@@ -6,12 +6,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
-import {
-  projectHostPath,
-  projectProviderCwd,
-  projectProviderEndpoint,
-  projectSetupPaths,
-} from "./SeparateProjectRegistry.ts";
+import { projectHostPath, projectProviderView } from "./SeparateProjectRegistry.ts";
 
 const publicationFixture = vi.hoisted(() => ({ root: "" }));
 
@@ -95,38 +90,25 @@ it("resolves identical project and scratch paths by workspace, including legacy 
         `scratch-${index}`,
       );
       NodeAssert.equal(
-        await projectProviderCwd(NodePath.join(root, "src"), state),
+        (await projectProviderView(NodePath.join(root, "src"), state))?.cwd,
         NodePath.join(visibleRoot, "src"),
       );
       NodeAssert.equal(
-        await projectProviderEndpoint(root, "http://127.0.0.1:4000/mcp", state),
+        (await projectProviderView(root, state))?.endpoint("http://127.0.0.1:4000/mcp"),
         "http://10.0.2.2:4000/mcp",
       );
-      const setup = await projectSetupPaths(NodePath.join(root, "src"), "/server/journals", state);
-      NodeAssert.equal(setup.cwd, NodePath.join(visibleRoot, "src"));
-      NodeAssert.equal(setup.projectRoot, visibleRoot);
       const alias = NodePath.join(base, `alias-${index}`);
       await NodeFSP.symlink(root, alias);
-      NodeAssert.equal(await projectProviderCwd(alias, state), visibleRoot);
-      NodeAssert.equal(
-        (await projectSetupPaths(alias, "/server/journals", state)).cwd,
-        visibleRoot,
-      );
-      NodeAssert.equal(
-        setup.journalDirectory,
-        NodePath.join(visibleHome, ".local/state/t3/setup-executions"),
-      );
-      await NodeFSP.mkdir(setup.hostJournalDirectory, { recursive: true });
-      await NodeFSP.writeFile(
-        NodePath.join(setup.hostJournalDirectory, "completion"),
-        `setup-${index}`,
-      );
+      NodeAssert.equal((await projectProviderView(alias, state))?.cwd, visibleRoot);
+      const hostHomeFile = NodePath.join(state, "environments", id, "home", ".cache", "probe");
+      await NodeFSP.mkdir(NodePath.dirname(hostHomeFile), { recursive: true });
+      await NodeFSP.writeFile(hostHomeFile, `home-${index}`);
       NodeAssert.equal(
         await NodeFSP.readFile(
-          await projectHostPath(root, NodePath.join(setup.journalDirectory, "completion"), state),
+          await projectHostPath(root, NodePath.join(visibleHome, ".cache", "probe"), state),
           "utf8",
         ),
-        `setup-${index}`,
+        `home-${index}`,
       );
       await NodeAssert.rejects(projectHostPath(root, "/etc/unmapped.png", state));
     }
@@ -144,18 +126,11 @@ it("resolves identical project and scratch paths by workspace, including legacy 
       await NodeFSP.readFile(await projectHostPath(first, "/tmp/image.png", state), "utf8"),
       "scratch-0",
     );
-    NodeAssert.equal(await projectProviderCwd(first, state), first);
-    NodeAssert.equal(
-      await projectProviderEndpoint(first, "http://localhost:4000/mcp", state),
-      "http://localhost:4000/mcp",
-    );
+    const legacy = await projectProviderView(first, state);
+    NodeAssert.equal(legacy?.cwd, first);
+    NodeAssert.equal(legacy?.endpoint("http://localhost:4000/mcp"), "http://localhost:4000/mcp");
+    NodeAssert.equal(await projectProviderView(base, state), undefined);
     NodeAssert.equal(await projectHostPath(base, "/tmp/host.png", state), "/tmp/host.png");
-    NodeAssert.deepEqual(await projectSetupPaths(base, "/server/journals", state), {
-      cwd: base,
-      projectRoot: undefined,
-      journalDirectory: "/server/journals",
-      hostJournalDirectory: "/server/journals",
-    });
   } finally {
     publicationFixture.root = "";
     await NodeFSP.rm(temporary, { recursive: true, force: true });

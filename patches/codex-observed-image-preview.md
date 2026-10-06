@@ -1,25 +1,71 @@
-# Codex Observed Image Preview
+# Codex observed-image previews
 
 ## Why this patch exists
 
-Codex can inspect local images through an `image_view` tool item. The upstream UI can show the inspected image back to the user, but T3 Code previously rendered that work-log item as text only.
-
-This patch snapshots locally viewed image files into server-managed state and attaches image media metadata to the corresponding `thread.activity.append` payload. The web timeline renders those media entries as thumbnails and opens them with the existing expanded image viewer.
-
-Observed-image thumbnails use the shared signed-asset capability flow. The client requests a short-lived URL over its authenticated, read-scoped RPC connection, so previews also work for remote environments whose bearer or DPoP credential cannot be attached by a browser `<img>` request.
-
-The same image-preview surface also supports assistant markdown images that point at local image files, such as `![alt](/Users/name/.codex/generated_images/result.png)`. The web renderer rewrites those local image sources to the authenticated `/local-image?path=...` route instead of handing a raw filesystem path to the browser.
+Codex inspects local images with its `view_image` tool and reports each use as an `imageView`
+item. Upstream's Codex adapter drops that item, so the timeline never shows what the agent looked
+at. Upstream does preview images that Claude reads, but that preview loads the file as it is now.
+Agents often view a screenshot and then overwrite or delete it, which leaves a wrong or broken
+preview.
 
 ## Requirements
 
-- Observed image URLs must be issued only through authenticated, read-scoped RPC requests and must use short-lived signed capabilities.
-- The UI should request observed media by stable storage id, not by the original local file path.
-- Original local paths may be retained as diagnostic metadata in activity payloads but must not be used as browser URLs.
-- Markdown image sources may use local file paths, but the browser must fetch them through authenticated environment HTTP routes and the server must refuse non-image files.
-- Failed snapshotting must not break provider event ingestion; the text work-log row should still appear.
+- An `imageView` item appears in the timeline as a read of that image. Expanding the row shows a
+  thumbnail on web, desktop, and mobile. Selecting it opens the expanded image viewer.
+- The thumbnail shows the image as Codex saw it. The server copies the file when the item
+  completes, so later edits or deletion of the original leave the preview unchanged.
+- Only previewable image types up to the 10 MiB image attachment limit are copied. A failed copy
+  logs a warning and never blocks event ingestion. The row then falls back to upstream's preview of
+  the current file.
+- Agents in separate projects report paths from their own namespace. The copy resolves them through
+  the agent-exec registry, like other media reads.
+- Clients load the copy through a short-lived signed URL issued over the authenticated connection.
+  A browser cannot attach bearer or DPoP credentials to an `<img>` request, so this is what makes
+  remote and relay clients work.
+- Deleting the thread deletes the copy.
 
-## Maintenance notes
+## Implementation
 
-- Keep the server route and storage helpers narrow to image media. Do not reuse this route for arbitrary tool artifacts without adding content-type and access semantics for those artifact types.
-- Keep observed media in the shared asset capability model rather than rendering the raw authenticated route; browser media elements cannot attach remote bearer or DPoP headers.
-- If upstream adds a first-class artifact/media event model, prefer migrating this patch to that model instead of extending the `payload.media` convention further.
+The copy is a thread-owned image attachment. `apps/server/src/observedImageSnapshot.ts` writes it to
+the attachments directory under a deterministic id built from the thread id and a SHA-256 of the
+bytes, so repeated views of one image share a file. As an attachment it gets upstream's signed
+`attachment` asset URL and upstream's attachment cleanup on thread deletion. The v1 fork needed its
+own `observed-media` directory, asset resource, and HTTP route for this. V2 needs none of them.
+
+`apps/server/src/orchestration-v2/Adapters/CodexImageView.ts` maps `imageView` onto a `dynamic_tool`
+item named `view_image`. Upstream already uses `dynamic_tool` with `viewedImagePath` for Claude's
+image reads, so grouping, labels, and the expanded image rendering work unchanged. The fork adds one
+optional `observedImage` field to that item. A new item type would have needed projection, wire,
+and client handling on every surface.
+
+Upstream-owned files with hooks:
+
+- `packages/contracts/src/orchestrationV2.ts` adds the optional `observedImage` field to both
+  `dynamic_tool` schemas, the domain one and the persisted JSON one.
+- `apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts` handles `imageView` in its
+  `item/completed` handler.
+- `apps/server/src/orchestration-v2/ProjectionStore.ts` adds `observedImage` ids to
+  `getThreadAttachmentIds` in the SQLite and in-memory stores. Thread deletion's
+  `attachment.cleanup` effect then removes them.
+- `packages/client-runtime/src/work-log/presentation.ts` adds `workEntryObservedImage`.
+  `resolveViewedImageAsset` uses the copy when there is one.
+- `apps/web/src/components/chat/MessagesTimeline.tsx` passes the copy to `resolveViewedImageAsset`.
+- `apps/mobile/src/features/threads/thread-work-log.tsx` and `ThreadFeed.tsx` pass the copy through
+  the viewed-image renderer.
+
+The v1 patch also served local Markdown image paths through a `/local-image` route. Upstream now
+signs those as `media-file` assets, so that part is gone.
+
+## Providers
+
+- Codex is supported.
+- Claude reads images with its `Read` tool. Upstream previews them from the current file through
+  `viewedImagePath`, and the fork takes no copy.
+- Cursor, OpenCode, Grok, ACP agents, Pi, and Antigravity report no image-view item, so they are not
+  supported.
+
+## Removing this patch
+
+Drop it when upstream maps Codex `imageView` items and keeps viewed images independent of later file
+changes. If upstream adds a first-class media model for turn items, move the copy onto it instead of
+extending `observedImage`.

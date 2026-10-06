@@ -1,65 +1,44 @@
 # Codex
 
-For one account, use the default Codex provider with your normal Codex login.
-[Provider setup](./install.md#providers) covers installation, Settings > Providers,
-and custom binaries or environment variables.
+Use your ChatGPT plan or an existing Codex CLI login to code in T3 Code.
+
+## Connect with ChatGPT
+
+Connect during onboarding or in **Settings → Providers**. For a remote machine,
+select that environment first. T3 Code handles Codex installation; sign in on
+OpenAI and allow sharing of your ChatGPT plan.
+
+Manage shared usage and credits in ChatGPT through **Manage usage** in T3 Code.
+If a request uses a feature that ChatGPT sharing does not support, use another
+provider for that request.
+
+When reconnecting, choose the same account in T3 Code and on OpenAI's sign-in
+page. Disconnecting stops running threads but keeps their history and lets you
+reconnect later.
+
+If remote sign-in cannot return automatically, paste the full URL from the final
+localhost page into the sign-in panel, even if that page could not load.
+
+## Use an existing Codex login
+
+T3 Code can use your installed Codex and its existing login. Run `codex login`
+on the environment's machine to sign in. [Provider setup](./install.md#providers)
+covers installation and custom configuration.
 
 ## Use multiple accounts
+
+Add another ChatGPT account in **Settings → Providers**, then select the account
+from the thread's model picker. Compatible accounts can continue the same thread.
+Connecting accounts through T3 Code leaves your CLI login unchanged.
+
+### Multiple CLI logins
 
 A shared Codex home with a shadow home lets work and personal accounts continue
 the same threads. The accounts share Codex sessions and configuration while keeping
 their own login and available models.
 
-## Answer Codex Questions
-
-Codex can show a structured question in the composer when it needs a decision that it
-cannot safely infer. Choose one of the suggested answers or enter a custom answer, then select
-**Submit answers**. The same question is available on web, desktop, iOS, and Android, including
-when you connect to the environment remotely.
-
-Questions asked while a thread is in Build mode are optional. Select **Skip** to let Codex continue
-with its best judgment. Plan Mode questions remain blocking because the answer may determine the
-plan.
-
-## Pause And Resume A Turn
-
-While Codex is working, use the Pause button in the composer to interrupt the current response.
-Once Codex has stopped, the empty composer shows Resume. Resuming continues from the interrupted
-thread context without adding a message such as “continue” to the conversation.
-
-If you want to change direction instead, type a new instruction. The Resume action becomes the
-normal Send action as soon as the composer has content.
-
-Resume is also available when a Codex turn stops because the selected model is at capacity. T3
-Code retries that failure automatically up to five times, with waits of roughly 5, 10, 20, 40,
-and 80 seconds. The retry remains scheduled if the T3 Code server restarts. The error banner shows
-whether another attempt is scheduled or the automatic retries are exhausted; select Resume at any
-time to retry immediately.
-
-A retry sequence resets after Codex makes meaningful progress. Other provider errors remain visible
-without automatic retries so repeated authentication, permission, or validation failures do not
-loop in the background.
-
-Pause and message-free resume are currently available for Codex threads. Other providers keep the
-Stop action until their runtimes expose an equivalent continuation operation.
-
-## I Only Use One Codex Account
-
-Use the default provider and log in normally.
-
-In Settings, your Codex provider can stay like this:
-
-```text
-Display name: Codex
-CODEX_HOME path: ~/.codex
-Shadow home path: empty
-```
-
-```bash
-codex login
-```
-
-For a second account, sign in from a fresh directory:
+Keep your first account in `~/.codex`. On the environment's machine, sign the
+second account into a fresh directory:
 
 ```bash
 mkdir -p ~/.codex_personal
@@ -106,12 +85,28 @@ If you do not want to answer, dismiss the question from its panel. Dismissing
 closes it without sending anything to Codex. This requires a Codex version that
 supports async questions.
 
-## Approve app access
+In Default mode, Codex can also ask a structured question when the answer changes
+the result. If every part of the question is optional, the panel shows **Skip**,
+which lets Codex continue with its own judgment. Plan mode questions stay blocking.
 
-Your submitted answers appear as a message in the conversation, together with their questions.
-If T3 cannot save the answer, the question stays open so you can retry. If the answer was saved
-but Codex could not receive it, the message remains in the conversation with the normal delivery
-failure state. Retrying a question does not create a second copy of an already accepted answer.
+## Pause and resume a turn
+
+While Codex works, the composer shows **Pause** where other providers show a stop
+button. Once Codex stops, an empty composer shows **Resume** on web, desktop, iOS, and
+Android. Resume picks up where Codex stopped and adds nothing to the conversation. Type a
+new instruction instead, and Resume turns back into Send.
+
+Resume also continues a turn that stopped on a usage limit or because the model was at
+capacity. At capacity, T3 Code retries by itself up to five times, waiting about 5, 10,
+20, 40, and 80 seconds. Retries continue after the environment restarts. The error banner
+on web and desktop, and a card above the composer on mobile, show the next attempt or that
+retries stopped. Select **Resume** to retry right away. Once Codex makes progress, a later
+capacity error gets five new retries. Other errors are not retried.
+
+Other providers keep the stop button. Their **Resume** on web and desktop sends a short
+message asking the agent to continue.
+
+## Approve app access
 
 Codex tools can request access to another app. Respond to the named app's request
 in the thread on web, desktop, or mobile. Some tools offer access for one request,

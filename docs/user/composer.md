@@ -3,21 +3,8 @@
 Give the agent a task in the composer. Add files, quote a previous response, or
 include a skill when the task needs more context.
 
-## Reply inline
-
-Hover an assistant paragraph or list item and choose the reply action to write directly beneath it.
-You can also select part of the assistant's text and use the contextual Reply action. Add as many
-responses as needed, optionally type an overall note in the main composer, then use its Send button
-to submit everything as one message.
-
-Press Escape in an inline editor to remove that reply draft.
-
 Messages can contain up to 120,000 characters. Longer drafts stay in the composer
 so you can shorten them or split them into several messages.
-
-On web and desktop, sending while the agent is working adds the message to the queue controls
-above the composer. It enters the conversation only when T3 Code dispatches it. You can send a
-queued message immediately or remove it before dispatch.
 
 Pasting 32 KiB or more of text adds that fragment as a text-file attachment so
 the agent can inspect it without filling the model context. A smaller paste also
@@ -32,8 +19,7 @@ Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
 50 MiB each, subject to the environment's upload support and limit. The agent
 receives them on the environment's machine. Provider and model limits still
 apply, including images already in the conversation. A video attachment gives
-the agent a file path; it does not enable native video input. Antigravity does
-not accept video attachments.
+the agent a file path; it does not enable native video input.
 
 Uploads begin when you add an attachment. All uploads must finish before the
 message can send. Retry or remove a failed upload. On web and desktop, reloading
@@ -48,27 +34,45 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, **Settings → General → Follow-up behavior** decides what a
-message sent during a running turn does. The setting applies to the current
-client.
+On web and desktop, choose **Settings → General → Follow-up behavior** to queue
+new messages for a later turn or steer the running turn immediately. The setting
+applies to this client; already queued messages keep their place. Queued messages
+are saved on the server and can be edited, reordered, or removed above the composer.
+`Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses the opposite action:
+it steers when your default is Queue and queues when your default is Steer.
 
-- **Queue**, the default, holds the message on the server and lists it above the
-  composer. It goes out when the turn completes. A failed, stopped, or
-  interrupted turn leaves the queue alone. Queued messages survive a reload and
-  show on every client connected to the thread.
-- **Steer** sends the message into the running turn right away.
+Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
+the oldest queued message as a steer. This leaves the current draft intact and
+requires an active turn that supports steering. Change
+`thread.steerQueuedMessage` in **Settings → Keybindings** to use another shortcut.
 
-Press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux to do the other
-one for a single message. When sending itself requires that shortcut, add
-`Shift`.
+Press `Option+Up` on macOS or `Alt+Up` on Windows and Linux with the cursor at the
+start of the composer to edit the most recently queued message. Change
+`thread.editQueuedMessage` to use another shortcut.
 
-Each queued message has a button to send it now, which steers the running turn,
-and one to remove it. Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on
-Windows and Linux to send the oldest queued message now. Change
-`thread.steerQueuedMessage` in **Settings → Keybindings** to use another
-shortcut.
+Mobile has the same choice under **Settings → Follow-ups**. While a turn is
+running the send button shows which action it will take. Long-press it to use the
+other action for a single message, or hold `Cmd` while sending from a hardware
+keyboard. The button only offers Steer when the running agent supports it.
 
-## Queue messages offline on mobile
+## Send while offline
+
+On web and desktop, a message you send while the environment is disconnected is
+saved on this device and listed above the composer. It goes out by itself once
+the connection is back, in the order you wrote it, even after a reload. This works
+for the first message of a new thread too; the thread appears when it arrives.
+Attachments stay on the device until they upload.
+
+If the connection drops before the environment confirms a message, T3 Code sends
+it again in a way that cannot deliver it twice. Until then it cannot be edited or
+discarded, because it may already have arrived.
+
+Choose **Edit** to take a waiting message back into the composer, or the trash
+button to discard it. A message the environment refused shows the reason and
+holds back later messages to that thread until you retry, edit, or discard it.
+
+Starting with several models, plan follow-ups, and answers to an agent's
+questions still need a connection.
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
 messages while disconnected. Uploads resume when you reconnect. Drafts and queued
@@ -108,6 +112,15 @@ The quoted text and comment count toward the message limit.
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
 
+## Reply inline
+
+Hover an assistant paragraph or list item and choose the reply action to write directly beneath it.
+You can also select part of the assistant's text and use the contextual Reply action. Add as many
+responses as needed, optionally type an overall note in the main composer, then use its Send button
+to submit everything as one message.
+
+Press Escape in an inline editor to remove that reply draft.
+
 ## Recall a sent prompt
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press
@@ -127,9 +140,11 @@ On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to restore them as well.
 File restore is only offered for threads running in a worktree, and it is
-refused when another thread or agent session also uses that directory, since
+refused when another thread or agent session also uses that directory, a folder
+inside it, or a folder that contains it, since
 restoring would erase their changes. A thread that works in the project directory
-rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
+rewinds the conversation only, as do jj workspaces and folders without Git, which have nothing
+to restore. The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
@@ -162,6 +177,30 @@ awake; it can sleep normally once recording stops.
 Transcription runs on your device. T3 Code deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
 
+## Queued messages
+
+On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
+empty. Codex threads show **Pause** instead; see [Codex](./providers-codex.md#pause-and-resume-a-turn). Adding text or attachments replaces it with a steer arrow. Click it to send a message into
+the active turn, or press `Enter` on desktop. Hold `Cmd` on macOS or `Ctrl` on Windows and Linux to
+switch the button to a queue icon. Click while holding that key, or press `Cmd+Enter` or
+`Ctrl+Enter` on desktop, to queue the message for after the active turn.
+
+Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
+the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
+to a steer, or remove it.
+
+If the server restarts, saved queued messages keep their order and are held. Press
+**Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
+sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.
+
+The pencil on a queued row opens that message in the composer for editing. The original message
+stays in the queue until you save, and its row is highlighted while you edit. The message's
+attachments appear above the text with a remove control, and new images can be added the usual way.
+The checkmark saves the queued message in place; **Cancel** on its row leaves it unchanged. Whatever
+you had typed in the composer before starting the edit is restored afterwards. If the queued
+message starts or is removed while you are editing, the edit ends: changed content moves into the
+composer when it is empty, and is discarded otherwise.
+
 ## Commands and skills
 
 Type `/` for commands or `$` to add a skill from the selected environment and
@@ -171,11 +210,44 @@ provider. On mobile, both are also available before starting a thread on
 The slash menu also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.
 
+After you add or change skills, plugins, or MCP servers, use **Restart agent
+session** in the command palette on web and desktop. The conversation continues,
+and your next message starts the agent again with the new setup.
+
 Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
+
+## Skill packs
+
+When your environment offers skill packs, the composer shows a **Skills** control after the model
+picker. A pack bundles related skills and adds them to the agent for the whole thread. Core skills
+are always on, so a thread without packs still has them, along with the skills your provider and
+project already provide.
+
+With no packs selected the control shows only an icon; hover it to see **Skills: core**. Otherwise
+it shows the profile or pack name, or a pack count. A dot marks a thread whose packs differ from its
+project default, a dashed ring means the packs apply on the next turn, and a warning mark means some
+skills could not be loaded.
+
+The panel lists profiles first. A profile selects a set of packs, and the checklist below it is what
+applies, so you can adjust packs after picking a profile. **Details** lists every skill the
+selection resolves to and notes skills a pack repeats from core or another pack. **Reset to project
+default** returns the thread to its project's packs, and **Make project default** saves the current
+selection for new threads in that project. A new thread starts with its project's packs, and a fork
+starts with the packs of the thread it came from.
+
+Changing a thread's packs restarts its agent session when the next turn starts. The conversation
+continues, but commands the agent left running in the background stop.
+
+On mobile, open the thread settings sheet and choose **Skills**. **New task** offers the same
+choice before you start.
+
+Picking a skill with `$` runs it once in that message and does not change the thread's packs. Codex,
+Claude, and OpenCode servers that T3 Code starts itself load packs. Other providers, external
+OpenCode servers, and OpenCode 2 show a note in **Details** instead; their own skills still work.
 
 ## Context in your message
 
@@ -193,6 +265,13 @@ pull requests in the current project's repository. Continue typing digits to fil
 by any part of its pull request numbers. A complete number is also resolved directly, even when that
 pull request is older than the recent list. Type a single word after `#` to search pull requests in
 the repository by text. Choose a result to insert it as a chip.
+
+Another thread can be context too. Type `@` followed by part of its title to pick one from
+the same server, or on web and desktop drag a thread out of the sidebar and drop it on the
+composer; a multi-selection drops together. The chip shows the thread's current title and
+opens it when selected. Your prompt only carries a reference: the agent reads the thread's
+history on demand, so attaching a long thread costs nothing until the agent looks. Attaching a
+thread does not change it, and the agent cannot send messages to it unless you ask.
 
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing
@@ -230,41 +309,6 @@ If nothing on the device can show a format, save or share it to open it elsewher
 
 Select an image or video attachment or link to preview it. Playback support depends
 on your browser or device; save an unsupported video to open it in another app.
-
-## Skill packs
-
-Skill packs bundle related skills that T3 Code makes available to the agent for a whole thread.
-They add to the skills your provider and project already have; those keep working as before. Core
-skills are always on, so a thread with no packs still has them.
-
-On web and desktop, the **Skills** control sits in the composer's context strip beside the
-workspace control. With no packs selected it shows only an icon; hover it to see **Skills: core**.
-Once packs are selected it shows the profile or pack name, or a pack count. A dot marks a thread
-that differs from its project default, a dashed dot marks packs that apply on the next turn, and a
-warning mark means some skills could not be loaded. Open the control for details.
-
-The **Skills** panel lists profiles first. A profile is a shortcut that selects a set of packs;
-the checklist below it is what actually applies, so you can adjust packs after picking a profile.
-**Details** shows every skill the selection resolves to and notes skills a pack repeats from core
-or another pack. **Reset to project default** returns the thread to its project's packs, and
-**Make project default** saves the current selection for new threads in that project. You can also
-edit the project default under **Settings → Projects → Skills**.
-
-On mobile, open the thread settings sheet and choose **Skills**. New tasks pick packs the same way
-before you start them.
-
-Picking a skill with `$` runs it once in that message and does not change the thread's packs.
-Providers that cannot load packs, such as an external OpenCode server, show a note in **Details**
-when packs are selected; their own skills still work.
-
-On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from a new thread to
-start it in the background. T3 Code opens another new thread and shows an Open action for the
-thread that started. The new thread keeps the selected workspace mode and base branch. If New
-worktree is selected, each background thread creates its own worktree.
-
-New worktrees use the generated thread title for their directory and development-instance name.
-The name stays fixed after creation even if the thread is renamed later. If naming is unavailable,
-T3 Code uses a short `task-…` name instead of copying part of the prompt.
 
 On web and desktop, right-click media to save it or copy its path or URL. On mobile,
 touch and hold an image or video thumbnail and choose **Save or share**. On iOS,

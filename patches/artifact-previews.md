@@ -24,6 +24,9 @@ work without the desktop-only integrated browser or a server-side browser sessio
 - The desktop content security policy allows frames from this one publishing origin.
   Markdown uses the existing authenticated connection in local, remote, and relay modes.
   Providers and persistent server state are unaffected.
+- `rightPanelStore.ts` adds the `artifact` surface kind and re-parses persisted
+  artifact URLs in the shared migration, dropping ones that no longer match. It
+  uses upstream's storage version (14) and adds no version of its own.
 - Native mobile keeps its existing link behavior. Web on small screens uses the
   existing right-panel sheet.
 

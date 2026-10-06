@@ -26,7 +26,7 @@ import {
   threadDragAction,
   type ThreadMoveDestination,
 } from "./threadOrder";
-import { getThreadListV2OrderedSection, threadListV2NeedsUser } from "./threadListV2";
+import { getThreadListV2OrderedSection } from "./threadListV2";
 
 const ROW_HEIGHT = 56;
 const HEADER_HEIGHT = 48;
@@ -148,7 +148,7 @@ function DragHandle(props: {
 
 export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const insets = useSafeAreaInsets();
-  const threads = useAtomValue(environmentThreadShells.threadShellsAtom);
+  const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
@@ -206,7 +206,6 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
         ordered: sections[section],
         allThreads: threads,
         section,
-        ...(section === "active" ? { needsUser: threadListV2NeedsUser(threads) } : {}),
         reorderableEnvironmentIds: new Set(
           [...configs].flatMap(([id, config]) =>
             (

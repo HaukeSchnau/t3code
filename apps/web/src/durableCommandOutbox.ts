@@ -1,622 +1,613 @@
-import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
-import { appAtomRegistry } from "./rpc/atomRegistry";
-import { environmentServerConfigsAtom } from "./state/server";
-import {
-  EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT,
-  decodeDurableCommandOutboxDocument,
-  encodeDurableCommandOutboxDocument,
-  makeDurableCommandDeliveryPlan,
-  type DurableClientCommand,
-  type DurableCommandOutboxDocument,
-  type DurableCommandOutboxEntry,
-} from "@t3tools/client-runtime/operations/command-outbox";
-import {
-  CommandOutboxStorage,
-  CommandOutboxStorageError,
-} from "@t3tools/client-runtime/platform/command-outbox";
+/**
+ * Durable composer sends for web and desktop. A send made while the
+ * environment is unreachable, or whose reply never arrived, waits here across
+ * reloads and is delivered in order once the environment is back. The command
+ * id stays fixed, so the server's command receipts turn a repeated delivery
+ * into a replay. See patches/durable-client-command-outbox.md.
+ */
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
+import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import {
   classifyCommandDeliveryFailure,
-  makeCommandOutbox,
-  type CommandOutboxService,
+  CommandOutboxState,
+  createCommandOutboxController,
+  type CommandOutboxController,
+  type CommandOutboxEntry,
+  type CommandOutboxStore,
 } from "@t3tools/client-runtime/state/command-outbox";
-import type { CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import { useSyncExternalStore } from "react";
+import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  ChatFileAttachment,
+  ChatImageAttachment,
+  CommandId,
+  EnvironmentId,
+  ManagedWorkspaceLaunchStrategy,
+  MessageId,
+  ModelSelection,
+  OrchestrationMessageContext,
+  ProjectId,
+  ProviderInteractionMode,
+  RuntimeMode,
+  ThreadId,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
+import * as Option from "effect/Option";
+import * as Struct from "effect/Struct";
+import * as Schema from "effect/Schema";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
-import { readEnvironmentApi } from "./environmentApi";
+import {
+  markPromotedDraftThreadByRef,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+} from "./composerDraftStore";
+import { environmentCatalog } from "./connection/catalog";
+import { deliverDurableComposerCommand } from "./durableCommandOutboxDelivery";
+import { stripInlineContextReferences } from "./lib/composerContextReferences";
+import { randomUUID } from "./lib/utils";
+import { readAttachmentUpload, releaseDraftAttachment } from "./lib/attachmentUploadQueue";
+import { appAtomRegistry } from "./rpc/atomRegistry";
 
-const DATABASE_NAME = "t3code:durable-command-outbox";
-const DATABASE_VERSION = 2;
-const STORE_NAME = "outbox";
-const ACCEPTED_STORE_NAME = "accepted-awaiting-projection";
-const DOCUMENT_KEY = "document";
+const DATABASE_NAME = "t3code:thread-outbox";
+const DATABASE_VERSION = 1;
+const STORE_NAME = "entries";
+const BROADCAST_CHANNEL = "t3code:thread-outbox";
+const DRAIN_LOCK = "t3code:thread-outbox:drain";
 
-type TimerHandle = unknown;
+const DurableComposerAttachment = Schema.Struct({
+  attachment: Schema.Union([ChatImageAttachment, ChatFileAttachment]),
+  // The bytes stay on this device until an upload succeeds, and afterwards so
+  // a rejected message can return to the composer.
+  blob: Schema.NullOr(Schema.instanceOf(Blob)),
+  uploadedAttachmentId: Schema.optionalKey(Schema.String),
+});
+export type DurableComposerAttachment = typeof DurableComposerAttachment.Type;
 
-export interface DurableCommandOutboxControllerOptions {
-  readonly storage: CommandOutboxStorage["Service"];
-  readonly acceptedProjectionStorage?: CommandOutboxStorage["Service"];
-  readonly dispatch: (environmentId: EnvironmentId, command: DurableClientCommand) => Promise<void>;
-  readonly prepareCommand?: (
-    environmentId: EnvironmentId,
-    command: DurableClientCommand,
-  ) => DurableClientCommand;
-  readonly now?: () => string;
-  readonly setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
-  readonly clearTimer?: (handle: TimerHandle) => void;
-  /** @deprecated Use withMutationLock. */
-  readonly withLock?: <A>(task: () => Promise<A>) => Promise<A>;
-  readonly withMutationLock?: <A>(task: () => Promise<A>) => Promise<A>;
-  readonly withDrainLeadership?: (task: () => Promise<void>) => Promise<boolean>;
-}
+const DurableThreadBootstrap = Schema.Struct({
+  createThread: Schema.optionalKey(
+    Schema.Struct({
+      projectId: ProjectId,
+      title: Schema.String,
+      modelSelection: ModelSelection,
+      runtimeMode: RuntimeMode,
+      interactionMode: ProviderInteractionMode,
+      branch: Schema.NullOr(Schema.String),
+      worktreePath: Schema.NullOr(Schema.String),
+      createdAt: Schema.String,
+    }),
+  ),
+  prepareWorktree: Schema.optionalKey(
+    Schema.Struct({
+      requireWorktree: Schema.optionalKey(Schema.Boolean),
+      projectCwd: Schema.String,
+      baseBranch: Schema.String,
+      branch: Schema.optionalKey(Schema.String),
+      startFromOrigin: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+  prepareWorkspace: Schema.optionalKey(
+    ManagedWorkspaceLaunchStrategy.mapFields((fields) => Struct.omit(fields, ["type"])),
+  ),
+  runSetupScript: Schema.optionalKey(Schema.Boolean),
+});
 
-export interface DurableCommandOutboxController {
-  readonly enqueue: (
-    environmentId: EnvironmentId,
-    command: DurableClientCommand,
-  ) => Promise<DurableCommandOutboxEntry>;
-  readonly flush: () => Promise<void>;
-  readonly wake: () => void;
-  readonly snapshot: () => ReadonlyArray<DurableCommandOutboxEntry>;
-  readonly acceptedProjectionSnapshot: () => ReadonlyArray<DurableCommandOutboxEntry>;
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly cancelPending: (commandId: CommandId) => Promise<void>;
-  readonly replacePending: (
-    commandId: CommandId,
-    replacement: DurableClientCommand,
-  ) => Promise<DurableCommandOutboxEntry>;
-  readonly replaceRejected: (
-    commandId: CommandId,
-    replacement: DurableClientCommand,
-  ) => Promise<DurableCommandOutboxEntry>;
-  readonly discardRejected: (commandId: CommandId) => Promise<void>;
-  readonly confirmProjected: (messageIds: ReadonlySet<string>) => Promise<void>;
-  readonly dispose: () => void;
-}
+/** Everything a composer send needs, frozen when the user pressed send. */
+export const DurableComposerCommand = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  commandId: CommandId,
+  messageId: MessageId,
+  createdAt: Schema.String,
+  text: Schema.String,
+  context: Schema.optionalKey(OrchestrationMessageContext),
+  attachments: Schema.Array(DurableComposerAttachment),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  // The server resolves queue or steer against the thread at delivery time.
+  dispatchMode: Schema.Literals(["auto", "queue", "steer", "restart"]),
+  titleSeed: Schema.String,
+  bootstrap: Schema.optionalKey(DurableThreadBootstrap),
+});
+export type DurableComposerCommand = typeof DurableComposerCommand.Type;
+export type DurableComposerEntry = CommandOutboxEntry<DurableComposerCommand>;
 
-function storageError(operation: "load" | "save", cause: unknown) {
-  return new CommandOutboxStorageError({
-    operation,
-    message: `Could not ${operation} the durable command outbox: ${String(cause)}`,
-  });
-}
+const NewEntry = Schema.Struct({
+  enqueuedAt: Schema.Number,
+  command: DurableComposerCommand,
+  state: CommandOutboxState,
+});
+// IndexedDB assigns `id` on add.
+const StoredEntry = NewEntry.mapFields((fields) => ({ id: Schema.Number, ...fields }));
+const decodeStoredEntry = Schema.decodeUnknownOption(StoredEntry);
+const encodeStoredEntry = Schema.encodeSync(StoredEntry);
+const encodeNewEntry = Schema.encodeSync(NewEntry);
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
-      reject(new Error("IndexedDB is unavailable in this browser context."));
+      reject(new Error("This browser cannot save messages on the device."));
       return;
     }
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     request.addEventListener("upgradeneeded", () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME);
-      }
-      if (!request.result.objectStoreNames.contains(ACCEPTED_STORE_NAME)) {
-        request.result.createObjectStore(ACCEPTED_STORE_NAME);
-      }
+      request.result.createObjectStore(STORE_NAME, { keyPath: "id", autoIncrement: true });
     });
-    request.addEventListener("error", () => reject(request.error ?? new Error("Open failed")));
+    request.addEventListener("error", () =>
+      reject(request.error ?? new Error("Could not open the message outbox.")),
+    );
     request.addEventListener("success", () => resolve(request.result));
   });
 }
 
-async function loadBrowserDocument(storeName = STORE_NAME): Promise<DurableCommandOutboxDocument> {
-  const database = await openDatabase();
-  try {
-    const raw = await new Promise<unknown>((resolve, reject) => {
-      const request = database
-        .transaction(storeName, "readonly")
-        .objectStore(storeName)
-        .get(DOCUMENT_KEY);
-      request.addEventListener("error", () => reject(request.error ?? new Error("Read failed")));
-      request.addEventListener("success", () => resolve(request.result));
-    });
-    if (raw === undefined) return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
-    return decodeDurableCommandOutboxDocument(raw);
-  } finally {
-    database.close();
-  }
+let database: Promise<IDBDatabase> | null = null;
+
+function connect(): Promise<IDBDatabase> {
+  database ??= openDatabase().then(
+    (opened) => {
+      // A later version (another tab after an update) asks us to step aside.
+      opened.addEventListener("versionchange", () => {
+        opened.close();
+        database = null;
+      });
+      opened.addEventListener("close", () => {
+        database = null;
+      });
+      return opened;
+    },
+    (error: unknown) => {
+      database = null;
+      throw error;
+    },
+  );
+  return database;
 }
 
-async function saveBrowserDocument(
-  document: DurableCommandOutboxDocument,
-  storeName = STORE_NAME,
-): Promise<void> {
-  const database = await openDatabase();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(storeName, "readwrite");
-      transaction.addEventListener("error", () =>
-        reject(transaction.error ?? new Error("Write failed")),
-      );
-      transaction.addEventListener("complete", () => resolve());
-      transaction
-        .objectStore(storeName)
-        .put(encodeDurableCommandOutboxDocument(document), DOCUMENT_KEY);
+const changes =
+  typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(BROADCAST_CHANNEL);
+
+/**
+ * Runs `body` in one transaction and resolves with its result once the
+ * transaction committed. `body` must issue its requests synchronously from
+ * request callbacks so the read-modify-write stays atomic across tabs.
+ */
+async function transact<A>(
+  mode: IDBTransactionMode,
+  body: (store: IDBObjectStore, settle: (value: A) => void, fail: (error: Error) => void) => void,
+): Promise<A> {
+  const opened = await connect();
+  const result = await new Promise<A>((resolve, reject) => {
+    const transaction = opened.transaction(STORE_NAME, mode);
+    let value: { readonly current: A } | null = null;
+    let failure: Error | null = null;
+    transaction.addEventListener("complete", () => {
+      if (value === null) reject(new Error("The message outbox transaction ended early."));
+      else resolve(value.current);
     });
-  } finally {
-    database.close();
-  }
-}
-
-export const browserCommandOutboxStorage = CommandOutboxStorage.of({
-  load: Effect.tryPromise({
-    try: () => loadBrowserDocument(),
-    catch: (cause) => storageError("load", cause),
-  }),
-  save: (document) =>
-    Effect.tryPromise({
-      try: () => saveBrowserDocument(document),
-      catch: (cause) => storageError("save", cause),
-    }),
-});
-
-export const browserAcceptedProjectionStorage = CommandOutboxStorage.of({
-  load: Effect.tryPromise({
-    try: () => loadBrowserDocument(ACCEPTED_STORE_NAME),
-    catch: (cause) => storageError("load", cause),
-  }),
-  save: (document) =>
-    Effect.tryPromise({
-      try: () => saveBrowserDocument(document, ACCEPTED_STORE_NAME),
-      catch: (cause) => storageError("save", cause),
-    }),
-});
-
-function earliestRetryDelay(
-  entries: ReadonlyArray<DurableCommandOutboxEntry>,
-  now: string,
-): number | null {
-  let earliest: number | null = null;
-  const nowMs = Date.parse(now);
-  for (const entry of entries) {
-    if (entry.state._tag !== "Retrying") continue;
-    const delay = Math.max(0, Date.parse(entry.state.retryNotBefore) - nowMs);
-    earliest = earliest === null ? delay : Math.min(earliest, delay);
-  }
-  return earliest;
-}
-
-function classifyWebCommandFailure(cause: unknown) {
-  if (typeof cause === "object" && cause !== null && "_tag" in cause) {
-    const tag = String(cause._tag);
-    if (
-      tag.includes("Invariant") ||
-      tag.includes("Validation") ||
-      tag.includes("NotFound") ||
-      tag.includes("Unauthorized") ||
-      tag.includes("Forbidden") ||
-      tag === "OrchestrationCommandPreviouslyRejectedError" ||
-      tag === "OrchestrationCommandReceiptMismatchError"
-    ) {
-      return classifyCommandDeliveryFailure(cause, "permanent");
-    }
-  }
-  return classifyCommandDeliveryFailure(cause);
-}
-
-export function createDurableCommandOutboxController(
-  options: DurableCommandOutboxControllerOptions,
-): DurableCommandOutboxController {
-  let memoryAcceptedDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
-  const acceptedProjectionStorage =
-    options.acceptedProjectionStorage ??
-    CommandOutboxStorage.of({
-      load: Effect.sync(() => memoryAcceptedDocument),
-      save: (document) => Effect.sync(() => void (memoryAcceptedDocument = document)),
-    });
-  const now = options.now ?? (() => new Date().toISOString());
-  const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-  const clearTimer =
-    options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
-  const withMutationLock = options.withMutationLock ?? options.withLock ?? (async (task) => task());
-  const withDrainLeadership =
-    options.withDrainLeadership ??
-    (async (task) => {
-      await task();
-      return true;
-    });
-  const listeners = new Set<() => void>();
-  let current: ReadonlyArray<DurableCommandOutboxEntry> = [];
-  let acceptedProjection: ReadonlyArray<DurableCommandOutboxEntry> = [];
-  let disposed = false;
-  let timer: TimerHandle | null = null;
-  let activeFlush: Promise<void> | null = null;
-  let flushRequested = false;
-  let recoveryAttempt = 0;
-  const loadService = (recoverInterruptedDeliveries = false) =>
-    Effect.runPromise(makeCommandOutbox(options.storage, now(), recoverInterruptedDeliveries));
-  const loadAcceptedProjectionService = () =>
-    Effect.runPromise(makeCommandOutbox(acceptedProjectionStorage, now(), false));
-
-  const notify = () => {
-    for (const listener of listeners) listener();
-  };
-
-  const publish = async (service: CommandOutboxService) => {
-    current = await Effect.runPromise(service.entries);
-    notify();
-  };
-
-  const publishAcceptedProjection = async (service: CommandOutboxService) => {
-    acceptedProjection = await Effect.runPromise(service.entries);
-    notify();
-  };
-
-  const schedule = async (service: CommandOutboxService) => {
-    if (disposed) return;
-    if (timer !== null) clearTimer(timer);
-    timer = null;
-    const delay = earliestRetryDelay(await Effect.runPromise(service.entries), now());
-    if (delay === null) return;
-    timer = setTimer(() => {
-      timer = null;
-      void flush();
-    }, delay);
-  };
-
-  const scheduleRecovery = () => {
-    if (disposed || timer !== null) return;
-    recoveryAttempt += 1;
-    const delay = Math.min(1_000 * 2 ** (recoveryAttempt - 1), 16_000);
-    timer = setTimer(() => {
-      timer = null;
-      void flush();
-    }, delay);
-  };
-
-  const runFlush = async () => {
+    transaction.addEventListener("abort", () =>
+      reject(failure ?? transaction.error ?? new Error("The message outbox write was aborted.")),
+    );
     try {
-      const acquiredLeadership = await withDrainLeadership(async () => {
-        await withMutationLock(async () => {
-          const recovered = await loadService(true);
-          await publish(recovered);
-        });
-        recoveryAttempt = 0;
-        while (true) {
-          if (disposed) break;
-          const delivery = await withMutationLock(async () => {
-            const service = await loadService(false);
-            const accepted = await loadAcceptedProjectionService();
-            const acceptedCommandIds = new Set(
-              (await Effect.runPromise(accepted.entries)).map(
-                (entry) => entry.plan.command.commandId,
-              ),
-            );
-            let entry = (await Effect.runPromise(service.ready(now())))[0];
-            while (entry !== undefined && acceptedCommandIds.has(entry.plan.command.commandId)) {
-              // A prior attempt persisted acceptance but crashed before removing
-              // retry ownership. Finish that local cleanup without dispatching
-              // the already accepted command again.
-              await Effect.runPromise(service.begin(entry.plan.command.commandId, now()));
-              await Effect.runPromise(service.complete(entry.plan.command.commandId));
-              entry = (await Effect.runPromise(service.ready(now())))[0];
-            }
-            if (entry === undefined) {
-              await publish(service);
-              await schedule(service);
-              return null;
-            }
-            const commandId = entry.plan.command.commandId;
-            const preparedPlan =
-              entry.state._tag === "Pending" && options.prepareCommand
-                ? {
-                    ...entry.plan,
-                    command: options.prepareCommand(entry.plan.environmentId, entry.plan.command),
-                  }
-                : entry.plan;
-            const delivering = await Effect.runPromise(
-              service.begin(commandId, now(), preparedPlan),
-            );
-            await publish(service);
-            return delivering;
-          });
-          if (delivery === null) break;
-          let dispatchFailure: unknown | null = null;
-          try {
-            await options.dispatch(delivery.plan.environmentId, delivery.plan.command);
-          } catch (cause) {
-            dispatchFailure = cause;
-          }
-          await withMutationLock(async () => {
-            const service = await loadService(false);
-            if (dispatchFailure === null) {
-              // Persist the accepted intent before removing it from the retry
-              // queue. This bridges the acknowledgement-to-projection window,
-              // including reloads, without sending an already accepted command
-              // merely to keep its optimistic message visible.
-              const accepted = await loadAcceptedProjectionService();
-              const acceptedEntries = await Effect.runPromise(accepted.entries);
-              if (
-                !acceptedEntries.some(
-                  (entry) => entry.plan.command.commandId === delivery.plan.command.commandId,
-                )
-              ) {
-                await Effect.runPromise(accepted.enqueue(delivery.plan));
-              }
-              await publishAcceptedProjection(accepted);
-              await Effect.runPromise(service.complete(delivery.plan.command.commandId));
-            } else {
-              await Effect.runPromise(
-                service.fail(
-                  delivery.plan.command.commandId,
-                  classifyWebCommandFailure(dispatchFailure),
-                  now(),
-                ),
-              );
-            }
-            await publish(service);
-          });
-        }
-      });
-      if (!acquiredLeadership) {
-        scheduleRecovery();
-      }
-    } catch (cause) {
-      console.error("Durable command outbox recovery failed", cause);
-      scheduleRecovery();
+      body(
+        transaction.objectStore(STORE_NAME),
+        (next) => {
+          value = { current: next };
+        },
+        (error) => {
+          failure = error;
+          transaction.abort();
+        },
+      );
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+      transaction.abort();
     }
-  };
-
-  const flush = (): Promise<void> => {
-    if (disposed) return Promise.resolve();
-    flushRequested = true;
-    if (activeFlush !== null) return activeFlush;
-    activeFlush = (async () => {
-      while (true) {
-        flushRequested = false;
-        await runFlush();
-        if (!flushRequested || disposed) break;
-      }
-    })().finally(() => {
-      activeFlush = null;
-    });
-    return activeFlush;
-  };
-
-  void withMutationLock(async () => {
-    await publishAcceptedProjection(await loadAcceptedProjectionService());
-    await publish(await loadService(false));
-  })
-    .then(() => flush())
-    .catch((cause) => {
-      console.error("Could not initialize durable command outbox", cause);
-      scheduleRecovery();
-    });
-
-  return {
-    enqueue: async (environmentId, command) => {
-      const entry = await withMutationLock(async () => {
-        const service = await loadService(false);
-        const persisted = await Effect.runPromise(
-          service.enqueue(
-            makeDurableCommandDeliveryPlan({
-              environmentId,
-              enqueuedAt: now(),
-              command,
-            }),
-          ),
-        );
-        await publish(service);
-        return persisted;
-      });
-      void flush();
-      return entry;
-    },
-    flush,
-    wake: () => {
-      if (timer !== null) {
-        clearTimer(timer);
-        timer = null;
-      }
-      void flush();
-    },
-    snapshot: () => current,
-    acceptedProjectionSnapshot: () => acceptedProjection,
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    cancelPending: (commandId) =>
-      withMutationLock(async () => {
-        const service = await loadService(false);
-        await Effect.runPromise(service.cancelPending(commandId));
-        await publish(service);
-        void flush();
-      }),
-    replacePending: (commandId, replacement) =>
-      withMutationLock(async () => {
-        const service = await loadService(false);
-        const original = (await Effect.runPromise(service.entries)).find(
-          (entry) => entry.plan.command.commandId === commandId,
-        );
-        if (!original) throw new Error(`Command ${commandId} is not queued`);
-        const replaced = await Effect.runPromise(
-          service.replacePending(
-            commandId,
-            makeDurableCommandDeliveryPlan({
-              environmentId: original.plan.environmentId,
-              enqueuedAt: now(),
-              command: replacement,
-            }),
-          ),
-        );
-        await publish(service);
-        void flush();
-        return replaced;
-      }),
-    replaceRejected: (commandId, replacement) =>
-      withMutationLock(async () => {
-        const service = await loadService(false);
-        const original = (await Effect.runPromise(service.entries)).find(
-          (entry) => entry.plan.command.commandId === commandId,
-        );
-        if (!original) throw new Error(`Command ${commandId} is not queued`);
-        const replaced = await Effect.runPromise(
-          service.replaceRejected(
-            commandId,
-            makeDurableCommandDeliveryPlan({
-              environmentId: original.plan.environmentId,
-              enqueuedAt: now(),
-              command: replacement,
-            }),
-          ),
-        );
-        await publish(service);
-        void flush();
-        return replaced;
-      }),
-    discardRejected: (commandId) =>
-      withMutationLock(async () => {
-        const service = await loadService(false);
-        await Effect.runPromise(service.removeRejected(commandId));
-        await publish(service);
-        void flush();
-      }),
-    confirmProjected: (messageIds) =>
-      withMutationLock(async () => {
-        if (messageIds.size === 0) return;
-        const accepted = await loadAcceptedProjectionService();
-        for (const entry of await Effect.runPromise(accepted.entries)) {
-          if (messageIds.has(entry.plan.command.message.messageId)) {
-            await Effect.runPromise(accepted.cancelPending(entry.plan.command.commandId));
-          }
-        }
-        await publishAcceptedProjection(accepted);
-      }),
-    dispose: () => {
-      disposed = true;
-      if (timer !== null) clearTimer(timer);
-      timer = null;
-      listeners.clear();
-    },
-  };
+  });
+  // oxlint-disable-next-line unicorn/require-post-message-target-origin -- BroadcastChannel takes no origin.
+  if (mode === "readwrite") changes?.postMessage("changed");
+  return result;
 }
 
-let liveController: DurableCommandOutboxController | null = null;
-let liveListenerCleanup: (() => void) | null = null;
-
-function withBrowserMutationLock<A>(task: () => Promise<A>): Promise<A> {
-  if (typeof navigator === "undefined" || navigator.locks === undefined) return task();
-  return navigator.locks.request("t3code:durable-command-outbox:mutation", task);
-}
-
-function withBrowserDrainLeadership(task: () => Promise<void>): Promise<boolean> {
-  if (typeof navigator === "undefined" || navigator.locks === undefined) {
-    return task().then(() => true);
-  }
-  return navigator.locks.request(
-    "t3code:durable-command-outbox:drain-leader",
-    { ifAvailable: true },
-    async (lock) => {
-      if (lock === null) return false;
-      await task();
-      return true;
-    },
+function decodeRows(rows: ReadonlyArray<unknown>): ReadonlyArray<DurableComposerEntry> {
+  return rows.flatMap((row) =>
+    Option.match(decodeStoredEntry(row), {
+      onNone: () => {
+        // Leave the record alone: a newer build may still read it.
+        console.warn("Skipping an unreadable message in the outbox", row);
+        return [];
+      },
+      onSome: (entry) => [entry],
+    }),
   );
 }
 
-export function attachDurableOutboxWakeListeners(
-  controller: Pick<DurableCommandOutboxController, "wake">,
-  windowTarget: Pick<Window, "addEventListener" | "removeEventListener">,
-  documentTarget: Pick<Document, "addEventListener" | "removeEventListener" | "visibilityState">,
-): () => void {
-  const visibilityListener = () => {
-    if (documentTarget.visibilityState === "visible") controller.wake();
-  };
-  windowTarget.addEventListener("online", controller.wake);
-  documentTarget.addEventListener("visibilitychange", visibilityListener);
-  return () => {
-    windowTarget.removeEventListener("online", controller.wake);
-    documentTarget.removeEventListener("visibilitychange", visibilityListener);
-  };
+export const indexedDbOutboxStore: CommandOutboxStore<DurableComposerCommand> = {
+  list: () =>
+    transact<ReadonlyArray<DurableComposerEntry>>("readonly", (store, settle) => {
+      const request = store.getAll();
+      request.addEventListener("success", () => settle(decodeRows(request.result)));
+    }),
+  add: (entry) =>
+    transact<DurableComposerEntry>("readwrite", (store, settle, fail) => {
+      const existing = store.getAll();
+      existing.addEventListener("success", () => {
+        if (
+          decodeRows(existing.result).some(
+            (stored) => stored.command.commandId === entry.command.commandId,
+          )
+        ) {
+          fail(new Error(`Command ${entry.command.commandId} is already in the outbox.`));
+          return;
+        }
+        const added = store.add(encodeNewEntry(entry));
+        added.addEventListener("success", () => settle({ ...entry, id: Number(added.result) }));
+      });
+    }),
+  update: (id, change) =>
+    transact<DurableComposerEntry | null | undefined>("readwrite", (store, settle) => {
+      const request = store.get(id);
+      request.addEventListener("success", () => {
+        const current = Option.getOrUndefined(decodeStoredEntry(request.result));
+        const next = current === undefined ? undefined : change(current);
+        if (next === null) store.delete(id);
+        else if (next !== undefined) store.put(encodeStoredEntry(next));
+        settle(next);
+      });
+    }),
+};
+
+function withDrainLock(drain: () => Promise<void>): Promise<void> {
+  // One tab drains at a time; without Web Locks, receipts still dedupe.
+  if (typeof navigator === "undefined" || navigator.locks === undefined) return drain();
+  return navigator.locks.request(DRAIN_LOCK, drain);
 }
 
-export function durableCommandOutbox(): DurableCommandOutboxController {
-  if (liveController !== null) return liveController;
-  liveController = createDurableCommandOutboxController({
-    storage: browserCommandOutboxStorage,
-    acceptedProjectionStorage: browserAcceptedProjectionStorage,
-    prepareCommand: (environmentId, command) => {
-      if (!command.message.context) return command;
-      const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
-      if (!config) throw new Error(`Environment capabilities unavailable for ${environmentId}`);
-      if (config.environment.capabilities.inlineMessageContext === true) return command;
-      const { context, ...message } = command.message;
-      return {
-        ...command,
-        message: {
-          ...message,
-          text: serializeLegacyContextMessage({ text: message.text, records: context.records }),
-        },
-      };
+function isEnvironmentConnected(environmentId: EnvironmentId): boolean {
+  return Option.exists(
+    AsyncResult.value(appAtomRegistry.get(environmentCatalog.stateAtom(environmentId))),
+    (state) => state.phase === "connected",
+  );
+}
+
+const rejectionListeners = new Set<(entry: DurableComposerEntry) => void>();
+let liveController: CommandOutboxController<DurableComposerCommand> | null = null;
+
+function startController(): CommandOutboxController<DurableComposerCommand> {
+  const controller = createCommandOutboxController<DurableComposerCommand>({
+    store: indexedDbOutboxStore,
+    deliver: deliverDurableComposerCommand,
+    canDeliver: (command) => isEnvironmentConnected(command.environmentId),
+    withDrainLock,
+    onRejected: (entry) => {
+      for (const listener of rejectionListeners) listener(entry);
     },
-    dispatch: async (environmentId, command) => {
-      const api = readEnvironmentApi(environmentId);
-      if (!api) throw new Error(`Environment API unavailable for ${environmentId}`);
-      await api.orchestration.dispatchCommand(command);
+    onError: (error) => console.error("The message outbox could not deliver", error),
+    now: () => Date.now(),
+    setTimer: (callback, delayMs) => {
+      const handle = window.setTimeout(callback, delayMs);
+      return () => window.clearTimeout(handle);
     },
-    withMutationLock: withBrowserMutationLock,
-    withDrainLeadership: withBrowserDrainLeadership,
   });
-  if (typeof window !== "undefined") {
-    liveListenerCleanup = attachDurableOutboxWakeListeners(liveController, window, document);
-  }
+
+  // Wake on reconnect for every environment that has waiting messages.
+  const watched = new Map<EnvironmentId, () => void>();
+  const watchEnvironments = () => {
+    const needed = new Set(controller.entries().map((entry) => entry.command.environmentId));
+    for (const [environmentId, unwatch] of watched) {
+      if (needed.has(environmentId)) continue;
+      unwatch();
+      watched.delete(environmentId);
+    }
+    for (const environmentId of needed) {
+      if (watched.has(environmentId)) continue;
+      let connected = isEnvironmentConnected(environmentId);
+      watched.set(
+        environmentId,
+        appAtomRegistry.subscribe(environmentCatalog.stateAtom(environmentId), () => {
+          const next = isEnvironmentConnected(environmentId);
+          if (next && !connected) void controller.wake();
+          connected = next;
+        }),
+      );
+    }
+  };
+  controller.subscribe(watchEnvironments);
+
+  changes?.addEventListener("message", () => void controller.refresh());
+  window.addEventListener("online", () => void controller.wake());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void controller.wake();
+  });
+  return controller;
+}
+
+export function durableCommandOutbox(): CommandOutboxController<DurableComposerCommand> {
+  liveController ??= startController();
   return liveController;
 }
 
-const EMPTY_ENTRIES: ReadonlyArray<DurableCommandOutboxEntry> = [];
+const EMPTY_ENTRIES: ReadonlyArray<DurableComposerEntry> = [];
+const noopSubscribe = () => () => undefined;
 
-export function useDurableCommandOutboxEntries(): ReadonlyArray<DurableCommandOutboxEntry> {
+function useOutboxEntries(): ReadonlyArray<DurableComposerEntry> {
   const controller = typeof window === "undefined" ? null : durableCommandOutbox();
   return useSyncExternalStore(
-    controller?.subscribe ?? (() => () => undefined),
-    controller?.snapshot ?? (() => EMPTY_ENTRIES),
+    controller?.subscribe ?? noopSubscribe,
+    controller?.entries ?? (() => EMPTY_ENTRIES),
     () => EMPTY_ENTRIES,
   );
 }
 
-export function useAcceptedCommandProjectionEntries(): ReadonlyArray<DurableCommandOutboxEntry> {
-  const controller = typeof window === "undefined" ? null : durableCommandOutbox();
-  return useSyncExternalStore(
-    controller?.subscribe ?? (() => () => undefined),
-    controller?.acceptedProjectionSnapshot ?? (() => EMPTY_ENTRIES),
-    () => EMPTY_ENTRIES,
-  );
+/** Starts delivery for the app session and reports rejections wherever the user is. */
+export function useDurableCommandOutbox(onRejected: (entry: DurableComposerEntry) => void): void {
+  useEffect(() => {
+    durableCommandOutbox();
+    rejectionListeners.add(onRejected);
+    return () => {
+      rejectionListeners.delete(onRejected);
+    };
+  }, [onRejected]);
 }
 
-export function selectDurableOutboxMessages(
-  entries: ReadonlyArray<DurableCommandOutboxEntry>,
+/**
+ * The thread's waiting messages, oldest first. Messages the server already
+ * shows are dropped: their delivery succeeded even if no reply said so.
+ */
+export function useThreadDurableOutbox(
+  threadRef: ScopedThreadRef | null,
+  serverMessageIds: ReadonlySet<string>,
+): ReadonlyArray<DurableComposerEntry> {
+  const entries = useOutboxEntries();
+  const threadKey = threadRef === null ? null : scopedThreadKey(threadRef);
+  const threadEntries = useMemo(
+    () =>
+      threadKey === null
+        ? EMPTY_ENTRIES
+        : entries.filter((entry) => scopedThreadKey(entry.command) === threadKey),
+    [entries, threadKey],
+  );
+  useEffect(() => {
+    if (!threadEntries.some((entry) => serverMessageIds.has(entry.command.messageId))) return;
+    void durableCommandOutbox().settle(
+      (command) =>
+        scopedThreadKey(command) === threadKey && serverMessageIds.has(command.messageId),
+    );
+  }, [serverMessageIds, threadEntries, threadKey]);
+  return threadEntries;
+}
+
+function durableAttachment(
+  attachment: ComposerImageAttachment | ComposerFileAttachment,
   environmentId: EnvironmentId,
-  threadId: ThreadId,
-  alreadyVisibleMessageIds: ReadonlySet<string> = new Set(),
-) {
-  const seen = new Set<string>();
-  return entries.flatMap((entry) => {
-    if (
-      entry.plan.environmentId !== environmentId ||
-      entry.plan.command.threadId !== threadId ||
-      alreadyVisibleMessageIds.has(entry.plan.command.message.messageId) ||
-      seen.has(entry.plan.command.message.messageId)
-    ) {
-      return [];
-    }
-    seen.add(entry.plan.command.message.messageId);
-    return [entry.plan.command.message];
+): DurableComposerAttachment {
+  const upload = readAttachmentUpload(attachment.id);
+  const uploadedAttachmentId =
+    upload?.status === "ready" && upload.environmentId === environmentId
+      ? upload.attachmentId
+      : attachment.type === "file" && attachment.uploadEnvironmentId === environmentId
+        ? attachment.uploadedAttachmentId
+        : undefined;
+  if (attachment.file === null && uploadedAttachmentId === undefined) {
+    throw new Error(`Attach '${attachment.name}' again before sending.`);
+  }
+  const { id, name, mimeType, sizeBytes } = attachment;
+  return {
+    attachment:
+      attachment.type === "image"
+        ? {
+            type: "image",
+            id,
+            name,
+            mimeType,
+            sizeBytes,
+            ...(attachment.source ? { source: attachment.source } : {}),
+          }
+        : {
+            type: "file",
+            id,
+            name,
+            mimeType,
+            sizeBytes,
+            ...(attachment.source ? { source: attachment.source } : {}),
+          },
+    blob: attachment.file,
+    ...(uploadedAttachmentId === undefined ? {} : { uploadedAttachmentId }),
+  };
+}
+
+export interface DurableComposerSend {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly createdAt: string;
+  readonly text: string;
+  readonly context: OrchestrationMessageContext | undefined;
+  readonly attachments: ReadonlyArray<ComposerImageAttachment | ComposerFileAttachment>;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly dispatchMode: ComposerDispatchMode;
+  /** Set for a draft's first message, which creates the thread. */
+  readonly createThread: {
+    readonly projectId: ProjectId;
+    readonly branch: string | null;
+    readonly worktreePath: string | null;
+    readonly createdAt: string;
+  } | null;
+  readonly prepareWorktree: {
+    readonly projectCwd: string;
+    readonly baseBranch: string;
+    readonly startFromOrigin: boolean;
+  } | null;
+  /** Set instead of `prepareWorktree` when the server creates a managed workspace. */
+  readonly prepareWorkspace: Omit<ManagedWorkspaceLaunchStrategy, "type"> | null;
+}
+
+function threadBootstrap(
+  send: DurableComposerSend,
+  title: string,
+): StartThreadTurnInput["bootstrap"] {
+  if (
+    send.createThread === null &&
+    send.prepareWorktree === null &&
+    send.prepareWorkspace === null
+  ) {
+    return undefined;
+  }
+  return {
+    ...(send.createThread === null
+      ? {}
+      : {
+          createThread: {
+            ...send.createThread,
+            title,
+            modelSelection: send.modelSelection,
+            runtimeMode: send.runtimeMode,
+            interactionMode: send.interactionMode,
+          },
+        }),
+    ...(send.prepareWorkspace !== null
+      ? { prepareWorkspace: send.prepareWorkspace, runSetupScript: true }
+      : send.prepareWorktree === null
+        ? {}
+        : {
+            prepareWorktree: {
+              projectCwd: send.prepareWorktree.projectCwd,
+              baseBranch: send.prepareWorktree.baseBranch,
+              ...(send.prepareWorktree.startFromOrigin ? { startFromOrigin: true } : {}),
+            },
+            runSetupScript: true,
+          }),
+  };
+}
+
+/**
+ * Saves a composer send on this device. A direct send that already went out
+ * passes its command id so delivery reuses it; `acknowledgementLost` marks
+ * that it may have arrived.
+ */
+export async function enqueueComposerSend(
+  send: DurableComposerSend,
+  directSend?: { readonly commandId: CommandId; readonly acknowledgementLost: boolean },
+): Promise<void> {
+  const controller = durableCommandOutbox();
+  const threadKey = scopedThreadKey(send);
+  // A follow-up written before the thread's launch went out joins that thread.
+  const launchPending = controller
+    .entries()
+    .some(
+      (entry) =>
+        scopedThreadKey(entry.command) === threadKey &&
+        entry.command.bootstrap?.createThread !== undefined,
+    );
+  const attachments = send.attachments.map((attachment) =>
+    durableAttachment(attachment, send.environmentId),
+  );
+  const titleSeed = deriveThreadTitleSeed({
+    text: stripInlineContextReferences(send.text),
+    attachments: send.attachments,
   });
+  const bootstrap = launchPending ? undefined : threadBootstrap(send, titleSeed);
+  await controller.enqueue(
+    {
+      environmentId: send.environmentId,
+      threadId: send.threadId,
+      commandId: directSend?.commandId ?? CommandId.make(randomUUID()),
+      messageId: send.messageId,
+      createdAt: send.createdAt,
+      text: send.text,
+      ...(send.context ? { context: send.context } : {}),
+      attachments,
+      modelSelection: send.modelSelection,
+      runtimeMode: send.runtimeMode,
+      interactionMode: send.interactionMode,
+      dispatchMode: send.dispatchMode,
+      titleSeed,
+      ...(bootstrap ? { bootstrap } : {}),
+    },
+    { acknowledgementLost: directSend?.acknowledgementLost === true },
+  );
+  // The outbox owns these files now. Uploads it adopted stay on the server;
+  // the composer's other jobs would otherwise retry on reconnect.
+  send.attachments.forEach((attachment, index) => {
+    if (attachments[index]?.uploadedAttachmentId === undefined) releaseDraftAttachment(attachment);
+  });
+  if (bootstrap?.createThread) {
+    // A sent draft must survive reloads and must not be reused for the next new thread.
+    markPromotedDraftThreadByRef({ environmentId: send.environmentId, threadId: send.threadId });
+  }
 }
 
-export function shouldClearComposerAfterDurableEnqueue(
-  submittedDraftRevision: unknown,
-  currentDraftRevision: unknown,
-): boolean {
-  return JSON.stringify(submittedDraftRevision) === JSON.stringify(currentDraftRevision);
+/**
+ * A direct send that failed on the way to the environment continues in the
+ * outbox under its command id instead of returning to the composer, where a
+ * second send could duplicate it. Resolves false for a decided rejection.
+ */
+export async function handOffUnconfirmedSend(
+  result: AtomCommandResult<unknown, unknown>,
+  send: DurableComposerSend,
+  commandId: CommandId,
+): Promise<boolean> {
+  if (result._tag === "Success") return false;
+  const { classification } = isAtomCommandInterrupted(result)
+    ? { classification: "ambiguous" as const }
+    : classifyCommandDeliveryFailure(squashAtomCommandFailure(result));
+  if (classification === "permanent") return false;
+  try {
+    await enqueueComposerSend(send, {
+      commandId,
+      acknowledgementLost: classification === "ambiguous",
+    });
+    return true;
+  } catch (error) {
+    console.error("Could not keep the unconfirmed message on this device", error);
+    return false;
+  }
 }
 
-export function __resetDurableCommandOutboxForTests(): void {
-  liveListenerCleanup?.();
-  liveListenerCleanup = null;
-  liveController?.dispose();
-  liveController = null;
+export interface RestoredComposerContent {
+  readonly text: string;
+  readonly images: ComposerImageAttachment[];
+  readonly files: ComposerFileAttachment[];
+  /** The message would have created its thread, so the draft is open again. */
+  readonly createsThread: boolean;
+}
+
+/** The message as composer content, for editing after it was taken out of the outbox. */
+export function restoredComposerContent(entry: DurableComposerEntry): RestoredComposerContent {
+  const { command } = entry;
+  const images: ComposerImageAttachment[] = [];
+  const files: ComposerFileAttachment[] = [];
+  for (const { attachment, blob, uploadedAttachmentId } of command.attachments) {
+    const file =
+      blob === null ? null : new File([blob], attachment.name, { type: attachment.mimeType });
+    if (attachment.type === "image" && file !== null) {
+      images.push({ ...attachment, previewUrl: URL.createObjectURL(file), file });
+    } else if (attachment.type === "file") {
+      files.push({
+        ...attachment,
+        file,
+        ...(uploadedAttachmentId === undefined
+          ? {}
+          : { uploadedAttachmentId, uploadEnvironmentId: command.environmentId }),
+      });
+    }
+  }
+  return {
+    // Context chips cannot be rebuilt from wire records; spell them out instead.
+    text: command.context
+      ? serializeLegacyContextMessage({ text: command.text, records: command.context.records })
+      : command.text,
+    images,
+    files,
+    createsThread: command.bootstrap?.createThread !== undefined,
+  };
 }

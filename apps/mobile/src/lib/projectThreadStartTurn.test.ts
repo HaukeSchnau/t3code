@@ -4,7 +4,6 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  ThreadWorkspaceId,
 } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { describe, expect, it } from "vite-plus/test";
@@ -20,6 +19,40 @@ describe("project thread title", () => {
     expect(deriveThreadTitleFromPrompt(" \n ")).toBe("New thread");
   });
 
+  it("derives attachment-only titles from prepared image metadata", () => {
+    const uploadedAttachments = [
+      {
+        type: "image" as const,
+        id: "prepared-photo",
+        name: "photo.png",
+        mimeType: "image/png",
+        sizeBytes: 3,
+      },
+    ];
+    const input = buildProjectThreadStartTurnInput({
+      projectId: ProjectId.make("project"),
+      projectCwd: "/workspace",
+      threadId: "image-thread",
+      commandId: "image-command",
+      messageId: "image-message",
+      createdAt: "2026-09-04T00:00:00Z",
+      text: "",
+      uploadedAttachments,
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceMode: "local",
+      branch: null,
+      worktreePath: null,
+      startFromOrigin: false,
+      worktreeBranchName: "unused",
+    });
+
+    expect(input.titleSeed).toBe("Image: photo.png");
+    expect(input.bootstrap.createThread.title).toBe(input.titleSeed);
+    expect(input.message.attachments).toEqual(uploadedAttachments);
+  });
+
   it.each([
     {
       comment: undefined,
@@ -27,7 +60,7 @@ describe("project thread title", () => {
     },
     {
       comment: 'Why "shared"?',
-      title: 'Keep `cache[key]` & <parser> shared. Retry! Comment: Why "shared"?',
+      title: "Keep `cache[key]` & <parser> shared. Retry! Commen...",
     },
   ])("uses readable titles and intact links with comment $comment", ({ comment, title }) => {
     const quoteText = "Keep `cache[key]` & <parser> shared.\n  Retry!";
@@ -96,50 +129,45 @@ describe("new thread on an existing branch", () => {
         branch: "feature/existing",
         worktreePath,
       });
-      expect(input.bootstrap).not.toHaveProperty("prepareWorkspace");
+      expect(input.bootstrap).not.toHaveProperty("prepareWorktree");
       expect(input.bootstrap).not.toHaveProperty("runSetupScript");
       expect(input.threadId).toBe("new-thread");
     },
   );
 });
 
-describe("managed workspace creation", () => {
-  const spec = {
-    projectId: ProjectId.make("project"),
-    projectCwd: "/project",
-    threadId: "fresh-thread",
-    commandId: "create",
-    messageId: "prompt",
-    createdAt: "2026-09-09T12:00:00Z",
-    text: "Continue the task",
-    uploadedAttachments: [],
-    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-luna" },
-    runtimeMode: "full-access" as const,
-    interactionMode: "default" as const,
-    workspaceMode: "worktree" as const,
-    branch: null,
-    worktreePath: null,
-    startFromOrigin: false,
-    worktreeBranchName: "unused",
-  };
-  it("lets the server select the current revision for a branchless repository", () => {
-    const command = buildProjectThreadStartTurnInput({ ...spec, workspaceProfile: "minimal" });
-    expect(command.bootstrap.prepareWorkspace).toEqual({
-      kind: "auto",
-      profile: "minimal",
-      roots: [{ projectId: "project", sourcePath: "/project", role: "primary" }],
-    });
-  });
-  it("shares the chosen workspace identity and files when starting another conversation", () => {
-    const workspaceId = ThreadWorkspaceId.make("workspace:original");
-    const command = buildProjectThreadStartTurnInput({
+// Fork: managed workspaces (patches/workspaces.md).
+describe("managed workspace bootstrap", () => {
+  it("asks the server for a new workspace without requiring a branch", () => {
+    const spec = {
+      projectId: ProjectId.make("project"),
+      projectCwd: "/notes",
+      threadId: "workspace-thread",
+      commandId: "workspace-command",
+      messageId: "workspace-message",
+      createdAt: "2026-10-05T00:00:00Z",
+      text: "Draft the release notes",
+      uploadedAttachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      workspaceMode: "worktree" as const,
+      branch: null,
+      worktreePath: null,
+      startFromOrigin: false,
+      worktreeBranchName: "t3code/0a1b2c3d",
+    };
+    const input = buildProjectThreadStartTurnInput({
       ...spec,
-      workspaceMode: "local",
-      workspaceId,
-      worktreePath: "/workspaces/task",
+      managedWorkspace: { profile: "minimal" },
     });
-    expect(command.bootstrap.createThread.workspaceId).toBe(workspaceId);
-    expect(command.bootstrap.createThread.worktreePath).toBe("/workspaces/task");
-    expect(command.bootstrap).not.toHaveProperty("prepareWorkspace");
+    expect(input.bootstrap).toMatchObject({
+      prepareWorkspace: { profile: "minimal" },
+      runSetupScript: true,
+    });
+    expect(input.bootstrap).not.toHaveProperty("prepareWorktree");
+    expect(buildProjectThreadStartTurnInput({ ...spec, branch: "main" }).bootstrap).toMatchObject({
+      prepareWorktree: { baseBranch: "main", branch: "t3code/0a1b2c3d" },
+    });
   });
 });

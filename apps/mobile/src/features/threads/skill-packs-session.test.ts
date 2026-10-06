@@ -34,12 +34,7 @@ describe("skill packs sheet", () => {
     const selection = resolveSkillPackSelection({
       catalog,
       projectDefaultPackIds: [],
-      threadScope: {
-        version: 1,
-        appliedVersion: 0,
-        packIds: [SkillPackId.make("web-craft")],
-        state: "pending",
-      },
+      threadScope: { packIds: [SkillPackId.make("web-craft")], state: "pending" },
     });
     expect(skillPacksRowValue({ catalog, selection })).toBe("Frontend · pending");
 
@@ -52,6 +47,22 @@ describe("skill packs sheet", () => {
       "2 skills in total",
     ]);
     expect(rows.notices).toEqual(["Applies on the next turn."]);
+  });
+
+  it("puts a degraded issue ahead of other notes", () => {
+    const selection = resolveSkillPackSelection({
+      catalog,
+      projectDefaultPackIds: [],
+      threadScope: {
+        packIds: [SkillPackId.make("web-craft")],
+        state: "degraded",
+        issue: "Missing skills: dataviz",
+      },
+    });
+    expect(skillPacksRowValue({ catalog, selection })).toBe("Frontend · issue");
+    expect(
+      buildSkillPacksSheetRows({ catalog, selection, providerWarning: "Unsupported" }).notices,
+    ).toEqual(["Missing skills: dataviz"]);
   });
 
   it("reads as core with no notices when nothing is selected", () => {

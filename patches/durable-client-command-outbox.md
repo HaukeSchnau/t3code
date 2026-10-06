@@ -2,124 +2,109 @@
 
 ## Why this patch exists
 
-Web and mobile clients need to accept user messages while an environment is disconnected or an
-acknowledgement is lost. Retrying an RPC assembled from current UI state can change its payload or identity,
-while treating a lost acknowledgement as a rejection can lose a command that the server already accepted.
-The shared client runtime therefore owns a small durable-delivery state machine; platform clients only supply
-storage and decide when to drain ready thread heads.
+Hauke works from trains. The connection drops for minutes at a time, and a socket can die after a
+request left but before its reply arrived. Upstream web refuses to send while the environment is
+disconnected ("Not connected: message not sent"). When a send fails in flight, it puts the text
+back into the composer, and sending it again mints a new command id, so a message the server did
+accept arrives twice. Upstream mobile keeps its own outbox (`apps/mobile/src/state/thread-outbox*`);
+web and desktop have none.
 
-## Public model and storage contract
+## Requirement
 
-- `@t3tools/client-runtime/operations/command-outbox` exports the versioned delivery-plan and persisted-document
-  schemas. A plan freezes the environment, enqueue timestamp, command variant, command id, and complete payload.
-- The durable allowlist contains only `thread.turn.start` and `thread.message.queue`. Approval responses,
-  interrupts, queued-message controls, VCS operations, terminal input, preview automation, and arbitrary RPC
-  methods must not be replayed through this outbox without a separate safety audit.
-- Document schema version 1 is an ordered array. Array position is the FIFO authority, including when an edited
-  rejected head receives a replacement plan whose enqueue timestamp is newer.
-- Outbox lifecycle timestamps use canonical UTC ISO strings. Lifecycle states are `Pending`, `Delivering`,
-  `Retrying`, and `Rejected`; retry and rejection records retain the attempt count and typed failure
-  classification (`transient`, `ambiguous`, or `permanent`).
-- `CommandOutboxStorage` is a platform service with `load` and atomic whole-document `save`. The shared package
-  intentionally contains no IndexedDB, filesystem, Expo, React, or React Native implementation.
-- `@t3tools/client-runtime/state/command-outbox` exports the serialized state machine and Effect layer. Every
-  mutation saves the next document before publishing it in memory. Durable save and in-memory publication are
-  one uninterruptible commit section, while mutation serialization and unrelated work remain interruptible. A
-  failed save leaves observable state unchanged. If interruption arrives after that commit section starts, it
-  is observed only after storage and memory agree; interruption before the section leaves both unchanged.
+- A web or desktop send made while the environment is unreachable is saved on the device, survives
+  reloads, and is delivered automatically once the environment is back.
+- A send whose reply was lost keeps its command id and is retried with it. The server's command
+  receipts make the retry a replay, for `message.dispatch` in the orchestrator and for
+  `launchThread` in `ThreadLaunchService`, so the message arrives once, also after a server restart.
+- Each thread delivers in order. A message still waiting in the outbox holds back later sends to the
+  same thread, including sends made after the connection returned.
+- The thread shows each waiting message and its state. A message that cannot have arrived can go
+  back into the composer or be discarded. A rejected one can also be retried under a new command id.
+- Queue or steer stays the user's choice. The message carries it and the server resolves it against
+  the thread when the message arrives.
+- Attachment bytes stay on the device until an upload succeeds.
 
-## Delivery requirements
+## Design
 
-- Build and persist a delivery plan before the first network attempt. `prepareStartThreadTurn` and
-  `prepareQueueThreadMessage` create complete commands without requiring a live environment connection.
-- Retry transient and ambiguous failures with the exact frozen command and command id. An interrupted
-  `Delivering` record becomes an immediate ambiguous retry during startup recovery.
-- `cancelPending` is the only pre-delivery cancellation transition. It removes only a `Pending` entry, persists
-  that removal before publication, and rejects `Delivering`, `Retrying`, and `Rejected` entries because each may
-  represent intent that reached or attempted the network boundary.
-- `replacePending` atomically edits only a `Pending` entry in its existing array position. The replacement must
-  pass the durable-plan schema, remain in the same environment and thread, and use a new command id that is
-  unique across the document. Same-id edits are forbidden even before I/O: replacing ready entry A with new-id
-  entry B guarantees a drainer holding a stale snapshot of A cannot begin or dispatch obsolete intent. Once
-  `begin` succeeds, pending replacement and cancellation are permanently unavailable and the deeply frozen
-  plan identity and payload are reused unchanged by delivery and retry transitions.
-- A permanent rejection remains at the thread head. Only `removeRejected` may discard an entry, and it rejects
-  pending, delivering, transient-retry, and ambiguous-retry states. Removing a rejected head unblocks the next
-  item; edit-and-retry uses the atomic `replaceRejected` transition and must provide a new command id in the
-  same environment and thread.
-- Only the first item for each `(environmentId, threadId)` can become ready. A delivering, delayed-retry, or
-  rejected head blocks that thread but does not prevent another thread from draining.
-- Unknown failures default to ambiguous so the core does not silently lose a possibly accepted command.
-  Adapters should classify typed business rejections as permanent and may use the shared classifier for known
-  unavailable and transport failures.
+Mobile's outbox was not generalized. It stores composer intent and is tied to mobile composer
+drafts, Expo files, and React Native hooks; sharing it would mean moving upstream mobile code into
+client-runtime. Web needs storage that several tabs can change at once. The fork therefore keeps a
+small delivery state machine in `packages/client-runtime/src/state/commandOutbox.ts` (export
+`./state/command-outbox`), and web supplies storage, delivery, and UI. Mobile is unchanged.
 
-## Integration notes
+### State machine
 
-- Web and mobile adapters must decode/migrate their platform records into document version 1 and implement an
-  atomic replacement write. They should call `begin` immediately before dispatch and dispatch only the frozen
-  plan returned by that successful `begin`, never a prior `ready` snapshot. They should then call `complete`
-  only after a positive receipt or `fail` with an explicit classification.
-- The core does not own reconnects, timers, connection policy, server receipts, or UI. `EnvironmentSupervisor`
-  remains the transport reconnect owner; adapters re-evaluate `ready(at)` on connectivity and retry-timer
-  changes.
-- Storage implementations must preserve document order. They may use a transaction, atomic file replacement,
-  or an equivalent platform primitive, but must never expose a partially replaced snapshot.
-- Mobile draft image attachments cross the command boundary through the pure
-  `apps/mobile/src/lib/composerImageAttachments.ts` sanitizer. Keep that module independent from the native
-  image-picker implementation: outbox planning and recovery must not load Expo or React Native merely to strip
-  draft-only `id` and `previewUri` fields.
+- Entries are `Pending`, `Delivering`, `Retrying`, or `Rejected`. The store assigns increasing ids,
+  and only the oldest entry of a thread can be delivered. A waiting or rejected head holds back its
+  thread and no other.
+- A failure is `transient` (the command never left the client), `ambiguous` (it may have arrived,
+  so only a retry with the same id is allowed), or `permanent` (the environment decided). Unknown
+  errors count as permanent, so a client bug cannot block a thread forever. The thread view removes
+  any entry whose message the server already shows, which also cleans up a "rejected" message that
+  in fact arrived.
+- Only `Pending`, transient `Retrying`, and `Rejected` entries can be taken back. Retrying a rejected
+  entry assigns a new command id, because the old one replays its rejection.
+- A drain runs under a lock shared by everything that uses the store. Holding it proves that a stored
+  `Delivering` entry was abandoned by a reload or closed tab, so the drain turns it into an immediate
+  ambiguous retry.
+- The store contract is an atomic read-modify-write per entry and an add that rejects a command id
+  already stored.
 
-### Web adapter
+### Web and desktop
 
-- `apps/web/src/durableCommandOutbox.ts` persists the versioned document in a dedicated IndexedDB database.
-  Composer submission waits for that transaction, not for the environment RPC, so an unavailable WebSocket
-  does not make accepted local intent look like a failed send.
-- The adapter owns one drain loop. It retries ready thread heads on the shared bounded backoff and wakes the
-  loop when the browser reports that it is online or foregrounded. RPC success is the durable acknowledgement;
-  ambiguous response loss keeps the frozen command in the outbox and retries the same command id.
-- Cross-tab coordination uses separate Web Locks: a nonblocking drain-leadership lock spans delivery, while a
-  short mutation lock protects reload-plus-transition transactions. RPC waits never hold the mutation lock, so
-  another tab can durably enqueue without becoming a second drainer. Ordinary locked reloads preserve an
-  active `Delivering` state; only new drain leadership recovers a delivery abandoned by a prior leader. A
-  controller that loses the nonblocking leadership election schedules its own bounded re-election, so a leader
-  tab disappearing cannot strand work until an unrelated browser or network event.
-- A turn-start command atomically emits any selected model, runtime-mode, and interaction-mode projection
-  changes before its message and turn request. These settings therefore share the command receipt/replay
-  boundary instead of depending on unaudited preflight RPCs.
-- Chat rendering projects persisted outbox messages alongside the existing in-memory optimistic messages and
-  server snapshot, deduplicated by message id. This makes reload recovery visible without rendering two copies
-  while the server projection catches up.
-- A separate IndexedDB record keeps accepted commands visible after the active outbox entry is removed but before
-  the authoritative thread projection owns the message. The adapter persists this accepted projection before
-  completing the outbox transition, hydrates it after reload, and clears it only when the thread transcript or
-  remote queued-message collection contains the same message id. Accepted ids also suppress redispatch if a
-  crash occurs between those two durable writes.
-- Connection loss no longer disables the ordinary Send or Queue action. Non-replayable actions, approval
-  responses, and prior-message editing retain their existing online requirements.
+- `apps/web/src/durableCommandOutbox.ts` stores one IndexedDB record per entry in the database
+  `t3code:thread-outbox`. Each transition is one transaction, so tabs never overwrite each other's
+  work. Web Locks let one tab drain at a time, and a BroadcastChannel tells the other tabs to reload.
+  The v1 fork database `t3code:durable-command-outbox` is left alone: its commands cannot be
+  delivered to a v2 server.
+- The drain wakes on enqueue, when an environment with waiting entries reconnects, on `online`, when
+  the page becomes visible, and on retry timers. It delivers only to connected environments.
+- `apps/web/src/durableCommandOutboxDelivery.ts` uploads each attachment that has no upload id yet
+  and records the id before continuing, so a retry does not upload it again. It brings an existing
+  thread's runtime and interaction mode in line with derived command ids (`<id>:runtime-mode`,
+  `<id>:interaction-mode`), then calls the shared `startThreadTurn` with the stored command id. That
+  dispatches `message.dispatch` for an existing thread and `launchThread` for a new one.
+- Message context follows the environment's capability at each attempt. A receipt replay ignores the
+  payload, so a capability change between attempts cannot cause a second delivery.
+- `ChatView` gives its direct send an explicit command id. When that send fails with a transport
+  error or an interruption, `handOffUnconfirmedSend` stores it under the same id instead of restoring
+  the composer. A failure the server decided keeps upstream's restore behavior.
+- The first message of a draft stores its launch and marks the draft as promoting. The draft then
+  survives reloads, and new-thread actions open a fresh draft. Later sends from that draft join the
+  thread as follow-ups. Editing the launch message reopens the draft.
+- Sends that are not replayable keep their online requirement: starts with several models, edits
+  of a queued run, plan follow-ups, answers to pending questions, compact, and resume.
 
-## Maintenance notes
+## Upstream hooks
 
-When syncing upstream, keep the durable command allowlist explicit and compare it against orchestration command
-semantics. A new command belongs in this outbox only when duplicate delivery under the same command id is safe
-and server receipt/idempotency behavior is covered. If the contracts package later exports a dedicated durable
-command schema, replace the local refinement rather than duplicating command payload schemas here.
+- `apps/web/src/components/ChatView.tsx`: the thread's outbox entries and the `offlineSendsQueue`
+  flag; the offline toast only when a send cannot queue; the composer's disconnected state only when
+  a send cannot queue; the outbox branch before uploads; the explicit command id and handoff on the
+  direct send; `restoreOutboxMessageToComposer`; and the `DurableOutboxStrip` mount below
+  `TrainNetworkStatus`.
+- `apps/web/src/routes/_chat.tsx`: mounts `DurableOutboxDelivery`, which starts delivery for the
+  session and shows a toast with an Open action when a message is rejected.
+- `packages/client-runtime/package.json`: the `./state/command-outbox` export.
+
+## Known limits
+
+- The server sweeps pending uploads after 24 hours, and it claims attachments before it checks
+  receipts. An unconfirmed message with attachments that is retried after that window shows as
+  rejected even if its first attempt arrived. Opening the thread removes it once the message shows;
+  retrying it by hand could duplicate it.
+- A new thread that is still waiting has no sidebar row. A rejection raises a toast that opens it.
+- Entries for an environment removed from the device stay in IndexedDB.
+
+## Removal
+
+Retire this patch when upstream web keeps unsent and unconfirmed sends on the device under a fixed
+command id, delivers them in order after reconnecting, and shows them in the thread.
 
 ## Verification
 
-- Focused operation, schema, persistence-order, lifecycle, retry, FIFO, rejection, and crash-recovery tests in
-  `packages/client-runtime/src/operations/commands.test.ts`,
-  `packages/client-runtime/src/operations/commandOutbox.test.ts`, and
-  `packages/client-runtime/src/state/commandOutbox.test.ts`. The state tests cover every lifecycle for pending
-  edit/cancel, stale-ready invalidation, mandatory new IDs, duplicate IDs, durable-plan validation,
-  FIFO/thread-head behavior,
-  storage failure, and interruption during asynchronous saves.
-- `apps/web/src/durableCommandOutbox.test.ts` covers offline persistence, reconnect draining,
-  acknowledgement-loss replay with a stable identity, hydration after a new runtime, cross-tab leadership,
-  accepted-before-cleanup crash recovery, no redispatch after accepted hydration, and exactly-one optimistic
-  projection.
-- Client-runtime typecheck plus repository `vp check` and `vp run typecheck` gates.
-
-Structured message context travels with durable commands and queued messages. First delivery freezes
-the wire representation for the target server capability; retries reuse that representation even if
-capabilities change. Server queue persistence keeps context until dispatch, so delaying a message
-does not discard file, terminal, or skill references.
+- `packages/client-runtime/src/state/commandOutbox.test.ts`: offline enqueue and delivery, lost
+  acknowledgement retried with the same id and accepted once, per-thread order, rejection at the
+  head with retry and discard, reload during delivery, duplicate command ids, recorded uploads, and
+  settling entries the server already holds.
+- `apps/web/src/components/chat/durableOutboxPresentation.test.ts`: which states can be taken back
+  and what the thread shows.

@@ -1,68 +1,46 @@
-# Shared Connection Freshness Projection
+# Shared connection freshness projection
 
-## Goal
+## Requirement
 
-Give web and mobile one typed, read-only description of environment connection progress and cached
-shell freshness. The projection exposes the supervisor's current setup stage, attempt, generation,
-failure, and absolute retry time alongside the shell snapshot's categorical freshness and identity.
+The chat view must say when an environment is reconnecting, waiting to retry, or blocked, and
+whether the visible content is saved or live. Upstream's `EnvironmentConnectionPresentation` only
+gives a coarse connection state. A stale browser offline signal must not stop reconnection to a
+reachable server.
 
-## Ownership
+## Implementation
 
-- `EnvironmentSupervisor` remains the only owner of desired connection state, retry scheduling, and
-  replacement sessions.
-- Browser connectivity is advisory while an environment connection is desired. A reported offline
-  state is normalized to unknown before initial setup, automatic recovery, and explicit retry so a
-  stale `navigator.onLine` value cannot park a reachable transport. Connection attempts and their
-  bounded backoff remain the authority for reachability.
-- The projection observes `SupervisorConnectionState`; it never calls `connect`, `retryNow`, or any
-  transport/session API.
-- `retryAt` is copied unchanged as an absolute epoch time. `retryRemainingMs` only compares it with a
-  caller-provided observation time and owns no clock or timer.
-- Shell freshness is independent from transport readiness. A connected environment may still have
-  empty, cached, synchronizing, or live shell data, including a cached synchronization error.
+- `packages/client-runtime/src/state/connectionFreshness.ts`, exported as
+  `@t3tools/client-runtime/state/connection-freshness`, projects `SupervisorConnectionState` and
+  the environment shell state into one typed value. It carries the setup stage, attempt, failure
+  and absolute `retryAt`, plus the shell's freshness (`empty`, `cached`, `synchronizing`, `live`)
+  and the content snapshot's sequence.
+- The projection only observes. It never calls `connect`, `retryNow` or a transport API, and
+  `retryRemainingMs` compares `retryAt` with a clock value the caller passes in.
+- Supervisor and shell state update independently. When the connection is not `connected` but the
+  shell still reports `live`, the projection downgrades freshness to `cached`. It never claims
+  live data without a transport.
+- The source types use nullable fields, so they can describe combinations their state machines
+  never publish. The projection throws on those instead of emitting an invalid value, such as a
+  backoff without a failure or a live shell without a snapshot.
+- `connection/supervisor.ts` (`normalizeDesiredIntent`) treats a browser `offline` report as
+  `unknown` while the connection is desired: at startup, during automatic recovery, and on an
+  explicit retry. Connection attempts and their backoff decide reachability.
+- Web `ChatView.tsx` builds `activeConnectionFreshness` and renders it above the composer through
+  `components/chat/TrainNetworkStatus.tsx` and `trainNetworkExperience.ts`. Mobile does not use
+  the projection.
 
-## Snapshot Coupling and Cross-Source Reconciliation
+## Upstream touch points
 
-The public snapshot identity keeps the content snapshot's embedded `snapshotSequence` (exposed as
-`contentSequence`) and server-authored `updatedAt` in one object. This is not the shell state's private
-durable replay cursor: cursor-only frames can advance `lastSequence` and the persisted resume point
-without changing the published content snapshot. `updatedAt` is not presented as a client receipt time
-and is not used for age-based stale heuristics.
+- `packages/client-runtime/src/connection/supervisor.ts`: the offline normalization.
+- `apps/web/src/components/ChatView.tsx`: the projection and the `TrainNetworkStatus` mount.
+- `packages/client-runtime/package.json`: the `./state/connection-freshness` export.
 
-Supervisor and shell refs update independently. If the combined projector observes a non-connected
-connection while the shell still reports `live`, it retains the snapshot but downgrades freshness to
-`cached`. It never publishes live freshness without a connected transport.
+## Removal
 
-## Compatibility
-
-The existing coarse `EnvironmentConnectionPresentation` remains unchanged. Platform adoption and UI
-copy belong to later web and mobile UX packets; this patch only provides the shared pure projection.
-
-Warm shell and thread subscriptions opt in to a terminal `synchronized` stream item. The server emits it after
-persisted catch-up and before buffered live events; older clients receive no marker unless they request it. The
-client binds the proof to the immutable RPC session and supervisor generation captured when that subscription is
-created. A marker from a replaced session, a lower generation, or a generation that has since disconnected
-cannot promote cached data to live.
-
-Replay diagnostics execute inside the returned long-lived WebSocket stream. `websocketRpcRouteLayer` therefore
-captures its server-owned `ReplayLogPublisher` while constructing the route and explicitly provides that service
-to deferred shell/thread replay observers. Do not move this lookup back inside stream execution: the route-build
-context is gone by then, which makes every warm catch-up fail while the full-snapshot path continues to work.
-
-## Source Invariants
-
-The existing supervisor and shell source interfaces use nullable fields rather than discriminated
-unions, so TypeScript can represent combinations their state machines never publish. The projection
-checks those boundaries and fails explicitly instead of emitting an invalid public union, such as a
-backoff without `retryAt`, a retry carrying a blocked failure, a non-positive active attempt, a phase
-that contradicts desired/network state, or cached freshness without a snapshot.
+Retire this patch when upstream shows connection progress and content freshness in the chat view
+and stops trusting a stale offline signal.
 
 ## Verification
 
-Focused tests cover every connection phase, active setup stages, exact retry-time observation,
-snapshot identity coupling, retained cached data, transport/freshness independence, and rejection of
-impossible nullable source combinations. They also cover the immediate disconnect/backoff/blocked
-cross-source race, initial and automatic recovery from stale offline signals, and cursor-only
-content-sequence semantics. RPC/state tests cover replaced-session and stale generation marker races, genuine
-same-generation loss, deleted/no-data states, and a real WebSocket catch-up through both the shell
-and thread synchronization markers.
+`connectionFreshness.test.ts`, the stale-offline tests in `supervisor.test.ts`,
+`TrainNetworkStatus.test.tsx` and `trainNetworkExperience.test.ts`.

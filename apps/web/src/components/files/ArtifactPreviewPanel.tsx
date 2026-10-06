@@ -80,7 +80,7 @@ export default function ArtifactPreviewPanel(props: ArtifactPreviewPanelProps) {
         <Tooltip>
           <TooltipTrigger render={<div className="min-w-0 flex-1 leading-tight" />}>
             <div className="truncate text-xs font-medium text-foreground">{props.title}</div>
-            <div className="truncate text-[10px] text-muted-foreground">{props.url}</div>
+            <div className="truncate text-3xs text-muted-foreground">{props.url}</div>
           </TooltipTrigger>
           <TooltipPopup className="max-w-sm break-all">{props.url}</TooltipPopup>
         </Tooltip>

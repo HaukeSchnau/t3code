@@ -1,41 +1,44 @@
-# Desktop Workspace Deeplink
+# Desktop workspace deeplink
 
 ## Goal
 
-Allow the desktop app to open a local workspace directly from Terminal with a custom URL and `open`.
+Open a local directory in the desktop app from a terminal with a custom URL and `open`. Upstream
+offers `t3 app <path>` but registers no URL for it.
 
 ## Supported URLs
-
-Production builds register both the current app scheme and the legacy terminal scheme:
 
 ```bash
 open "t3code://open?cwd=$PWD"
 open "t3://open?cwd=$PWD"
 ```
 
-Development launchers register:
+Development builds use `t3code-dev://` in place of `t3code://`. Percent-encode `cwd` when the
+path contains spaces or other URL-sensitive characters.
 
-```bash
-open "t3code-dev://open?cwd=$PWD"
-open "t3://open?cwd=$PWD"
-```
+## Implementation
 
-If the path contains spaces or other URL-sensitive characters, percent-encode the `cwd` value first.
+- `apps/desktop/src/app/DesktopOpenWorkspace.ts` parses `<scheme>://open?cwd=<path>` for
+  `t3code`, `t3code-dev` and the legacy `t3` scheme. `dispatchUrl` answers synchronously, because
+  Electron's handlers decide on the spot whether to call `preventDefault`.
+- `DesktopClerk.configure` registers the schemes and handles `open-url` and `second-instance`,
+  because upstream's Clerk bridge owns the single-instance lock. The deeplink check runs after
+  upstream's provider-auth handlers, and only a handled URL calls `preventDefault`. Removing the
+  Clerk bridge also removes deeplink delivery.
+- Links that arrive before Electron is ready wait in a queue. `layerAppActivationDelivery`, wired
+  in `main.ts`, sends each one through `DesktopAppActivation.request` as an `open-workspace`
+  request. That is upstream's broker for `t3 app <path>`. It holds the request until the renderer
+  is ready, finds or creates the project in the primary environment, and opens a new thread.
+  `DesktopAppActivation.ts` only adds the `request` method to the service.
+- Source launches (`apps/desktop/scripts/electron-launcher.mjs`) declare the app scheme and `t3`
+  in their Info.plist. Packaged builds declare only `t3code` and `t3code-dev` through
+  `scripts/build-desktop-artifact.ts`, and macOS only honors runtime registration for schemes the
+  Info.plist declares. `t3://` therefore reaches source launches only.
 
-## Requirements
+## Non-goals
 
-- The packaged desktop app registers the `t3code` and `t3` URL schemes with macOS.
-- The development macOS launcher registers `t3code-dev` and `t3`.
-- The desktop main process handles `open-url` and `second-instance` early enough for cold-start launches. Both handlers live in `DesktopClerk.configure` because upstream's Clerk bridge owns the single-instance lock; removing that bridge also removes deeplink delivery.
-- The supported action is `<scheme>://open?cwd=<path>`.
-- `cwd` is forwarded to the existing web-side project creation/opening flow instead of duplicating project persistence logic in Electron.
-- Requests received before the web app is ready are queued and replayed after startup.
-- Existing projects should be reopened instead of duplicated.
-- New workspaces should create the project and open a draft thread.
-- The patch should stay narrowly scoped to desktop deeplink handling and avoid changing unrelated startup behavior.
+- No routing to remote environments.
+- No relative paths.
 
-## Non-Goals
+## Removal
 
-- No remote-environment deeplink routing.
-- No relative-path terminal context reconstruction.
-- No changes to remote clone flows.
+Retire this patch when upstream's desktop app handles an open-directory URL.

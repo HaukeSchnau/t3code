@@ -7,9 +7,9 @@ import {
 } from "@t3tools/client-runtime/skillPacks";
 
 /**
- * What the thread settings sheet needs to show and edit skill packs. Built by
- * the thread composer state for existing threads and by the new-task flow for
- * drafts; the sheet itself stays presentational.
+ * What the thread settings sheet needs to show and edit skill packs. The
+ * thread composer builds it for existing threads and the new-task flow for
+ * drafts; the sheet stays presentational. Fork: patches/skill-packs.md.
  */
 export interface SkillPacksSheetSession {
   readonly catalog: SkillPackCatalog;
@@ -80,14 +80,14 @@ export function buildSkillPacksSheetRows(
       ),
     `${resolveEffectiveSkills(catalog, selection.packIds).length} skills in total`,
   ];
-  const notices = [
-    ...(selection.state === "degraded"
-      ? [selection.issue ?? "Some skills could not be injected for this thread."]
-      : selection.state === "pending"
-        ? ["Applies on the next turn."]
-        : []),
-    ...(session.providerWarning ? [session.providerWarning] : []),
-  ];
+  const notices =
+    selection.state === "degraded"
+      ? [selection.issue ?? "Some skills could not be loaded for this thread."]
+      : session.providerWarning
+        ? [session.providerWarning]
+        : selection.state === "pending"
+          ? ["Applies on the next turn."]
+          : [];
   return {
     profiles: catalog.profiles.map((profile) => ({
       id: profile.id,

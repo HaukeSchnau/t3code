@@ -1,47 +1,32 @@
-# Bounded Thread Reconnect Catch-up
+# Bounded thread reconnect catch-up
 
-## Purpose
+## Requirement
 
-Keep durable thread-detail subscriptions current without replaying stale history or allowing a
-monitor full of visible threads to start every reconnect catch-up simultaneously.
+A reconnect with many mounted threads must not start every thread catch-up at once. Upstream
+replays every thread-detail subscription concurrently after a reconnect, which floods the server
+and the client with simultaneous replays. At most three thread catch-ups may run at a time per
+RPC session.
 
-## Contract
+## Implementation
 
-- Durable subscription input factories are sampled for every session attempt and every configured
-  expected-failure retry. Existing static subscription APIs remain available and retain their
-  behavior.
-- Thread detail subscriptions read their current applied sequence immediately before each attempt.
-  A zero cursor omits `afterSequence` so a cold client receives a snapshot; otherwise the latest
-  sequence is sent.
-- Thread catch-up admission is opt-in and scoped to an RPC session. At most three thread-detail
-  catch-ups may run concurrently. Shell, terminal, authentication, and other subscriptions are not
-  admitted through this gate.
-- Admission limits are normalized before subscription work and must be positive safe integers. A
-  logical group owns exactly one limit per session; conflicting configurations fail with the group
-  and both limits instead of silently creating an independent gate.
-- A permit is released on the first synchronization marker. The live stream continues without
-  holding it. Failure, interruption, and session replacement release through the scoped finalizer,
-  and release is idempotent. Permit acquisition is interruptible so a cancelled queued waiter does
-  not block session teardown or retain its FIFO position.
-- Admission preserves transport batches so replay updates publish once per batch, including when a
-  synchronization marker releases the permit.
-- Each replacement `RpcSession` owns a fresh weakly referenced gate. Pending work from an obsolete
-  session cannot consume the replacement session's capacity.
+- `SubscriptionOptions.admission` in `packages/client-runtime/src/rpc/client.ts` takes `group`,
+  `maxConcurrent`, `appliesTo(input)` and `releaseWhen(value)`. Each RPC session gets its own
+  semaphore per group, so a replacement session never inherits permits from the old one. A second
+  subscription that names the same group with a different limit fails instead of creating another
+  gate.
+- A subscription holds its permit from subscribe until the first value that `releaseWhen` accepts.
+  The live phase holds no permit. Failure and interruption release it through the scope
+  finalizer, at most once. Waiting for a permit is interruptible, and admission keeps transport
+  batches intact.
+- `state/threads.ts` admits thread-detail subscriptions in the `thread-detail-catch-up` group with
+  three permits. Only inputs that set `requestCompletionMarker` take a permit, because only those
+  streams emit the `synchronized` item that releases it.
+
+## Removal
+
+Retire this patch when upstream bounds concurrent thread catch-up and releases capacity before the
+live phase.
 
 ## Verification
 
-- `packages/client-runtime/src/state/threads-sync.test.ts` proves same-session retries resume from
-  the latest applied event sequence. Its replacement test advances the supervisor generation and
-  uses distinct client queues to prove old-transport cancellation and cursor freshness.
-- `packages/client-runtime/src/rpc/client.test.ts` drives eight subscriptions deterministically and
-  proves 3/3/2 admission waves, continued liveness after synchronization, validation and conflict
-  failures, finalizer-before-retry ordering, queued-waiter cancellation, exact-once release for
-  duplicate synchronization markers, failure/interruption release, and independent capacity for a
-  replacement session.
-
-## Maintenance
-
-Retain this patch while upstream durable subscriptions accept only eager inputs or allow unbounded
-thread-detail catch-up fan-out. If upstream adds equivalent per-attempt inputs and bounded catch-up,
-prefer its implementation only if permits are released before the live phase and all interruption
-paths remain covered.
+The "thread catch-up admission" tests in `packages/client-runtime/src/rpc/client.test.ts`.

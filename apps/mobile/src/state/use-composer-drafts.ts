@@ -1,9 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  ThreadWorkspaceId,
-  WorkspaceProfile,
   EnvironmentId as EnvironmentIdSchema,
-  MessageId as MessageIdSchema,
   ModelSelection as ModelSelectionSchema,
   ComposerContextId,
   ComposerContextRecord,
@@ -13,15 +10,15 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectId as ProjectIdSchema,
   ProviderInteractionMode as ProviderInteractionModeSchema,
+  ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
-  SkillPackId as SkillPackIdSchema,
+  SkillPackId,
   type EnvironmentId,
-  type MessageId,
   type ModelSelection,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderOptionSelection,
   type RuntimeMode,
-  type SkillPackId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useEffect } from "react";
@@ -29,6 +26,7 @@ import { Atom } from "effect/unstable/reactivity";
 
 import { writeFileAtomically } from "../lib/atomic-file";
 import { createComposerContextHistory, referencedComposerContext } from "../lib/composerContext";
+import { isQueuedEditDraftKey } from "./queued-edit-draft-key";
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
@@ -41,8 +39,11 @@ import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import {
   composerAttachmentFileReferenceKey,
   isComposerAttachmentFileRetained,
-  retainComposerAttachmentFile,
 } from "../lib/composerAttachmentFiles";
+import {
+  registerComposerAttachmentUnusedHandler,
+  retainComposerAttachmentFileForPreview,
+} from "../lib/composerAttachmentPreviewRetention";
 import type { DraftComposerAttachment, FileBackedComposerAttachment } from "../lib/composerImages";
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
@@ -332,10 +333,9 @@ export interface ComposerDraft {
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
-  /** Durable outbox intent currently copied into this draft for editing. */
-  readonly editingQueuedMessageId?: MessageId;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
+  /** Fork: a new task's skill packs; absent follows the project default. */
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   /**
    * Set on new-task drafts only. The project is stored here rather than in
    * the key so a project can hold any number of drafts and a draft can be
@@ -361,8 +361,6 @@ export interface ComposerDraftWorkspaceSelection {
   readonly mode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
-  readonly workspaceId?: ThreadWorkspaceId;
-  readonly workspaceProfile?: WorkspaceProfile;
   readonly startFromOrigin?: boolean;
 }
 
@@ -371,18 +369,15 @@ export type ComposerDraftSettingsUpdate = Pick<
   | "modelSelection"
   | "runtimeMode"
   | "interactionMode"
-  | "skillPackIds"
   | "workspaceSelection"
   | "project"
-  | "editingQueuedMessageId"
+  | "skillPackIds"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   mode: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
-  workspaceId: Schema.optional(ThreadWorkspaceId),
-  workspaceProfile: Schema.optional(WorkspaceProfile),
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
@@ -407,9 +402,8 @@ const ComposerDraftSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
-  skillPackIds: Schema.optional(Schema.Array(SkillPackIdSchema)),
-  editingQueuedMessageId: Schema.optional(MessageIdSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   project: Schema.optional(ComposerDraftProjectSchema),
 });
 
@@ -417,6 +411,12 @@ const PersistedComposerDraftsSchema = Schema.Struct({
   schemaVersion: Schema.Literal(COMPOSER_DRAFTS_SCHEMA_VERSION),
   drafts: Schema.Record(Schema.String, ComposerDraftSchema),
   stickyModelSelection: Schema.optional(ModelSelectionSchema),
+  modelOptionMemory: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Record(Schema.String, Schema.Array(ProviderOptionSelectionSchema)),
+    ),
+  ),
   cloudAccountId: Schema.optional(Schema.String),
   signedOutDrafts: Schema.optional(
     Schema.Record(
@@ -442,23 +442,19 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.keepAlive,
   Atom.withLabel("mobile:composer-drafts"),
 );
-export const composerDraftsReadyAtom = Atom.make(false).pipe(
-  Atom.keepAlive,
-  Atom.withLabel("mobile:composer-drafts:ready"),
-);
-export const persistedQueuedEditIdsAtom = Atom.make((get) => {
-  const editing: Record<MessageId, true> = {};
-  for (const draft of Object.values(get(composerDraftsAtom))) {
-    if (draft.editingQueuedMessageId !== undefined) {
-      editing[draft.editingQueuedMessageId] = true;
-    }
-  }
-  return editing as Readonly<Record<MessageId, true>>;
-}).pipe(Atom.withLabel("mobile:composer-drafts:queued-edit-ids"));
 
 export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:sticky-composer-model-selection"),
+);
+
+export type ModelOptionMemoryState = Readonly<
+  Record<string, Readonly<Record<string, ReadonlyArray<ProviderOptionSelection>>>>
+>;
+
+export const modelOptionMemoryAtom = Atom.make<ModelOptionMemoryState>({}).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:model-option-memory"),
 );
 
 interface SignedOutDrafts {
@@ -485,7 +481,6 @@ const persistenceQueue = new SerializedAsyncQueue();
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
   persistRetryNeeded = false;
-  appAtomRegistry.set(composerDraftsReadyAtom, false);
 }
 
 function attachmentContextRecord(
@@ -640,6 +635,7 @@ export function migrateLegacyNewTaskDraft(
 export function decodePersistedComposerState(value: unknown): {
   readonly drafts: Record<string, ComposerDraft>;
   readonly stickyModelSelection: ModelSelection | null;
+  readonly modelOptionMemory: ModelOptionMemoryState;
   readonly cloudDrafts: ComposerCloudDraftState;
 } {
   const parsed = decodePersistedComposerDraftsDocument(value);
@@ -671,9 +667,14 @@ export function decodePersistedComposerState(value: unknown): {
         // importedShareIds are share-import receipts: a contentless draft
         // carrying one is not empty, or the same native share would be
         // re-imported after restart.
-        .filter(([, draft]) => !isEmptyDraft(draft) || (draft.importedShareIds?.length ?? 0) > 0),
+        .filter(([, draft]) => !isEmptyDraft(draft) || (draft.importedShareIds?.length ?? 0) > 0)
+        // Queued-message edits are in-memory sessions. Their draft outlives a
+        // restart on disk, but the edit record that says which run it belongs
+        // to does not, so the draft would be unreachable and invisible.
+        .filter(([key]) => !isQueuedEditDraftKey(key)),
     ),
     stickyModelSelection: parsed.stickyModelSelection ?? null,
+    modelOptionMemory: parsed.modelOptionMemory ?? {},
     cloudDrafts: {
       accountId: parsed.cloudAccountId ?? null,
       signedOut: Object.fromEntries(
@@ -695,10 +696,6 @@ export function decodePersistedComposerState(value: unknown): {
   };
 }
 
-export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
-  return decodePersistedComposerState(value).drafts;
-}
-
 async function getComposerDraftsFile() {
   const { Directory, File, Paths } = await import("expo-file-system");
   const directory = new Directory(Paths.document, COMPOSER_DRAFTS_DIRECTORY);
@@ -716,6 +713,7 @@ async function loadPersistedComposerState(): Promise<
       return {
         drafts: {},
         stickyModelSelection: null,
+        modelOptionMemory: {},
         cloudDrafts: { accountId: null, signedOut: {} },
       };
     }
@@ -749,6 +747,9 @@ async function writePersistedComposerState(
       schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
       drafts: nonEmptyDrafts,
       ...(stickyModelSelection ? { stickyModelSelection } : {}),
+      ...(Object.keys(appAtomRegistry.get(modelOptionMemoryAtom)).length > 0
+        ? { modelOptionMemory: appAtomRegistry.get(modelOptionMemoryAtom) }
+        : {}),
       ...(cloudDrafts.accountId ? { cloudAccountId: cloudDrafts.accountId } : {}),
       ...(Object.keys(cloudDrafts.signedOut).length > 0
         ? {
@@ -996,16 +997,16 @@ export function scheduleUnusedComposerAttachmentCleanup(
   });
 }
 
-/** Keeps a native preview or upload readable until it finishes, then retries ownership cleanup. */
-export function retainComposerAttachmentFileForPreview(
-  attachment: FileBackedComposerAttachment,
-): () => void {
-  return retainComposerAttachmentFile(attachment.fileUri, () => {
-    scheduleUnusedComposerAttachmentCleanup([attachment]);
-  });
-}
+/**
+ * Owner-side cleanup hook for the shared preview-retention helper: releasing
+ * the last preview/upload lease retries the unused-file sweep. Registered here
+ * because this module owns the draft and outbox references the sweep reads.
+ */
+registerComposerAttachmentUnusedHandler((attachment) => {
+  scheduleUnusedComposerAttachmentCleanup([attachment]);
+});
 
-function schedulePersistComposerState(): void {
+export function schedulePersistComposerState(): void {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
   }
@@ -1051,7 +1052,18 @@ export function ensureComposerDraftsLoaded(): void {
     ) {
       appAtomRegistry.set(stickyComposerModelSelectionAtom, persisted.stickyModelSelection);
     }
-    appAtomRegistry.set(composerDraftsReadyAtom, true);
+    if (Object.keys(persisted.modelOptionMemory).length > 0) {
+      const current = appAtomRegistry.get(modelOptionMemoryAtom);
+      appAtomRegistry.set(modelOptionMemoryAtom, {
+        ...persisted.modelOptionMemory,
+        ...Object.fromEntries(
+          Object.entries(current).map(([instanceId, models]) => [
+            instanceId,
+            { ...(persisted.modelOptionMemory[instanceId] ?? {}), ...models },
+          ]),
+        ),
+      });
+    }
   });
   loadPromise = loading;
   // Handle fire-and-forget hook loads without swallowing failures from the
@@ -1192,8 +1204,6 @@ export async function removeDeliveredCloudQueuedMessage(
           (editor.workspaceSelection.mode !== message.creation?.workspaceMode ||
             editor.workspaceSelection.branch !== message.creation?.branch ||
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
-            editor.workspaceSelection.workspaceId !== message.creation?.workspaceId ||
-            editor.workspaceSelection.workspaceProfile !== message.creation?.workspaceProfile ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
               (message.creation?.startFromOrigin ?? false))))
     )

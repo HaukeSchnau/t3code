@@ -15,7 +15,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { type ClaudeSettings, type ModelSelection } from "@t3tools/contracts";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { TextGenerationError } from "@t3tools/contracts";
@@ -102,8 +102,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateNotification",
+      | "generateThreadTitle",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -133,8 +132,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateNotification";
+      | "generateThreadTitle";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -374,6 +372,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       const { prompt, outputSchema } = buildBranchNamePrompt({
         message: input.message,
         attachments: input.attachments,
+        naming: input.naming,
       });
 
       const generated = yield* runClaudeJson({
@@ -385,7 +384,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       });
 
       return {
-        branch: sanitizeBranchFragment(generated.branch),
+        branch: formatGeneratedBranchName(generated.branch, input.naming),
       };
     });
 
@@ -413,33 +412,10 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
-  const generateNotification: TextGeneration.TextGeneration["Service"]["generateNotification"] =
-    Effect.fn("ClaudeTextGeneration.generateNotification")(function* (input) {
-      if (input.kind === "watchDecision") {
-        const result = yield* runClaudeJson({
-          operation: "generateNotification",
-          cwd: input.cwd,
-          prompt: input.prompt,
-          outputSchemaJson: TextGeneration.WatchDecisionGenerationResult,
-          modelSelection: input.modelSelection,
-        });
-        return { kind: input.kind, result };
-      }
-      const result = yield* runClaudeJson({
-        operation: "generateNotification",
-        cwd: input.cwd,
-        prompt: input.prompt,
-        outputSchemaJson: TextGeneration.WaitSummaryGenerationResult,
-        modelSelection: input.modelSelection,
-      });
-      return { kind: input.kind, result };
-    });
-
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
-    generateNotification,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

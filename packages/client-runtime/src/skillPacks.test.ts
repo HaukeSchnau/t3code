@@ -1,9 +1,4 @@
-import {
-  ProviderDriverKind,
-  SkillId,
-  SkillPackId,
-  type SkillPackCatalog,
-} from "@t3tools/contracts";
+import { SkillId, SkillPackId, type SkillPackCatalog } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -91,12 +86,7 @@ describe("resolveSkillPackSelection", () => {
     const selection = resolveSkillPackSelection({
       catalog,
       projectDefaultPackIds: [id("web-craft"), id("browser-qa")],
-      threadScope: {
-        version: 2,
-        appliedVersion: 1,
-        packIds: [id("browser-qa"), id("web-craft")],
-        state: "pending",
-      },
+      threadScope: { packIds: [id("browser-qa"), id("web-craft")], state: "pending" },
     });
     expect(selection.source).toBe("project");
     expect(selection.isProjectDefault).toBe(true);
@@ -112,8 +102,6 @@ describe("resolveSkillPackSelection", () => {
       catalog,
       projectDefaultPackIds: [],
       threadScope: {
-        version: 1,
-        appliedVersion: 1,
         packIds: [id("infra"), id("unknown-pack")],
         state: "degraded",
         issue: "plugin path missing",
@@ -176,23 +164,13 @@ describe("resolveEffectiveSkills", () => {
 });
 
 describe("resolveSkillPackProviderWarning", () => {
-  it("only warns for unsupported providers with non-core packs selected", () => {
-    const opencode = { driver: ProviderDriverKind.make("opencode") };
-    expect(resolveSkillPackProviderWarning({ provider: opencode, packIds: [] })).toBeNull();
-    expect(resolveSkillPackProviderWarning({ provider: opencode, packIds: [id("infra")] })).toMatch(
+  it("warns only for providers that never load packs, and only with packs selected", () => {
+    expect(resolveSkillPackProviderWarning({ driver: "cursor", packIds: [] })).toBeNull();
+    expect(resolveSkillPackProviderWarning({ driver: "cursor", packIds: [id("infra")] })).toMatch(
       /cannot load skill packs/,
     );
-    expect(
-      resolveSkillPackProviderWarning({
-        provider: { ...opencode, skillScopeInjection: "supported" },
-        packIds: [id("infra")],
-      }),
-    ).toBeNull();
-    expect(
-      resolveSkillPackProviderWarning({
-        provider: { driver: ProviderDriverKind.make("claudeAgent") },
-        packIds: [id("infra")],
-      }),
-    ).toBeNull();
+    for (const driver of ["codex", "claudeAgent", "opencode"]) {
+      expect(resolveSkillPackProviderWarning({ driver, packIds: [id("infra")] })).toBeNull();
+    }
   });
 });

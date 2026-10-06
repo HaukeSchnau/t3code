@@ -1,7 +1,6 @@
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
-  AssetObservedMediaNotFoundError,
   AssetGitHubMediaUrlValidationError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
@@ -30,6 +29,7 @@ import {
   type ImageDimensions,
 } from "@t3tools/shared/imageDimensions";
 import { githubMediaFetchUrl, githubMediaFileName } from "@t3tools/shared/githubMedia";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -40,7 +40,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import { projectHostPath } from "../project/SeparateProjectRegistry.ts";
 
 import {
   base64UrlDecodeUtf8,
@@ -51,8 +50,8 @@ import {
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import { resolveObservedMediaPathById } from "../observedMediaStore.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import { projectHostPath } from "../project/SeparateProjectRegistry.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
@@ -119,12 +118,6 @@ const AssetClaimsSchema = Schema.Union([
         download filename and Content-Type. */
     fileName: Schema.optionalKey(Schema.String),
     mimeType: Schema.optionalKey(Schema.String),
-    expiresAt: Schema.Number,
-  }),
-  Schema.Struct({
-    version: Schema.Literal(1),
-    kind: Schema.Literal("observed-media"),
-    storageId: Schema.String,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -199,7 +192,7 @@ const optionOnNotFound = <A, R>(
   effect: Effect.Effect<A, PlatformError.PlatformError, R>,
 ): Effect.Effect<Option.Option<A>, PlatformError.PlatformError, R> =>
   effect.pipe(
-    Effect.map(Option.some),
+    Effect.asSome,
     Effect.catchTags({
       PlatformError: (error) =>
         error.reason._tag === "NotFound" ? Effect.succeed(Option.none<A>()) : Effect.fail(error),
@@ -222,9 +215,9 @@ const resolveCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWor
     const fileSystem = yield* FileSystem.FileSystem;
     const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
     const resolved = yield* workspacePaths.resolveRelativePathWithinRoot(input).pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.catchTags({
-        WorkspacePathOutsideRootError: () => Effect.succeed(Option.none()),
+        WorkspacePathOutsideRootError: () => Effect.succeedNone,
       }),
     );
     if (Option.isNone(resolved)) return null;
@@ -424,10 +417,25 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
   },
 );
 
+/** Agents in separate projects report paths from their own filesystem view. */
+const separateProjectHostPath = Effect.fn("AssetAccess.separateProjectHostPath")(function* (
+  resource: AssetResource,
+  workspaceRoot: string,
+  requestedPath: string,
+) {
+  const environment = yield* HostProcessEnvironment;
+  return yield* Effect.tryPromise({
+    try: () => projectHostPath(workspaceRoot, requestedPath, environment.AGENT_EXEC_STATE),
+    catch: (cause) => new AssetWorkspaceAssetInspectionError({ resource, cause }),
+  });
+});
+
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
+  /** The project's clone has not landed, so its icon is reported missing without a lookup. */
+  readonly projectCheckoutPending?: boolean;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -456,12 +464,11 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath = path.resolve(workspaceRoot, requestedPath);
       }
       if (input.workspaceRoot) {
-        const cwd = input.workspaceRoot;
-        requestedPath = yield* Effect.tryPromise({
-          try: () => projectHostPath(cwd, requestedPath, process.env.AGENT_EXEC_STATE),
-          catch: (cause) =>
-            new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
-        });
+        requestedPath = yield* separateProjectHostPath(
+          input.resource,
+          input.workspaceRoot,
+          requestedPath,
+        );
       }
       const finalized = yield* finalizeAbsoluteMediaFileAsset({
         requestedPath,
@@ -488,15 +495,13 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
-      const resourcePath = input.resource.path;
-      const hostPath = yield* Effect.tryPromise({
-        try: () => projectHostPath(workspaceRoot, resourcePath, process.env.AGENT_EXEC_STATE),
-        catch: (cause) =>
-          new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
-      });
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
-        requestedPath: hostPath,
+        requestedPath: yield* separateProjectHostPath(
+          input.resource,
+          workspaceRoot,
+          input.resource.path,
+        ),
         resource: input.resource,
         expiresAt,
       });
@@ -585,26 +590,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileName = input.resource.fileName ?? path.basename(attachmentPath);
       break;
     }
-    case "observed-media": {
-      const config = yield* ServerConfig.ServerConfig;
-      const observedMediaPath = resolveObservedMediaPathById({
-        observedMediaDir: config.observedMediaDir,
-        mediaId: input.resource.storageId,
-      });
-      if (!observedMediaPath) {
-        return yield* new AssetObservedMediaNotFoundError({
-          resource: input.resource,
-        });
-      }
-      claims = {
-        version: 1,
-        kind: "observed-media",
-        storageId: input.resource.storageId,
-        expiresAt,
-      };
-      fileName = path.basename(observedMediaPath);
-      break;
-    }
     case "project-favicon": {
       const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.resource.cwd).pipe(
         Effect.mapError(
@@ -616,17 +601,20 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         ),
       );
       const faviconResolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
-      const faviconPath = yield* faviconResolver
-        .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AssetProjectFaviconResolutionError({
-                resource: input.resource,
-                cause,
-              }),
-          ),
-        );
+      // A lookup in a half-cloned checkout would cache a miss that outlives the clone.
+      const faviconPath = input.projectCheckoutPending
+        ? null
+        : yield* faviconResolver
+            .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AssetProjectFaviconResolutionError({
+                    resource: input.resource,
+                    cause,
+                  }),
+              ),
+            );
       const isExternalOverride =
         faviconPath !== null &&
         input.projectFaviconPath !== undefined &&
@@ -807,29 +795,6 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
           ...(claims.fileName !== undefined ? { fileName: claims.fileName } : {}),
           ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
         } satisfies ResolvedAsset)
-      : null;
-  }
-
-  if (claims.kind === "observed-media") {
-    const config = yield* ServerConfig.ServerConfig;
-    const observedMediaPath = resolveObservedMediaPathById({
-      observedMediaDir: config.observedMediaDir,
-      mediaId: claims.storageId,
-    });
-    if (!observedMediaPath) return null;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const info = yield* optionOnNotFound(fileSystem.stat(observedMediaPath)).pipe(
-      Effect.tapError((cause) =>
-        Effect.logError("Failed to inspect observed media asset.", {
-          storageId: claims.storageId,
-          path: observedMediaPath,
-          cause,
-        }),
-      ),
-      Effect.orElseSucceed(() => Option.none()),
-    );
-    return Option.isSome(info) && info.value.type === "File"
-      ? ({ kind: "file", path: observedMediaPath } satisfies ResolvedAsset)
       : null;
   }
 

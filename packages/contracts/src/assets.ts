@@ -5,8 +5,8 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
-  ProjectFaviconPath,
-} from "./orchestration.ts";
+} from "./chatAttachment.ts";
+import { ProjectFaviconPath } from "./project.ts";
 import { ToolActivityNativeAppReference } from "./providerRuntime.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
@@ -40,9 +40,6 @@ export const AssetResource = Schema.Union([
     /** Generic attachments download by default. Document viewers opt into an
         inline response after deciding the file type is safe to preview. */
     disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
-  }),
-  Schema.TaggedStruct("observed-media", {
-    storageId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
@@ -248,17 +245,6 @@ export class AssetAttachmentNotFoundError extends Schema.TaggedError<AssetAttach
   }
 }
 
-export class AssetObservedMediaNotFoundError extends Schema.TaggedError<AssetObservedMediaNotFoundError>()(
-  "AssetObservedMediaNotFoundError",
-  {
-    resource: AssetResource,
-  },
-) {
-  override get message(): string {
-    return "Observed media was not found.";
-  }
-}
-
 export class AssetProjectFaviconResolutionError extends Schema.TaggedError<AssetProjectFaviconResolutionError>()(
   "AssetProjectFaviconResolutionError",
   {
@@ -325,7 +311,6 @@ export const AssetAccessError = Schema.Union([
   AssetWorkspaceAssetNotFoundError,
   AssetWorkspaceResolutionError,
   AssetAttachmentNotFoundError,
-  AssetObservedMediaNotFoundError,
   AssetProjectFaviconResolutionError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,

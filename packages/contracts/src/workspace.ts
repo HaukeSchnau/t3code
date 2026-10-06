@@ -1,76 +1,26 @@
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import {
-  IsoDateTime,
-  ProjectId,
-  ThreadId,
-  ThreadWorkspaceId,
-  ThreadWorkspaceRootId,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
-import { VcsDriverKind } from "./vcs.ts";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-export const ThreadWorkspaceKind = Schema.Literals([
-  "local",
-  "git-detached",
-  "jj-workspace",
-  "directory-copy",
-  "isolated",
-]);
-export type ThreadWorkspaceKind = typeof ThreadWorkspaceKind.Type;
-
+/** What an isolated workspace starts with: global instructions and skills, or project guidance only. */
 export const WorkspaceProfile = Schema.Literals(["familiar", "minimal"]);
 export type WorkspaceProfile = typeof WorkspaceProfile.Type;
 
-export const ThreadWorkspaceLifecycle = Schema.Literals([
-  "preparing",
-  "active",
-  "deleting",
-  "deleted",
-  "failed",
-]);
-export type ThreadWorkspaceLifecycle = typeof ThreadWorkspaceLifecycle.Type;
-
-export const ThreadWorkspaceRetentionPolicy = Schema.Literals(["explicit-delete", "permanent"]);
-export type ThreadWorkspaceRetentionPolicy = typeof ThreadWorkspaceRetentionPolicy.Type;
-
-export const ThreadWorkspaceRootRole = Schema.Literals(["primary", "supporting"]);
-export type ThreadWorkspaceRootRole = typeof ThreadWorkspaceRootRole.Type;
-
-export const ThreadWorkspaceRoot = Schema.Struct({
-  id: ThreadWorkspaceRootId,
-  workspaceId: ThreadWorkspaceId,
-  projectId: ProjectId,
-  role: ThreadWorkspaceRootRole,
-  sourcePath: TrimmedNonEmptyString,
-  checkoutPath: TrimmedNonEmptyString,
-  vcsKind: VcsDriverKind,
-  repositoryRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  baseRevision: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  headRevision: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
+/**
+ * A new workspace whose backend the server chooses for the project: a jj workspace, a
+ * guarded directory copy, an isolated runtime, or a Git worktree for plain Git projects.
+ */
+export const ManagedWorkspaceLaunchStrategy = Schema.Struct({
+  type: Schema.Literal("workspace"),
+  baseRef: Schema.optional(TrimmedNonEmptyString),
+  startFromOrigin: Schema.optional(Schema.Boolean),
+  profile: Schema.optional(WorkspaceProfile),
 });
-export type ThreadWorkspaceRoot = typeof ThreadWorkspaceRoot.Type;
+export type ManagedWorkspaceLaunchStrategy = typeof ManagedWorkspaceLaunchStrategy.Type;
 
-export const ThreadWorkspace = Schema.Struct({
-  id: ThreadWorkspaceId,
-  kind: ThreadWorkspaceKind,
-  lifecycle: ThreadWorkspaceLifecycle,
-  displayName: TrimmedNonEmptyString,
-  managed: Schema.Boolean,
-  primaryRootId: ThreadWorkspaceRootId,
-  roots: Schema.Array(ThreadWorkspaceRoot),
-  createdForThreadId: Schema.NullOr(ThreadId),
-  retentionPolicy: ThreadWorkspaceRetentionPolicy,
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-  deletedAt: Schema.NullOr(IsoDateTime),
-  failureDetail: Schema.NullOr(Schema.String),
-  metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
+/** Present when the server creates workspaces for jj and directory projects too. */
+export const ManagedWorkspacesCapability = Schema.Struct({
+  /** New workspaces run in separate agent-exec environments and accept a profile. */
+  isolated: Schema.Boolean,
 });
-export type ThreadWorkspace = typeof ThreadWorkspace.Type;
+export type ManagedWorkspacesCapability = typeof ManagedWorkspacesCapability.Type;

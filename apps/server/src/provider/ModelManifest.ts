@@ -19,6 +19,7 @@ import {
   type ProviderDriverKind,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
 import { codexModelFamily } from "@t3tools/shared/model";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -30,10 +31,12 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import packageJson from "../../package.json" with { type: "json" };
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
+import { ProviderCompatibilityPolicy } from "./providerCompatibility.ts";
 import type { ServerProviderDraft } from "./providerSnapshot.ts";
 
 const MODEL_MANIFEST_URL =
@@ -89,6 +92,7 @@ const ModelManifestEnvelopeSchema = Schema.Struct({
    * files still decode; they count as older than any dated bundle.
    */
   updatedAt: Schema.optional(Schema.String),
+  compatibility: Schema.optional(Schema.Array(ProviderCompatibilityPolicy)),
   currentModels: Schema.Record(Schema.String, Schema.Array(Schema.String)),
   providers: Schema.optional(Schema.Record(Schema.String, ManifestProviderCatalog)),
 });
@@ -137,6 +141,25 @@ const decodeManifest = Schema.decodeUnknownEffect(ModelManifestSchema);
 
 export const BUNDLED_MODEL_MANIFEST: ModelManifestData =
   Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson);
+
+/**
+ * TEMPORARY V2 preview stopgap. Revert before V2 merges into main; it is on
+ * #2829's "Revert before merging into main" checklist.
+ *
+ * The fetched manifest is `main`'s, and its compatibility policy is written for
+ * stable and nightly builds, which do not run OpenCode 2. A policy's
+ * `t3CodeRange` cannot single out preview builds because range matching drops
+ * prerelease tags. Preview builds therefore keep the compatibility policy they
+ * shipped with and take everything else from the fetched manifest.
+ */
+function withPreviewCompatibility(
+  manifest: ModelManifestData,
+  t3CodeVersion: string,
+): ModelManifestData {
+  return cliReleaseChannelOf(t3CodeVersion) === "preview"
+    ? { ...manifest, compatibility: BUNDLED_MODEL_MANIFEST.compatibility }
+    : manifest;
+}
 
 /** Epoch millis of the manifest's `updatedAt`, or 0 when absent or unparsable. */
 function manifestUpdatedAtMs(manifest: ModelManifestData): number {
@@ -315,6 +338,8 @@ export class ModelManifest extends Context.Service<
     readonly current: Effect.Effect<ModelManifestData>;
     /** Manifest after a TTL-gated remote refresh; never fails. */
     readonly refresh: Effect.Effect<ModelManifestData>;
+    /** Explicit refresh bypasses freshness and retry timers, retaining last-good data. */
+    readonly forceRefresh: Effect.Effect<ModelManifestData>;
     /** Forks `refresh` into the service's own scope. Drivers call this from
      * provider checks: the fetch is process-shared state, so it must survive
      * the teardown of whichever instance happened to trigger it. */
@@ -326,12 +351,14 @@ export class ModelManifest extends Context.Service<
 const BundledOnlyModelManifest: ModelManifest["Service"] = {
   current: Effect.succeed(BUNDLED_MODEL_MANIFEST),
   refresh: Effect.succeed(BUNDLED_MODEL_MANIFEST),
+  forceRefresh: Effect.succeed(BUNDLED_MODEL_MANIFEST),
   refreshInBackground: Effect.void,
 };
 
 export const layerTest = Layer.succeed(ModelManifest, BundledOnlyModelManifest);
 
-export const make = Effect.gen(function* () {
+/** `make` for a given T3 Code version, so tests can exercise each release channel. */
+export const makeForVersion = Effect.fnUntraced(function* (t3CodeVersion: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
@@ -364,12 +391,12 @@ export const make = Effect.gen(function* () {
       if (manifestUpdatedAtMs(BUNDLED_MODEL_MANIFEST) > manifestUpdatedAtMs(fromDisk.manifest)) {
         return;
       }
-      manifest = fromDisk.manifest;
+      manifest = withPreviewCompatibility(fromDisk.manifest, t3CodeVersion);
       fetchedAtMs = fromDisk.fetchedAtMs;
     }),
   );
 
-  const refresh = Effect.fn("ModelManifest.refresh")(function* () {
+  const refresh = Effect.fn("ModelManifest.refresh")(function* (force = false) {
     yield* ensureDiskCacheLoaded;
     const now = yield* Clock.currentTimeMillis;
     // A timestamp in the future means the wall clock moved backwards (the
@@ -377,8 +404,8 @@ export const make = Effect.gen(function* () {
     // it as expired: the refetch rewrites both timestamps and self-heals.
     const isWithin = (sinceMs: number | null, windowMs: number) =>
       sinceMs !== null && now >= sinceMs && now - sinceMs < windowMs;
-    if (isWithin(fetchedAtMs, MANIFEST_TTL_MS)) return manifest;
-    if (isWithin(lastAttemptMs, MANIFEST_RETRY_MS)) return manifest;
+    if (!force && isWithin(fetchedAtMs, MANIFEST_TTL_MS)) return manifest;
+    if (!force && isWithin(lastAttemptMs, MANIFEST_RETRY_MS)) return manifest;
 
     // The same switch that gates provider CLI update checks. It stops network
     // fetches only: a manifest already cached on disk from an earlier fetch
@@ -397,13 +424,17 @@ export const make = Effect.gen(function* () {
       Effect.timeout(FETCH_TIMEOUT_MS),
       Effect.catchCause(() => Effect.succeed(null)),
     );
-    if (fetched === null) return manifest;
+    // A CDN can still serve an earlier edit after a release. Apply the same
+    // freshness rule as the disk cache so it cannot undo bundled version gates.
+    if (fetched === null || manifestUpdatedAtMs(fetched) < manifestUpdatedAtMs(manifest)) {
+      return manifest;
+    }
 
-    manifest = fetched;
+    manifest = withPreviewCompatibility(fetched, t3CodeVersion);
     fetchedAtMs = now;
     yield* encodeManifestCache({ fetchedAtMs: now, manifest: fetched }).pipe(
       Effect.flatMap((serialized) => fileSystem.writeFileString(cachePath, serialized)),
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
     );
     return manifest;
   });
@@ -413,8 +444,11 @@ export const make = Effect.gen(function* () {
   return ModelManifest.of({
     current: ensureDiskCacheLoaded.pipe(Effect.map(() => manifest)),
     refresh: guardedRefresh,
+    forceRefresh: refreshSemaphore.withPermits(1)(refresh(true)),
     refreshInBackground: Effect.forkIn(guardedRefresh, serviceScope).pipe(Effect.asVoid),
   });
 });
+
+export const make = makeForVersion(packageJson.version);
 
 export const layer = Layer.effect(ModelManifest, make);

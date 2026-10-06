@@ -4,7 +4,7 @@
 
 A paired web client previously blocked its root route on `/api/auth/session` and rebuilt the primary environment
 registration through a live descriptor request. Reloading while the remote server was unreachable therefore
-showed a fatal 502 screen before the durable outbox and cached shell/thread state could hydrate.
+showed a fatal 502 screen before the durable outbox and cached shell and thread state could hydrate.
 
 ## Security boundary
 
@@ -52,5 +52,5 @@ runtime while discovery is unavailable.
 - Revalidation controller tests cover 30-day chunked expiry, promotion, ejection, retry interruption, and wakeups.
 - Platform tests cover persisted descriptor decoding and replacement, while the real environment-registry test
   proves changed-id runtime/cache isolation.
-- Browser evidence covers server stop, cold page reload with cached content and queued intent, then automatic
-  recovery without a fatal root route or stuck freshness banner.
+- Browser evidence covers server stop, cold page reload with cached content, then automatic recovery without a
+  fatal root route or stuck freshness banner.

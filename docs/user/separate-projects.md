@@ -1,25 +1,22 @@
-# Work in a separate workspace
+# Separate project environments
 
-Choose **New workspace** in the composer to start with separate files and a private runtime on a supported server. Web, desktop and mobile use the same workspace selection. Choose an existing workspace to share its files with another thread, or **Project checkout** to work in the original directory.
+On hosts with the `agent-exec` launcher, a project directory registered with it runs its agents
+in a separate environment. The agent gets private runtime state and the project's own development
+tools. Global integrations and network access stay available. T3 Code detects registered
+directories on its own, including workspaces created by earlier versions.
 
-Advanced setup offers Familiar, which includes your global instructions and skills, and Minimal, which starts with project instructions. Both keep account integrations, network access and project development tools. Each thread keeps its own conversation; threads sharing a workspace share files and services.
+Only Codex and Claude can run in a separate environment. Starting a thread there with another
+provider fails with a message asking you to switch. While a directory is registered, you can't
+move its project to another folder in project settings. Ask for outside help to migrate it.
 
-Use a Codex or Claude provider for isolated execution. Projects can be Git/jj repositories or directories containing repositories at any depth. Each discovered repository gets independent history and files. Ordinary files outside repositories are copied only when changed in the workspace; untouched files can reflect later changes in the original directory. Keep that source directory available while using its workspaces.
+On these hosts, **New workspace** in the composer creates a separate environment for the task,
+with its own checkout of the project's repositories. Under **Advanced**, **Familiar** keeps your
+global instructions and skills; **Minimal** starts with the project's own guidance. Deleting the
+workspace stops its environment and removes its files. This version can't create new separate
+projects from T3 Code.
 
-From the CLI:
+Agents can use `agent-service` to run and publish project previews. Service names are scoped to
+the project.
 
-```sh
-t3 thread create --worktree
-```
-
-Pass `--workspace ID` to reuse a workspace. A workspace leaves the normal picker after all its threads settle or archive. Search or show settled workspaces to find it again. Its files and previews remain available. Deleting a workspace refuses active or running threads and asks the runtime to stop before removing its files.
-
-Agents can use `agent-service` to run and publish project previews. Service names are scoped to the project. For host tooling or infrastructure problems, they can run:
-
-```sh
-agent-help "Describe the problem, failing command, and relevant output"
-```
-
-This creates a linked support thread in the host's infra project and registers a durable wait that reports its result back. You can inspect both threads in T3. It does not grant the support agent additional authorization.
-
-Global integrations and network access remain available, so an agent can deliberately retrieve outside context. Separate environments prevent nearby project directories from becoming incidental examples; they are not intended as a security sandbox.
+Separate environments keep nearby project directories from becoming incidental examples. They are
+not a security sandbox.

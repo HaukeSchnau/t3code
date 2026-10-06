@@ -93,6 +93,11 @@ const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>
 // foreground after real time away still triggers a replay. Cleared on
 // transport identity changes alongside the device registration state.
 const ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS = 60_000;
+// Locally started activities carry the same stale window the paired server puts
+// on every push (STALE_AFTER_SECONDS in apps/server agentAwareness/ApnsProvider.ts),
+// so a card whose registration never lands still degrades instead of looking alive forever.
+const LIVE_ACTIVITY_STALE_AFTER_MS = 10 * 60_000;
+const liveActivityStaleDate = () => new Date(Date.now() + LIVE_ACTIVITY_STALE_AFTER_MS);
 const registeredActivityPushTokens = new Map<string, number>();
 let androidDeviceReplayedAt: number | null = null;
 let pushTokenSubscription: { remove: () => void } | null = null;
@@ -478,7 +483,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
       ],
     } satisfies AgentActivityProps;
     updateAgentActivityWidgetSnapshot(props);
-    const activity = startAgentLiveActivity(props);
+    const activity = startAgentLiveActivity(props, liveActivityStaleDate());
     if (!activity) return;
     logRegistrationDebug("live activity card armed for local work", {
       threadTitle: input.threadTitle,
@@ -1058,13 +1063,16 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<voi
           const aggregate = snapshot.aggregate;
           const primed = yield* Effect.try({
             try: () =>
-              startAgentLiveActivity({
-                title: aggregate.title,
-                subtitle: aggregate.subtitle,
-                activeCount: aggregate.activeCount,
-                updatedAt: aggregate.updatedAt,
-                activities: aggregate.activities,
-              }),
+              startAgentLiveActivity(
+                {
+                  title: aggregate.title,
+                  subtitle: aggregate.subtitle,
+                  activeCount: aggregate.activeCount,
+                  updatedAt: aggregate.updatedAt,
+                  activities: aggregate.activities,
+                },
+                liveActivityStaleDate(),
+              ),
             catch: (cause) =>
               new AgentAwarenessOperationError({
                 operation: "prime-live-activity",

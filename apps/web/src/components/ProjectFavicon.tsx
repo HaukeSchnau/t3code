@@ -19,7 +19,7 @@ const DynamicIcon = lazy(() =>
 );
 
 function DynamicProjectIconFallback() {
-  return <FolderCodeIcon className="size-full text-[inherit]" />;
+  return <FolderCodeIcon className="size-full text-inherit" />;
 }
 
 // The slice of a project that decides its icon. Every surface must pass the
@@ -30,35 +30,12 @@ export type ProjectFaviconProject = Pick<
   EnvironmentProject,
   "environmentId" | "workspaceRoot" | "title" | "faviconPath" | "projectIcon"
 >;
-
-type ProjectFaviconInput =
-  | {
-      project: ProjectFaviconProject;
-      className?: string | undefined;
-      fallbackIcon?: ComponentType<{ className?: string }>;
-    }
-  | {
-      /** TODO: Remove this shape when the legacy sidebar passes project records. */
-      environmentId: ProjectFaviconProject["environmentId"];
-      cwd: string;
-      projectName: string;
-      faviconPath?: string | null | undefined;
-      projectIcon?: ProjectFaviconProject["projectIcon"];
-      className?: string | undefined;
-      fallbackIcon?: ComponentType<{ className?: string }>;
-    };
-
-export function ProjectFavicon(input: ProjectFaviconInput) {
-  const project: ProjectFaviconProject =
-    "project" in input
-      ? input.project
-      : {
-          environmentId: input.environmentId,
-          workspaceRoot: input.cwd,
-          title: input.projectName,
-          faviconPath: input.faviconPath ?? null,
-          projectIcon: input.projectIcon ?? null,
-        };
+export function ProjectFavicon(input: {
+  project: ProjectFaviconProject;
+  className?: string | undefined;
+  fallbackIcon?: ComponentType<{ className?: string }>;
+}) {
+  const { project } = input;
   const src = useAtomValue(
     projectFaviconUrlAtom({
       environmentId: project.environmentId,
@@ -199,7 +176,7 @@ function ProjectFaviconImage({
         <img
           src={displayedSrc}
           alt=""
-          className={cn("size-3.5 shrink-0 rounded-[37.5%] object-contain", className)}
+          className={cn("size-3.5 shrink-0 rounded-[25%] object-contain", className)}
           onError={() => handleLoadError(displayedSrc)}
         />
       ) : null}

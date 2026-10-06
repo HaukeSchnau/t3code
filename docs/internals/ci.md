@@ -6,7 +6,7 @@
 
 Kiln runs the fork's pipeline, defined in [`.kiln/ci.ts`](../../.kiln/ci.ts), on pull requests and on
 pushes to the Gitea `main` branch. The format, type-check, test, and release-smoke tasks run in
-parallel in persistent workspaces (the server tests as three shards of one step). Three builds of the
+parallel in persistent workspaces (the server tests as six shards of one step). Three builds of the
 web, server, and runtime pnpm stores start immediately, so a stale fixed-output hash fails before the
 release contract (`gate`). Each step reports a `kiln/<step>` commit status, and branch protection
 requires them. On `main`, `promote` deploys the release to srv-1 and srv-2 after every check passed,

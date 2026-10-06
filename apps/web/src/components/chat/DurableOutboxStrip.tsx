@@ -1,225 +1,201 @@
-import type {
-  DurableClientCommand,
-  DurableCommandOutboxEntry,
-} from "@t3tools/client-runtime/operations/command-outbox";
-import type { CommandId } from "@t3tools/contracts";
-import { LoaderCircleIcon, PencilIcon, RotateCwIcon, Trash2Icon } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { CommandId } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
+import {
+  CircleAlertIcon,
+  CloudUploadIcon,
+  PencilIcon,
+  RotateCwIcon,
+  Trash2Icon,
+} from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-import { cn, newCommandId } from "~/lib/utils";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import {
+  durableCommandOutbox,
+  restoredComposerContent,
+  useDurableCommandOutbox,
+  type DurableComposerEntry,
+  type RestoredComposerContent,
+} from "../../durableCommandOutbox";
+import { readThreadShell } from "../../state/entities";
+import { buildThreadRouteParams } from "../../threadRoutes";
+import { cn, randomUUID } from "~/lib/utils";
 import { Button } from "../ui/button";
-import { localRetryCountdownText, presentDurableOutboxEntry } from "./durableOutboxPresentation";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { presentDurableOutboxEntries, retryCountdownText } from "./durableOutboxPresentation";
+
+/** Delivers saved messages for the whole session and reports rejections wherever the user is. */
+export function DurableOutboxDelivery() {
+  const navigate = useNavigate();
+  const onRejected = useCallback(
+    (entry: DurableComposerEntry) => {
+      const threadRef = scopeThreadRef(entry.command.environmentId, entry.command.threadId);
+      const open = () => {
+        const draftId =
+          readThreadShell(threadRef) === null
+            ? useComposerDraftStore.getState().getDraftIdByRef(threadRef)
+            : null;
+        void (draftId
+          ? navigate({ to: "/draft/$draftId", params: { draftId } })
+          : navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(threadRef),
+            }));
+      };
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "A saved message was not delivered",
+          ...(entry.state._tag === "Rejected" ? { description: entry.state.failure.message } : {}),
+          actionProps: { children: "Open", onClick: open },
+        }),
+      );
+    },
+    [navigate],
+  );
+  useDurableCommandOutbox(onRejected);
+  return null;
+}
 
 interface DurableOutboxStripProps {
-  readonly entries: ReadonlyArray<DurableCommandOutboxEntry>;
+  readonly entries: ReadonlyArray<DurableComposerEntry>;
+  readonly connected: boolean;
+  /** Puts a message taken back from the outbox into the composer. */
+  readonly onRestore: (content: RestoredComposerContent) => void;
   readonly className?: string;
-  readonly onCancel: (commandId: CommandId) => Promise<void>;
-  readonly onReplace: (
-    commandId: CommandId,
-    replacement: DurableClientCommand,
-    state: "Pending" | "Rejected",
-  ) => Promise<void>;
-  readonly onDiscard: (commandId: CommandId) => Promise<void>;
 }
 
 export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   entries,
+  connected,
+  onRestore,
   className,
-  onCancel,
-  onReplace,
-  onDiscard,
 }: DurableOutboxStripProps) {
+  const views = useMemo(
+    () => presentDurableOutboxEntries(entries, connected),
+    [connected, entries],
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [editingCommandId, setEditingCommandId] = useState<CommandId | null>(null);
-  const [editText, setEditText] = useState("");
-  const [busyCommandId, setBusyCommandId] = useState<CommandId | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const views = useMemo(() => entries.map(presentDurableOutboxEntry), [entries]);
-  const hasRetryCountdown = views.some((view) => view.retryAt !== null);
+  const countingDown = views.some((view) => view.retryAt !== null);
 
   useEffect(() => {
-    if (!hasRetryCountdown) return;
+    if (!countingDown) return;
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(interval);
-  }, [hasRetryCountdown]);
+  }, [countingDown]);
 
   if (views.length === 0) return null;
 
-  const run = async (commandId: CommandId, task: () => Promise<void>) => {
-    setBusyCommandId(commandId);
+  const run = async (id: number, action: () => Promise<void>) => {
+    setBusyId(id);
     setActionError(null);
     try {
-      await task();
-      setEditingCommandId(null);
+      await action();
     } catch (cause) {
       setActionError(
-        cause instanceof Error ? cause.message : "The saved message could not be updated.",
+        cause instanceof Error ? cause.message : "The saved message could not change.",
       );
     } finally {
-      setBusyCommandId(null);
+      setBusyId(null);
     }
   };
 
   return (
     <div
+      data-durable-outbox-strip="true"
+      aria-label={`Messages waiting to send (${views.length})`}
       className={cn(
-        "mx-auto mb-2 max-h-52 w-full max-w-3xl space-y-1 overflow-y-auto rounded-xl border border-info/25 bg-info/6 p-1.5 shadow-xs",
+        "mx-auto mb-2 max-h-48 max-w-3xl space-y-1 overflow-y-auto rounded-xl border border-info/25 bg-info/6 px-3 py-2 text-xs shadow-xs",
         className,
       )}
-      aria-label={`Messages saved on this device (${views.length})`}
-      data-durable-outbox-strip="true"
     >
       {views.map((view) => {
-        const command = view.entry.plan.command;
-        const commandId = command.commandId;
-        const editing = editingCommandId === commandId;
-        const busy = busyCommandId === commandId;
-        const retryText = localRetryCountdownText(view.retryAt, nowMs);
-
+        const { entry } = view;
+        const busy = busyId === entry.id;
+        const countdown = retryCountdownText(view.retryAt, nowMs);
         return (
           <div
-            key={commandId}
-            className="rounded-lg px-2 py-1.5 text-xs text-muted-foreground"
-            data-outbox-command-id={commandId}
-            data-outbox-state={view.entry.state._tag}
+            key={entry.id}
+            data-outbox-state={entry.state._tag}
+            className="flex min-w-0 items-center gap-2.5"
           >
-            <div className="flex min-w-0 items-center gap-2">
-              {view.entry.state._tag === "Delivering" ? (
-                <LoaderCircleIcon
-                  className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <span className="size-2 shrink-0 rounded-full bg-info" aria-hidden="true" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-foreground">{view.title}</div>
-                <div className="truncate">
-                  {view.detail}
-                  {view.attempt !== null ? ` Attempt ${view.attempt}.` : ""}
-                  {retryText !== null ? ` ${retryText}.` : ""}
-                </div>
+            {view.rejected ? (
+              <CircleAlertIcon className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+            ) : (
+              <CloudUploadIcon className="size-4 shrink-0 text-info" aria-hidden="true" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium text-foreground">{view.preview}</div>
+              <div className={view.rejected ? "text-destructive" : "text-muted-foreground"}>
+                {view.status}
+                {countdown === null ? null : ` ${countdown}.`}
               </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {view.canEdit ? (
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {view.retryLabel === null ? null : (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={view.rejected ? "outline" : "ghost"}
+                  disabled={busy}
+                  onClick={() =>
+                    void run(entry.id, () =>
+                      durableCommandOutbox().retry(entry.id, CommandId.make(randomUUID())),
+                    )
+                  }
+                >
+                  <RotateCwIcon className="size-3" aria-hidden="true" />
+                  {view.retryLabel}
+                </Button>
+              )}
+              {view.canTakeBack ? (
+                <>
                   <Button
                     type="button"
                     size="xs"
                     variant="ghost"
                     disabled={busy}
-                    onClick={() => {
-                      setEditingCommandId(commandId);
-                      setEditText(command.message.text);
-                    }}
+                    onClick={() =>
+                      void run(entry.id, async () => {
+                        const removed = await durableCommandOutbox().discard(entry.id);
+                        if (removed) onRestore(restoredComposerContent(removed));
+                      })
+                    }
                   >
                     <PencilIcon className="size-3" aria-hidden="true" />
                     Edit
                   </Button>
-                ) : null}
-                {view.canCancel ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => void run(commandId, () => onCancel(commandId))}
-                  >
-                    Cancel
-                  </Button>
-                ) : null}
-                {view.canRetry ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(commandId, () =>
-                        onReplace(commandId, { ...command, commandId: newCommandId() }, "Rejected"),
-                      )
-                    }
-                  >
-                    <RotateCwIcon
-                      className={cn("size-3", busy && "animate-spin motion-reduce:animate-none")}
-                      aria-hidden="true"
-                    />
-                    Retry
-                  </Button>
-                ) : null}
-                {view.canDiscard ? (
                   <Button
                     type="button"
                     size="icon-xs"
                     variant="ghost"
-                    aria-label="Discard rejected message"
+                    aria-label="Discard saved message"
                     disabled={busy}
-                    onClick={() => void run(commandId, () => onDiscard(commandId))}
+                    onClick={() =>
+                      void run(entry.id, async () => {
+                        await durableCommandOutbox().discard(entry.id);
+                      })
+                    }
                   >
                     <Trash2Icon className="size-3.5" aria-hidden="true" />
                   </Button>
-                ) : null}
-              </div>
+                </>
+              ) : null}
             </div>
-            {editing ? (
-              <form
-                className="mt-2 flex gap-1.5"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const text = editText.trim();
-                  if (!text) return;
-                  const replacement: DurableClientCommand =
-                    command.type === "thread.turn.start"
-                      ? {
-                          ...command,
-                          commandId: newCommandId(),
-                          message: { ...command.message, text },
-                          titleSeed: text,
-                        }
-                      : {
-                          ...command,
-                          commandId: newCommandId(),
-                          message: { ...command.message, text },
-                          titleSeed: text,
-                        };
-                  void run(commandId, () => onReplace(commandId, replacement, "Pending"));
-                }}
-              >
-                <label className="sr-only" htmlFor={`outbox-edit-${commandId}`}>
-                  Edit saved message
-                </label>
-                <input
-                  id={`outbox-edit-${commandId}`}
-                  className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={editText}
-                  autoFocus
-                  disabled={busy}
-                  onChange={(event) => setEditText(event.target.value)}
-                />
-                <Button type="submit" size="xs" disabled={busy || editText.trim().length === 0}>
-                  Save
-                </Button>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => setEditingCommandId(null)}
-                >
-                  Close
-                </Button>
-              </form>
-            ) : null}
-            <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-              {view.title}. {view.detail}
-            </span>
           </div>
         );
       })}
       {actionError ? (
-        <p className="px-2 py-1 text-destructive text-xs" role="alert">
+        <p className="text-destructive" role="alert">
           {actionError}
         </p>
       ) : null}
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {views.map((view) => `${view.preview}: ${view.status}`).join(" ")}
+      </span>
     </div>
   );
 });

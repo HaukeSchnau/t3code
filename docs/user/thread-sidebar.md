@@ -1,50 +1,7 @@
 # Working with threads
 
-The sidebar puts threads that need you first, followed by all other active threads. Within each
-group, the thread with the most recent user message appears first. Opening a thread, streaming a
-response, and tool activity do not change its position.
-
-Project pickers follow the same order: the project containing the highest-ranked live thread appears
-first. Projects without live threads follow alphabetically.
-
-Threads created by a coordinator nest below it. Effort headers contain the threads that explicitly
-belong to that effort, including forks whose source is elsewhere. Explicit effort membership chooses
-the thread's one sidebar location, so the same thread does not also appear below a different creator.
-Current and attention-needed efforts appear before completed and closed effort history. T3 Code keeps
-their relative order stable within each lifecycle group; elapsed time does not reorder them.
-
-Projects remain a flat list. A top-level thread that has delegated work gets a separate disclosure
-control aligned below the project icon; ordinary top-level threads use that space for their full card.
-Closing the disclosure hides every descendant, including effort members, unassigned work, retries,
-nested coordinators, and past-effort history. Effort, retry, and nested-coordinator sections can still
-be opened and closed independently. Their summaries put work that needs you first, then working and
-done counts, and finally the number of hidden rows. On mobile, **Move up** and **Move down** move a
-top-level thread past the neighbouring thread and everything nested below it; nested threads follow
-their parent and have no move of their own.
-
-Every thread keeps the normal sidebar card and its existing actions, regardless of its depth or
-lifecycle. If the thread you are viewing is hidden by a closed section, a **Viewing** row remains next
-to its root. Select it to reopen the exact chain of sections leading to that thread. Search results and
-the Snoozed and Settled shelves remain flat so a thread still has one predictable lifecycle location.
-
-When a coordinator has efforts and unassigned children, those children appear under **Other delegated
-work**. A coordinator with no efforts continues to show its children without a section header.
-
-Use a new thread for a separate task. In the workspace picker, choose **New workspace**
-for a separate copy of the project, an existing workspace to continue its work in a fresh
-conversation, or **Project checkout** to use the original files. Conversations sharing a
-workspace see each other's file changes. The picker shows when another thread is running.
-
-Workspaces stay in the normal picker while any of their threads remain active. When all
-threads settle or archive, use search or **Show settled** to find the retained workspace.
-Starting another thread there reuses its files. Settling a thread does not delete or merge
-its changes. On hosts with isolated workspaces, **Advanced** lets you choose whether a new
-workspace keeps your global agent instructions and skills.
-
-Pinning applies to the individual thread, not its whole delegation tree. When a parent and child
-have different pin states, each starts a top-level row in its own pinned or active section. Children
-with the same pin state remain nested, so no unpinned row crosses the pinned divider and a pinned
-child never disappears with an unpinned parent.
+Use a new thread for a separate task. Choose **New worktree** when its code changes
+need a separate branch and working directory.
 
 ## Start a thread
 
@@ -55,6 +12,37 @@ an existing worktree, use **New thread in this worktree** from the branch toolba
 
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
+
+### Choose a workspace
+
+The workspace control below the composer (`mod+shift+x`) decides where a new thread works.
+**Project checkout** uses the project folder. **New workspace** gives the task a folder of its
+own: a worktree for Git projects, a jj workspace for jj repositories, and a copy for folders
+without version control. A copy over 5 GiB needs a file system that clones files (APFS or Btrfs).
+On mobile, tap the workspace control to choose.
+
+To continue where other threads already work, pick their workspace from the list. Settled and
+archived threads keep their workspaces; search or **Show settled** finds them. Settling never
+deletes files. When you delete a workspace's last thread, T3 Code asks whether to delete the
+workspace too, and refuses while an active or running thread still uses it. Hosts with separate
+environments create each new workspace as one; see
+[Separate project environments](./separate-projects.md).
+
+### Start without a project
+
+A thread does not need a project. To start one without a project, click **or
+start without a project** under a new thread's heading, pick **No project** from
+the project menu in that heading or from **New thread in...** in the command
+palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
+list. To move a draft into a project, pick the project in the heading.
+
+Each thread without a project works in its own folder under `~/.t3/scratch` (the
+`scratch` folder of your T3 data directory), named after its date, the first words
+of its first message, and a short id, like
+`2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread keeps its
+folder, so the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay hidden because
+these folders are not Git repositories. This is unavailable when the data
+directory itself sits inside a Git checkout.
 
 ### Start in the background
 
@@ -113,16 +101,6 @@ or **Settled** to drag a parked thread back into either live section. Each drop 
 **Move up** and **Move down** are also available in the thread menu. The server
 saves the order, so it survives a refresh and appears on your other connected devices.
 
-Threads that need you always stay above the rest of the active list, so you can drag a thread only
-within its own group.
-
-On web and desktop, start dragging a thread with delegated work from its top-level card. Reordering
-it moves its nested threads with it. Dragging it to another section pins, unpins, or settles
-only that thread, like the matching menu action; its nested threads stay where they are. To move a
-nested thread, use its row actions or menu. When a project filter shows threads from more than one
-workspace, the active list follows the workspaces, so dragging there changes a thread's section but
-not its position.
-
 On web and desktop, the list also animates section changes made with thread actions such as
 **Pin**, **Settle**, and **Snooze**. These transitions respect your system's reduced-motion
 preference. While dragging, rows follow the insertion gap without replaying a second transition
@@ -137,19 +115,36 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+Agents connected through T3 Code can use the same server-owned metadata workflow to
+rename a thread, regenerate its title, or link and unlink a pull request. These changes
+appear on web, desktop, and mobile without requiring the originating browser to remain
+open.
+
+### Fold working threads (beta)
+
+On web and desktop, turn on **Settings → General → Working section (beta)** to move threads that
+are working or monitoring into a collapsed **Working** section at the bottom of the sidebar. A
+thread returns to the top of the active list when it finishes, fails, or needs an approval or
+answer. Pinned threads stay in the pinned section.
+
+While this is on, the active list is ordered by when each thread last came back to you, so you
+cannot drag to reorder it. Your saved order returns when you turn it off.
+
 ## Automatic titles
 
-New threads receive a generated title from their first message. By default, T3 Code keeps that
-title aligned with the conversation as later requests make the goal clearer or move to a different
-topic. Ordinary progress such as planning, implementation, testing, and review does not change an
-otherwise accurate title.
+New threads get a title generated from their first message. When later messages make the goal
+clearer or move the thread to a different topic, T3 Code updates that title. Ordinary progress
+such as planning, implementation, testing, and review leaves an accurate title alone.
 
-Editing a title yourself stops automatic updates for that thread. Choose **Regenerate title** to
-generate a new title from the current conversation and resume automatic updates. Existing threads
-from older T3 Code versions remain unchanged until you regenerate their titles.
+A rename, by you or by an agent, stops automatic updates for that thread. To generate a fresh
+title from the conversation and resume automatic updates, open the thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress or when the
+connected environment needs a server update. Threads from older T3 Code versions keep their titles
+until you regenerate them.
 
-Turn off **Automatic thread titles** in General settings to keep first-message generation
-without later automatic updates. Explicit title regeneration remains available.
+Turn off **Automatic thread titles** in **Settings → General** on web and desktop, or
+**Settings → Thread behavior** on mobile, to keep first-message titles without later updates.
+**Regenerate title** still works.
 
 ## Settle finished work
 
@@ -157,7 +152,9 @@ Choose **Settle thread** from its menu to move finished work out of the active l
 without deleting the conversation. **Un-settle thread** restores it to active work
 and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
-sending an answer or restarting the agent.
+sending an answer or restarting the agent. Settling also closes the thread's
+terminals that wait at an idle prompt, and keeps their output. A terminal that
+runs a command, such as a dev server, stays open.
 
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
@@ -165,6 +162,11 @@ thread. Work in progress, pending questions or approvals, and live background wo
 prevent automatic settlement. An open pull request does not prevent inactivity
 settlement, but an old closed or merged pull request does not settle work you
 resumed after it closed.
+
+To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
+choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
+**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it
+is disabled.
 
 Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior** on mobile.
 They continue to run when your apps are closed. On web and desktop, choose an environment at the
@@ -198,11 +200,50 @@ for custom configuration.
 
 ## Inspect agent work
 
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+On web and desktop, press **Resume** in an empty composer to continue a limited
+or interrupted turn manually.
+Queued messages stay saved while the limit blocks the thread. They run after
+the continuation finishes. If the queue was held by a restart, resume it then.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Auto-resume limited
+threads** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Sending a new message, archiving, or settling the
+thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze limited threads** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
+
 On web and desktop, use **Agents** to follow work delegated to subagents.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. When such a subagent needs an approval or an answer, the parent
+thread asks for it.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
+
+## Let an agent wait
+
+An agent can hand its waiting to T3 Code and end its turn. It can watch another
+thread until that thread's current run ends, or keep a command running on the
+server and hear about each new burst of output and the exit. The environment
+keeps watching across restarts and wakes the thread with a notification. An idle
+thread starts right away; a busy one picks it up after its current turn.
+
+Command watches run without approval, so only full-access threads can start one.
+Archiving or deleting a thread stops its watches. Ask the agent to list or cancel
+them.
 
 ## Snooze until later
 

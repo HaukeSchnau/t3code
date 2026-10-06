@@ -10,6 +10,7 @@ import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
+import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
@@ -155,10 +156,11 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
           }),
       });
 
-    const prepareCache = yield* Cache.make({
+    const prepareCache = yield* Cache.makeWith(prepare, {
       capacity: options.prepareCacheSize ?? 200,
-      timeToLive: options.prepareCacheTTL ?? Duration.minutes(10),
-      lookup: prepare,
+      // A transient prepare failure must not outlive the lock or missing schema.
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit) ? (options.prepareCacheTTL ?? Duration.minutes(10)) : Duration.zero,
     });
 
     const runStatement = (

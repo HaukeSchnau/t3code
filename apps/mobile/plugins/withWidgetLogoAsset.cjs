@@ -19,7 +19,6 @@ const path = require("path");
 const fs = require("fs");
 const { withDangerousMod, withXcodeProject } = require("expo/config-plugins");
 const { addWidgetAssetCatalog } = require("./lib/addWidgetAssetCatalog.cjs");
-const { syncWidgetBuildVersions } = require("./lib/syncWidgetBuildVersions.cjs");
 
 const TARGET_NAME = "ExpoWidgetsTarget";
 const CATALOG_NAME = "Assets.xcassets";
@@ -58,15 +57,8 @@ function withAssetFiles(config) {
 }
 
 function withAssetWiring(config) {
-  const marketingVersion = config.version ?? "1.0";
-  const buildNumber = config.ios?.buildNumber ?? "1";
   return withXcodeProject(config, (cfg) => {
     addWidgetAssetCatalog(cfg.modResults, { targetName: TARGET_NAME });
-    syncWidgetBuildVersions(cfg.modResults, {
-      targetName: TARGET_NAME,
-      marketingVersion,
-      buildNumber,
-    });
     return cfg;
   });
 }

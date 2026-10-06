@@ -2,38 +2,53 @@
 
 ## Fork requirement
 
-This fork needs one catalog of optional skill groups that users can select in T3 Code and apply
-consistently to Codex, Claude Code, and locally managed OpenCode sessions. The catalog and canonical
-skill directories are supplied by the companion Nix infrastructure. Core provider skills must keep
-their native discovery and trigger behavior.
+The fork needs one catalog of optional skill groups that users pick per thread, with project
+defaults, and that Codex, Claude Code, and locally managed OpenCode sessions load the same way. The
+companion Nix infrastructure supplies the catalog and the canonical skill directories through
+`T3CODE_SKILL_CATALOG_PATH`. Core provider skills keep their native discovery and trigger behavior.
+Upstream has no per-thread skill scoping at all.
 
-## Implementation
+How it works is in [docs/internals/skill-packs.md](../docs/internals/skill-packs.md).
 
-- Read the configured catalog from `T3CODE_SKILL_CATALOG_PATH` and publish only its path-free client
-  projection.
-- Persist project defaults and versioned per-thread pack selections in orchestration state.
-- Merge skill scope from the authoritative shell subscription into cached thread details so
-  existing-thread checkboxes and activation status update immediately on server events.
-- Forward draft pack IDs through first-turn bootstrap into `thread.create`, preserving an
-  explicit empty selection as well as omitted selections that inherit project defaults.
-- Materialize selected skills once as content-addressed symlink trees and a Claude local plugin.
-  Use the stable plugin name `skills`, so Claude exposes `skills:animate` rather than a cache hash.
-  Include that name in the cache digest so namespace changes get a new plugin directory.
-- Inject the tree through Codex extra roots, Claude local plugins, or local OpenCode config paths.
-  Do not set Claude's SDK skill allowlist or add prompt instructions that force skill activation.
-- Mark unsupported providers and external OpenCode servers degraded while leaving their native
-  skills untouched.
-- Keep web, desktop, mobile, orchestration tools, and the `t3 thread create --skill-pack` CLI on the
-  same contract.
+## Fork-owned code
 
-## Infrastructure dependency
+- Contracts and RPCs: `packages/contracts/src/skillPacks.ts`.
+- Server: `apps/server/src/skills/` (catalog, provider scope registry, `SkillPacks` service) and
+  migration `081_SkillPackThreadSelections.ts`, which copies v1 `projection_threads.skill_scope_json`.
+- Clients: `packages/client-runtime/src/skillPacks.ts` and `state/skillPacks.ts`,
+  `apps/web/src/state/skillPacks.ts`, `apps/web/src/components/chat/SkillPacksControl.tsx`,
+  `apps/web/src/components/settings/ProjectSkillPacksSettings.tsx`, and
+  `apps/mobile/src/features/threads/skill-packs-session.ts`, `SkillPacksSheetContent.tsx`,
+  `apps/mobile/src/state/skill-packs.ts`.
 
-The server remains usable without a catalog, but selected packs degrade until the environment sets
-`T3CODE_SKILL_CATALOG_PATH` to a valid version-1 catalog. Skill IDs and paths in that catalog must
-match the directories installed on the server host.
+## Upstream hooks
+
+- `packages/contracts/src/{index,rpc,server}.ts`: export, RPC group entries, `skillPackCatalog`.
+- `apps/server/src/ws.ts` and `auth/RpcAuthorization.ts`: handlers, catalog in the server config,
+  scopes.
+- `apps/server/src/orchestration-v2/runtimeLayer.ts`: provides `SkillPacks`.
+- `apps/server/src/orchestration-v2/ProviderTurnStartService.ts`: `prepareTurn` before the session
+  opens.
+- `CodexAdapterV2.ts` (extra root after `initialize`, per-thread `skills.config`),
+  `ClaudeAdapterV2.ts` (`plugins`), `OpenCodeAdapterV2.ts` (spawn environment).
+- `apps/server/src/persistence/Migrations.ts` and the two migration manifest tests.
+- `packages/client-runtime/src/operations/commands.ts` (draft packs before `launchThread`) and
+  `rpc/client.ts` (subscription tag).
+- Web: `ChatComposer.tsx` (first resting block), `ChatView.tsx` (control and draft bootstrap),
+  `ProjectSettingsPanel.tsx` (Skills row).
+- Mobile: `ThreadSettingsSheet.tsx` (Skills row and page), `ThreadComposer.tsx`,
+  `new-task-flow-provider.tsx`, `use-composer-drafts.ts`, `thread-outbox-model.ts`,
+  `use-thread-outbox-drain.ts`, `projectThreadStartTurn.ts`.
+
+## Not carried after the v2 merge
+
+The v1 `t3 thread create --skill-pack` flag and the thread-orchestration MCP field went away with
+the v1 orchestration toolkit. Threads that agents create follow their parent or project instead.
+The web control has no entry in the composer's overflow menu, so it is unreachable only when every
+resting control is hidden.
 
 ## Upstream maintenance
 
-Prefer an upstream provider-neutral skill-scoping API if one becomes available. Preserve the
-additive semantics, Claude's native trigger loading, project defaults, and multi-client scope state
-when replacing this patch.
+Prefer an upstream provider-neutral skill-scoping API if one appears, keeping additive semantics,
+Claude's native trigger loading, project defaults, and the shared scope state. Codex per-thread
+skill roots would remove the process-wide root and the disable rules.

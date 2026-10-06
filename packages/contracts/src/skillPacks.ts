@@ -1,6 +1,8 @@
 import * as Schema from "effect/Schema";
+import * as Rpc from "effect/unstable/rpc/Rpc";
 
-import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentAuthorizationError } from "./auth.ts";
+import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const SkillPackId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(64),
@@ -48,21 +50,71 @@ export const SkillPackCatalog = Schema.Struct({
 });
 export type SkillPackCatalog = typeof SkillPackCatalog.Type;
 
+/**
+ * A thread's effective packs. `pending` means the provider has not loaded this
+ * selection yet; the next turn applies it. `degraded` carries the reason some
+ * or all selected skills are missing from the provider.
+ */
 export const ThreadSkillScope = Schema.Struct({
-  version: PositiveInt,
-  appliedVersion: NonNegativeInt,
   packIds: Schema.Array(SkillPackId),
   state: Schema.Literals(["ready", "pending", "degraded"]),
   issue: Schema.optional(TrimmedNonEmptyString),
 });
 export type ThreadSkillScope = typeof ThreadSkillScope.Type;
 
-/** Server-only materialized scope passed from orchestration to provider adapters. */
-export const ProviderSkillScope = Schema.Struct({
-  version: PositiveInt,
-  packIds: Schema.Array(SkillPackId),
-  skillIds: Schema.Array(SkillId),
-  skillsPath: TrimmedNonEmptyString,
-  pluginPath: TrimmedNonEmptyString,
+export const SkillPackState = Schema.Struct({
+  projectDefaultPackIds: Schema.Array(SkillPackId),
+  /** Null when the subscription names no thread. */
+  thread: Schema.NullOr(ThreadSkillScope),
 });
-export type ProviderSkillScope = typeof ProviderSkillScope.Type;
+export type SkillPackState = typeof SkillPackState.Type;
+
+export const SkillPackSubscribeInput = Schema.Struct({
+  projectId: ProjectId,
+  threadId: Schema.optional(ThreadId),
+});
+export type SkillPackSubscribeInput = typeof SkillPackSubscribeInput.Type;
+
+/** Also accepted before the thread exists, so a draft's packs apply to its first turn. */
+export const SkillPackSetThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  packIds: Schema.Array(SkillPackId),
+});
+export type SkillPackSetThreadInput = typeof SkillPackSetThreadInput.Type;
+
+export const SkillPackSetProjectDefaultInput = Schema.Struct({
+  projectId: ProjectId,
+  packIds: Schema.Array(SkillPackId),
+});
+export type SkillPackSetProjectDefaultInput = typeof SkillPackSetProjectDefaultInput.Type;
+
+export class SkillPackError extends Schema.TaggedError<SkillPackError>()("SkillPackError", {
+  message: TrimmedNonEmptyString,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+export const SKILL_PACK_WS_METHODS = {
+  subscribe: "skillPacks.subscribe",
+  setThreadPacks: "skillPacks.setThreadPacks",
+  setProjectDefault: "skillPacks.setProjectDefault",
+} as const;
+
+/** Streams the project's default packs and, when named, one thread's scope. */
+export const WsSkillPacksSubscribeRpc = Rpc.make(SKILL_PACK_WS_METHODS.subscribe, {
+  payload: SkillPackSubscribeInput,
+  success: SkillPackState,
+  error: Schema.Union([SkillPackError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsSkillPacksSetThreadPacksRpc = Rpc.make(SKILL_PACK_WS_METHODS.setThreadPacks, {
+  payload: SkillPackSetThreadInput,
+  success: Schema.Void,
+  error: Schema.Union([SkillPackError, EnvironmentAuthorizationError]),
+});
+
+export const WsSkillPacksSetProjectDefaultRpc = Rpc.make(SKILL_PACK_WS_METHODS.setProjectDefault, {
+  payload: SkillPackSetProjectDefaultInput,
+  success: Schema.Void,
+  error: Schema.Union([SkillPackError, EnvironmentAuthorizationError]),
+});

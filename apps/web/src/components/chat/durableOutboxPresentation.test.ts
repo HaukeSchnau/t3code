@@ -1,121 +1,89 @@
-import type { DurableCommandOutboxEntry } from "@t3tools/client-runtime/operations/command-outbox";
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  MessageId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import type { CommandOutboxState } from "@t3tools/client-runtime/state/command-outbox";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  localRetryCountdownText,
-  presentDurableOutboxEntry,
-  selectThreadDurableOutboxEntries,
-} from "./durableOutboxPresentation";
+import type { DurableComposerEntry } from "../../durableCommandOutbox";
+import { presentDurableOutboxEntries, retryCountdownText } from "./durableOutboxPresentation";
 
-const environmentId = EnvironmentId.make("env-1");
-const threadId = ThreadId.make("thread-1");
-
-function entry(state: DurableCommandOutboxEntry["state"]): DurableCommandOutboxEntry {
+function entry(id: number, text: string, state: CommandOutboxState): DurableComposerEntry {
   return {
-    plan: {
-      schemaVersion: 1,
-      environmentId,
-      enqueuedAt: "2026-07-15T10:00:00.000Z",
-      command: {
-        type: "thread.message.queue",
-        commandId: CommandId.make("command-1"),
-        threadId,
-        message: {
-          messageId: MessageId.make("message-1"),
-          role: "user",
-          text: "Keep going",
-          attachments: [],
-        },
-        titleSeed: "Keep going",
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        createdAt: "2026-07-15T10:00:00.000Z",
-      },
-    },
+    id,
+    enqueuedAt: 0,
     state,
+    command: {
+      environmentId: EnvironmentId.make("environment-1"),
+      threadId: ThreadId.make("thread-1"),
+      commandId: CommandId.make(`command-${id}`),
+      messageId: MessageId.make(`message-${id}`),
+      createdAt: "2026-10-05T10:00:00.000Z",
+      text,
+      attachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      dispatchMode: "auto",
+      titleSeed: text,
+    },
   };
 }
 
-describe("durable outbox presentation", () => {
-  it("offers edit and cancel only before delivery begins", () => {
-    expect(presentDurableOutboxEntry(entry({ _tag: "Pending" }))).toMatchObject({
-      canEdit: true,
-      canCancel: true,
-      canRetry: false,
-      title: "Message saved on this device",
-    });
-    expect(
-      presentDurableOutboxEntry(
-        entry({
-          _tag: "Delivering",
-          attempt: 1,
-          startedAt: "2026-07-15T10:00:01.000Z",
-        }),
-      ),
-    ).toMatchObject({ canEdit: false, canCancel: false, canRetry: false });
+describe("presentDurableOutboxEntries", () => {
+  it("tells offline users the message is saved and later messages wait their turn", () => {
+    const views = presentDurableOutboxEntries(
+      [entry(1, "first\nsecond line", { _tag: "Pending" }), entry(2, "next", { _tag: "Pending" })],
+      false,
+    );
+    expect(views.map((view) => [view.preview, view.status, view.canTakeBack])).toEqual([
+      ["first", "Saved on this device. Sends when the connection is back.", true],
+      ["next", "Sends after the message above.", true],
+    ]);
   });
 
-  it("makes a permanent rejection retryable only with a replacement identity", () => {
-    expect(
-      presentDurableOutboxEntry(
-        entry({
+  it("keeps a message that may have arrived out of reach of edit and discard", () => {
+    const [view] = presentDurableOutboxEntries(
+      [
+        entry(1, "hello", {
+          _tag: "Retrying",
+          attempt: 1,
+          retryAt: 5_000,
+          failure: { classification: "ambiguous", message: "Socket closed" },
+        }),
+      ],
+      true,
+    );
+    expect(view).toMatchObject({ canTakeBack: false, retryAt: 5_000, retryLabel: "Retry now" });
+  });
+
+  it("offers retry, edit and discard for a rejected message", () => {
+    const [view] = presentDurableOutboxEntries(
+      [
+        entry(1, "hello", {
           _tag: "Rejected",
           attempt: 2,
-          failure: {
-            classification: "permanent",
-            message: "Thread was removed",
-            failedAt: "2026-07-15T10:00:02.000Z",
-          },
+          failure: { classification: "permanent", message: "Thread was deleted." },
         }),
-      ),
-    ).toMatchObject({ canRetry: true, canDiscard: true, canEdit: false });
+      ],
+      true,
+    );
+    expect(view).toMatchObject({
+      status: "Not delivered: Thread was deleted.",
+      rejected: true,
+      canTakeBack: true,
+      retryLabel: "Retry",
+    });
   });
+});
 
-  it("shows a visible automatic retry countdown", () => {
-    expect(localRetryCountdownText(Date.parse("2026-07-15T10:00:05.100Z"), 0)).not.toBeNull();
-    expect(localRetryCountdownText(5_100, 1_000)).toBe("Retrying in 5s");
-  });
-
-  it("selects only local intents for the active environment and thread", () => {
-    const otherThread = {
-      ...entry({ _tag: "Pending" }),
-      plan: {
-        ...entry({ _tag: "Pending" }).plan,
-        command: {
-          ...entry({ _tag: "Pending" }).plan.command,
-          threadId: ThreadId.make("thread-2"),
-        },
-      },
-    };
-    expect(
-      selectThreadDurableOutboxEntries(
-        [entry({ _tag: "Pending" }), otherThread],
-        environmentId,
-        threadId,
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("hands ownership to the remote queue after acknowledgement loss", () => {
-    expect(
-      selectThreadDurableOutboxEntries(
-        [
-          entry({
-            _tag: "Retrying",
-            attempt: 1,
-            retryNotBefore: "2026-07-15T10:00:05.000Z",
-            failure: {
-              classification: "ambiguous",
-              message: "Ack lost",
-              failedAt: "2026-07-15T10:00:01.000Z",
-            },
-          }),
-        ],
-        environmentId,
-        threadId,
-        new Set(["message-1"]),
-      ),
-    ).toEqual([]);
+describe("retryCountdownText", () => {
+  it("counts whole seconds down to the next attempt", () => {
+    expect(retryCountdownText(4_200, 1_000)).toBe("Retrying in 4s");
+    expect(retryCountdownText(1_000, 1_000)).toBe("Retrying");
+    expect(retryCountdownText(null, 1_000)).toBeNull();
   });
 });
