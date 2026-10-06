@@ -54,28 +54,70 @@ prefetch-pnpm-deps: deps-nix-refresh
 ci-watch revision="main@origin":
     ./node_modules/.bin/vp run --workspace-root ci:watch -- --revision {{ quote(revision) }}
 
-# Publish the mobile JavaScript bundle as an OTA update. Entry point for the Mobile workflow.
+# Publish the mobile JavaScript bundle as an OTA update. Entry point for Kiln's mobile-update step;
+# leaves the runtime version in mobile-runtime-version for the TestFlight step on the Apple builder.
 ci-mobile-update:
     #!/usr/bin/env bash
     set -euo pipefail
-    : "${T3CODE_MOBILE_UPDATES_DIR:?The runner must provide a writable update directory.}"
+    : "${T3CODE_MOBILE_UPDATES_DIR:?The host must provide a writable update directory.}"
     runtime_version="$(node scripts/mobile-update.ts runtime-version --updates-url "$T3CODE_MOBILE_UPDATES_URL")"
-    echo "runtime_version=$runtime_version" >> "$GITHUB_OUTPUT"
+    printf '%s\n' "$runtime_version" > mobile-runtime-version
     node scripts/mobile-update.ts publish \
       --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
       --runtime-version "$runtime_version" \
       --updates-dir "$T3CODE_MOBILE_UPDATES_DIR"
 
-# Publish the Desktop workflow's macOS build of `commit`. Entry point for its Publish job.
-ci-desktop-publish artifacts_dir commit:
+# Upload a TestFlight build when the runtime in `runtime_file` has none yet. Entry point for Kiln's
+# testflight step on the Apple builder, which provides Xcode, CocoaPods, Node and the App Store
+# Connect key; this flake's pinned Node and CocoaPods misbehave on macOS 27.
+ci-mobile-testflight runtime_file: _apple-install
     #!/usr/bin/env bash
     set -euo pipefail
-    : "${T3CODE_DESKTOP_UPDATES_DIR:?The runner must provide a writable desktop update directory.}"
+    node scripts/mobile-testflight.ts \
+      --runtime-version "$(cat {{ quote(runtime_file) }})" \
+      --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
+      --notes "$(git log -1 --format=%s)"
+
+# Package and sign the macOS desktop app into desktop-release. Entry point for Kiln's
+# desktop-package step on the Apple builder.
+ci-desktop-package: _apple-install
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # electron-updater only installs a strictly higher version.
+    base_version="$(node -p "require('./apps/desktop/package.json').version")"
+    node scripts/update-release-package-versions.ts "${base_version}-schnau.$(date +%s)"
+    # Urbs UG's Apple Development identity in the builder's login keychain. The team-based
+    # designated requirement keeps updates and macOS permissions working when it is replaced.
+    export CSC_NAME="Apple Development: Created via API (85N8Y9CZC4)" T3CODE_APPLE_TEAM_ID=2243J9RD68
+    export T3CODE_DESKTOP_UPDATE_URL=https://t3code-updates.schnau.dev/desktop
+    export PATH="$PWD/node_modules/.bin:/run/current-system/sw/bin:$PATH"
+    rm -rf desktop-release
+    # Rust comes from the builder's own pinned nixpkgs registry entry.
+    nix shell nixpkgs#cargo nixpkgs#rustc --command \
+      node scripts/build-desktop-artifact.ts --platform mac --target zip --arch arm64 --signed --output-dir desktop-release
+    # Only what the update feed serves leaves the builder.
+    find desktop-release -mindepth 1 -maxdepth 1 \
+      ! -name '*-arm64.zip' ! -name '*-arm64.zip.blockmap' ! -name latest-mac.yml -exec rm -rf {} +
+
+# The Apple builder sits behind a slow home uplink; pnpm's 60 s default aborts large tarballs when
+# many download at once.
+_apple-install:
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm_config_fetch_timeout=600000 \
+      corepack pnpm install --frozen-lockfile --trust-lockfile --network-concurrency 4
+
+# Publish the desktop build in `artifacts_dir` to the update feed. Entry point for Kiln's
+# desktop-publish step.
+ci-desktop-publish artifacts_dir commit=env("KILN_REVISION"):
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${T3CODE_DESKTOP_UPDATES_DIR:?The host must provide a writable desktop update directory.}"
+    # Release notes list the first-parent commits since the previous build.
+    git fetch -q --no-tags --depth=100 origin {{ quote(commit) }} || true
     node scripts/desktop-publish.ts \
       --artifacts-dir {{ quote(artifacts_dir) }} \
       --updates-dir "$T3CODE_DESKTOP_UPDATES_DIR" \
       --commit {{ quote(commit) }} \
-      --repo "$GITHUB_WORKSPACE"
+      --repo "$PWD"
 
 # Build and install the iOS development app on the configured device.
 mobile-dev:
