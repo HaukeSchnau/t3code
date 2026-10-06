@@ -9,9 +9,9 @@ and fork lockfile check.
 ## Implementation
 
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
-- Kiln (`.kiln/ci.ts`) runs each QA task in a persistent workspace slot. `.ci/` owns T3 Code's
-  retained paths, environment, and dependency setup; a slot set up for one dependency set is
-  cloned for the next task that needs the same set.
+- Kiln (`.kiln/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
+  (`Pnpm.install` from `@kiln/std`) installs dependencies once per lockfile state and keeps the
+  apps' builds and caches between tasks; each task starts from a copy of the prepared workspace.
 - CI installs the committed lockfile with `--frozen-lockfile --trust-lockfile`, matching Nix release
   builds. Dependency changes retain normal pnpm policy checks when resolving the lockfile; CI does
   not recheck every locked version against live registry metadata. That pnpm 11.10 verification
