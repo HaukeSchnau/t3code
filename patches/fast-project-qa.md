@@ -21,7 +21,7 @@ and fork lockfile check.
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `Justfile` owns the QA tasks. The Gitea workflow runs formatting and linting, TypeScript checks,
   non-server tests, release smoke, and server shards as independent jobs. The serial server test
-  suite is split across three jobs.
+  suite is split across six jobs.
 - TypeScript package checks run one at a time inside each runner. Client and remaining package checks
   use separate Gitea jobs for cross-host parallelism without making two large `tsgo` processes page
   inside one cgroup. Successful package checks use Vite+'s persistent task cache.

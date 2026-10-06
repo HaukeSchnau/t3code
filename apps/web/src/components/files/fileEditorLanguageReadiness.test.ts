@@ -40,7 +40,7 @@ const source = "export const View = () => <div>Ready</div>;";
 let pool: WorkerPoolManager;
 let renderer: FileRenderer;
 let terminationPromises: Promise<number>[];
-const animationFrames = new Set<ReturnType<typeof setImmediate>>();
+const pendingAnimationFrames = new Set<ReturnType<typeof setImmediate>>();
 
 class WorkerTransport {
   private readonly worker = new NodeWorkerThreads.Worker(
@@ -99,15 +99,15 @@ beforeEach(async () => {
   terminationPromises = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     const handle = setImmediate(() => {
-      animationFrames.delete(handle);
+      pendingAnimationFrames.delete(handle);
       callback(0);
     });
-    animationFrames.add(handle);
+    pendingAnimationFrames.add(handle);
     return handle;
   });
   vi.stubGlobal("cancelAnimationFrame", (handle: ReturnType<typeof setImmediate>) => {
+    pendingAnimationFrames.delete(handle);
     clearImmediate(handle);
-    animationFrames.delete(handle);
   });
   vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
   await disposeHighlighter();
@@ -125,10 +125,10 @@ afterEach(async () => {
   pool?.terminate();
   await Promise.all(terminationPromises);
   await disposeHighlighter();
-  // Worker shutdown can queue a final broadcast after the last test assertion.
-  // Cancel it before removing the browser globals it expects.
-  for (const handle of animationFrames) clearImmediate(handle);
-  animationFrames.clear();
+  // Drain the pool's final state broadcast before removing the animation frame stubs.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (const handle of pendingAnimationFrames) clearImmediate(handle);
+  pendingAnimationFrames.clear();
   vi.unstubAllGlobals();
 });
 

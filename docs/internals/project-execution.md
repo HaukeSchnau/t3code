@@ -1,11 +1,30 @@
 # Project execution
 
-The optional managed execution launcher is an environment capability. Project creation requests it through `ProjectCreateCommand.separateEnvironment`; the normalizer captures a deferred preparation effect so filesystem creation follows the existing dispatch workflow.
+The optional `agent-exec` launcher is an environment capability owned by the companion infra
+repository. It owns project registration, private runtime state, mounts, and the preview bridge.
+T3 Code only reads registrations (`project/SeparateProjectRegistry.ts`) and routes processes for
+registered directories through the launcher (`project/ProjectExecution.ts`).
 
-The infra launcher owns persistent project registration and private runtime state. `SeparateProjectRegistry` reads the versioned path registry without loading provider history or project source. `ProjectExecution` resolves the registered cwd before process spawning, preserving ordinary command performance and rejecting a missing launcher for registered paths.
+Registrations are keyed by canonical root, so T3 walks a cwd's ancestors to find one. An
+unregistered cwd never touches the launcher. A registered cwd whose launcher is missing fails
+instead of falling back to host execution.
 
-The provider spawner wraps commands before applying systemd scopes. Claude's synchronous SDK spawn callback is supplied only after resolving separate execution. TerminalManager resolves the launcher before PTY creation, so project setup scripts inherit the same behavior. ProcessRunner also resolves execution for commands with a cwd.
+Every process entry point resolves execution before spawning: `ProviderProcessSpawner` for
+provider subprocesses and text generation, `ProcessRunner`, and `TerminalManager`. The Claude SDK
+spawns through `separateProjectSpawn`.
 
-The server stays outside the filesystem environment. Provider traffic continues over stdio, MCP remains reachable over the existing HTTP endpoint, and app previews use host routing. Host services requested through the infra bridge must re-enter the project environment when launching project code.
+The server stays on the host. Provider traffic continues over stdio, so the v2 adapters keep the
+host cwd for the subprocess but show the agent its visible cwd (`workspace.visibleRoot`) in thread
+and turn parameters. Local MCP URLs are rewritten to the environment's host gateway, because v2
+reaches every orchestration and preview tool over the `t3-code` MCP endpoint. Files the agent names
+by an environment path resolve through `projectHostPath` in `WorkspaceFileSystem` and
+`AssetAccess` before T3 reads them.
 
-The registry root is a stable project identity. Settings cannot move it implicitly, and managed workspace creation is currently rejected. These restrictions can be replaced with an explicit migration/alias protocol once multi-workspace execution is implemented.
+New workspaces on a launcher host are registrations too. `workspace/IsolatedWorkspaces.ts` runs
+`agent-exec fork` and `retire --remove-checkout` from `/`, because provisioning is a host
+operation even when the source project is itself registered; see
+[workspaces](../../patches/workspaces.md).
+
+`ProviderSessionManager` admits only the Codex and Claude drivers in registered directories, since
+their execution paths are the only verified ones. `ProjectService.update` refuses to move a
+registered project's root, because the registration is keyed by that root.

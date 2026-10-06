@@ -97,6 +97,8 @@ export function AgentActivity(
         return isLightScheme ? "#dc2626" : "#fca5a5"; // red-600 / red-300
       case "completed":
         return isLightScheme ? "#059669" : "#6ee7b7"; // emerald-600 / emerald-300
+      case "stale":
+        return secondaryForeground;
       case "starting":
       case "running":
       default:
@@ -112,20 +114,29 @@ export function AgentActivity(
     if (phase === "running" || phase === "starting") return 2;
     return 3;
   };
-  const ordered = [...props.activities].sort(
-    (a, b) => phasePriority(a.phase) - phasePriority(b.phase),
-  );
+  // Past the stale date the system stops vouching for the content, so every
+  // in-flight row degrades to "stale" rather than claiming an agent is still
+  // working. Terminal phases keep their own state. Home-screen widgets have no stale date.
+  const isStale = "isStale" in environment && environment.isStale === true;
+  const activities: ReadonlyArray<AgentActivityRowProps> = isStale
+    ? props.activities.map((row) =>
+        row.phase === "completed" || row.phase === "failed"
+          ? row
+          : { ...row, phase: "stale", status: "Out of date" },
+      )
+    : props.activities;
+  const ordered = [...activities].sort((a, b) => phasePriority(a.phase) - phasePriority(b.phase));
   const row0 = ordered[0];
   const row1 = ordered[1];
   const row2 = ordered[2];
   const row3 = ordered[3];
   const row4 = ordered[4];
 
-  const attentionRows = props.activities.filter(
+  const attentionRows = activities.filter(
     (row) => row.phase === "waiting_for_approval" || row.phase === "waiting_for_input",
   );
   const attentionRow = attentionRows[0];
-  const failedRow = props.activities.find((row) => row.phase === "failed");
+  const failedRow = activities.find((row) => row.phase === "failed");
   const heroRow = attentionRow ?? failedRow ?? row0;
   const tint = phaseTint(heroRow?.phase);
   // Headline count leans on the accent when a human is actually blocked.
@@ -157,6 +168,8 @@ export function AgentActivity(
     agentsLabel = "No active agents";
   } else if (allDone) {
     agentsLabel = outcomeLabel;
+  } else if (isStale) {
+    agentsLabel = "Agent status out of date";
   }
   const attentionSuffix =
     attentionRows.length > 0
@@ -167,6 +180,8 @@ export function AgentActivity(
     activeLabel = "Idle";
   } else if (allDone) {
     activeLabel = doneLabel;
+  } else if (isStale) {
+    activeLabel = "Out of date";
   }
   const summary = attentionSuffix || activeLabel;
 
@@ -395,7 +410,11 @@ export function AgentActivity(
         modifiers={[
           padding({ all: 14 }),
           // A clear tint reveals iOS 26's glass material; older hosts keep the standard surface.
-          activityBackgroundTint(environment.isLiquidGlassAvailable ? "clear" : null),
+          activityBackgroundTint(
+            "isLiquidGlassAvailable" in environment && environment.isLiquidGlassAvailable
+              ? "clear"
+              : null,
+          ),
           ...(deepLink ? [widgetURL(deepLink)] : []),
         ]}
       >

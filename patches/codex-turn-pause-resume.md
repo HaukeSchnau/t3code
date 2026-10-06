@@ -1,52 +1,66 @@
-# Codex Turn Pause And Resume
+# Codex turn pause and resume
 
 ## Requirement
 
-T3 Code users frequently interrupt active work to restart the client, temporarily stop resource
-usage, or move between devices. A Codex thread must offer a direct way to continue that interrupted
-work without requiring a visible synthetic user message.
+People stop Codex to restart the client, free resources, or move to another device, then want it
+to carry on. Resuming must not put a synthetic "continue" message into the T3 or Codex
+transcript. Upstream's Resume sends a visible "Continue where you left off." message, and only on
+web and desktop.
 
-Codex can also terminate a turn with `codexErrorInfo: "serverOverloaded"` and `willRetry: false`.
-That failure must remain resumable and recover automatically instead of requiring the user to type
-a synthetic “continue” message.
+Codex can also end a turn with `codexErrorInfo: "serverOverloaded"` and `willRetry: false` when the
+model is at capacity. Upstream shows it as an ordinary provider error. The fork retries it up to
+five times, about 5, 10, 20, 40 and 80 seconds apart, across server restarts.
 
-## Design
+## Implementation
 
-- `thread.turn.resume` targets the latest resumable provider turn by id. Resumable means an
-  interrupted Codex turn or a Codex turn that failed because the provider was overloaded. The
-  decider rejects stale targets, unrelated failures, and threads that still have active work.
-- Resume reuses the durable `thread.turn-start-requested` pipeline with a null message reference and
-  `resumedFromTurnId`. Projection turns, checkpoint baselines, receipts, remote connections, and
-  multi-client updates therefore follow the normal turn path.
-- Provider capabilities declare whether a message-free continuation is supported. Codex uses App
-  Server's supported empty `turn/start` input; other providers reject the operation at the adapter
-  boundary.
-- The interruption itself remains a real provider interruption. Codex records its normal
-  interruption context, then Resume starts a new technical provider turn with `input: []`. No user
-  message is fabricated in the T3 or Codex transcript.
-- Web, desktop, iOS, and Android label the Codex interrupt control Pause and show Resume when the
-  composer is empty. Typing a replacement instruction restores Send so steering remains obvious.
-- Terminal Codex overload errors retain their structured classification. The session projection
-  persists a retry attempt and timestamp so the provider reactor can recover scheduled work after a
-  server restart.
-- Automatic retries use five attempts with exponential delays of roughly 5, 10, 20, 40, and 80
-  seconds plus stable jitter. Meaningful provider progress resets the retry sequence. Manual Resume
-  cancels the pending timer and retries immediately; other provider error classes never enter this
-  loop.
+- `packages/shared/src/codexTurnContinuation.ts` holds the rules the server, web and mobile share:
+  which run Codex can resume, whether Codex is working, the retry state, and the banner text.
+- Resume uses upstream's `message.dispatch` with `manualContinuationOfRunId` and an empty message.
+  `Orchestrator.ts` also accepts overload failures as a source, rejects an empty continuation unless
+  the source run is Codex on the thread's current instance, and emits no user turn item for it. The
+  run keeps an empty conversation message because every v2 run points at one.
+- `CodexAdapterV2.ts` sends `turn/start` with `input: []` for an empty message, the same request
+  upstream uses for restart continuations.
+- `CodexOverloadRetryWorker.ts` runs on upstream's shared scheduler. Nothing about the sequence is
+  stored. Each retry's message id is `codex-overload-retry:<failed run id>`, which links it to the
+  run it continues and makes the dispatch idempotent. The attempt number is the length of that chain
+  of overloaded runs, and the wait counts from the failed run's `completedAt`. A retry with agent
+  output, or any continuation the user started, begins a new sequence. Other errors never match.
+- Web and desktop: `ChatView.tsx` prefers the Codex resumable run, sends the empty message, passes
+  `canPauseTurn` through `ChatComposer.tsx` to `ComposerPrimaryActions.tsx`, and gives
+  `ThreadErrorBanner.tsx` the retry line. Mobile: `useCodexTurnContinuation.ts` feeds
+  `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx` (with `CodexOverloadRetryCard.tsx`) and
+  `ThreadComposer.tsx`. `AppSymbol.tsx` maps the pause and filled play icons for Android.
+- Codex usage-limit stops resume without a message too. The automatic resume at reset
+  (`UsageLimitRecoveryWorker.ts`) is upstream's and still sends its visible message.
+- Other providers keep Stop and upstream's Resume message. Mobile shows Resume only for Codex.
 
-## Upstream dependency
+## Upstream hooks
 
-This behavior depends on Codex App Server accepting an empty `turn/start` input for a resumed
-thread. Keep the focused `buildTurnStartParams` and provider continuation tests when updating Codex
-protocol support.
+- `Orchestrator.ts`: the overload clause and the Codex check in manual-continuation validation; the
+  skipped user turn item in the immediate-start path.
+- `CodexAdapterV2.ts`: the empty-input condition in `startTurn`.
+- `runtimeLayer.ts`: the worker beside `UsageLimitRecoveryWorker`.
+- `packages/shared/package.json`: the subpath export.
+- Web: `ChatView.tsx`, `ChatComposer.tsx`, `ComposerPrimaryActions.tsx`, `ThreadErrorBanner.tsx`.
+- Mobile: `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx`, `ThreadComposer.tsx`, `AppSymbol.tsx`.
+
+## Removal
+
+Drop the empty-message branches, the Orchestrator user-item skip, and the Pause controls when
+upstream resumes Codex without a message on every client. Drop the worker and the overload clause
+when upstream retries `serverOverloaded`. The adapter test documents the dependency on App Server
+accepting an empty `turn/start` input.
 
 ## Verification
 
-- Contract decoding and typechecking cover the resume command and nullable continuation link.
-- Decider tests cover interrupted and overloaded continuations, automatic retry correlation,
-  unrelated errors, and stale-target rejection.
-- Provider service and reactor tests cover Codex-only empty continuation and the absence of a new
-  user message. Reactor tests also cover due timers and startup recovery from persisted retry state.
-- Runtime-ingestion and migration tests cover overload classification, scheduled retry state, and
-  persistence.
-- Web action tests cover Pause, Resume, typed-instruction precedence, and retry status messaging.
+- `packages/shared/src/codexTurnContinuation.test.ts`: resumable runs per provider and stop reason,
+  the backoff schedule, exhaustion, and resets after progress or a manual Resume.
+- `CodexTurnContinuation.test.ts`: an empty continuation of an interrupted or overloaded Codex run
+  starts a run without a user turn item; a non-Codex thread rejects it and keeps the visible
+  message.
+- `CodexOverloadRetryWorker.test.ts`: the retry fires on schedule and after a restart, and other
+  provider errors are left alone.
+- `CodexAdapterV2.test.ts`: `turn/start` with `input: []` and the `serverOverloaded` failure code.
+- After a sync, pause and resume a live Codex turn on web and on a phone, and check that no message
+  appears.

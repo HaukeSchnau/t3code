@@ -88,20 +88,17 @@ export function createAttachmentId(threadId: string, extension?: string): string
   return `${threadSegment}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
 }
 
-/**
- * Derive a stable attachment id for preprocessing a durable client command.
- * The UUID-shaped suffix keeps the existing attachment-path validation contract.
- */
-export function createDeterministicAttachmentId(threadId: string, identity: string): string | null {
+export function createDeterministicAttachmentId(
+  threadId: string,
+  stableKey: string,
+): string | null {
   const threadSegment = toSafeThreadAttachmentSegment(threadId);
-  if (!threadSegment) {
-    return null;
-  }
-  const bytes = NodeCrypto.createHash("sha256").update(identity).digest();
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  if (!threadSegment) return null;
+  const hash = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([threadId, stableKey]))
+    .digest("hex")
+    .slice(0, 32);
+  const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
   return `${threadSegment}-${uuid}`;
 }
 
@@ -276,7 +273,7 @@ export function sweepStalePendingAttachments(input: {
   return { deleted };
 }
 
-export function parseAttachmentIdFromRelativePath(relativePath: string): string | null {
+function parseAttachmentIdFromRelativePath(relativePath: string): string | null {
   const normalized = normalizeAttachmentRelativePath(relativePath);
   if (!normalized || normalized.includes("/")) {
     return null;

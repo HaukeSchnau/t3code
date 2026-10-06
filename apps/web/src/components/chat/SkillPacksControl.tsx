@@ -1,40 +1,62 @@
-import type { SkillPackCatalog, SkillPackId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  SkillPackCatalog,
+  SkillPackId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   describeSkillPackSkills,
   formatSkillPackSelectionLabel,
   formatSkillPackSelectionSummary,
   resolveEffectiveSkills,
+  resolveSkillPackProviderWarning,
+  resolveSkillPackSelection,
   toggleSkillPackId,
   type SkillPackSelection,
 } from "@t3tools/client-runtime/skillPacks";
 import { BlocksIcon, ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
-import { memo, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 
-import { cn } from "~/lib/utils";
+import { useEnvironment } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import {
+  readDraftSkillPackIds,
+  skillPackEnvironment,
+  useDraftSkillPackIds,
+  useDraftSkillPacksStore,
+} from "../../state/skillPacks";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { composerFloatingLayerProps } from "./composerEventScope";
+import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
+import { useComposerMenuProps } from "./composerEventScope";
+import { useComposerMenuState } from "./useComposerMenuState";
 
-/**
- * Everything a surface needs to show and edit the packs for one thread or
- * draft. The host resolves the selection and owns persistence; this file only
- * renders it.
- */
-export interface SkillPacksControlProps {
-  catalog: SkillPackCatalog;
-  selection: SkillPackSelection;
-  /** Set when the active provider ignores pack injection; shown in details. */
-  providerWarning: string | null;
-  onPackIdsChange: (packIds: ReadonlyArray<SkillPackId>) => void;
-  onResetToProjectDefault: () => void;
-  onMakeProjectDefault: () => void;
+/** Fork: skill packs (patches/skill-packs.md). */
+export interface SkillPacksEditor {
+  readonly catalog: SkillPackCatalog;
+  readonly selection: SkillPackSelection;
+  /** Set when the active provider never loads packs; shown in Details. */
+  readonly providerWarning: string | null;
+  readonly onPackIdsChange: (packIds: ReadonlyArray<SkillPackId>) => void;
+}
+
+/** First-turn bootstrap field for a draft's picks; absent follows the project default. */
+export function draftSkillPackBootstrap(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): { readonly skillPackIds?: ReadonlyArray<SkillPackId> } {
+  const skillPackIds = readDraftSkillPackIds(environmentId, threadId);
+  return skillPackIds === undefined ? {} : { skillPackIds };
 }
 
 /** Override, pending, and degraded states each get one small mark beside the icon. */
-function SkillPacksStatusGlyph({ selection }: { selection: SkillPackSelection }) {
+function SkillPacksStatusGlyph({ selection }: { readonly selection: SkillPackSelection }) {
   if (selection.state === "degraded") {
     return <TriangleAlertIcon aria-hidden="true" className="size-3 shrink-0 text-warning" />;
   }
@@ -52,18 +74,18 @@ function SkillPacksStatusGlyph({ selection }: { selection: SkillPackSelection })
   return null;
 }
 
-function PanelHeading({ children }: { children: ReactNode }) {
+function PanelHeading({ children }: { readonly children: ReactNode }) {
   return (
-    <div className="font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
+    <div className="font-medium text-2xs text-muted-foreground uppercase tracking-wide">
       {children}
     </div>
   );
 }
 
 /**
- * The popover body. Profiles are one-tap shortcuts that replace the pack
- * list; the checklist below is the source of truth. Resolved skills and the
- * provider note stay folded unless the scope is degraded.
+ * Profiles are one-tap shortcuts that replace the pack list; the checklist is
+ * what applies. Resolved skills and notes stay folded unless the scope is
+ * degraded.
  */
 export function SkillPacksPanel({
   catalog,
@@ -71,13 +93,13 @@ export function SkillPacksPanel({
   providerWarning,
   onPackIdsChange,
   actions,
-}: Pick<SkillPacksControlProps, "catalog" | "selection" | "providerWarning" | "onPackIdsChange"> & {
-  actions?: Pick<SkillPacksControlProps, "onResetToProjectDefault" | "onMakeProjectDefault">;
-}) {
+}: SkillPacksEditor & { readonly actions?: ReactNode }) {
   const headingId = useId();
   const [detailsOpen, setDetailsOpen] = useState(selection.state === "degraded");
   const effectiveSkills = resolveEffectiveSkills(catalog, selection.packIds);
   const selectedPacks = catalog.packs.filter((pack) => selection.packIds.includes(pack.id));
+  const skillName = (skillId: string) =>
+    catalog.skills.find((skill) => skill.id === skillId)?.displayName ?? skillId;
 
   return (
     <div aria-labelledby={headingId} className="flex w-full flex-col gap-3 text-sm" role="group">
@@ -123,28 +145,25 @@ export function SkillPacksPanel({
           <span className="text-muted-foreground text-xs">No packs are available.</span>
         ) : (
           <ul className="flex flex-col gap-0.5">
-            {catalog.packs.map((pack) => {
-              const checked = selection.packIds.includes(pack.id);
-              return (
-                <li key={pack.id}>
-                  <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1.5 hover:bg-accent/60">
-                    <Checkbox
-                      checked={checked}
-                      className="mt-0.5"
-                      onCheckedChange={() =>
-                        onPackIdsChange(toggleSkillPackId(catalog, selection.packIds, pack.id))
-                      }
-                    />
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-foreground leading-4">{pack.displayName}</span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {pack.description}
-                      </span>
+            {catalog.packs.map((pack) => (
+              <li key={pack.id}>
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1.5 hover:bg-accent/60">
+                  <Checkbox
+                    checked={selection.packIds.includes(pack.id)}
+                    className="mt-0.5"
+                    onCheckedChange={() =>
+                      onPackIdsChange(toggleSkillPackId(catalog, selection.packIds, pack.id))
+                    }
+                  />
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-foreground leading-4">{pack.displayName}</span>
+                    <span className="text-muted-foreground text-xs leading-4">
+                      {pack.description}
                     </span>
-                  </label>
-                </li>
-              );
-            })}
+                  </span>
+                </label>
+              </li>
+            ))}
           </ul>
         )}
       </div>
@@ -165,27 +184,20 @@ export function SkillPacksPanel({
           <div className="flex flex-col gap-2 pt-2 text-xs">
             {selection.state === "degraded" ? (
               <p className="rounded-md bg-warning/8 px-2 py-1.5 text-warning-foreground">
-                {selection.issue ?? "Some skills could not be injected for this thread."}
+                {selection.issue ?? "Some skills could not be loaded for this thread."}
               </p>
-            ) : selection.state === "pending" ? (
-              <p className="text-muted-foreground">Applies on the next turn.</p>
-            ) : null}
-            {providerWarning ? (
+            ) : providerWarning ? (
               <p className="rounded-md bg-warning/8 px-2 py-1.5 text-warning-foreground">
                 {providerWarning}
               </p>
+            ) : selection.state === "pending" ? (
+              <p className="text-muted-foreground">Applies on the next turn.</p>
             ) : null}
             <dl className="flex flex-col gap-1.5">
               <div className="flex flex-col gap-0.5">
                 <dt className="text-muted-foreground">Core</dt>
                 <dd className="text-foreground">
-                  {catalog.coreSkillIds
-                    .map(
-                      (skillId) =>
-                        catalog.skills.find((skill) => skill.id === skillId)?.displayName ??
-                        skillId,
-                    )
-                    .join(", ")}
+                  {catalog.coreSkillIds.map(skillName).join(", ")}
                 </dd>
               </div>
               {selectedPacks.map((pack) => (
@@ -219,22 +231,7 @@ export function SkillPacksPanel({
 
       {actions ? (
         <div className="flex flex-wrap justify-end gap-1.5 border-border/60 border-t pt-2.5">
-          <Button
-            variant="ghost"
-            size="xs"
-            disabled={selection.isProjectDefault}
-            onClick={actions.onResetToProjectDefault}
-          >
-            Reset to project default
-          </Button>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={selection.isProjectDefault}
-            onClick={actions.onMakeProjectDefault}
-          >
-            Make project default
-          </Button>
+          {actions}
         </div>
       ) : null}
     </div>
@@ -242,23 +239,79 @@ export function SkillPacksPanel({
 }
 
 /**
- * Context-strip trigger. Core-only with no project default is icon-only; any
- * other selection shows its short label, muted when it merely mirrors the
- * project default. The strip's compact mode hides the label like its
- * neighbours do.
+ * The composer's Skills control for a server thread or a draft. Renders
+ * nothing unless the environment publishes a catalog. Core only is icon-only;
+ * any other selection shows its profile, pack name or count.
  */
-export const SkillPacksControl = memo(function SkillPacksControl({
-  catalog,
-  selection,
-  providerWarning,
-  onPackIdsChange,
-  onResetToProjectDefault,
-  onMakeProjectDefault,
-}: SkillPacksControlProps) {
-  const [open, setOpen] = useState(false);
+export function ComposerSkillPacksControl(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+  /** Drafts keep picks locally until their first turn creates the thread. */
+  readonly isServerThread: boolean;
+  readonly providerDriver: ProviderDriverKind | null;
+  readonly size: ComposerControlSize;
+  readonly hidden: boolean;
+}) {
+  const { environmentId, projectId, threadId, isServerThread } = props;
+  const catalog = useEnvironment(environmentId)?.serverConfig?.skillPackCatalog ?? null;
+  const state = useEnvironmentQuery(
+    catalog === null
+      ? null
+      : skillPackEnvironment.state({
+          environmentId,
+          input: isServerThread ? { projectId, threadId } : { projectId },
+        }),
+  ).data;
+  const draftPackIds = useDraftSkillPackIds(environmentId, threadId);
+  const setDraftPackIds = useDraftSkillPacksStore((store) => store.set);
+  const setThreadPacks = useAtomCommand(skillPackEnvironment.setThreadPacks, "set skill packs");
+  const setProjectDefault = useAtomCommand(
+    skillPackEnvironment.setProjectDefault,
+    "save the project's default skills",
+  );
+  const composerMenuProps = useComposerMenuProps();
+  const [open, setOpen] = useComposerMenuState(props.hidden);
+
+  const projectDefaultPackIds = state?.projectDefaultPackIds;
+  const applyPackIds = useCallback(
+    (packIds: ReadonlyArray<SkillPackId> | null) => {
+      if (isServerThread) {
+        void setThreadPacks({
+          environmentId,
+          input: { threadId, packIds: packIds ?? projectDefaultPackIds ?? [] },
+        });
+        return;
+      }
+      setDraftPackIds(environmentId, threadId, packIds);
+    },
+    [
+      environmentId,
+      isServerThread,
+      projectDefaultPackIds,
+      setDraftPackIds,
+      setThreadPacks,
+      threadId,
+    ],
+  );
+
+  if (catalog === null) return null;
+  const selection = resolveSkillPackSelection({
+    catalog,
+    projectDefaultPackIds,
+    ...(isServerThread ? { threadScope: state?.thread } : { draftPackIds }),
+  });
   const summary = formatSkillPackSelectionSummary(catalog, selection);
-  const showLabel = selection.source !== "core";
-  const label = formatSkillPackSelectionLabel(catalog, selection);
+  const makeProjectDefault = async () => {
+    const result = await setProjectDefault({
+      environmentId,
+      input: { projectId, packIds: selection.packIds },
+    });
+    // The draft's picks now match the project, so it follows the default again.
+    if (result._tag === "Success" && !isServerThread) {
+      setDraftPackIds(environmentId, threadId, null);
+    }
+  };
 
   return (
     <Tooltip>
@@ -266,56 +319,51 @@ export const SkillPacksControl = memo(function SkillPacksControl({
         <TooltipTrigger
           render={
             <PopoverTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  aria-label={summary}
-                  data-composer-context-control
-                  className={cn(
-                    "min-w-0 shrink justify-start gap-1 font-normal text-xs! hover:text-foreground/80",
-                    selection.source === "thread"
-                      ? "text-muted-foreground"
-                      : "text-muted-foreground/70",
-                  )}
-                />
-              }
+              render={<ComposerControl size={props.size} aria-label={summary} type="button" />}
             />
           }
         >
-          <BlocksIcon className="size-3 shrink-0" />
-          {showLabel ? (
-            <span
-              data-composer-label
-              className="min-w-0 max-w-[160px] group-data-[compact]/composer-context:max-w-0"
-            >
-              <span
-                data-composer-label-motion
-                className="block w-full min-w-0 max-w-[160px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
-              >
-                {label}
-              </span>
+          <ComposerControlIcon icon={BlocksIcon} size={props.size} />
+          {selection.source !== "core" ? (
+            <span data-composer-control-label className="max-w-40 truncate">
+              {formatSkillPackSelectionLabel(catalog, selection)}
             </span>
           ) : null}
           <SkillPacksStatusGlyph selection={selection} />
         </TooltipTrigger>
-        <PopoverPopup
-          side="top"
-          align="start"
-          className="w-80"
-          viewportClassName="py-3 [--viewport-inline-padding:--spacing(3)]"
-          {...composerFloatingLayerProps}
-        >
+        <PopoverPopup side="top" align="start" width="md" padding="compact" {...composerMenuProps}>
           <SkillPacksPanel
             catalog={catalog}
             selection={selection}
-            providerWarning={providerWarning}
-            onPackIdsChange={onPackIdsChange}
-            actions={{ onResetToProjectDefault, onMakeProjectDefault }}
+            providerWarning={resolveSkillPackProviderWarning({
+              driver: props.providerDriver,
+              packIds: selection.packIds,
+            })}
+            onPackIdsChange={applyPackIds}
+            actions={
+              <>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={selection.isProjectDefault}
+                  onClick={() => applyPackIds(null)}
+                >
+                  Reset to project default
+                </Button>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={selection.isProjectDefault}
+                  onClick={() => void makeProjectDefault()}
+                >
+                  Make project default
+                </Button>
+              </>
+            }
           />
         </PopoverPopup>
       </Popover>
       <TooltipPopup side="top">{summary}</TooltipPopup>
     </Tooltip>
   );
-});
+}

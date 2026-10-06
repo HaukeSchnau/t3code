@@ -12,7 +12,7 @@ const gaugeValue = (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, id: string
   return snapshot?.type === "Gauge" ? snapshot.state.value : undefined;
 };
 
-it.effect("records event-loop delay and SQLite file sizes", () =>
+it.effect("records SQLite database and WAL sizes", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -23,26 +23,18 @@ it.effect("records event-loop delay and SQLite file sizes", () =>
     yield* fileSystem.writeFileString(dbPath, "database");
     yield* fileSystem.writeFileString(`${dbPath}-wal`, "wal");
 
-    yield* recordRuntimeMetrics({ dbPath, eventLoopDelayNanoseconds: 2_500_000 });
+    yield* recordRuntimeMetrics(dbPath);
 
     const snapshots = yield* Metric.snapshot;
-    assert.equal(gaugeValue(snapshots, "t3_event_loop_delay_milliseconds"), 2.5);
     assert.equal(gaugeValue(snapshots, "t3_sqlite_database_size_bytes"), 8);
     assert.equal(gaugeValue(snapshots, "t3_sqlite_wal_size_bytes"), 3);
 
-    yield* recordRuntimeMetrics({ dbPath, eventLoopDelayNanoseconds: Number.NaN });
-    const normalizedSnapshots = yield* Metric.snapshot;
-    assert.equal(gaugeValue(normalizedSnapshots, "t3_event_loop_delay_milliseconds"), 0);
-
     yield* fileSystem.remove(`${dbPath}-wal`);
-    yield* recordRuntimeMetrics({ dbPath, eventLoopDelayNanoseconds: 1 });
+    yield* recordRuntimeMetrics(dbPath);
     const missingWalSnapshots = yield* Metric.snapshot;
     assert.equal(gaugeValue(missingWalSnapshots, "t3_sqlite_wal_size_bytes"), 0);
 
-    yield* recordRuntimeMetrics({
-      dbPath: path.join(directory, "missing.sqlite"),
-      eventLoopDelayNanoseconds: 1,
-    });
+    yield* recordRuntimeMetrics(path.join(directory, "missing.sqlite"));
     const missingDatabaseSnapshots = yield* Metric.snapshot;
     const errors = missingDatabaseSnapshots.find(
       (candidate) => candidate.id === "t3_runtime_metrics_collection_errors_total",

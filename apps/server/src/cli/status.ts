@@ -15,10 +15,7 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
-import * as ThreadBackgroundLiveness from "../orchestration/ThreadBackgroundLiveness.ts";
 import { layerConfigAttached as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
-import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { getServerIdleStatus } from "../status/IdleStatus.ts";
 import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -69,12 +66,6 @@ const withStatusCliSessionToken = <A, E, R>(
     (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
   );
 
-const StatusOfflineRuntimeLive = OrchestrationProjectionSnapshotQueryLive.pipe(
-  Layer.provideMerge(ThreadBackgroundLiveness.layer),
-  Layer.provideMerge(RepositoryIdentityResolver.layer),
-  Layer.provideMerge(SqlitePersistenceLayerLive),
-);
-
 function formatIdleStatus(status: ServerIdleStatus, options: { readonly json: boolean }): string {
   if (options.json) {
     return JSON.stringify(status);
@@ -123,7 +114,7 @@ const queryOfflineIdleStatus = (flags: CliAuthLocationFlags) =>
     const config = yield* resolveCliAuthConfig(flags, logLevel);
     return yield* getServerIdleStatus().pipe(
       Effect.provide(
-        StatusOfflineRuntimeLive.pipe(
+        SqlitePersistenceLayerLive.pipe(
           Layer.provide(ServerConfig.layer(config)),
           Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
         ),

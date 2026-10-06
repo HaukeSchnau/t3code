@@ -42,6 +42,11 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedRightPanelToggle.command, "rightPanel.toggle");
 
+    const parsedThreadPanelToggle = yield* decode(KeybindingRule, {
+      key: "mod+shift+b",
+      command: "threadPanel.toggle",
+    });
+    assert.strictEqual(parsedThreadPanelToggle.command, "threadPanel.toggle");
     const parsedRightPanelToggleMaximized = yield* decode(KeybindingRule, {
       key: "mod+shift+m",
       command: "rightPanel.toggleMaximized",
@@ -72,12 +77,6 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedSettingsOpen.command, "settings.open");
 
-    const parsedMonitorToggle = yield* decode(KeybindingRule, {
-      key: "mod+alt+g",
-      command: "monitor.toggle",
-    });
-    assert.strictEqual(parsedMonitorToggle.command, "monitor.toggle");
-
     const parsedFilePicker = yield* decode(KeybindingRule, {
       key: "mod+p",
       command: "filePicker.toggle",
@@ -89,6 +88,12 @@ it.effect("parses keybinding rules", () =>
       command: "projectSearch.toggle",
     });
     assert.strictEqual(parsedProjectSearch.command, "projectSearch.toggle");
+
+    const parsedUsageOpen = yield* decode(KeybindingRule, {
+      key: "mod+u",
+      command: "usage.open",
+    });
+    assert.strictEqual(parsedUsageOpen.command, "usage.open");
 
     const parsedThemeEditor = yield* decode(KeybindingRule, {
       key: "mod+alt+shift+t",

@@ -1,66 +1,35 @@
-# Codex Structured User Input
+# Codex structured user input
 
 ## Requirement
 
-Codex must be able to ask structured questions through T3 Code on web, desktop, iOS, and Android.
-The prompt must remain usable over remote and multi-device connections, and abandoned provider
-requests must not leave a stale question blocking the composer.
+Codex must be able to ask structured questions in Default mode, not only in Plan mode, on web,
+desktop, iOS and Android. A question that Codex marks as non-blocking must be skippable, so Codex
+can continue with its best judgment. Upstream leaves Codex's `default_mode_request_user_input`
+feature off, and its Default-mode instructions tell Codex to ask in plain text.
 
-## Design
+## Implementation
 
-- Enable Codex App Server's `default_mode_request_user_input` feature for both new and resumed
-  threads. Default-mode instructions prefer this tool for consequential questions that cannot
-  be answered from context; plain-text questions are the fallback when the tool is unavailable.
-- Keep the existing provider-neutral user-input contract and orchestration flow. Codex translates
-  `item/tool/requestUserInput` at the adapter boundary instead of adding a Codex-only client API.
-- Preserve the App Server JSON-RPC request id and raw request metadata beside the generated typed
-  payload. This carries the newer `isBlocking` field without hand-editing generated protocol files.
-- Treat `isBlocking: false` as optional user input. Web, desktop, iOS, and Android label these
-  prompts and offer **Skip**, which answers with an empty result so Codex can use its best judgment.
-  Missing metadata remains blocking for compatibility with older Codex versions.
-- Keep the web and desktop prompt inside the composer's `ComposerBanner` attachment stack. The
-  question card uses that root's grid and spacing variables, so rendering it directly inside the
-  main input surface breaks its header, body alignment, and neighboring stash tab.
-- Correlate `serverRequest/resolved` with the pending prompt. Provider resolution, a new or completed
-  turn, interruption, process exit, and runtime close all settle and remove pending input.
-- Return an empty answer immediately when Codex sends no renderable question, preventing an
-  invisible pending request.
+- `orchestration-v2/Adapters/CodexAdapterV2.ts` starts every `codex app-server` process with
+  `-c features.default_mode_request_user_input=true` (`CODEX_STRUCTURED_USER_INPUT_ARGS`). A
+  process-level flag reaches new and resumed threads. Per-thread config would change the recorded
+  `thread/start` frames that upstream's replay fixtures match exactly.
+- `provider/CodexDeveloperInstructions.ts` replaces upstream's Default-mode text about questions.
+  Codex asks only when the answer changes the result and cannot be found in context. It uses
+  `request_user_input` when the tool is listed and otherwise asks one plain-text question.
+- The adapter turns a request with `isBlocking: false` into questions with `required: false` on
+  upstream's question contract. A request without the field stays blocking, as Codex treats it.
+- When every question is optional, the prompt shows an Optional label and a Skip action that
+  answers `{}`. Web and desktop use `isOptionalPendingUserInput` in `pendingUserInput.ts` and
+  `ComposerPendingUserInputPanel.tsx`. Mobile has its own copy in `lib/threadActivity.ts` and
+  renders it in `PendingUserInputCard.tsx`.
 
-## Upstream Dependency
+## Removal
 
-This patch depends on Codex App Server's `item/tool/requestUserInput` server request,
-`serverRequest/resolved` notification, and `features.default_mode_request_user_input` config flag.
-When updating Codex protocol bindings, keep the raw request context until generated schemas expose
-`isBlocking` directly, then remove the compatibility decoder.
+Drop the launch flag and the instruction text when upstream enables Default-mode questions. Drop
+the Skip controls when upstream renders optional questions itself.
 
 ## Verification
 
-- The Effect Codex client test covers typed request handling plus raw id and metadata preservation.
-- Codex runtime tests cover feature configuration and out-of-band request settlement.
-- Adapter and ingestion tests cover optional metadata normalization and persistence.
-- Web and mobile state tests cover optional prompt derivation; package typechecks cover the shared
-  Skip controls on every client surface.
-- Exercise a live Codex prompt at desktop and narrow viewport widths after composer or banner syncs.
-
-## Async answer delivery
-
-Codex async agent messages with questions are persisted with `responseMode: "message"`.
-They never register a provider callback. The provider-command reactor reads the saved request
-with `getUserInputActivity`, then dispatches an immediate queued user message using the existing
-turn pipeline. That pipeline handles steering a running turn and recovering an inactive session.
-Web, desktop and mobile submit the same typed answer command; clients do not choose the transport.
-Callback-based questions and approvals keep their existing response path.
-
-The message includes each original question and its submitted answer. Resolve the question only
-after message persistence succeeds. A stable message ID derived from thread and request prevents
-double delivery after repeated submissions or an interrupted resolution write. Before enqueueing, check whether that message
-already exists in the durable thread. Command IDs belong to each response attempt so corrected
-answers can retry a rejected save without conflicting with its command receipt. Persistence
-failures keep the question open; provider delivery failures remain visible on the durable message.
-Invalid answer payloads produce a failure without echoing submitted values. Response mode and request
-ID are span attributes and failure-activity fields; answer contents are not diagnostic attributes.
-
-Focused reactor tests cover active, ready, stopped and absent sessions, duplicate submissions,
-failed message/resolution writes followed by retry, malformed inputs and structured answer forms.
-The same suite retains the callback-response and stale-callback tests. The database lookup must
-select `activity_revision` as required by the activity row schema.
+`CodexAdapterV2.test.ts` covers the launch arguments and a non-blocking request.
+`pendingUserInput.test.ts` and mobile `threadActivity.test.ts` cover optional detection. After a
+Codex or composer sync, exercise a live Default-mode question on desktop and on a narrow viewport.

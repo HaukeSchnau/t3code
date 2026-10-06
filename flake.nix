@@ -43,9 +43,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-0SiV3QlPF/lm9hjsgyzmX8r+3uGPt7w6r7/0gPa2SeE=";
-            server = "sha256-83ShS2nLqMWlOhrdW9Wkrz9Q1PICF5EoCTYbrnJVtnM=";
-            runtime = "sha256-1IH918LygsHpOUf1vZI3HPLNiuHBsi2kBvnYAi3XACo=";
+            web = "sha256-u+wcJvT8CVSeDqCAJPf7HHNT9C+P0XL7w8wuV2LaCBA=";
+            server = "sha256-Pp8S8N+UCymktJxjftjQm0iJHfF/WrM86q/LPJ7nsPE=";
+            runtime = "sha256-Q975B7PsQbpDy0XCypzDqaagQ3oMKBpC1UMqTrYqppU=";
           },
         }:
         let
@@ -128,8 +128,13 @@
                 src
                 pnpm
                 hash
-                prePnpmInstall
                 ;
+              # pnpm 11 checks registry metadata for every locked package. On a loaded
+              # builder one request can exceed the 60-second default and fail the fetch.
+              prePnpmInstall = ''
+                export pnpm_config_fetch_timeout=300000
+              ''
+              + prePnpmInstall;
               version = packageJson.version;
               fetcherVersion = 4;
               pnpmWorkspaces = workspaces;
@@ -445,6 +450,7 @@
             pkgs.gzip
             pkgs.just
             pkgs.jq
+            pkgs.jujutsu
             pkgs.libsecret
             pkgs.pkg-config
             pkgs.python3
@@ -480,6 +486,8 @@
 
             shellHook = ''
               export npm_config_nodedir="${nodejs}"
+              # Tests match English tool messages; Kiln workers inherit the host's German locale.
+              export LC_ALL=C.UTF-8
             '';
           };
         }

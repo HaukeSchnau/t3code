@@ -150,7 +150,7 @@ export const readPersistedServerRuntimeState = (path: string) =>
                   cause,
                 }),
               ),
-        onSuccess: (contents) => Effect.succeed(Option.some(contents)),
+        onSuccess: (contents) => Effect.succeedSome(contents),
       }),
     );
     if (Option.isNone(raw)) {
@@ -163,7 +163,7 @@ export const readPersistedServerRuntimeState = (path: string) =>
     }
 
     return yield* decodePersistedServerRuntimeState(trimmed).pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.mapError(
         (cause) =>
           new ServerRuntimeStateError({

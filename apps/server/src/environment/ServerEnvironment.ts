@@ -26,6 +26,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
+import { managedWorkspacesCapability } from "../workspace/IsolatedWorkspaces.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -131,13 +132,12 @@ const makeIdentity = Effect.gen(function* () {
       });
       yield* fileSystem.writeFileString(tempPath, `${value}\n`);
       // Publish the completed file without replacing an ID created by another process.
-      yield* fileSystem
-        .link(tempPath, destinationPath)
-        .pipe(
-          Effect.catch((cause) =>
-            cause.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(cause),
-          ),
-        );
+      yield* fileSystem.link(tempPath, destinationPath).pipe(
+        Effect.catchIf(
+          (cause) => cause.reason._tag === "AlreadyExists",
+          () => Effect.void,
+        ),
+      );
       if (mode === "recover") {
         // Keep the recovery ID so delayed initializers also publish the same winner.
         yield* fileSystem.remove(tempPath);
@@ -192,7 +192,6 @@ export const make = Effect.gen(function* () {
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcessPlatform;
   const hostArchitecture = yield* HostProcessArchitecture;
-  const hostEnvironment = yield* HostProcessEnvironment;
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
@@ -226,12 +225,11 @@ export const make = Effect.gen(function* () {
       questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
+      pullRequestChecks: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
       threadAutoSettlement: true,
-      isolatedWorkspaces:
-        hostPlatform === "linux" && Boolean(hostEnvironment.T3CODE_EXECUTION_LAUNCHER),
       storageCleanup: true,
       projectWorktreeCleanup: true,
       threadRestartContinuation: true,
@@ -243,18 +241,21 @@ export const make = Effect.gen(function* () {
       threadPinning: true,
       threadPinReorder: true,
       threadActiveReorder: true,
+      threadAutoSettleOptOut: true,
       threadTitleRegeneration: true,
+      threadVisitedTracking: true,
       threadPullRequests: true,
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
+      serverResolvedCommandContext: true,
       environmentIcon: true,
       projectCloneTracking: true,
+      managedWorkspaces: managedWorkspacesCapability(hostPlatform, yield* HostProcessEnvironment),
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
+      // V2 restart recovery uses the environment-owned opt-in. The old
+      // per-update request flag is not wired into the V2 update RPC path.
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
-        ? {
-            serverSelfUpdateProgress: true,
-            serverUpdateThreadContinuation: true,
-          }
+        ? { serverSelfUpdateProgress: true }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },

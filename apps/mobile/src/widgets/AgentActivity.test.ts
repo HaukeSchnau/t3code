@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-const widgetFactories = vi.hoisted(() => ({
-  createWidget: vi.fn((name: string, layout: unknown) => ({ layout, name })),
-}));
-
 vi.mock("@expo/ui/swift-ui", () => ({
   HStack: "HStack",
   Image: "Image",
@@ -30,11 +26,12 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 
 vi.mock("expo-widgets", () => ({
   createLiveActivity: vi.fn((name: string, layout: unknown) => ({ layout, name })),
-  createWidget: widgetFactories.createWidget,
+  createWidget: vi.fn((name: string, layout: unknown) => ({ layout, name })),
 }));
 
 import {
   AgentActivity,
+  AgentActivityWidget,
   type AgentActivityProps,
   type AgentActivityRowProps,
 } from "./AgentActivity";
@@ -82,7 +79,7 @@ const mediumWidgetEnvironment = {
 
 describe("AgentActivity widget layout", () => {
   it("registers a home-screen widget layout", () => {
-    expect(widgetFactories.createWidget).toHaveBeenCalledWith("AgentActivity", AgentActivity);
+    expect(AgentActivityWidget).toEqual({ layout: AgentActivity, name: "AgentActivity" });
   });
 
   it("adopts WidgetKit's required container background", () => {
@@ -111,6 +108,26 @@ describe("AgentActivity widget layout", () => {
     const banner = JSON.stringify(layout.banner);
     expect(banner).toContain("#7dd3fc"); // sky-300: running
     expect(banner).toContain("#fcd34d"); // amber-300: waiting_for_approval
+  });
+
+  it("degrades in-flight rows once the system marks the activity stale", () => {
+    const layout = AgentActivity(
+      {
+        ...props,
+        activeCount: 2,
+        activities: [
+          makeRow({}),
+          makeRow({ threadId: "thread-2", phase: "completed", status: "Done" }),
+        ],
+      },
+      { ...environment, isStale: true } as never,
+    );
+    const banner = JSON.stringify(layout.banner);
+    expect(banner).toContain("Agent status out of date");
+    expect(banner).toContain("Out of date");
+    expect(banner).not.toContain("#7dd3fc"); // sky-300: running
+    expect(banner).toContain("Done");
+    expect(JSON.stringify(layout.minimal)).not.toContain("2");
   });
 
   it("switches to the web sidebar's light palette when the scheme is light", () => {

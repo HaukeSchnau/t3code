@@ -30,9 +30,9 @@ export const testClients = Task.make("test-clients", {
 
 export const testServer = Task.make("test-server", {
   shell,
-  shards: { count: 3 },
+  shards: { count: 6 },
   run: ({ index, count }) => cmd`just qa-test-server-shard ${index} ${count}`,
-}).pipe(Step.timeout("25 minutes"));
+}).pipe(Step.timeout("30 minutes"));
 
 export const smoke = Task.make("release-smoke", { shell, run: cmd`just qa-release` }).pipe(
   Step.timeout("10 minutes"),

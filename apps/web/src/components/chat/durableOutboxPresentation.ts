@@ -1,89 +1,77 @@
-import type { DurableCommandOutboxEntry } from "@t3tools/client-runtime/operations/command-outbox";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { canDiscardCommandOutboxEntry } from "@t3tools/client-runtime/state/command-outbox";
+
+import type { DurableComposerEntry } from "../../durableCommandOutbox";
 
 export interface DurableOutboxEntryView {
-  readonly entry: DurableCommandOutboxEntry;
-  readonly title: string;
-  readonly detail: string;
-  readonly canEdit: boolean;
-  readonly canCancel: boolean;
-  readonly canRetry: boolean;
-  readonly canDiscard: boolean;
-  readonly attempt: number | null;
+  readonly entry: DurableComposerEntry;
+  readonly preview: string;
+  readonly status: string;
+  readonly rejected: boolean;
+  /** Epoch milliseconds of the next automatic attempt, for a countdown. */
   readonly retryAt: number | null;
+  /** Edit and discard take the message back; only safe while it cannot have arrived. */
+  readonly canTakeBack: boolean;
+  readonly retryLabel: "Retry" | "Retry now" | null;
 }
 
-export function selectThreadDurableOutboxEntries(
-  entries: ReadonlyArray<DurableCommandOutboxEntry>,
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-  remotelyQueuedMessageIds: ReadonlySet<string> = new Set(),
-): ReadonlyArray<DurableCommandOutboxEntry> {
-  return entries.filter(
-    (entry) =>
-      entry.plan.environmentId === environmentId &&
-      entry.plan.command.threadId === threadId &&
-      !remotelyQueuedMessageIds.has(entry.plan.command.message.messageId),
-  );
+function preview(entry: DurableComposerEntry): string {
+  const firstLine = entry.command.text.trim().split("\n", 1)[0] ?? "";
+  if (firstLine.length > 0) return firstLine;
+  const count = entry.command.attachments.length;
+  return count === 1 ? "1 attachment" : `${count} attachments`;
 }
 
-export function presentDurableOutboxEntry(
-  entry: DurableCommandOutboxEntry,
-): DurableOutboxEntryView {
-  switch (entry.state._tag) {
-    case "Pending":
-      return {
-        entry,
-        title: "Message saved on this device",
-        detail: "Will send automatically.",
-        canEdit: true,
-        canCancel: true,
-        canRetry: false,
-        canDiscard: false,
-        attempt: null,
-        retryAt: null,
-      };
-    case "Delivering":
-      return {
-        entry,
-        title: "Sending saved message",
-        detail: "Waiting for the remote environment to accept it.",
-        canEdit: false,
-        canCancel: false,
-        canRetry: false,
-        canDiscard: false,
-        attempt: entry.state.attempt,
-        retryAt: null,
-      };
-    case "Retrying":
-      return {
-        entry,
-        title: "Message saved on this device",
-        detail: "The last send failed. It will retry automatically.",
-        canEdit: false,
-        canCancel: false,
-        canRetry: false,
-        canDiscard: false,
-        attempt: entry.state.attempt,
-        retryAt: Date.parse(entry.state.retryNotBefore),
-      };
-    case "Rejected":
-      return {
-        entry,
-        title: "Message rejected",
-        detail: entry.state.failure.message,
-        canEdit: false,
-        canCancel: false,
-        canRetry: true,
-        canDiscard: true,
-        attempt: entry.state.attempt,
-        retryAt: null,
-      };
-  }
+/** One row per waiting message of a thread, oldest first. */
+export function presentDurableOutboxEntries(
+  entries: ReadonlyArray<DurableComposerEntry>,
+  connected: boolean,
+): ReadonlyArray<DurableOutboxEntryView> {
+  return entries.map((entry, index) => {
+    const base = {
+      entry,
+      preview: preview(entry),
+      rejected: false,
+      retryAt: null,
+      canTakeBack: canDiscardCommandOutboxEntry(entry),
+      retryLabel: null,
+    };
+    const { state } = entry;
+    switch (state._tag) {
+      case "Pending":
+        return {
+          ...base,
+          status:
+            index > 0
+              ? "Sends after the message above."
+              : connected
+                ? "Sending."
+                : "Saved on this device. Sends when the connection is back.",
+        };
+      case "Delivering":
+        return { ...base, status: "Sending." };
+      case "Retrying":
+        return {
+          ...base,
+          status:
+            state.failure.classification === "ambiguous"
+              ? "No reply from the environment yet. It is sent again with the same id, so it arrives once."
+              : `Not sent yet: ${state.failure.message}`,
+          retryAt: connected ? state.retryAt : null,
+          retryLabel: connected ? "Retry now" : null,
+        };
+      case "Rejected":
+        return {
+          ...base,
+          status: `Not delivered: ${state.failure.message}`,
+          rejected: true,
+          retryLabel: "Retry",
+        };
+    }
+  });
 }
 
-export function localRetryCountdownText(retryAt: number | null, nowMs: number): string | null {
+export function retryCountdownText(retryAt: number | null, nowMs: number): string | null {
   if (retryAt === null) return null;
-  const seconds = Math.max(1, Math.ceil((retryAt - nowMs) / 1_000));
-  return `Retrying in ${seconds}s`;
+  const seconds = Math.ceil((retryAt - nowMs) / 1_000);
+  return seconds > 0 ? `Retrying in ${seconds}s` : "Retrying";
 }

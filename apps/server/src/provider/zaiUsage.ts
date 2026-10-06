@@ -16,7 +16,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-import { parseOpenCodeModelSlug } from "./opencodeRuntime.ts";
 import {
   clampPercent,
   makeUnavailableUsageLimits,
@@ -175,18 +174,6 @@ function providerZaiUsageSource(
     trimmed(provider.key) ??
     trimmed(Option.getOrUndefined(decodeStringOption(provider.options.apiKey)));
   return apiKey ? { apiKey, quotaUrl } : null;
-}
-
-/** Resolves Z.AI quota access for the model a session selected. */
-export function openCodeZaiUsageSource(
-  providerList: ProviderListResponse,
-  modelSlug: string | null | undefined,
-): ZaiUsageSource | null {
-  const parsed = parseOpenCodeModelSlug(modelSlug);
-  if (!parsed) return null;
-  const provider = providerList.all.find((candidate) => candidate.id === parsed.providerID);
-  const model = provider?.models[parsed.modelID];
-  return provider && model ? providerZaiUsageSource(provider, model) : null;
 }
 
 /**

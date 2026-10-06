@@ -1,5 +1,4 @@
 import type {
-  ServerProvider,
   SkillCatalogEntry,
   SkillId,
   SkillPack,
@@ -12,11 +11,9 @@ import type {
 /**
  * Where the effective pack list came from. `core` is the untouched default
  * (no packs anywhere), `project` mirrors the project's default packs, and
- * `thread` is a per-thread override that differs from the project default.
+ * `thread` is a selection that differs from the project default.
  */
 export type SkillPackSelectionSource = "core" | "project" | "thread";
-
-export type SkillPackSelectionState = ThreadSkillScope["state"];
 
 export interface SkillPackSelection {
   /** Effective pack ids in catalog order, unknown ids dropped. */
@@ -25,7 +22,7 @@ export interface SkillPackSelection {
   /** True when the effective packs equal the project default, including both empty. */
   readonly isProjectDefault: boolean;
   /** Only server threads report application state; drafts are always ready. */
-  readonly state: SkillPackSelectionState;
+  readonly state: ThreadSkillScope["state"];
   readonly issue: string | null;
   /** The profile whose packs exactly match the selection, if any. */
   readonly profile: SkillPackProfile | null;
@@ -46,7 +43,7 @@ export function normalizeSkillPackIds(
   return catalog.packs.filter((pack) => wanted.has(pack.id)).map((pack) => pack.id);
 }
 
-export function matchSkillPackProfile(
+function matchSkillPackProfile(
   catalog: Pick<SkillPackCatalog, "profiles">,
   packIds: ReadonlyArray<SkillPackId>,
 ): SkillPackProfile | null {
@@ -66,17 +63,15 @@ export function toggleSkillPackId(
 }
 
 /**
- * Resolve what the composer should show for a thread or draft.
- *
- * A server thread carries its own scope once the server materialized it; a
- * missing scope (older threads) inherits the project default. Drafts pass
- * their pending pack list instead, where `null` also means inherit.
+ * Resolve what a surface shows for a thread or draft. A server thread reports
+ * its scope (inherited packs included); a draft passes its picks, where `null`
+ * or `undefined` means it follows the project default.
  */
 export function resolveSkillPackSelection(input: {
-  catalog: SkillPackCatalog;
-  projectDefaultPackIds: ReadonlyArray<SkillPackId> | null | undefined;
-  threadScope?: ThreadSkillScope | null | undefined;
-  draftPackIds?: ReadonlyArray<SkillPackId> | null | undefined;
+  readonly catalog: SkillPackCatalog;
+  readonly projectDefaultPackIds: ReadonlyArray<SkillPackId> | null | undefined;
+  readonly threadScope?: ThreadSkillScope | null | undefined;
+  readonly draftPackIds?: ReadonlyArray<SkillPackId> | null | undefined;
 }): SkillPackSelection {
   const projectDefault = normalizeSkillPackIds(input.catalog, input.projectDefaultPackIds ?? []);
   const explicit = input.threadScope?.packIds ?? input.draftPackIds ?? null;
@@ -117,7 +112,7 @@ export function formatSkillPackSelectionSummary(
     case "pending":
       return `${label} · applies on the next turn`;
     case "degraded":
-      return `${label} · ${selection.issue ?? "some skills could not be injected"}`;
+      return `${label} · ${selection.issue ?? "some skills could not be loaded"}`;
     case "ready":
       return label;
   }
@@ -132,7 +127,10 @@ export interface SkillPackSkillRow {
   readonly providedBy: "core" | SkillPackId | null;
 }
 
-function catalogSkill(catalog: Pick<SkillPackCatalog, "skills">, skillId: SkillId) {
+function catalogSkill(
+  catalog: Pick<SkillPackCatalog, "skills">,
+  skillId: SkillId,
+): SkillCatalogEntry {
   return (
     catalog.skills.find((skill) => skill.id === skillId) ?? {
       id: skillId,
@@ -142,9 +140,9 @@ function catalogSkill(catalog: Pick<SkillPackCatalog, "skills">, skillId: SkillI
 }
 
 /**
- * The skills one pack contributes, annotated with prior providers. The core
- * set always counts as provided; selected packs count in catalog order so a
- * shared skill is attributed to the first pack that lists it.
+ * The skills one pack contributes, annotated with prior providers. Core
+ * always counts as provided; selected packs count in catalog order so a shared
+ * skill is attributed to the first pack that lists it.
  */
 export function describeSkillPackSkills(
   catalog: Pick<SkillPackCatalog, "skills" | "packs" | "coreSkillIds">,
@@ -152,15 +150,10 @@ export function describeSkillPackSkills(
   selectedPackIds: ReadonlyArray<SkillPackId>,
 ): ReadonlyArray<SkillPackSkillRow> {
   const core = new Set(catalog.coreSkillIds);
-  const earlierPacks = normalizeSkillPackIds(catalog, selectedPackIds)
-    .filter((id) => id !== pack.id)
-    .map((id) => catalog.packs.find((candidate) => candidate.id === id))
-    .filter((candidate): candidate is SkillPack => candidate !== undefined)
-    .filter(
-      (candidate) =>
-        catalog.packs.findIndex((p) => p.id === candidate.id) <
-        catalog.packs.findIndex((p) => p.id === pack.id),
-    );
+  const packIndex = catalog.packs.findIndex((candidate) => candidate.id === pack.id);
+  const earlierPacks = catalog.packs.filter(
+    (candidate, index) => index < packIndex && selectedPackIds.includes(candidate.id),
+  );
   return pack.skillIds.map((skillId) => ({
     skill: catalogSkill(catalog, skillId),
     providedBy: core.has(skillId)
@@ -174,35 +167,29 @@ export function resolveEffectiveSkills(
   catalog: SkillPackCatalog,
   packIds: ReadonlyArray<SkillPackId>,
 ): ReadonlyArray<SkillCatalogEntry> {
-  const seen = new Set<SkillId>();
-  const result: SkillCatalogEntry[] = [];
-  const add = (skillId: SkillId) => {
-    if (seen.has(skillId)) return;
-    seen.add(skillId);
-    result.push(catalogSkill(catalog, skillId));
-  };
-  for (const skillId of catalog.coreSkillIds) add(skillId);
+  const skillIds = new Set<SkillId>(catalog.coreSkillIds);
   for (const packId of normalizeSkillPackIds(catalog, packIds)) {
     const pack = catalog.packs.find((candidate) => candidate.id === packId);
-    for (const skillId of pack?.skillIds ?? []) add(skillId);
+    for (const skillId of pack?.skillIds ?? []) skillIds.add(skillId);
   }
-  return result;
+  return [...skillIds].map((skillId) => catalogSkill(catalog, skillId));
 }
 
 /**
- * Whether the active provider can receive the selected packs. Provider-native
- * skills keep working regardless; only the pack injection is in question, so
- * a core-only selection never warns.
+ * Pre-send note for providers that never load packs. The server reports the
+ * remaining cases, such as an external OpenCode server, as a degraded scope.
  */
 export function resolveSkillPackProviderWarning(input: {
-  provider: Pick<ServerProvider, "driver" | "skillScopeInjection"> | null | undefined;
-  packIds: ReadonlyArray<SkillPackId>;
+  readonly driver: string | null | undefined;
+  readonly packIds: ReadonlyArray<SkillPackId>;
 }): string | null {
-  if (input.packIds.length === 0 || !input.provider) return null;
-  const unsupported =
-    input.provider.skillScopeInjection === "unsupported" ||
-    (input.provider.skillScopeInjection === undefined && input.provider.driver === "opencode");
-  return unsupported
-    ? "This provider cannot load skill packs. Its own skills still work; selected packs are ignored."
-    : null;
+  if (input.packIds.length === 0 || !input.driver) return null;
+  switch (input.driver) {
+    case "codex":
+    case "claudeAgent":
+    case "opencode":
+      return null;
+    default:
+      return "This provider cannot load skill packs. Its own skills still work; selected packs are ignored.";
+  }
 }

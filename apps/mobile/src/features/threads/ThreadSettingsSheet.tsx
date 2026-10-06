@@ -55,13 +55,15 @@ import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { rememberModelOptions } from "../../state/use-model-option-memory";
 import {
   NativeHeaderToolbar,
   NativeStackScreenOptions,
   nativeHeaderScrollEdgeEffects,
 } from "../../native/StackHeader";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-import { serverEnvironment } from "../../state/server";
+import { ChatGptSharingStatus } from "./ChatGptSharingStatus";
+import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useNewTaskFlow } from "./new-task-flow-provider";
@@ -76,18 +78,13 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
-import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-options";
+import { skillPacksRowValue, type SkillPacksSheetSession } from "./skill-packs-session";
+import { SkillPacksChoiceContent, useNewTaskSkillPacksSession } from "./SkillPacksSheetContent";
 import {
-  buildSkillPacksSheetRows,
-  skillPacksRowValue,
-  type SkillPacksSheetSession,
-} from "./skill-packs-session";
-import {
-  resolveSkillPackProviderWarning,
-  resolveSkillPackSelection,
-} from "@t3tools/client-runtime/skillPacks";
-import { useEnvironmentServerConfig } from "../../state/entities";
-import { projectEnvironment } from "../../state/projects";
+  compatibleRuntimeModeForChoices,
+  runtimeModeChoicesForSupportedModes,
+  selectableChoices,
+} from "./thread-settings-options";
 import {
   canCommitPendingModel,
   favoritesFirst,
@@ -134,6 +131,7 @@ const FAVORITES_PROVIDER_FILTER = "@favorites";
 /** Provider catalog header with its harness logo and disclosure state. */
 function ProviderHeader(props: {
   readonly driver: string | undefined;
+  readonly iconUrl: string | undefined;
   readonly label: string;
   readonly collapsible: boolean;
   readonly collapsed: boolean;
@@ -142,7 +140,7 @@ function ProviderHeader(props: {
 }) {
   const content = (
     <>
-      <ProviderIcon provider={props.driver} size={15} />
+      <ProviderIcon iconUrl={props.iconUrl} provider={props.driver} size={15} />
       <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
       {props.collapsible ? (
         <>
@@ -169,9 +167,8 @@ function ProviderHeader(props: {
         accessibilityLabel={`${props.label}, ${props.modelCount} models`}
         accessibilityRole="button"
         accessibilityState={{ expanded: !props.collapsed }}
-        className="mx-4 mt-1 min-h-11 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60"
+        className="mx-4 mt-1 min-h-11 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60 android:min-h-12"
         onPress={props.onToggle}
-        style={Platform.OS === "android" ? { minHeight: 48 } : undefined}
       >
         {content}
       </Pressable>
@@ -196,9 +193,8 @@ function DisclosureRow(props: {
     <Pressable
       accessibilityRole="button"
       onPress={props.onPress}
-      style={Platform.OS === "android" ? { minHeight: 56 } : undefined}
       className={cn(
-        "min-h-11 flex-row items-center gap-2 bg-card px-4 py-2 active:bg-subtle",
+        "min-h-11 flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14",
         !props.isLast && "border-b border-border-subtle",
       )}
     >
@@ -228,7 +224,7 @@ function SwitchRow(props: {
   return (
     <View
       className={cn(
-        "min-h-11 flex-row items-center justify-between bg-card px-4 py-1",
+        "min-h-11 flex-row items-center justify-between bg-grouped-card px-4 py-1",
         !props.isLast && "border-b border-border-subtle",
       )}
     >
@@ -257,6 +253,7 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  /** Fork: present when the environment publishes skill packs (patches/skill-packs.md). */
   readonly skillPacks?: SkillPacksSheetSession;
 };
 
@@ -309,6 +306,7 @@ type ThreadSettingsSessionValue = {
   readonly favoritesLoaded: boolean;
   readonly toggleFavorite: (option: ModelOption) => void;
   readonly runtimeMode: RuntimeMode;
+  readonly runtimeModeChoices: ReturnType<typeof runtimeModeChoicesForSupportedModes>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly skillPacks: SkillPacksSheetSession | null;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
@@ -398,6 +396,20 @@ function ThreadSettingsSessionProvider(
         : props.optionDescriptors,
     [pendingModel, props.optionDescriptors],
   );
+  const displayedModel = useMemo(
+    () =>
+      pendingModel ??
+      props.providerGroups.flatMap((group) => group.models).find((option) => isApplied(option)) ??
+      null,
+    [isApplied, pendingModel, props.providerGroups],
+  );
+  const runtimeModeChoices = runtimeModeChoicesForSupportedModes(
+    displayedModel?.supportedRuntimeModes,
+  );
+  const compatibleRuntimeMode = compatibleRuntimeModeForChoices(
+    props.runtimeMode,
+    runtimeModeChoices,
+  );
 
   const hasLegacyModels = useMemo(
     () => props.providerGroups.some((group) => group.models.some((model) => model.isLegacy)),
@@ -425,6 +437,7 @@ function ThreadSettingsSessionProvider(
         return;
       }
       if (pendingModel) {
+        rememberModelOptions(pendingModel.selection.instanceId, pendingModel.selection.model, next);
         setPendingModel({
           ...pendingModel,
           selection: { ...pendingModel.selection, options: next },
@@ -465,7 +478,8 @@ function ThreadSettingsSessionProvider(
       environmentId: props.environmentId,
       providerInstanceId: props.providerInstanceId,
       providerGroups: props.providerGroups,
-      runtimeMode: props.runtimeMode,
+      runtimeMode: compatibleRuntimeMode,
+      runtimeModeChoices,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
       skillPacks: props.skillPacks ?? null,
       displayedDescriptors,
@@ -491,6 +505,7 @@ function ThreadSettingsSessionProvider(
     [
       applyOptionChange,
       commitPendingModel,
+      compatibleRuntimeMode,
       displayedDescriptors,
       favoriteKeys,
       favoritesLoaded,
@@ -505,8 +520,8 @@ function ThreadSettingsSessionProvider(
       providerFilter,
       props.onUpdateRuntimeMode,
       props.providerGroups,
-      props.runtimeMode,
       props.skillPacks,
+      runtimeModeChoices,
       searchQuery,
       showLegacyToggle,
       toggleProvider,
@@ -532,6 +547,7 @@ function useThreadSettingsSession() {
 type ThreadSettingsProviderCatalog = {
   readonly key: string;
   readonly driver: string | undefined;
+  readonly iconUrl: string | undefined;
   readonly label: string;
   readonly collapsible: boolean;
   readonly collapsed: boolean;
@@ -600,6 +616,7 @@ function ThreadSettingsProviderListHeader(props: {
       collapsible={props.provider.collapsible}
       collapsed={props.provider.collapsed}
       driver={props.provider.driver}
+      iconUrl={props.provider.iconUrl}
       label={props.provider.label}
       modelCount={props.provider.modelCount}
       onToggle={onToggle}
@@ -661,6 +678,7 @@ function useThreadSettingsCatalogItems(
         const provider: ThreadSettingsProviderCatalog = {
           key: group.providerKey,
           driver,
+          iconUrl: group.models[0]?.providerIconUrl,
           label: group.providerLabel,
           collapsible,
           collapsed,
@@ -701,6 +719,12 @@ function ThreadSettingsOptionsItem(props: {
 }) {
   const insets = useSafeAreaInsets();
   const session = useThreadSettingsSession();
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const selectedProvider = session.environmentId
+    ? (configs
+        .get(session.environmentId)
+        ?.providers.find((provider) => provider.instanceId === session.providerInstanceId) ?? null)
+    : null;
   const bottomToolbarInset =
     Platform.OS === "ios" && NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
       ? NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET
@@ -708,9 +732,10 @@ function ThreadSettingsOptionsItem(props: {
 
   return (
     <View style={{ paddingBottom: insets.bottom + bottomToolbarInset + 12 }}>
+      <ChatGptSharingStatus provider={selectedProvider} />
       <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">Options</Text>
       <Animated.View
-        className="mx-4 overflow-hidden rounded-2xl bg-card"
+        className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
         {session.displayedDescriptors.map((descriptor) => {
@@ -761,7 +786,8 @@ function ThreadSettingsOptionsItem(props: {
             isLast
             label="Runtime"
             value={
-              RUNTIME_MODE_CHOICES.find((choice) => choice.mode === session.runtimeMode)?.label
+              session.runtimeModeChoices.find((choice) => choice.mode === session.runtimeMode)
+                ?.label
             }
             onPress={() => props.onOpenSubmenu({ kind: "runtime" })}
           />
@@ -773,7 +799,7 @@ function ThreadSettingsOptionsItem(props: {
           <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
             Catalog
           </Text>
-          <View className="mx-4 overflow-hidden rounded-2xl bg-card">
+          <View className="mx-4 overflow-hidden rounded-2xl bg-grouped-card">
             <SwitchRow
               isLast
               label="Legacy models"
@@ -958,6 +984,7 @@ function ThreadSettingsChoiceContent(props: {
 }) {
   const insets = useSafeAreaInsets();
   const session = useThreadSettingsSession();
+  const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
   if (props.submenu.kind === "skills") {
     return session.skillPacks ? (
       <SkillPacksChoiceContent session={session.skillPacks} onSelected={props.onSelected} />
@@ -965,7 +992,6 @@ function ThreadSettingsChoiceContent(props: {
       <View className="flex-1 bg-sheet" />
     );
   }
-  const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
 
   const activeDescriptor =
     descriptorId !== null
@@ -977,7 +1003,7 @@ function ThreadSettingsChoiceContent(props: {
   const submenuContent =
     props.submenu.kind === "runtime"
       ? {
-          rows: RUNTIME_MODE_CHOICES.map((choice) => ({
+          rows: session.runtimeModeChoices.map((choice) => ({
             id: choice.mode,
             label: choice.label,
             description: choice.description,
@@ -1025,7 +1051,7 @@ function ThreadSettingsChoiceContent(props: {
       contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
     >
-      <View className="overflow-hidden rounded-2xl bg-card">
+      <View className="overflow-hidden rounded-2xl bg-grouped-card">
         {submenuContent.rows.map((row, index) => (
           <ChoiceRow
             key={row.id}
@@ -1039,162 +1065,6 @@ function ThreadSettingsChoiceContent(props: {
       </View>
     </ScrollView>
   );
-}
-
-/**
- * The skills page: profiles first, then the pack checklist, then what the
- * selection resolves to. Picking a profile or pack keeps the page open so
- * several packs can be toggled in one visit.
- */
-function SkillPacksChoiceContent(props: {
-  readonly session: SkillPacksSheetSession;
-  readonly onSelected: () => void;
-}) {
-  const insets = useSafeAreaInsets();
-  const { session } = props;
-  const rows = buildSkillPacksSheetRows(session);
-  const isDefault = session.selection.isProjectDefault;
-
-  return (
-    <ScrollView
-      className="flex-1 bg-sheet"
-      contentContainerStyle={{ paddingBottom: insets.bottom + 12, paddingTop: 16 }}
-      contentInsetAdjustmentBehavior="automatic"
-      showsVerticalScrollIndicator={false}
-    >
-      <Text className="px-5 pb-2 text-sm text-foreground-muted">Core skills are always on.</Text>
-      {rows.profiles.length > 0 ? (
-        <>
-          <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">
-            Profiles
-          </Text>
-          <View className="mx-4 overflow-hidden rounded-2xl bg-card">
-            {rows.profiles.map((row, index) => (
-              <ChoiceRow
-                key={row.id}
-                description={row.description}
-                isLast={index === rows.profiles.length - 1}
-                label={row.label}
-                selected={row.selected}
-                onPress={() => {
-                  void Haptics.selectionAsync();
-                  session.onPackIdsChange(row.packIds);
-                }}
-              />
-            ))}
-          </View>
-        </>
-      ) : null}
-      <Text className="px-5 pb-2 pt-6 text-sm font-t3-medium text-foreground-muted">Packs</Text>
-      <View className="mx-4 overflow-hidden rounded-2xl bg-card">
-        {rows.packs.map((row, index) => (
-          <ChoiceRow
-            key={row.id}
-            description={row.description}
-            isLast={index === rows.packs.length - 1}
-            label={row.label}
-            role="checkbox"
-            selected={row.selected}
-            onPress={() => {
-              void Haptics.selectionAsync();
-              session.onPackIdsChange(
-                row.selected
-                  ? session.selection.packIds.filter((id) => !row.packIds.includes(id))
-                  : [...session.selection.packIds, ...row.packIds],
-              );
-            }}
-          />
-        ))}
-      </View>
-      <Text className="px-5 pb-2 pt-6 text-sm font-t3-medium text-foreground-muted">Details</Text>
-      <View className="mx-4 gap-1.5 overflow-hidden rounded-2xl bg-card px-4 py-3">
-        {rows.notices.map((notice) => (
-          <Text key={notice} className="text-sm leading-5 text-warning-foreground">
-            {notice}
-          </Text>
-        ))}
-        {rows.details.map((line) => (
-          <Text key={line} className="text-sm leading-5 text-foreground-muted">
-            {line}
-          </Text>
-        ))}
-      </View>
-      <View className="mx-4 mt-6 overflow-hidden rounded-2xl bg-card">
-        <DisclosureRow
-          label="Reset to project default"
-          value={isDefault ? "Already default" : undefined}
-          onPress={() => {
-            if (isDefault) return;
-            void Haptics.selectionAsync();
-            session.onResetToProjectDefault();
-            props.onSelected();
-          }}
-        />
-        <DisclosureRow
-          isLast
-          label="Make project default"
-          value={isDefault ? "Already default" : undefined}
-          onPress={() => {
-            if (isDefault) return;
-            void Haptics.selectionAsync();
-            session.onMakeProjectDefault();
-            props.onSelected();
-          }}
-        />
-      </View>
-    </ScrollView>
-  );
-}
-
-/** Skill pack session for a new-task draft: picks stay local until the thread starts. */
-function useNewTaskSkillPacksSession(
-  flow: ReturnType<typeof useNewTaskFlow>,
-): SkillPacksSheetSession | null {
-  const config = useEnvironmentServerConfig(flow.selectedEnvironmentId);
-  const updateProject = useAtomCommand(projectEnvironment.update, "update project");
-  const catalog = config?.skillPackCatalog ?? null;
-  const selectedProject = flow.selectedProject;
-  const projectDefaultPackIds = selectedProject?.defaultSkillPackIds;
-  const draftPackIds = flow.skillPackIds;
-  const provider = config?.providers.find(
-    (candidate) => candidate.instanceId === flow.selectedModel?.instanceId,
-  );
-  const { setSkillPackIds } = flow;
-  return useMemo(() => {
-    if (!catalog || !selectedProject) {
-      return null;
-    }
-    const selection = resolveSkillPackSelection({
-      catalog,
-      projectDefaultPackIds,
-      draftPackIds,
-    });
-    return {
-      catalog,
-      selection,
-      providerWarning: resolveSkillPackProviderWarning({ provider, packIds: selection.packIds }),
-      onPackIdsChange: setSkillPackIds,
-      onResetToProjectDefault: () => setSkillPackIds(undefined),
-      onMakeProjectDefault: () => {
-        void updateProject({
-          environmentId: selectedProject.environmentId,
-          input: { projectId: selectedProject.id, defaultSkillPackIds: [...selection.packIds] },
-        }).then((result) => {
-          if (result._tag === "Success") {
-            setSkillPackIds(undefined);
-          }
-        });
-      },
-    };
-  }, [
-    catalog,
-    draftPackIds,
-    projectDefaultPackIds,
-    provider,
-    selectedProject,
-    setSkillPackIds,
-    updateProject,
-  ]);
 }
 
 type ThreadSettingsPickerStackParams = {
@@ -1516,6 +1386,17 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
   );
 }
 
+/** Shared model catalog and option screens, bound to the caller's draft. */
+export function ThreadSettingsPickerScreen(
+  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
+) {
+  return (
+    <ThreadSettingsSessionProvider {...props}>
+      <ThreadSettingsPickerNavigator onClose={props.onClose} />
+    </ThreadSettingsSessionProvider>
+  );
+}
+
 /** Existing-thread model picker hosted by the root RNS form-sheet route. */
 export function ExistingThreadSettingsRouteScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
@@ -1536,11 +1417,7 @@ export function ExistingThreadSettingsRouteScreen() {
 
   const { ownerId: _ownerId, ...settings } = session;
 
-  return (
-    <ThreadSettingsSessionProvider {...settings}>
-      <ThreadSettingsPickerNavigator onClose={() => navigation.goBack()} />
-    </ThreadSettingsSessionProvider>
-  );
+  return <ThreadSettingsPickerScreen {...settings} onClose={() => navigation.goBack()} />;
 }
 
 /**
@@ -1551,7 +1428,13 @@ export function ExistingThreadSettingsRouteScreen() {
 export function NewTaskThreadSettingsRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
-  const skillPacks = useNewTaskSkillPacksSession(flow);
+  const skillPacks = useNewTaskSkillPacksSession({
+    environmentId: flow.selectedEnvironmentId,
+    projectId: flow.selectedProject?.id ?? null,
+    draftPackIds: flow.skillPackIds,
+    setDraftPackIds: flow.setSkillPackIds,
+    providerDriver: flow.selectedModelOption?.providerDriver ?? null,
+  });
   const optionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -1562,8 +1445,9 @@ export function NewTaskThreadSettingsRouteScreen() {
   );
 
   return (
-    <ThreadSettingsSessionProvider
+    <ThreadSettingsPickerScreen
       environmentId={flow.selectedEnvironmentId}
+      {...(flow.selectedModel ? { providerInstanceId: flow.selectedModel.instanceId } : {})}
       providerGroups={flow.providerGroups}
       selectedModel={flow.selectedModel}
       onSelectModel={(option) => flow.setSelectedModelKey(option.key, option.selection.options)}
@@ -1572,8 +1456,7 @@ export function NewTaskThreadSettingsRouteScreen() {
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
       {...(skillPacks ? { skillPacks } : {})}
-    >
-      <ThreadSettingsPickerNavigator onClose={() => navigation.goBack()} />
-    </ThreadSettingsSessionProvider>
+      onClose={() => navigation.goBack()}
+    />
   );
 }

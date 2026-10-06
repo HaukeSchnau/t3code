@@ -131,7 +131,7 @@ function InlineReplyEditor({
   return (
     <div data-inline-reply-ui className="group/inline-editor relative mt-1.5 ml-2">
       <div className="relative rounded-md border border-border/65 focus-within:border-foreground/25">
-        <span className="absolute -top-2 left-2.5 max-w-[calc(100%-2.75rem)] truncate bg-background px-1 text-[10px] leading-4 text-muted-foreground">
+        <span className="absolute -top-2 left-2.5 max-w-[calc(100%-2.75rem)] truncate bg-background px-1 text-3xs leading-4 text-muted-foreground">
           {reply.anchorKind === "paragraph" ? "Whole paragraph" : `“${reply.quote}”`}
         </span>
         <textarea

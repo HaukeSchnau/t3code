@@ -6,15 +6,7 @@
  *
  * @module OrchestrationCommandReceiptRepository
  */
-import {
-  CommandId,
-  IsoDateTime,
-  NonNegativeInt,
-  OrchestrationAggregateKind,
-  OrchestrationCommandReceiptStatus,
-  ProjectId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { CommandId, IsoDateTime, NonNegativeInt, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
@@ -24,45 +16,15 @@ import type { OrchestrationCommandReceiptRepositoryError } from "../Errors.ts";
 
 export const OrchestrationCommandReceipt = Schema.Struct({
   commandId: CommandId,
-  aggregateKind: OrchestrationAggregateKind,
+  aggregateKind: Schema.Literals(["project", "thread"]),
   aggregateId: Schema.Union([ProjectId, ThreadId]),
-  commandVariant: Schema.NullOr(Schema.String),
-  envelopeFingerprint: Schema.NullOr(Schema.String),
+  commandType: Schema.String,
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
-  status: OrchestrationCommandReceiptStatus,
+  status: Schema.Literals(["accepted", "rejected"]),
   error: Schema.NullOr(Schema.String),
 });
 export type OrchestrationCommandReceipt = typeof OrchestrationCommandReceipt.Type;
-
-const newReceiptIdentityFields = {
-  commandId: CommandId,
-  aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
-  commandVariant: Schema.String,
-  envelopeFingerprint: Schema.String,
-} as const;
-
-export const ClaimAcceptedReceiptInput = Schema.Struct({
-  ...newReceiptIdentityFields,
-  acceptedAt: IsoDateTime,
-});
-export type ClaimAcceptedReceiptInput = typeof ClaimAcceptedReceiptInput.Type;
-
-export const FinalizeAcceptedReceiptInput = Schema.Struct({
-  commandId: CommandId,
-  acceptedAt: IsoDateTime,
-  resultSequence: NonNegativeInt,
-});
-export type FinalizeAcceptedReceiptInput = typeof FinalizeAcceptedReceiptInput.Type;
-
-export const InsertRejectedReceiptInput = Schema.Struct({
-  ...newReceiptIdentityFields,
-  acceptedAt: IsoDateTime,
-  resultSequence: NonNegativeInt,
-  error: Schema.String,
-});
-export type InsertRejectedReceiptInput = typeof InsertRejectedReceiptInput.Type;
 
 export const GetByCommandIdInput = Schema.Struct({
   commandId: CommandId,
@@ -73,23 +35,18 @@ export type GetByCommandIdInput = typeof GetByCommandIdInput.Type;
  * OrchestrationCommandReceiptRepositoryShape - Service API for command receipts.
  */
 export interface OrchestrationCommandReceiptRepositoryShape {
+  readonly insertIfAbsent: (
+    receipt: OrchestrationCommandReceipt,
+  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
+
   /**
-   * Claim an accepted command id as the first write in the event transaction.
-   * The provisional row must be finalized before that transaction commits.
+   * Insert or replace a command receipt row.
+   *
+   * Upserts by `commandId` for idempotent command-result tracking.
    */
-  readonly claimAccepted: (
-    input: ClaimAcceptedReceiptInput,
-  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
-
-  /** Finalize a provisional accepted claim using compare-and-set semantics. */
-  readonly finalizeAccepted: (
-    input: FinalizeAcceptedReceiptInput,
-  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
-
-  /** Insert an immutable terminal rejection. */
-  readonly insertRejected: (
-    input: InsertRejectedReceiptInput,
-  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
+  readonly upsert: (
+    receipt: OrchestrationCommandReceipt,
+  ) => Effect.Effect<void, OrchestrationCommandReceiptRepositoryError>;
 
   /**
    * Read a command receipt by command id.

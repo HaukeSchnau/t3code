@@ -9,6 +9,21 @@ import * as SqliteClient from "./NodeSqliteClient.ts";
 const layer = it.layer(SqliteClient.layerMemory());
 
 layer("NodeSqliteClient", (it) => {
+  it.effect("retries preparing a query after the missing schema becomes available", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const select = sql<{ name: string }>`SELECT name FROM created_after_prepare_failure`;
+      const error = yield* select.pipe(Effect.flip);
+      assert.equal(error._tag, "SqlError");
+      assert.equal(error.reason.operation, "prepare");
+
+      yield* sql`CREATE TABLE created_after_prepare_failure(name TEXT NOT NULL)`;
+      yield* sql`INSERT INTO created_after_prepare_failure VALUES ('recovered')`;
+      assert.deepEqual(yield* select, [{ name: "recovered" }]);
+      assert.deepEqual(yield* select.values, [["recovered"]]);
+    }),
+  );
+
   it.effect("runs prepared queries and returns positional values", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

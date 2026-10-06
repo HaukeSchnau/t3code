@@ -1,110 +1,47 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopOpenWorkspace from "./DesktopOpenWorkspace.ts";
-
-function makeHarness() {
-  const sends: { readonly channel: string; readonly args: readonly unknown[] }[] = [];
-  const reveals: unknown[] = [];
-  const mainWindow = { id: "main-window" };
-
-  const window = ElectronWindow.ElectronWindow.of({
-    create: () => Effect.die("not used"),
-    main: Effect.succeed(Option.some(mainWindow as never)),
-    currentMainOrFirst: Effect.succeed(Option.some(mainWindow as never)),
-    focusedMainOrFirst: Effect.succeed(Option.some(mainWindow as never)),
-    setMain: () => Effect.void,
-    clearMain: () => Effect.void,
-    prepareReveal: () => Effect.succeed(false),
-    reveal: (target) =>
-      Effect.sync(() => {
-        reveals.push(target);
-      }),
-    sendAll: (channel, ...args) =>
-      Effect.sync(() => {
-        sends.push({ channel, args });
-      }),
-    destroyAll: Effect.void,
-    syncAllAppearance: () => Effect.void,
-  });
-
-  return {
-    sends,
-    reveals,
-    layer: Layer.mergeAll(
-      DesktopOpenWorkspace.layer,
-      Layer.succeed(ElectronWindow.ElectronWindow, window),
-    ),
-  };
-}
 
 describe("DesktopOpenWorkspace", () => {
   it("parses workspace open requests from supported schemes", () => {
-    assert.deepEqual(
+    assert.equal(
       DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://open?cwd=/Users/dev/t3code"),
-      { type: "open-workspace", cwd: "/Users/dev/t3code" },
+      "/Users/dev/t3code",
     );
-    assert.deepEqual(
+    assert.equal(
       DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl(
         "t3code:///open?cwd=%2FUsers%2Fdev%2Fwith%20spaces",
       ),
-      { type: "open-workspace", cwd: "/Users/dev/with spaces" },
+      "/Users/dev/with spaces",
     );
-    assert.deepEqual(
+    assert.equal(
       DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code-dev://open?cwd=/repo"),
-      { type: "open-workspace", cwd: "/repo" },
-    );
-  });
-
-  it("parses Codex thread resume requests from supported schemes", () => {
-    assert.deepEqual(
-      DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl(
-        "t3code://codex/resume?threadId=thread-123",
-      ),
-      { type: "codex-thread-resume", threadId: "thread-123" },
-    );
-    assert.deepEqual(
-      DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl(
-        "t3code:///codex/resume?threadId=thread-456",
-      ),
-      { type: "codex-thread-resume", threadId: "thread-456" },
+      "/repo",
     );
   });
 
   it("ignores unsupported actions and malformed requests", () => {
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://settings"));
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://open"));
-    assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code://codex"));
-    assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code://codex/resume"));
+    assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://open?cwd=%20"));
+    assert.isNull(
+      DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code://codex/resume?threadId=thread-1"),
+    );
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("https://open?cwd=/repo"));
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("not-a-url"));
   });
 
-  it.effect("queues requests until the web bridge consumes pending requests", () => {
-    const harness = makeHarness();
-
-    return Effect.gen(function* () {
+  it.effect("queues workspace deeplinks in arrival order until they are taken", () =>
+    Effect.gen(function* () {
       const openWorkspace = yield* DesktopOpenWorkspace.DesktopOpenWorkspace;
-      yield* openWorkspace.dispatchUrl("t3://open?cwd=/repo/one");
 
-      assert.deepEqual(harness.sends, []);
-      assert.deepEqual(yield* openWorkspace.consumePending, [
-        { type: "open-workspace", cwd: "/repo/one" },
-      ]);
+      assert.isTrue(openWorkspace.dispatchUrl("t3://open?cwd=/repo/one"));
+      assert.isFalse(openWorkspace.dispatchUrl("t3://settings"));
+      assert.isTrue(openWorkspace.dispatchUrl("t3code://open?cwd=/repo/two"));
 
-      yield* openWorkspace.dispatchUrl("t3://open?cwd=/repo/two");
-
-      assert.deepEqual(harness.sends, [
-        {
-          channel: IpcChannels.OPEN_WORKSPACE_REQUEST_CHANNEL,
-          args: [{ type: "open-workspace", cwd: "/repo/two" }],
-        },
-      ]);
-      assert.lengthOf(harness.reveals, 1);
-    }).pipe(Effect.provide(harness.layer));
-  });
+      assert.equal(yield* openWorkspace.take, "/repo/one");
+      assert.equal(yield* openWorkspace.take, "/repo/two");
+    }).pipe(Effect.provide(DesktopOpenWorkspace.layer)),
+  );
 });

@@ -1,10 +1,4 @@
 import {
-  formatSkillPackSelectionLabel,
-  resolveSkillPackSelection,
-} from "@t3tools/client-runtime/skillPacks";
-import { SkillPacksPanel } from "../chat/SkillPacksControl";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import {
   isAtomCommandInterrupted,
   mapAtomCommandResult,
   settlePromise,
@@ -13,10 +7,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { type EnvironmentId, type ProjectIconOverride, type SkillPackId } from "@t3tools/contracts";
+import { type EnvironmentId, type ProjectIconOverride } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
-import { ChevronDownIcon, Trash2Icon } from "lucide-react";
+import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -27,10 +21,11 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useServerConfigs, useThreadShells } from "../../state/entities";
+import { useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -45,6 +40,8 @@ import {
   ProjectFaviconPickerDialog,
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
+import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ProjectSkillPacksSettings } from "./ProjectSkillPacksSettings";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 
@@ -58,7 +55,8 @@ function memberKey(member: { environmentId: string; id: string }): string {
   return `${member.environmentId}:${member.id}`;
 }
 
-export type ProjectSettingsCategory = "general" | "integrations" | "source-control";
+/** `project` is the Projects page shortcut: the new-thread defaults people change most. */
+export type ProjectSettingsCategory = "general" | "integrations" | "source-control" | "project";
 
 export function ProjectSettingsPanel({
   projectKey,
@@ -213,7 +211,6 @@ function ProjectDetail({
     async (
       input: Partial<{
         title: string;
-        defaultSkillPackIds: ReadonlyArray<SkillPackId>;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
       }>,
@@ -388,29 +385,6 @@ function ProjectDetail({
     ],
   );
 
-  // ----- default skill packs -----
-  const skillPackCatalog =
-    useServerConfigs().get(representative.environmentId)?.skillPackCatalog ?? null;
-  const defaultSkillPackIds = representative.defaultSkillPackIds;
-  const defaultSkillPackSelection = useMemo(
-    () =>
-      skillPackCatalog
-        ? resolveSkillPackSelection({
-            catalog: skillPackCatalog,
-            projectDefaultPackIds: defaultSkillPackIds,
-          })
-        : null,
-    [defaultSkillPackIds, skillPackCatalog],
-  );
-  const setDefaultSkillPackIds = useCallback(
-    (packIds: ReadonlyArray<SkillPackId>) =>
-      void updateAllMembers(
-        { defaultSkillPackIds: packIds },
-        "Failed to update the project's default skills",
-      ),
-    [updateAllMembers],
-  );
-
   const checkoutChoices = (
     <SettingsSection title="Checkouts">
       {group.memberProjects.map((member) => (
@@ -436,6 +410,12 @@ function ProjectDetail({
   return (
     <>
       <SettingsPageContainer className="gap-6">
+        <Alert variant="info">
+          <InfoIcon aria-hidden />
+          <AlertDescription>
+            Can't find a setting? Keep this project picked above and hop to any other settings page.
+          </AlertDescription>
+        </Alert>
         <SettingsSection id="project-overview" title="Project" hideTitle>
           <SettingsRow
             title="Name"
@@ -509,43 +489,12 @@ function ProjectDetail({
               </div>
             }
           />
-          {skillPackCatalog && defaultSkillPackSelection ? (
-            <SettingsRow
-              title="Skills"
-              description="Skill packs new threads in this project start with. Core skills are always on; a thread can still pick its own packs."
-              resetAction={
-                defaultSkillPackSelection.packIds.length > 0 ? (
-                  <SettingResetButton
-                    label="project default skills"
-                    onClick={() => setDefaultSkillPackIds([])}
-                  />
-                ) : null
-              }
-              control={
-                <Popover>
-                  <PopoverTrigger
-                    render={<Button variant="outline" size="sm" aria-label="Default skills" />}
-                  >
-                    {formatSkillPackSelectionLabel(skillPackCatalog, defaultSkillPackSelection)}
-                    <ChevronDownIcon className="size-3.5 text-icon-muted" />
-                  </PopoverTrigger>
-                  <PopoverPopup
-                    align="end"
-                    className="w-80"
-                    viewportClassName="py-3 [--viewport-inline-padding:--spacing(3)]"
-                  >
-                    <SkillPacksPanel
-                      catalog={skillPackCatalog}
-                      selection={defaultSkillPackSelection}
-                      providerWarning={null}
-                      onPackIdsChange={setDefaultSkillPackIds}
-                    />
-                  </PopoverPopup>
-                </Popover>
-              }
-            />
-          ) : null}
+          <ProjectSkillPacksSettings
+            representative={representative}
+            members={group.memberProjects}
+          />
         </SettingsSection>
+        <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
         {hasMultipleCheckouts ? checkoutChoices : null}
         <SettingsSection title="Danger">

@@ -1,5 +1,4 @@
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import type { DurableCommandState } from "@t3tools/client-runtime/operations/command-outbox";
 
 import { deriveThreadTitleFromPrompt } from "../lib/projectThreadStartTurn";
 import type { QueuedThreadCreation, QueuedThreadMessage } from "./thread-outbox-model";
@@ -27,7 +26,6 @@ export interface PendingQueuedTask {
   readonly createdAt: string;
   readonly message: QueuedThreadMessage;
   readonly creation: QueuedThreadCreation;
-  readonly deliveryState?: DurableCommandState;
 }
 
 export interface PendingDraftTask {
@@ -63,7 +61,6 @@ function draftTitle(draft: ComposerDraft): string {
 export function buildPendingNewTasks(input: {
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly drafts: Readonly<Record<string, ComposerDraft>>;
-  readonly deliveryStates?: Readonly<Record<string, DurableCommandState>>;
 }): ReadonlyArray<PendingNewTask> {
   const tasks: PendingNewTask[] = [];
   for (const message of input.queuedMessages) {
@@ -82,7 +79,6 @@ export function buildPendingNewTasks(input: {
       createdAt: message.createdAt,
       message,
       creation: message.creation,
-      deliveryState: input.deliveryStates?.[message.commandId],
     });
   }
   for (const [draftKey, draft] of Object.entries(input.drafts)) {

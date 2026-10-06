@@ -1,161 +1,125 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId, TurnId, type ProviderSession } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import type { ProjectionRestartSafetyThread } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { summarizeServerIdleStatus } from "./IdleStatus.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { getServerIdleStatus } from "./IdleStatus.ts";
 
-const runtimeStartedAt = "2026-07-16T08:29:00.000Z";
-const now = "2026-07-16T12:00:00.000Z";
+const at = "2026-10-01T00:00:00.000Z";
 
-function projected(
-  overrides: Partial<ProjectionRestartSafetyThread> = {},
-): ProjectionRestartSafetyThread {
-  return {
-    threadId: "thread-1",
-    session: null,
-    latestTurnId: null,
-    latestTurnState: null,
-    latestTurnUpdatedAt: null,
-    queuedMessageCount: 0,
-    pendingApprovalCount: 0,
-    pendingUserInputCount: 0,
-    undeliveredTranscriptEventCount: 0,
-    ...overrides,
-  } as ProjectionRestartSafetyThread;
-}
-
-function summarize(input: {
-  liveSessions?: ReadonlyArray<ProviderSession>;
-  threads?: ReadonlyArray<ProjectionRestartSafetyThread>;
-  liveStateKnown?: boolean;
-  activeCommandThreadIds?: ReadonlyArray<ThreadId>;
-}) {
-  return summarizeServerIdleStatus({
-    liveSessions: input.liveSessions ?? [],
-    projectedState: { threads: input.threads ?? [] },
-    checkedAt: now,
-    runtimeStartedAt,
-    liveStateKnown: input.liveStateKnown ?? true,
-    ...(input.activeCommandThreadIds === undefined
-      ? {}
-      : { activeCommandThreadIds: input.activeCommandThreadIds }),
+const insertThread = (threadId: string, deletedAt: string | null = null) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        created_at, updated_at, deleted_at, payload_json
+      ) VALUES (
+        ${threadId}, 'project', 'Thread', 'codex', 'full-access', 'default',
+        ${at}, ${at}, ${deletedAt}, '{}'
+      )
+    `;
   });
-}
 
-it("reports idle when live and projected state have no pending work", () => {
-  const status = summarize({});
-  assert.isTrue(status.idle);
-  assert.equal(status.busyThreadCount, 0);
-});
-
-it("blocks restart during command preprocessing before a provider turn exists", () => {
-  const threadId = ThreadId.make("thread-setup");
-  const status = summarize({ activeCommandThreadIds: [threadId, threadId] });
-  assert.isFalse(status.idle);
-  assert.equal(status.busyThreadCount, 1);
-  assert.equal(status.busyThreads.length, 1);
-  assert.equal(status.busyThreads[0]?.reason, "command-in-progress");
-  assert.equal(status.busyThreads[0]?.source, "command-preprocessing");
-});
-
-it("treats live provider active turns as busy", () => {
-  const liveSession = {
-    provider: "codex",
-    providerInstanceId: "codex",
-    status: "running",
-    runtimeMode: "full-access",
-    threadId: "thread-live",
-    activeTurnId: "turn-live",
-    createdAt: now,
-    updatedAt: now,
-  } as ProviderSession;
-  const status = summarize({ liveSessions: [liveSession] });
-  assert.isFalse(status.idle);
-  assert.equal(status.liveActiveTurnCount, 1);
-  assert.equal(status.busyThreads[0]?.reason, "live-provider-active-turn");
-});
-
-for (const status of ["running", "connecting"] as const) {
-  it(`treats live ${status} provider sessions without a turn id as busy`, () => {
-    const liveSession = {
-      provider: "codex",
-      providerInstanceId: "codex",
-      status,
-      runtimeMode: "full-access",
-      threadId: `thread-live-${status}`,
-      createdAt: now,
-      updatedAt: now,
-    } as ProviderSession;
-
-    const result = summarize({ liveSessions: [liveSession] });
-    assert.isFalse(result.idle);
-    assert.equal(result.liveActiveTurnCount, 1);
-    assert.equal(result.busyThreads[0]?.reason, "live-provider-session-busy");
-    assert.equal(result.busyThreads[0]?.turnId, null);
+const insertRun = (threadId: string, ordinal: number, status: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_runs (
+        run_id, thread_id, ordinal, provider, status, requested_at, payload_json
+      ) VALUES (${`${threadId}:run:${ordinal}`}, ${threadId}, ${ordinal}, 'codex', ${status}, ${at}, '{}')
+    `;
   });
-}
 
-it("does not let old orphaned projections block a live restart probe", () => {
-  const status = summarize({
-    threads: [
-      projected({
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "codex",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          runtimeMode: "full-access",
-          activeTurnId: TurnId.make("turn-old"),
-          lastError: null,
-          updatedAt: "2026-07-15T12:00:00.000Z",
-        },
-        latestTurnId: TurnId.make("turn-old"),
-        latestTurnState: "running",
-      }),
-    ],
+const insertSession = (threadId: string, status: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const sessionId = `${threadId}:session`;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_provider_sessions (
+        provider_session_id, thread_id, provider, status, updated_at, payload_json
+      ) VALUES (${sessionId}, ${threadId}, 'codex', ${status}, ${at}, '{}')
+    `;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_provider_session_bindings (provider_session_id, thread_id)
+      VALUES (${sessionId}, ${threadId})
+    `;
   });
-  assert.isTrue(status.idle);
-  assert.equal(status.projectedActiveTurnCount, 1);
-  assert.equal(status.projectedRunningTurnCount, 1);
-});
 
-it("fails closed for current-epoch projected work and offline probes", () => {
-  const thread = projected({
-    session: {
-      threadId: ThreadId.make("thread-1"),
-      status: "starting",
-      providerName: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      runtimeMode: "full-access",
-      activeTurnId: null,
-      lastError: null,
-      updatedAt: "2026-07-16T08:30:00.000Z",
-    },
+const insertRequest = (threadId: string, kind: string, responseType: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_runtime_requests (
+        runtime_request_id, thread_id, node_id, kind, status, created_at, payload_json
+      ) VALUES (
+        ${`${threadId}:${kind}:${responseType}`}, ${threadId}, 'node', ${kind}, 'pending', ${at},
+        ${`{"responseCapability":{"type":"${responseType}"}}`}
+      )
+    `;
   });
-  assert.isFalse(summarize({ threads: [thread] }).idle);
-  assert.isFalse(summarize({ threads: [thread], liveStateKnown: false }).idle);
-});
 
-it("counts durable actionable state without treating it as unsafe to restart", () => {
-  const status = summarize({
-    threads: [
-      projected({
-        queuedMessageCount: 2,
-        pendingApprovalCount: 1,
-        pendingUserInputCount: 3,
-      }),
-    ],
+const insertEffect = (threadId: string, effectType: string, status: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_effect_outbox (
+        effect_id, command_id, thread_id, effect_type, payload_json, status,
+        available_at, created_at, updated_at
+      ) VALUES (
+        ${`${threadId}:${effectType}`}, 'command', ${threadId}, ${effectType}, '{}', ${status},
+        ${at}, ${at}, ${at}
+      )
+    `;
   });
-  assert.isTrue(status.idle);
-  assert.equal(status.queuedMessageCount, 2);
-  assert.equal(status.pendingApprovalCount, 1);
-  assert.equal(status.pendingUserInputCount, 3);
-});
 
-it("blocks restart while durable transcript events await ingestion", () => {
-  const status = summarize({
-    threads: [projected({ undeliveredTranscriptEventCount: 4 })],
-  });
-  assert.isFalse(status.idle);
-  assert.equal(status.busyThreads[0]?.reason, "undelivered-transcript-events");
-});
+const busyReasons = Effect.map(getServerIdleStatus(), (status) =>
+  status.busyThreads.map((thread) => `${thread.threadId}:${thread.reason}`).toSorted(),
+);
+
+it.effect("blocks restart on work that dies with the server process", () =>
+  Effect.gen(function* () {
+    for (const threadId of ["preparing", "running", "session", "approval", "effect"]) {
+      yield* insertThread(threadId);
+    }
+    yield* insertRun("preparing", 1, "preparing");
+    yield* insertRun("running", 1, "waiting");
+    yield* insertSession("session", "running");
+    yield* insertRequest("approval", "command", "live");
+    yield* insertEffect("effect", "provider-turn.start", "pending");
+
+    const status = yield* getServerIdleStatus();
+    assert.isFalse(status.idle);
+    assert.equal(status.busyThreadCount, 5);
+    assert.equal(status.projectedRunningTurnCount, 1);
+    assert.equal(status.projectedActiveTurnCount, 1);
+    assert.equal(status.pendingApprovalCount, 1);
+    assert.deepEqual(yield* busyReasons, [
+      "approval:pending-approval",
+      "effect:command-in-progress",
+      "preparing:command-in-progress",
+      "running:projected-latest-turn-running",
+      "session:projected-active-turn",
+    ]);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect("counts durable work without blocking restart", () =>
+  Effect.gen(function* () {
+    yield* insertThread("thread");
+    yield* insertThread("deleted", at);
+    yield* insertRun("thread", 1, "completed");
+    yield* insertRun("thread", 2, "queued");
+    yield* insertSession("thread", "ready");
+    yield* insertRequest("thread", "user_input", "message");
+    yield* insertEffect("thread", "checkpoint.capture", "running");
+    yield* insertEffect("thread", "provider-turn.interrupt", "succeeded");
+    yield* insertRun("deleted", 1, "running");
+
+    const status = yield* getServerIdleStatus();
+    assert.isTrue(status.idle);
+    assert.equal(status.busyThreadCount, 0);
+    assert.equal(status.queuedMessageCount, 1);
+    assert.equal(status.pendingUserInputCount, 1);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
