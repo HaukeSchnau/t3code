@@ -13571,8 +13571,10 @@ describe("AcpAdapterV2", () => {
           requestRuntimeRestart: true,
         })
         .pipe(Effect.forkScoped);
+      // The teardown sleeps a 1 s kill grace on the wall clock and waits up to 10 s for the turn
+      // to settle, longer on a loaded host. A hung cancel never returns.
       const interruptCompleted = yield* Fiber.join(interruptFiber).pipe(
-        Effect.timeoutOption("3 seconds"),
+        Effect.timeoutOption("30 seconds"),
       );
       assert.isTrue(Option.isSome(interruptCompleted), "hung ACP cancel must not block teardown");
       assert.isFalse(cancelCalled, "hard process-group teardown must skip ACP cancel");
