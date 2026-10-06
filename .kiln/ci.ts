@@ -1,15 +1,25 @@
 import { Flake, Nix, Step, Task, cmd } from "@kiln/core";
-import { Project } from "@kiln/std";
+import { Pnpm, Project } from "@kiln/std";
 import { flake } from "./flake.ts";
 
 const shell = flake.devShells.ci;
+
+/**
+ * The committed lockfile as is, like the Nix release build; rechecking every locked version against
+ * the registry stalled cold installs. Builds and caches of the apps survive between tasks.
+ */
+const install = Pnpm.install({
+  shell,
+  args: ["--trust-lockfile"],
+  keep: [".repos", ".t3", "release", ".expo", "dist", "dist-electron", "build"],
+});
 
 /** The filtered pnpm stores the release builds from; a stale hash fails here first. */
 export const deps = ["web", "server", "runtime"].map((part) =>
   Nix.build(Flake.select(flake.packages.t3code, `pnpmDeps.${part}`), { name: `deps-${part}` }),
 );
 
-export const lint = Task.make("static", { shell, run: cmd`just qa-static` }).pipe(
+export const lint = Task.make("static", { shell, setup: install, run: cmd`just qa-static` }).pipe(
   Step.timeout("15 minutes"),
 );
 
@@ -17,6 +27,7 @@ export const lint = Task.make("static", { shell, run: cmd`just qa-static` }).pip
 export const typecheck = ["clients", "rest"].map((group) =>
   Task.make(`typecheck-${group}`, {
     shell,
+    setup: install,
     run: cmd`just qa-typecheck-${group}`,
     env: { GOMEMLIMIT: "3GiB" },
   }).pipe(Step.timeout("15 minutes")),
@@ -24,18 +35,22 @@ export const typecheck = ["clients", "rest"].map((group) =>
 
 export const testClients = Task.make("test-clients", {
   shell,
+  setup: install,
   run: cmd`just qa-test-non-server`,
 }).pipe(Step.timeout("35 minutes"));
 
 export const testServer = Task.make("test-server", {
   shell,
+  setup: install,
   shards: { count: 6 },
   run: ({ index, count }) => cmd`just qa-test-server-shard ${index} ${count}`,
 }).pipe(Step.timeout("30 minutes"));
 
-export const smoke = Task.make("release-smoke", { shell, run: cmd`just qa-release` }).pipe(
-  Step.timeout("10 minutes"),
-);
+export const smoke = Task.make("release-smoke", {
+  shell,
+  setup: install,
+  run: cmd`just qa-release`,
+}).pipe(Step.timeout("10 minutes"));
 
 /** The update feed's manifest, which the OTA update and the TestFlight build agree on. */
 const updatesUrl = "https://t3code-updates.schnau.dev/manifest";
@@ -54,10 +69,12 @@ const apps = (promote: Step.Any) => {
   }).pipe(Step.timeout("60 minutes"));
   const desktopPublish = Task.make("desktop-publish", {
     shell,
+    setup: install,
     run: cmd`just ci-desktop-publish ${desktopPackage.outputs.release}`,
   }).pipe(Step.timeout("15 minutes"));
   const mobileUpdate = Task.make("mobile-update", {
     shell,
+    setup: install,
     after: [promote],
     run: cmd`just ci-mobile-update`,
     env: { T3CODE_MOBILE_UPDATES_URL: updatesUrl },
