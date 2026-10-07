@@ -78,6 +78,7 @@ export const testServer = vitest({
     Files.of("vitest.config.ts", "apps/server/vitest.config.ts"),
     Files.imports([
       longTempDir,
+      "packages/shared/src/testing/isolatedTestFiles.ts",
       "apps/server/src/testUtils/gitConfig.setup.ts",
       "apps/server/src/testUtils/weightedShardSequencer.ts",
     ]),
