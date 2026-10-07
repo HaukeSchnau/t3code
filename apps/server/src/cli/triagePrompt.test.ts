@@ -11,6 +11,7 @@ import {
   TRIAGE_PLAYBOOK,
 } from "./triagePrompt.ts";
 
+// kiln: always, since it reads .github/triage/PLAYBOOK.md by path rather than importing it.
 it("stays byte-identical to .github/triage/PLAYBOOK.md", () => {
   // Old releases fetch the repo copy from `main` and follow it when it differs
   // from their bundled playbook. The two must say the same thing at HEAD, or a

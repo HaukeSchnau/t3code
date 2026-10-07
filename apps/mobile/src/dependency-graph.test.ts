@@ -26,6 +26,7 @@ import { describe, expect, it } from "vite-plus/test";
  * the `@t3tools/mobile` package test task).
  */
 
+// kiln: always, since it reads every source file under this directory, not only its imports.
 const SOURCE_ROOT = __dirname;
 
 /** Metro candidate order per platform (platform, then native, then generic). */

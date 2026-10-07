@@ -13,9 +13,21 @@ const entries: ReadonlyArray<readonly [key: string, value: string]> = [
   ["init.defaultBranch", "main"],
 ];
 
-const existing = Number(process.env.GIT_CONFIG_COUNT ?? "0");
-process.env.GIT_CONFIG_COUNT = String(existing + entries.length);
-entries.forEach(([key, value], index) => {
-  process.env[`GIT_CONFIG_KEY_${existing + index}`] = key;
-  process.env[`GIT_CONFIG_VALUE_${existing + index}`] = value;
-});
+// Setup files run before every test file. Without isolation the files share a
+// process, so the entries are appended only when they aren't already the last.
+const count = Number(process.env.GIT_CONFIG_COUNT ?? "0");
+const start = count - entries.length;
+const applied =
+  start >= 0 &&
+  entries.every(
+    ([key, value], index) =>
+      process.env[`GIT_CONFIG_KEY_${start + index}`] === key &&
+      process.env[`GIT_CONFIG_VALUE_${start + index}`] === value,
+  );
+if (!applied) {
+  process.env.GIT_CONFIG_COUNT = String(count + entries.length);
+  entries.forEach(([key, value], index) => {
+    process.env[`GIT_CONFIG_KEY_${count + index}`] = key;
+    process.env[`GIT_CONFIG_VALUE_${count + index}`] = value;
+  });
+}
