@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"],
-    "lib": ["ESNext", "esnext.disposable"]
+    "lib": ["ESNext", "esnext.disposable"],
+    // A cold check takes minutes; Kiln keeps tsconfig.tsbuildinfo between runs.
+    "incremental": true
   },
   "include": ["src", "vite.config.ts", "scripts", "integration", "../../scripts/lib"]
 }

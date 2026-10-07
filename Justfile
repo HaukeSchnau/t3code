@@ -29,11 +29,50 @@ qa-test-non-server:
     ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/desktop' test --maxWorkers {{ quote(non_server_test_workers) }}
     cd apps/desktop && ../../node_modules/.bin/vp test run --passWithNoTests --maxWorkers {{ quote(non_server_test_workers) }}
 
-qa-test-server:
-    cd apps/server && ../../node_modules/.bin/vp test run
+# The server's tests, or only the given files (repository paths). Kiln reads the results from
+# apps/server/.vitest-report.json.
+[positional-arguments]
+qa-test-server *files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$PWD
+    cd apps/server
+    ../../node_modules/.bin/vp test run --reporter verbose --reporter json --outputFile.json=.vitest-report.json "${@/#/$root/}"
 
-qa-test-server-shard shard total:
-    cd apps/server && ../../node_modules/.bin/vp test run --reporter verbose --shard {{ quote(shard + "/" + total) }}
+# A package's tests, or only the given files (repository paths). Kiln reads the results from the
+# package's .vitest-report.json.
+[positional-arguments]
+qa-test-package dir *files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$PWD
+    cd "$1"
+    shift
+    node --run test -- --maxWorkers {{ quote(non_server_test_workers) }} --reporter default --reporter json --outputFile.json=.vitest-report.json "${@/#/$root/}"
+
+[positional-arguments]
+qa-test-desktop *files:
+    ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
+    just qa-test-package apps/desktop "$@"
+
+# The tests of the packages in the given directories, one package at a time.
+[positional-arguments]
+qa-test-packages +dirs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    filters=()
+    for dir in "$@"; do filters+=(--filter "./$dir"); done
+    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 "${filters[@]}" test --maxWorkers {{ quote(non_server_test_workers) }}
+
+# Typechecks the packages in the given directories, one at a time.
+[positional-arguments]
+qa-typecheck +dirs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    filters=()
+    for dir in "$@"; do filters+=(--filter "./$dir"); done
+    if [[ " $* " == *" apps/desktop "* ]]; then ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron; fi
+    ./node_modules/.bin/vp run --cache --concurrency-limit 1 "${filters[@]}" typecheck
 
 qa-release:
     node scripts/release-smoke.ts
