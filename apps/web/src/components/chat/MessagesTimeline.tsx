@@ -1279,8 +1279,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div className="messages-timeline-row-frame">
-        <div className="chat-content-lane overflow-x-clip" data-timeline-root="true">
+      // Clips at the frame rather than the lane: inline reply controls sit in the gutter beside it.
+      <div className="messages-timeline-row-frame overflow-x-clip">
+        <div className="chat-content-lane" data-timeline-root="true">
           <TimelineRowContent row={item} />
         </div>
       </div>

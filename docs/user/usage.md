@@ -90,6 +90,10 @@ current model's limits without leaving the conversation. The result opens above 
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
+On web and desktop, the composer footer also shows the current provider's session and weekly
+windows as small bars with the quota left. A bar turns amber when you are spending faster than the
+window elapses and red when 10% or less is left. Hover it to see every window and when it resets.
+
 OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
 the environment. T3 cannot report limits for external OpenCode servers because their credentials
 belong to the remote server. Cursor reports
