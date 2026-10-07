@@ -27,6 +27,14 @@ and fork lockfile check.
   `qa-test-server` and `qa-test-package` run Vitest directly on the given files and write the
   package's `.vitest-report.json`, which tells Kiln what passed. They bypass `vp run --cache`, so a
   report never holds replayed results. A nightly run repeats every check without reuse.
+- The server and web suites each run as two Vitest projects. Most files share one module graph per
+  worker (`isolate: false`) and keep transformed modules in `node_modules/.vitest-cache`
+  (`fsModuleCache`), which Kiln keeps between runs. Files that call `vi.mock`, `vi.doMock`,
+  `vi.stubGlobal` or `vi.stubEnv` run isolated, since a mock or stub only reaches modules evaluated
+  after it; `packages/shared/src/testing/isolatedTestFiles.ts` finds them, plus a listed few that
+  fail for other reasons. On srv-2 the whole web suite went from 1167 to 551 CPU seconds with a warm
+  cache, and a 40-file sample of small server files from 102 to 15. Upstream isolates every file;
+  when an upstream test fails only in the shared project, add it to the config's list.
 - A test that reads repository files its imports don't show has a `// kiln: always` comment line and
   runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook and
   `apps/mobile/src/dependency-graph.test.ts` the whole source tree. Keep the comments when upstream
