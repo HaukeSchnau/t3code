@@ -32,7 +32,9 @@ one ordinary user message when sent.
 - `ChatMarkdown.renderBlock` is the narrow upstream seam. Preserve its default output when no
   decorator is supplied; do not fork or replace the Markdown renderer.
 - The transparent hit target for each block affordance is always mounted in the adjacent gutter; its
-  icon becomes visible when either the block or that target is hovered. Text selection follows the
+  icon becomes visible when either the block or that target is hovered. The gutter lies outside
+  `chat-content-lane`, so `MessagesTimeline`'s row frame clips horizontal overflow, not the lane.
+  Orchestration v2 moved that clip onto the lane, which hid every reply arrow. Text selection follows the
   document `selectionchange` event. Whole-block browser selections may end at the next block
   boundary and must be normalized back to the source block.
 - The feature ships on the web client and therefore the Electron desktop client. The React Native
