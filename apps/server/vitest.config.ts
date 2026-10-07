@@ -8,8 +8,13 @@ import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.t
 const isolated = isolatedTestFiles(
   import.meta.dirname,
   ["src/**/*.test.ts", "integration/**/*.test.ts", "scripts/**/*.test.ts"],
-  // Asserts on a metrics histogram that is global to the process.
-  ["src/persistence/NodeSqliteClient.test.ts"],
+  [
+    // Asserts on a metrics histogram that is global to the process.
+    "src/persistence/NodeSqliteClient.test.ts",
+    // Loads a skill catalog, which sets the Codex pack root in SkillPackProviderScope for the
+    // process. Codex replays in later files then send frames their transcripts don't have.
+    "src/skills/SkillPacks.test.ts",
+  ],
 );
 
 export default mergeConfig(
