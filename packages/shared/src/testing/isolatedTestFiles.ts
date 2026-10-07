@@ -23,3 +23,24 @@ export const isolatedTestFiles = (
   );
   return [...new Set([...isolated, ...known])];
 };
+
+// Vitest 5.0.1's VM pools reuse a module's compiled code across environments. After a jsdom file, a
+// worker hands node files the browser transform of the modules they share. Vitest 5.0.3 fixes this
+// (vitest#11395), so the rule can go with the upgrade to vite-plus 1.1.0.
+const otherEnvironment = /@vitest-environment\s+(?!node\b)\S/;
+
+/**
+ * Of `files` under `root`, those that can't run in a VM pool worker alongside other files: those
+ * that pick an environment other than node, and `known`, which fail in a VM context or change state
+ * that every file in the worker shares.
+ */
+export const vmIncompatibleTestFiles = (
+  root: string,
+  files: ReadonlyArray<string>,
+  known: ReadonlyArray<string>,
+) =>
+  files.filter(
+    (file) =>
+      known.includes(file) ||
+      otherEnvironment.test(NodeFS.readFileSync(NodePath.join(root, file), "utf8")),
+  );
