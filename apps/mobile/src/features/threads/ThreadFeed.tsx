@@ -8,7 +8,9 @@ import {
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
+import { KeyboardController } from "react-native-keyboard-controller";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { threadFindItemKey, type ThreadFindMatch } from "@t3tools/client-runtime/thread-find";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -23,6 +25,11 @@ import {
   type RunId,
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
+import { threadFindItemText } from "@t3tools/shared/threadFind";
+import {
+  distributeMarkdownHighlight,
+  type MarkdownTextHighlight,
+} from "@t3tools/mobile-markdown-text/highlight";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
   parseComposerContextHref,
@@ -106,6 +113,7 @@ import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import {
+  countMarkdownHighlights,
   hasNativeSelectableMarkdownText,
   SelectableMarkdownText,
   type MarkdownFileContextMenu,
@@ -177,9 +185,12 @@ import {
   ThreadWorkGroupToggle,
   ThreadThinkingRow,
   ThreadWorkLog,
+  type ThreadWorkLogFind,
   type ViewedImageRenderer,
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
+import { resolveThreadFindReveal, type ThreadFindReveal } from "./thread-find-feed";
+import type { ThreadFeedFind } from "./thread-find-highlight";
 import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
@@ -296,6 +307,12 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
+  /** Set while find is open and has a valid query. */
+  readonly find?: ThreadFeedFind | null;
+  /** Find is open: the reader is navigating history, so the feed stops following the end. */
+  readonly findActive?: boolean;
+  /** The reader started dragging the feed. */
+  readonly onUserScrollBegin?: () => void;
 }
 
 async function waitForThreadShell(
@@ -893,13 +910,32 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  readonly highlight?: MarkdownTextHighlight | undefined;
 }) {
   const segments = useMemo(
     () => splitCodexArtifactTemplateMarkdown(props.markdown),
     [props.markdown],
   );
+  const { highlight, skills } = props;
+  const segmentHighlights = useMemo(
+    () =>
+      distributeMarkdownHighlight(
+        highlight,
+        segments,
+        (segment) =>
+          highlight && segment.kind !== "artifact-template"
+            ? countMarkdownHighlights(
+                renderCodexFileCitationsAsMarkdown(segment.markdown),
+                { skills },
+                highlight.find,
+              )
+            : 0,
+        { clampToLast: true },
+      ),
+    [highlight, segments, skills],
+  );
 
-  return segments.map((segment) => {
+  return segments.map((segment, index) => {
     if (segment.kind === "artifact-template") {
       return (
         <ArtifactTemplateCard
@@ -920,6 +956,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         textStyle={props.markdownStyles.nativeTextStyle}
         {...props.linkHandlers}
         renderImage={props.renderImage}
+        highlight={segmentHighlights[index]}
       />
     ) : (
       <Markdown
@@ -1516,7 +1553,8 @@ function renderFeedEntry(
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
     readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly renderViewedImage: ViewedImageRenderer;
-    readonly renderReasoning: (text: string) => ReactNode;
+    readonly renderReasoning: (text: string, highlight?: MarkdownTextHighlight) => ReactNode;
+    readonly find: ThreadWorkLogFind | null;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly screenColor: string;
     readonly userBubbleColor: string | import("react-native").ColorValue;
@@ -1615,6 +1653,15 @@ function renderFeedEntry(
   if (entry.type === "message") {
     const { message } = entry;
     const isUser = message.role === "user";
+    const findHighlight =
+      props.find && message.projectedItem
+        ? props.find.highlightFor(
+            threadFindItemKey(
+              message.projectedItem.sourceThreadId,
+              message.projectedItem.sourceItemId,
+            ),
+          )
+        : undefined;
     const presentation = resolveUserMessagePresentation(message);
     const renderedText = renderAssistantCitationsAsText(presentation.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
@@ -1747,6 +1794,7 @@ function renderFeedEntry(
                   skills={props.skills}
                   linkHandlers={props.markdownLinkHandlers}
                   renderImage={props.renderMarkdownImage}
+                  highlight={findHighlight}
                 />
               </MarkdownImageAvailableWidthContext>
             ) : null}
@@ -1852,6 +1900,7 @@ function renderFeedEntry(
               onUseArtifactTemplate={props.onUseArtifactTemplate}
               renderImage={props.renderMarkdownImage}
               skills={props.skills}
+              highlight={findHighlight}
             />
           </MarkdownImageAvailableWidthContext>
         ) : null}
@@ -1924,6 +1973,7 @@ function renderFeedEntry(
       onToggleRow={props.onToggleWorkRow}
       renderImage={props.renderViewedImage}
       renderReasoning={props.renderReasoning}
+      find={props.find}
     />
   );
 }
@@ -1937,6 +1987,7 @@ type UserMessageContentProps = {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly renderImage: MarkdownImageRenderer;
+  readonly highlight?: MarkdownTextHighlight | undefined;
 };
 
 function UserMessageContent(props: UserMessageContentProps) {
@@ -2003,6 +2054,20 @@ function LegacyUserMessageContent(props: UserMessageContentProps) {
   const text = props.text;
   const segments = parseReviewCommentMessageSegments(text);
   const hasReviewComment = segments.some((segment) => segment.kind === "review-comment");
+  const { highlight, skills } = props;
+  // Review comments render as cards, so only the text between them is marked.
+  const textParts = hasReviewComment
+    ? segments.map((segment) => (segment.kind === "review-comment" ? "" : segment.text.trim()))
+    : [text];
+  const partHighlights = distributeMarkdownHighlight(
+    highlight,
+    textParts,
+    (part) =>
+      highlight && part.length > 0
+        ? countMarkdownHighlights(part, { preserveSoftBreaks: true, skills }, highlight.find)
+        : 0,
+    { clampToLast: true },
+  );
   // A message can hold both a review comment and context chips. The fragment travels with every
   // text run, so copying from the segmented branch carries the same context as the plain one.
   const contextClipboardFragment = props.context
@@ -2023,6 +2088,7 @@ function LegacyUserMessageContent(props: UserMessageContentProps) {
           preserveSoftBreaks
           {...props.linkHandlers}
           renderImage={props.renderImage}
+          highlight={partHighlights[0]}
         />
       );
     }
@@ -2040,7 +2106,7 @@ function LegacyUserMessageContent(props: UserMessageContentProps) {
 
   return (
     <View className="w-full gap-2">
-      {segments.map((segment) => {
+      {segments.map((segment, index) => {
         if (segment.kind === "review-comment") {
           return (
             <ReviewCommentCard
@@ -2066,6 +2132,7 @@ function LegacyUserMessageContent(props: UserMessageContentProps) {
             preserveSoftBreaks
             {...props.linkHandlers}
             renderImage={props.renderImage}
+            highlight={partHighlights[index]}
           />
         ) : (
           <Markdown
@@ -2183,6 +2250,34 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     expandedTurnIds: new Set(),
   });
   const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  // Folds find opened for its current match. They close when the match moves
+  // on, and join the reader's own folds when find closes.
+  const [findReveal, setFindReveal] = useState<Omit<ThreadFindReveal, "rowId"> | null>(null);
+  const findRevealRef = useRef(findReveal);
+  findRevealRef.current = findReveal;
+  const userExpandedWorkGroupIds = useMemo(
+    () =>
+      new Set(
+        Object.entries(expandedWorkGroups)
+          .filter(([, expanded]) => expanded)
+          .map(([groupId]) => groupId),
+      ),
+    [expandedWorkGroups],
+  );
+  const shownTurnIds = useMemo(
+    () =>
+      findReveal?.runId == null || expandedTurnIds.has(findReveal.runId)
+        ? expandedTurnIds
+        : new Set(expandedTurnIds).add(findReveal.runId),
+    [expandedTurnIds, findReveal?.runId],
+  );
+  const shownWorkGroupIds = useMemo(
+    () =>
+      findReveal?.workGroupId == null
+        ? userExpandedWorkGroupIds
+        : new Set(userExpandedWorkGroupIds).add(findReveal.workGroupId),
+    [findReveal?.workGroupId, userExpandedWorkGroupIds],
+  );
   const [expandedFile, setExpandedFile] = useState<FilePreviewSource | null>(null);
   const [expandedVideo, setExpandedVideo] = useState<VideoPreviewSource | null>(null);
   const fileShareSourceIdentifier = useId();
@@ -2435,13 +2530,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const markdownStyles = useMarkdownStyles(onMarkdownLinkPress, renderMarkdownImage);
   const renderReasoning = useCallback(
-    (text: string) => (
+    (text: string, highlight?: MarkdownTextHighlight) => (
       <AssistantMarkdownContent
         markdown={text}
         markdownStyles={markdownStyles.assistant}
         linkHandlers={markdownLinkHandlers}
         renderImage={renderMarkdownImage}
         skills={props.skills}
+        highlight={highlight}
       />
     ),
     [markdownStyles.assistant, markdownLinkHandlers, renderMarkdownImage, props.skills],
@@ -2451,6 +2547,37 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
+  const find = props.find ?? null;
+  const findActive = props.findActive === true;
+  const findHighlighter = find?.highlighter ?? null;
+  const findCurrent = find?.current ?? null;
+  const findMatchedItemKeys = find?.matchedItemKeys ?? null;
+  const softFindHighlight = useMemo<MarkdownTextHighlight | null>(
+    () => (findHighlighter === null ? null : { ...findHighlighter, current: -1 }),
+    [findHighlighter],
+  );
+  const currentFindHighlight = useMemo<MarkdownTextHighlight | null>(
+    () =>
+      findHighlighter === null || findCurrent === null || findCurrent.field !== "text"
+        ? null
+        : { ...findHighlighter, current: findCurrent.occurrence },
+    [findCurrent, findHighlighter],
+  );
+  const rowFind = useMemo<ThreadWorkLogFind | null>(
+    () =>
+      softFindHighlight === null || findMatchedItemKeys === null
+        ? null
+        : {
+            current: findCurrent,
+            highlightFor: (itemKey) =>
+              !findMatchedItemKeys.has(itemKey)
+                ? undefined
+                : findCurrent?.itemKey === itemKey
+                  ? (currentFindHighlight ?? softFindHighlight)
+                  : softFindHighlight,
+          },
+    [currentFindHighlight, findCurrent, findMatchedItemKeys, softFindHighlight],
+  );
   const listAppearanceData = useMemo(
     () => ({
       worktreeSetup: props.worktreeSetup,
@@ -2467,6 +2594,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      rowFind,
     }),
     [
       props.worktreeSetup,
@@ -2483,6 +2611,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      rowFind,
     ],
   );
   const reportHeaderMaterialVisibility = useCallback(
@@ -2525,13 +2654,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       userScrollSettleTimerRef.current = null;
     }
   }, []);
+  const onUserScrollBegin = props.onUserScrollBegin;
   const handleScrollBeginDrag = useCallback(() => {
+    onUserScrollBegin?.();
     clearUserScrollSettle();
     userScrollSessionRef.current = true;
     // Pause before the first scroll event. Otherwise a stream update can run
     // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
     transitionEndFollow({ type: "user-scroll-begin" });
-  }, [clearUserScrollSettle, transitionEndFollow]);
+  }, [clearUserScrollSettle, onUserScrollBegin, transitionEndFollow]);
   const finishUserScroll = useCallback(
     (releaseIsAtEnd?: boolean) => {
       clearUserScrollSettle();
@@ -2612,12 +2743,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         deriveThreadFeedPresentation(
           props.feed,
           props.latestRun,
-          expandedTurnIds,
-          new Set(
-            Object.entries(expandedWorkGroups)
-              .filter(([, expanded]) => expanded)
-              .map(([groupId]) => groupId),
-          ),
+          shownTurnIds,
+          shownWorkGroupIds,
           props.activeWorkStartedAt,
           props.runlessWorkActive ?? false,
         ),
@@ -2626,8 +2753,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ),
     [
       props.queuedMessages,
-      expandedTurnIds,
-      expandedWorkGroups,
+      shownTurnIds,
+      shownWorkGroupIds,
       props.activeWorkStartedAt,
       props.runlessWorkActive,
       props.feed,
@@ -2754,7 +2881,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     if (disclosureAnchorKeyRef.current !== null) {
       settleDisclosureAfterLayout();
     }
-  }, [expandedTurnIds, expandedWorkGroups, expandedWorkRows, settleDisclosureAfterLayout]);
+  }, [shownTurnIds, shownWorkGroupIds, expandedWorkRows, settleDisclosureAfterLayout]);
 
   const handleItemSizeChanged = useCallback(() => {
     if (disclosureAnchorKeyRef.current !== null) {
@@ -2776,6 +2903,144 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [shouldRestoreVisibleContentPosition],
   );
 
+  // Closing find keeps the fold that holds the last match open.
+  useEffect(() => {
+    if (findActive || findRevealRef.current === null) return;
+    const reveal = findRevealRef.current;
+    setFindReveal(null);
+    setInteractionState((current) => ({
+      ...current,
+      expandedTurnIds:
+        reveal.runId === null
+          ? current.expandedTurnIds
+          : new Set(current.expandedTurnIds).add(reveal.runId),
+      expandedWorkGroups:
+        reveal.workGroupId === null
+          ? current.expandedWorkGroups
+          : { ...current.expandedWorkGroups, [reveal.workGroupId]: true },
+    }));
+  }, [findActive]);
+
+  const findScrollTargetRef = useRef<{
+    readonly rowId: string;
+    readonly match: ThreadFindMatch;
+  } | null>(null);
+  const [findScrollRequest, setFindScrollRequest] = useState(0);
+  const findTargetKey = findCurrent?.loaded ? findCurrent.key : null;
+  // Only a new match or a repeated request moves the reader; streaming never does.
+  useEffect(() => {
+    if (find === null) return;
+    if (findCurrent === null) {
+      findScrollTargetRef.current = null;
+      setFindReveal(null);
+      return;
+    }
+    if (!findCurrent.loaded) return;
+    const reveal = resolveThreadFindReveal({
+      feed: props.feed,
+      latestRun: props.latestRun,
+      activeWorkStartedAt: props.activeWorkStartedAt,
+      runlessWorkActive: props.runlessWorkActive ?? false,
+      expandedRunIds: expandedTurnIds,
+      expandedWorkGroupIds: userExpandedWorkGroupIds,
+      itemKey: findCurrent.itemKey,
+    });
+    setFindReveal(
+      reveal === null || (reveal.runId === null && reveal.workGroupId === null)
+        ? null
+        : { runId: reveal.runId, workGroupId: reveal.workGroupId },
+    );
+    findScrollTargetRef.current = reveal && { rowId: reveal.rowId, match: findCurrent };
+    setFindScrollRequest((request) => request + 1);
+  }, [findTargetKey, find?.navigation]);
+
+  const presentedFeedRef = useRef(presentedFeed);
+  presentedFeedRef.current = presentedFeed;
+  const scrollToFindTarget = useCallback(() => {
+    const target = findScrollTargetRef.current;
+    const list = props.listRef.current;
+    if (target === null || list === null) return;
+    const rows = presentedFeedRef.current;
+    const index = rows.findIndex((row) => row.id === target.rowId);
+    if (index < 0) return;
+    findScrollTargetRef.current = null;
+    const row = rows[index]!;
+    const headerInset = usesNativeAutomaticInsets ? anchorTopInset : 0;
+    // The keyboard covers the feed without resizing it.
+    const keyboardInset = KeyboardController.isVisible() ? KeyboardController.state().height : 0;
+    const footerInset =
+      props.contentInsetEndAdjustment.value +
+      (usesNativeAutomaticInsets ? insets.bottom : 0) +
+      keyboardInset;
+    // Long messages place the match by its line, so it lands on screen rather than the row's top.
+    const lineShare =
+      row.type === "message" && row.message.projectedItem && target.match.field === "text"
+        ? (target.match.excerpt.line - 1) /
+          Math.max(1, threadFindItemText(row.message.projectedItem.item).text.split("\n").length)
+        : 0;
+    const settle = () => {
+      const state = list.getState();
+      transitionEndFollow({
+        type: "find-settled",
+        isAtEnd: state.isAtEnd,
+        userScrollSessionActive: userScrollSessionRef.current,
+      });
+    };
+    const place = (animated: boolean) => {
+      const state = list.getState();
+      const rowSize = state.sizeAtIndex(index);
+      const offsetInRow = Math.min(
+        Math.max(0, lineShare * rowSize - 24),
+        Math.max(0, rowSize - 48),
+      );
+      const visibleHeight = Math.max(1, state.scrollLength - headerInset - footerInset);
+      const point = state.positionAtIndex(index) + offsetInRow;
+      // Without a line to aim at, the match can sit anywhere in the row, such as
+      // a work row's excerpt card under its label, so the row has to fit too.
+      const extent = lineShare > 0 ? 0 : Math.min(rowSize, visibleHeight * 0.6);
+      return {
+        rowSize,
+        visible:
+          point >= state.scroll + headerInset + 24 &&
+          point + extent <= state.scroll + state.scrollLength - footerInset - 48,
+        scroll: () =>
+          list.scrollToIndex({
+            index,
+            // Animating across many unmeasured rows corrects itself mid-flight; jump instead.
+            animated: animated && Math.abs(point - state.scroll) < state.scrollLength * 3,
+            viewPosition: 0,
+            viewOffset: headerInset + visibleHeight / 3 - offsetInRow,
+          }),
+      };
+    };
+    const first = place(true);
+    if (first.visible) {
+      settle();
+      return;
+    }
+    void first
+      .scroll()
+      .then(() => {
+        // Rows far away, or just paged in, are only estimated until they mount;
+        // correct once measured.
+        const measured = place(false);
+        if (!measured.visible) return measured.scroll();
+      })
+      .finally(settle);
+  }, [
+    anchorTopInset,
+    insets.bottom,
+    props.contentInsetEndAdjustment,
+    props.listRef,
+    transitionEndFollow,
+    usesNativeAutomaticInsets,
+  ]);
+  useEffect(() => {
+    if (findScrollTargetRef.current === null) return;
+    const frame = requestAnimationFrame(scrollToFindTarget);
+    return () => cancelAnimationFrame(frame);
+  }, [findScrollRequest, presentedFeed, scrollToFindTarget]);
+
   const onCopyWorkRow = useCallback((rowId: string, value: string) => {
     copyTextWithHaptic(value, {
       target: "thread-work-row",
@@ -2796,6 +3061,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const onToggleWorkGroup = useCallback(
     (groupId: string, anchorKey?: string) => {
       suspendEndScrollMaintenanceForDisclosure(anchorKey ?? `work-toggle:${groupId}`);
+      if (findRevealRef.current?.workGroupId === groupId) {
+        setFindReveal({ ...findRevealRef.current, workGroupId: null });
+        return;
+      }
       setInteractionState((current) => ({
         ...current,
         expandedWorkGroups: {
@@ -2824,6 +3093,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const onToggleTurnFold = useCallback(
     (runId: RunId) => {
       suspendEndScrollMaintenanceForDisclosure(`run-fold:${runId}`);
+      if (findRevealRef.current?.runId === runId) {
+        setFindReveal({ ...findRevealRef.current, runId: null });
+        return;
+      }
       setInteractionState((current) => {
         const next = new Set(current.expandedTurnIds);
         if (next.has(runId)) {
@@ -2883,10 +3156,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           ) {
             return undefined;
           }
-          // Expanded rows append a variable detail block — fall back to
-          // measurement for those groups.
+          // Expanded rows append a variable detail block, and find's current
+          // match an excerpt — fall back to measurement for those groups.
           return entry.activities.some(
-            (activity) => activity.prominent || expandedWorkRows[activity.id],
+            (activity) =>
+              activity.prominent ||
+              expandedWorkRows[activity.id] ||
+              (findCurrent !== null &&
+                threadFindItemKey(
+                  activity.projectedItem.sourceThreadId,
+                  activity.projectedItem.sourceItemId,
+                ) === findCurrent.itemKey),
           )
             ? undefined
             : collapsedWorkLogHeight(entry.activities, entry.continuesWorkLog);
@@ -2894,7 +3174,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           return undefined;
       }
     },
-    [expandedWorkRows, workRowSizing.fixedRowHeight],
+    [expandedWorkRows, findCurrent, workRowSizing.fixedRowHeight],
   );
 
   // Disclosures can mount existing offscreen rows as well as new work rows.
@@ -2929,6 +3209,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             renderMarkdownImage,
             renderViewedImage,
             renderReasoning,
+            find: rowFind,
             iconSubtleColor,
             screenColor,
             userBubbleColor,
@@ -2990,6 +3271,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       renderMarkdownImage,
       renderViewedImage,
       renderReasoning,
+      rowFind,
     ],
   );
 
@@ -3062,7 +3344,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // Follow the measured end immediately. Animating toward an estimated
             // end races row measurement when a pending message is acknowledged.
             maintainScrollAtEnd={
-              disclosureToggleSettling || !endFollowEnabled
+              disclosureToggleSettling || !endFollowEnabled || findActive
                 ? false
                 : {
                     animated: false,
@@ -3074,7 +3356,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                   }
             }
             maintainVisibleContentPosition={
-              endFollowEnabled && !disclosureToggleSettling ? false : maintainVisibleContentPosition
+              endFollowEnabled && !disclosureToggleSettling && !findActive
+                ? false
+                : maintainVisibleContentPosition
             }
             data={presentedFeed}
             extraData={listAppearanceData}

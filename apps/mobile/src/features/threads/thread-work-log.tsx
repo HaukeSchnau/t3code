@@ -41,7 +41,9 @@ import {
   View,
 } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import { threadFindItemKey, type ThreadFindMatch } from "@t3tools/client-runtime/thread-find";
 import type { ChatImageAttachment, EnvironmentId, ToolActivityIcon } from "@t3tools/contracts";
+import type { MarkdownTextHighlight } from "@t3tools/mobile-markdown-text/highlight";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
 
 import { AppText as Text } from "../../components/AppText";
@@ -82,6 +84,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useAssetUrl } from "../../state/assets";
+import { ThreadFindExcerptCard, ThreadFindText } from "./thread-find-highlight";
 
 const SHIMMER_WIDTH = 72;
 const SHIMMER_SWEEP_MS = 1_350;
@@ -448,8 +451,18 @@ interface ThreadWorkLogProps {
   readonly onCopyRow: (rowId: string, value: string) => void;
   readonly onToggleRow: (rowId: string, anchorKey: string) => void;
   readonly renderImage: ViewedImageRenderer;
-  readonly renderReasoning: (text: string) => ReactNode;
+  readonly renderReasoning: (text: string, highlight?: MarkdownTextHighlight) => ReactNode;
+  readonly find?: ThreadWorkLogFind | null | undefined;
 }
+
+/** Find state for work rows: which rows hold matches, and the current match. */
+export interface ThreadWorkLogFind {
+  readonly highlightFor: (itemKey: string) => MarkdownTextHighlight | undefined;
+  readonly current: ThreadFindMatch | null;
+}
+
+const activityItemKey = (row: ThreadFeedActivity) =>
+  threadFindItemKey(row.projectedItem.sourceThreadId, row.projectedItem.sourceItemId);
 
 /** Renders a viewed image, preferring the server's copy when it took one. */
 export type ViewedImageRenderer = (
@@ -457,24 +470,31 @@ export type ViewedImageRenderer = (
 ) => ReactNode;
 
 export function ThreadWorkLog(props: ThreadWorkLogProps) {
+  const find = props.find ?? null;
   const renderRow = useCallback(
-    (row: ThreadFeedActivity) => (
-      <ThreadWorkLogRow
-        key={row.id}
-        row={row}
-        anchorKey={props.anchorKey}
-        copied={props.copiedRowId === row.id}
-        expanded={props.expandedRows[row.id] ?? false}
-        environmentId={props.environmentId}
-        iconSubtleColor={props.iconSubtleColor}
-        onCopyRow={props.onCopyRow}
-        onToggleRow={props.onToggleRow}
-        renderImage={props.renderImage}
-        renderReasoning={props.renderReasoning}
-        themeAppearance={props.themeAppearance}
-      />
-    ),
+    (row: ThreadFeedActivity) => {
+      const itemKey = find === null ? null : activityItemKey(row);
+      return (
+        <ThreadWorkLogRow
+          key={row.id}
+          row={row}
+          anchorKey={props.anchorKey}
+          copied={props.copiedRowId === row.id}
+          expanded={props.expandedRows[row.id] ?? false}
+          environmentId={props.environmentId}
+          iconSubtleColor={props.iconSubtleColor}
+          onCopyRow={props.onCopyRow}
+          onToggleRow={props.onToggleRow}
+          renderImage={props.renderImage}
+          renderReasoning={props.renderReasoning}
+          themeAppearance={props.themeAppearance}
+          findHighlight={itemKey === null ? undefined : find?.highlightFor(itemKey)}
+          findCurrent={itemKey !== null && find?.current?.itemKey === itemKey ? find.current : null}
+        />
+      );
+    },
     [
+      find,
       props.anchorKey,
       props.copiedRowId,
       props.expandedRows,
@@ -487,6 +507,11 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       props.themeAppearance,
     ],
   );
+  const currentItemKey = find?.current?.itemKey ?? null;
+  const revealRowId =
+    currentItemKey === null
+      ? null
+      : (props.activities.find((row) => activityItemKey(row) === currentItemKey)?.id ?? null);
 
   if (props.activities.length === 0) {
     return null;
@@ -503,7 +528,12 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
     return (
       <ScrollView nestedScrollEnabled className="ml-7 max-h-96 py-1">
         {props.activities.map((row) => (
-          <View key={row.id}>{props.renderReasoning(row.workEntry.detail ?? "")}</View>
+          <View key={row.id}>
+            {props.renderReasoning(
+              row.workEntry.detail ?? "",
+              find?.highlightFor(activityItemKey(row)),
+            )}
+          </View>
         ))}
       </ScrollView>
     );
@@ -520,6 +550,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
           rowSizing={props.rowSizing}
           scrollPositions={props.scrollPositions}
           renderRow={renderRow}
+          revealRowId={revealRowId}
         />
       ) : (
         <WorkLogRows>{props.activities.map(renderRow)}</WorkLogRows>
@@ -536,6 +567,8 @@ function ThreadWorkGroupList(props: {
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
   readonly renderRow: (row: ThreadFeedActivity) => ReactNode;
+  /** A row find wants in view. */
+  readonly revealRowId: string | null;
 }) {
   const estimatedRowsHeight = workLogRowsHeight(
     props.activities,
@@ -545,9 +578,12 @@ function ThreadWorkGroupList(props: {
     const position = props.scrollPositions.get(props.groupId);
     return props.activities.some((row) => row.id === position?.rowId) ? position : undefined;
   });
-  const [initialScrollIndex] = useState(() =>
-    resolveThreadWorkGroupInitialScroll(props.activities, initialPosition),
-  );
+  const [initialScrollIndex] = useState(() => {
+    const revealIndex = props.activities.findIndex((row) => row.id === props.revealRowId);
+    return revealIndex >= 0
+      ? { index: revealIndex, viewOffset: 0 }
+      : resolveThreadWorkGroupInitialScroll(props.activities, initialPosition);
+  });
   const [restoringPosition, setRestoringPosition] = useState(initialScrollIndex !== undefined);
   const listRef = useRef<LegendListRef>(null);
   const loadedRef = useRef(false);
@@ -667,11 +703,26 @@ function ThreadWorkGroupList(props: {
   }, []);
   const getFixedItemSize = useCallback(
     (row: ThreadFeedActivity, index: number) =>
-      props.expandedRows[row.id] || props.rowSizing.fixedRowHeight === undefined
+      props.expandedRows[row.id] ||
+      row.id === props.revealRowId ||
+      props.rowSizing.fixedRowHeight === undefined
         ? undefined
         : props.rowSizing.fixedRowHeight + (index < props.activities.length - 1 ? WORK_ROW_GAP : 0),
-    [props.activities.length, props.expandedRows, props.rowSizing.fixedRowHeight],
+    [
+      props.activities.length,
+      props.expandedRows,
+      props.revealRowId,
+      props.rowSizing.fixedRowHeight,
+    ],
   );
+  useEffect(() => {
+    const index = props.activities.findIndex((row) => row.id === props.revealRowId);
+    if (index < 0) return;
+    const frame = requestAnimationFrame(() => {
+      void listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.revealRowId]);
   const renderItem = useCallback(
     ({ item, index }: { item: ThreadFeedActivity; index: number }) => (
       <View className={index < props.activities.length - 1 ? "pb-px" : undefined}>
@@ -790,9 +841,16 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
     readonly row: ThreadFeedActivity;
     readonly copied: boolean;
     readonly expanded: boolean;
+    readonly findHighlight: MarkdownTextHighlight | undefined;
+    readonly findCurrent: ThreadFindMatch | null;
   },
 ) {
   const { row, expanded } = props;
+  // Labels mark every match; the current one shows in the excerpt card below the row.
+  const labelHighlight =
+    props.findHighlight && props.findHighlight.current >= 0
+      ? { ...props.findHighlight, current: -1 }
+      : props.findHighlight;
   const navigation = useNavigation();
   const failureItem = row.projectedItem.item;
   if (failureItem.type === "error" && failureItem.status === "failed") {
@@ -853,7 +911,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
           </View>
           {!warning ? (
             <Text selectable className="ml-7 text-sm text-foreground">
-              {failureItem.failure.message}
+              <ThreadFindText text={failureItem.failure.message} highlight={props.findHighlight} />
             </Text>
           ) : null}
         </View>
@@ -961,7 +1019,10 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
             <WorkLogLabel
               tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
             >
-              {isSystemNotice ? row.summary : displayText}
+              <ThreadFindText
+                text={isSystemNotice ? row.summary : displayText}
+                highlight={labelHighlight}
+              />
               {answerPreview ? (
                 <Text
                   className={
@@ -1010,6 +1071,14 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
         </View>
       </WorkLogPressable>
 
+      {props.findCurrent && props.findHighlight && !(reasoning && expanded) ? (
+        <ThreadFindExcerptCard
+          match={props.findCurrent}
+          item={row.projectedItem.item}
+          highlight={props.findHighlight}
+        />
+      ) : null}
+
       {expanded && (reasoning || fullDetail || viewedImagePath || row.workEntry.questionAnswer) ? (
         <Animated.View
           entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
@@ -1041,7 +1110,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
             contentContainerStyle={{ paddingRight: 8 }}
           >
             {reasoning ? (
-              props.renderReasoning(reasoning.text)
+              props.renderReasoning(reasoning.text, props.findHighlight)
             ) : (
               <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
                 {fullDetail}

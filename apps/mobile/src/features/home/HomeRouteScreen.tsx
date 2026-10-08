@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
@@ -24,6 +25,7 @@ import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
+import { takeThreadSearchHandoff, threadSearchHandoffAtom } from "../threads/thread-find-store";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -36,6 +38,11 @@ export function HomeRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
+  const searchHandoff = useAtomValue(threadSearchHandoffAtom);
+  useEffect(() => {
+    if (searchHandoff === null) return;
+    setSearchQuery(takeThreadSearchHandoff() ?? "");
+  }, [searchHandoff]);
   const handleSelectThread = useHomeThreadSelection();
   const handleNewThreadOnBranch = useCallback(
     (thread: EnvironmentThreadShell) => {
