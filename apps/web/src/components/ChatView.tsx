@@ -599,6 +599,9 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import { ThreadFindBackPill, ThreadFindBar } from "./chat/ThreadFindBar";
+import { threadFindSelectionText, useThreadFind } from "./chat/useThreadFind";
+import { useThreadFindStore } from "../threadFindStore";
 
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
@@ -3917,6 +3920,14 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
   );
   const displayedThreadRef = parseScopedThreadKey(displayedTimelineKey);
+  const threadFind = useThreadFind({
+    threadRef: isServerThread ? routeThreadDetailRef : null,
+    enabled: !paintOnlyDisplayedTimeline,
+    items: serverVisibleTurnItems,
+    entries: displayedTimeline.entries,
+    history: threadHistoryControls,
+    listRef: legendListRef,
+  });
   const worktreeSetupOwnerKey = draftId ?? routeThreadKey;
   const worktreeSetupActive =
     worktreeSetupRef !== null && worktreeSetupRef.ownerKey === worktreeSetupOwnerKey;
@@ -7414,6 +7425,15 @@ export default function ChatView(props: ChatViewProps) {
     terminalUiOpenByThreadRef.current[activeThreadKey] = current;
   }, [activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
 
+  const openThreadFind = threadFind.openFind;
+  const stepThreadFind = threadFind.step;
+  useEffect(() => {
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function" || !isServerThread) return;
+    return onMenuAction((action) => {
+      if (action === "find-in-thread") openThreadFind();
+    });
+  }, [isServerThread, openThreadFind]);
   const getShortcutContext = useCallback(
     (eventTarget: EventTarget | null = document.activeElement) => ({
       terminalFocus: getTerminalFocusOwner() !== null,
@@ -7430,6 +7450,7 @@ export default function ChatView(props: ChatViewProps) {
       browser: !isElectron,
       desktop: isElectron,
       mac: isMacPlatform(navigator.platform),
+      threadFindOpen: useThreadFindStore.getState().open,
     }),
     [composerRef, previewPanelOpen, terminalUiState.terminalOpen, routeKind, phase],
   );
@@ -7469,6 +7490,25 @@ export default function ChatView(props: ChatViewProps) {
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "thread.find" || command === "thread.findSelection") {
+        const selection = threadFindSelectionText(
+          legendListRef.current?.getScrollableNode() ?? null,
+        );
+        if (command === "thread.findSelection" && selection === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openThreadFind(selection ?? undefined);
+        return;
+      }
+
+      if (command === "thread.findNext" || command === "thread.findPrevious") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!useThreadFindStore.getState().open) openThreadFind();
+        else stepThreadFind(command === "thread.findNext" ? "older" : "newer");
+        return;
+      }
 
       if (command === "thread.copyReference") {
         event.preventDefault();
@@ -7728,6 +7768,8 @@ export default function ChatView(props: ChatViewProps) {
     toggleThreadPanel,
     toggleTerminalVisibility,
     composerRef,
+    openThreadFind,
+    stepThreadFind,
   ]);
 
   // Paste-to-focus: the resting composer blurs on a click into the timeline,
@@ -10688,6 +10730,10 @@ export default function ChatView(props: ChatViewProps) {
     onToggleTerminal: toggleTerminalVisibility,
     onToggleThreadPanel: toggleThreadPanel,
     onToggleRightPanel: toggleRightPanel,
+    findAvailable: isServerThread,
+    findOpen: threadFind.isOpen,
+    findShortcutLabel: shortcutLabelForCommand(keybindings, "thread.find"),
+    onToggleFind: threadFind.isOpen ? threadFind.close : () => threadFind.openFind(),
   } satisfies PanelLayoutControlsProps;
   const panelToggleControls = (
     <PanelLayoutControls
@@ -10702,6 +10748,7 @@ export default function ChatView(props: ChatViewProps) {
     >
       <PanelLayoutControls
         {...panelToggleControlProps}
+        showFindControl={false}
         showTerminalControl={false}
         showRightPanelControl={false}
       />
@@ -10955,7 +11002,10 @@ export default function ChatView(props: ChatViewProps) {
                 onAnchorReady={onTimelineAnchorReady}
                 onAnchorSizeChanged={onTimelineAnchorSizeChanged}
                 contentInsetEndAdjustment={composerTimelineInset}
-                liveFollowEnabled={!paintOnlyDisplayedTimeline && timelineLiveFollowEnabled}
+                // Following the stream would move the match out from under the reader.
+                liveFollowEnabled={
+                  !paintOnlyDisplayedTimeline && timelineLiveFollowEnabled && !threadFind.isOpen
+                }
                 onIsAtEndChange={onIsAtEndChange}
                 onContentOverflowChange={setTimelineOverflows}
                 onToolOutputCollapsedAtEnd={onToolOutputCollapsedAtEnd}
@@ -10966,7 +11016,17 @@ export default function ChatView(props: ChatViewProps) {
                 {...(paintOnlyDisplayedTimeline || threadHistoryControls === undefined
                   ? {}
                   : { historyControls: threadHistoryControls })}
+                find={paintOnlyDisplayedTimeline ? null : threadFind.timeline}
               />
+              {threadFind.isOpen ? <ThreadFindBar find={threadFind} /> : null}
+              {threadFind.showBack ? (
+                <div
+                  className="pointer-events-none absolute inset-x-0 z-30 flex justify-center"
+                  style={{ bottom: scrollToEndClearance + 44 }}
+                >
+                  <ThreadFindBackPill find={threadFind} />
+                </div>
+              ) : null}
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
               {showScrollToBottom && (

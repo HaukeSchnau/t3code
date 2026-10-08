@@ -64,6 +64,7 @@ import {
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  ScanSearchIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -111,6 +112,7 @@ import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
+import { useThreadFindStore } from "../threadFindStore";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -2027,6 +2029,21 @@ function OpenCommandPaletteDialog(props: {
       openOverlayMode("content");
     },
   });
+
+  if (activeThread && pathname !== "/pull-requests") {
+    actionItems.push({
+      kind: "action",
+      value: "action:find-in-thread",
+      searchTerms: ["find in thread", "search this thread", "find", "search messages"],
+      title: "Find in thread",
+      icon: <ScanSearchIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "thread.find",
+      run: async () => {
+        // After the palette closes and hands focus back, so the find input keeps it.
+        window.setTimeout(() => useThreadFindStore.getState().openFind(), 0);
+      },
+    });
+  }
 
   if (newProjectEnvironmentOptions.length > 0) {
     actionItems.push({
