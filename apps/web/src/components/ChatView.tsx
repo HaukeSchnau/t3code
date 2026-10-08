@@ -7431,6 +7431,11 @@ export default function ChatView(props: ChatViewProps) {
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const searchAllThreads = useThreadFindStore((state) => state.searchAllThreads);
   const stepThreadFind = threadFind.step;
+  // Read by the key handler, which should not re-subscribe whenever find toggles.
+  const threadFindOpenRef = useRef(threadFind.isOpen);
+  useLayoutEffect(() => {
+    threadFindOpenRef.current = threadFind.isOpen;
+  }, [threadFind.isOpen]);
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
     if (typeof onMenuAction !== "function" || !isServerThread) return;
@@ -7454,7 +7459,7 @@ export default function ChatView(props: ChatViewProps) {
       browser: !isElectron,
       desktop: isElectron,
       mac: isMacPlatform(navigator.platform),
-      threadFindOpen: useThreadFindStore.getState().open,
+      threadFindOpen: threadFindOpenRef.current,
     }),
     [composerRef, previewPanelOpen, terminalUiState.terminalOpen, routeKind, phase],
   );
@@ -7495,6 +7500,16 @@ export default function ChatView(props: ChatViewProps) {
       });
       if (!command) return;
 
+      if (
+        !isServerThread &&
+        (command === "thread.find" ||
+          command === "thread.findSelection" ||
+          command === "thread.findNext" ||
+          command === "thread.findPrevious")
+      ) {
+        return;
+      }
+
       if (command === "thread.find" || command === "thread.findSelection") {
         const selection = threadFindSelectionText(
           legendListRef.current?.getScrollableNode() ?? null,
@@ -7509,7 +7524,7 @@ export default function ChatView(props: ChatViewProps) {
       if (command === "thread.findNext" || command === "thread.findPrevious") {
         event.preventDefault();
         event.stopPropagation();
-        if (!useThreadFindStore.getState().open) openThreadFind();
+        if (!threadFindOpenRef.current) openThreadFind();
         else stepThreadFind(command === "thread.findNext" ? "older" : "newer");
         return;
       }

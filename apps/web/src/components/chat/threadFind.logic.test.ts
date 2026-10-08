@@ -63,6 +63,20 @@ describe("threadFindRowIndexByEntryId", () => {
       ["item-plan", 3],
     ]);
   });
+
+  it("maps every subagent in a grouped row to that row", () => {
+    const rows = [
+      {
+        kind: "event",
+        id: "agent-1",
+        subagents: [{ item: { id: "agent-1" } }, { item: { id: "agent-2" } }],
+      },
+    ] as unknown as ReadonlyArray<MessagesTimelineRow>;
+    expect([...threadFindRowIndexByEntryId(rows)]).toEqual([
+      ["agent-1", 0],
+      ["agent-2", 0],
+    ]);
+  });
 });
 
 describe("threadFindSnippet", () => {

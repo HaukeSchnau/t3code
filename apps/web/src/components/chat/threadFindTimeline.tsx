@@ -64,6 +64,7 @@ export function useThreadFindReveal(entryId: string) {
   const target = reveal.target?.entryId === entryId ? reveal.target : null;
   return {
     revealed: target !== null,
+    match: target?.match ?? null,
     detail: target?.match.field === "detail" ? target.match : null,
     keepOpen: reveal.keepOpenEntryId === entryId,
   };
@@ -96,22 +97,27 @@ function targetRect(
 ): DOMRect | null {
   const element = findEntryElement(viewport, target.entryId);
   if (!element) return null;
-  if (target.match.field === "detail") {
-    return (
-      element.querySelector("[data-find-current]")?.getBoundingClientRect() ??
-      element.getBoundingClientRect()
-    );
-  }
-  if (matcher?._tag === "Valid") {
+  if (target.match.field === "text" && matcher?._tag === "Valid") {
     const ranges = entryRanges(element, matcher);
     const rect =
       ranges[Math.min(target.match.occurrence, ranges.length - 1)]?.getBoundingClientRect();
     if (rect && rect.height > 0) return rect;
   }
-  return element.getBoundingClientRect();
+  // Detail, and text a row does not render, show in an excerpt under the row.
+  return (
+    element.querySelector("[data-find-current]")?.getBoundingClientRect() ??
+    element.getBoundingClientRect()
+  );
 }
 
-/** Paints every match in mounted rows, and repaints as rows mount or stream. */
+const holdsEntry = (node: Node) =>
+  node instanceof Element && (node.matches(ENTRY_SELECTOR) || node.querySelector(ENTRY_SELECTOR));
+
+/**
+ * Paints every match in mounted rows, and repaints as rows mount or stream.
+ * Ranges are kept per entry element, and a mutation re-walks only the entry it
+ * touched, so a streaming message does not re-walk every mounted row.
+ */
 export function useThreadFindPainter(
   viewport: HTMLElement | null,
   find: ThreadFindTimelineState | null,
@@ -123,21 +129,45 @@ export function useThreadFindPainter(
     if (!supportsHighlights() || !viewport || !query || !paintEntryIds) return;
     const matcher = compileThreadFind(query);
     if (matcher?._tag !== "Valid") return;
+    const rangesByElement = new Map<HTMLElement, Range[]>();
+    const dirty = new Set<HTMLElement>();
+    let rescan = true;
     let frame = 0;
     const paint = () => {
       frame = 0;
-      const all: Range[] = [];
+      if (rescan) {
+        rescan = false;
+        const mounted = new Set<HTMLElement>();
+        for (const element of viewport.querySelectorAll<HTMLElement>(ENTRY_SELECTOR)) {
+          if (!paintEntryIds.has(element.dataset.findEntry ?? "")) continue;
+          mounted.add(element);
+          if (!rangesByElement.has(element)) dirty.add(element);
+        }
+        for (const element of rangesByElement.keys()) {
+          if (!mounted.has(element)) rangesByElement.delete(element);
+        }
+      }
+      for (const element of dirty) {
+        if (element.isConnected && paintEntryIds.has(element.dataset.findEntry ?? "")) {
+          rangesByElement.set(element, entryRanges(element, matcher));
+        } else {
+          rangesByElement.delete(element);
+        }
+      }
+      dirty.clear();
+      const all = new Highlight();
       let current: Range | null = null;
-      for (const element of viewport.querySelectorAll<HTMLElement>(ENTRY_SELECTOR)) {
-        const entryId = element.dataset.findEntry;
-        if (entryId === undefined || !paintEntryIds.has(entryId)) continue;
-        const ranges = entryRanges(element, matcher);
-        all.push(...ranges);
-        if (target?.entryId === entryId && target.match.field === "text") {
+      for (const [element, ranges] of rangesByElement) {
+        for (const range of ranges) all.add(range);
+        if (
+          target !== null &&
+          target.entryId === element.dataset.findEntry &&
+          target.match.field === "text"
+        ) {
           current = ranges[Math.min(target.match.occurrence, ranges.length - 1)] ?? null;
         }
       }
-      CSS.highlights.set(HIGHLIGHT, new Highlight(...all));
+      CSS.highlights.set(HIGHLIGHT, all);
       if (current) {
         const highlight = new Highlight(current);
         highlight.priority = 1;
@@ -150,8 +180,32 @@ export function useThreadFindPainter(
       if (frame === 0) frame = requestAnimationFrame(paint);
     };
     schedule();
-    const observer = new MutationObserver(schedule);
-    observer.observe(viewport, { childList: true, subtree: true, characterData: true });
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const node = record.target;
+        const entry =
+          (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>(
+            ENTRY_SELECTOR,
+          ) ?? null;
+        if (entry !== null) dirty.add(entry);
+        // Rendered text skips hidden subtrees, so their flips change an entry's text.
+        if (record.type === "attributes" && record.attributeName !== "data-find-entry") continue;
+        if (
+          entry === null ||
+          record.type === "attributes" ||
+          [...record.addedNodes, ...record.removedNodes].some(holdsEntry)
+        ) {
+          rescan = true;
+        }
+      }
+      schedule();
+    });
+    observer.observe(viewport, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributeFilter: ["data-find-entry", "hidden", "aria-hidden"],
+    });
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
@@ -210,11 +264,13 @@ export function useThreadFindNavigation(input: {
     setPinnedRowKey(row.key);
     const matcher = latest.current.query ? compileThreadFind(latest.current.query) : null;
     let cancelled = false;
+    let done = false;
     let frame = 0;
     let attempts = 0;
     let scrolledToRow = false;
 
     const finish = () => {
+      done = true;
       const rect = targetRect(viewport, target, matcher);
       if (rect && latest.current.container) flashRect(latest.current.container, rect);
       setPinnedRowKey(null);
@@ -233,6 +289,7 @@ export function useThreadFindNavigation(input: {
           return;
         }
         if (++attempts > 40) {
+          done = true;
           setPinnedRowKey(null);
           return;
         }
@@ -255,6 +312,11 @@ export function useThreadFindNavigation(input: {
     return () => {
       cancelled = true;
       cancelAnimationFrame(frame);
+      // An interrupted jump releases its row, and runs again if its target returns.
+      if (!done) {
+        handledRequestRef.current = null;
+        setPinnedRowKey(null);
+      }
     };
   }, [listRef, rowReady, target]);
 
@@ -292,7 +354,19 @@ export function ThreadFindTicks(props: {
         const current = find.target?.match.key === tick.key;
         if (!byTop.has(top) || current) byTop.set(top, { key: tick.key, top, current });
       }
-      setTicks([...byTop.values()]);
+      const next = [...byTop.values()];
+      // Measured on every scroll frame; most frames move nothing.
+      setTicks((previous) =>
+        previous.length === next.length &&
+        previous.every(
+          (tick, index) =>
+            tick.key === next[index]!.key &&
+            tick.top === next[index]!.top &&
+            tick.current === next[index]!.current,
+        )
+          ? previous
+          : next,
+      );
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(measure);

@@ -5,6 +5,7 @@ import {
   nearestThreadFindMatch,
   reduceThreadFindCursor,
   THREAD_FIND_CURSOR_START,
+  THREAD_FIND_SCOPES,
   THREAD_FIND_SERVER_MIN_LENGTH,
   type ThreadFindCursor,
   type ThreadFindCursorEvent,
@@ -51,6 +52,75 @@ interface CursorState {
   readonly match: ThreadFindMatch | null;
   /** Bumped by every navigation the timeline must perform. */
   readonly requestId: number;
+}
+
+const NO_RESULTS: ThreadFindResults = {
+  matches: [],
+  counts: { all: 0, user: 0, assistant: 0, tool: 0, reasoning: 0 },
+  invalid: null,
+  truncated: false,
+};
+
+// Matches keep their identity while their items are unchanged, so this holds
+// whenever streaming touched nothing that matches.
+function sameResults(left: ThreadFindResults, right: ThreadFindResults): boolean {
+  return (
+    left.invalid === right.invalid &&
+    left.truncated === right.truncated &&
+    left.matches.length === right.matches.length &&
+    left.matches.every((match, index) => match === right.matches[index]) &&
+    THREAD_FIND_SCOPES.every((scope) => left.counts[scope] === right.counts[scope])
+  );
+}
+
+/** Where the reader is: the newest entry showing above the viewport bottom. */
+function readerEntryId(
+  viewport: HTMLElement,
+  orderByEntryId: ReadonlyMap<string, number>,
+): string | null {
+  const bottom = viewport.getBoundingClientRect().bottom;
+  let best: { readonly id: string; readonly order: number } | null = null;
+  for (const element of viewport.querySelectorAll<HTMLElement>("[data-find-entry]")) {
+    const rect = element.getBoundingClientRect();
+    if (rect.height === 0 || rect.top >= bottom) continue;
+    const id = element.dataset.findEntry ?? "";
+    const order = orderByEntryId.get(id);
+    if (order !== undefined && (best === null || order > best.order)) best = { id, order };
+  }
+  return best?.id ?? null;
+}
+
+/**
+ * The scroll position as the topmost visible row plus an offset into it, so
+ * returning there survives history prepended above it.
+ */
+interface ScrollHome {
+  readonly rowKey: string | null;
+  readonly delta: number;
+  readonly scrollTop: number;
+}
+
+function captureScrollHome(list: LegendListRef): ScrollHome | null {
+  const viewport = list.getScrollableNode();
+  if (!viewport) return null;
+  const top = viewport.getBoundingClientRect().top;
+  let rowKey: string | null = null;
+  let rowTop = Number.POSITIVE_INFINITY;
+  for (const element of viewport.querySelectorAll<HTMLElement>("[data-timeline-row-id]")) {
+    const rect = element.getBoundingClientRect();
+    if (rect.height === 0 || rect.bottom <= top || rect.top >= rowTop) continue;
+    rowKey = element.dataset.timelineRowId ?? null;
+    rowTop = rect.top;
+  }
+  const position = rowKey === null ? undefined : list.getState().positionByKey(rowKey);
+  return position === undefined
+    ? { rowKey: null, delta: 0, scrollTop: viewport.scrollTop }
+    : { rowKey, delta: viewport.scrollTop - position, scrollTop: viewport.scrollTop };
+}
+
+function scrollHomeOffset(list: LegendListRef, home: ScrollHome): number {
+  const position = home.rowKey === null ? undefined : list.getState().positionByKey(home.rowKey);
+  return position === undefined ? home.scrollTop : position + home.delta;
 }
 
 /** Text the reader selected inside the timeline, if it fits a single-line query. */
@@ -121,7 +191,8 @@ export function useThreadFind(input: {
       : null,
   );
   const serverData = serverSettledInput ? server.data : null;
-  const serverPending = serverInput !== null && serverData === null && server.error === null;
+  const serverFailed = serverSettledInput && server.error !== null;
+  const serverPending = serverInput !== null && serverData === null && !serverFailed;
 
   // Re-run the server find when rows are added or finish, not per token.
   const contentRevision = useMemo(
@@ -138,7 +209,7 @@ export function useThreadFind(input: {
     return () => window.clearTimeout(timer);
   }, [contentRevision, refreshServer, serverData]);
 
-  const results: ThreadFindResults = useMemo(
+  const derived = useMemo(
     () =>
       active
         ? deriveThreadFindResults({
@@ -148,14 +219,13 @@ export function useThreadFind(input: {
             server: serverData,
             isRendered,
           })
-        : {
-            matches: [],
-            counts: { all: 0, user: 0, assistant: 0, tool: 0, reasoning: 0 },
-            invalid: null,
-            truncated: false,
-          },
+        : NO_RESULTS,
     [active, findQuery, isRendered, items, scope, serverData],
   );
+  // Streaming re-derives on every token; keep the previous results when
+  // nothing changed so the list, ticks and painter are left alone.
+  const [results, setResults] = useState(derived);
+  if (results !== derived && !sameResults(results, derived)) setResults(derived);
   const matches = results.matches;
   // Cursor events read the latest matches; effects below run after this one.
   const matchesRef = useRef(matches);
@@ -163,32 +233,50 @@ export function useThreadFind(input: {
     matchesRef.current = matches;
   }, [matches]);
 
-  // Where the reader was when find opened or the thread changed.
-  const originRef = useRef<{ readonly order: number; readonly scrollTop: number } | null>(null);
+  // Entries change on every streamed token; cursor callbacks read them here
+  // so they keep their identity.
+  const entryIndexRef = useRef(entryIndex);
+  useLayoutEffect(() => {
+    entryIndexRef.current = entryIndex;
+  }, [entryIndex]);
+
+  // Typing searches from where the reader is, by entry, so history prepended
+  // later does not shift it. That is where find opened, the match the reader
+  // stepped or picked to, or wherever they scrolled since. Find's own jumps do
+  // not move it, or each keystroke would walk further down.
+  const originEntryIdRef = useRef<string | null>(null);
+  const readerScrolledRef = useRef(false);
   const captureOrigin = useCallback(() => {
     const viewport = listRef.current?.getScrollableNode() ?? null;
-    let order = -1;
-    if (viewport) {
-      const bottom = viewport.getBoundingClientRect().bottom;
-      for (const element of viewport.querySelectorAll<HTMLElement>("[data-find-entry]")) {
-        const rect = element.getBoundingClientRect();
-        if (rect.height === 0 || rect.top >= bottom) continue;
-        const entryOrder = entryIndex.orderByEntryId.get(element.dataset.findEntry ?? "");
-        if (entryOrder !== undefined && entryOrder > order) order = entryOrder;
-      }
-    }
-    originRef.current = {
-      order: order === -1 ? entries.length - 1 : order,
-      scrollTop: viewport?.scrollTop ?? 0,
+    originEntryIdRef.current =
+      viewport === null ? null : readerEntryId(viewport, entryIndexRef.current.orderByEntryId);
+    readerScrolledRef.current = false;
+  }, [listRef]);
+  useEffect(() => {
+    const viewport = active ? listRef.current?.getScrollableNode() : null;
+    if (!viewport) return;
+    const scrolled = () => {
+      readerScrolledRef.current = true;
     };
-  }, [entries.length, entryIndex, listRef]);
+    const events = ["wheel", "touchmove", "pointerdown"] as const;
+    for (const event of events) viewport.addEventListener(event, scrolled, { passive: true });
+    return () => {
+      for (const event of events) viewport.removeEventListener(event, scrolled);
+    };
+  }, [active, listRef]);
+  // Where the reader was when find opened, for the way back.
+  const homeRef = useRef<ScrollHome | null>(null);
 
   const nearest = useCallback(() => {
-    const origin = originRef.current?.order ?? entries.length - 1;
+    const index = entryIndexRef.current;
+    const originId = originEntryIdRef.current;
+    const origin =
+      (originId === null ? undefined : index.orderByEntryId.get(originId)) ??
+      index.orderByEntryId.size - 1;
     return nearestThreadFindMatch(matchesRef.current, (match) =>
-      isAtOrAboveOrigin(match, entryIndex, origin),
+      isAtOrAboveOrigin(match, index, origin),
     );
-  }, [entries.length, entryIndex]);
+  }, []);
 
   const [cursorState, setCursorState] = useState<CursorState>({
     cursor: THREAD_FIND_CURSOR_START,
@@ -236,12 +324,22 @@ export function useThreadFind(input: {
     }
     if (lastThreadKeyRef.current !== threadKey) {
       lastThreadKeyRef.current = threadKey;
+      homeRef.current = listRef.current === null ? null : captureScrollHome(listRef.current);
       captureOrigin();
     }
     const settled = serverData !== null && serverData !== lastServerDataRef.current;
     lastServerDataRef.current = serverData;
     if (lastSearchKeyRef.current !== searchKey) {
       lastSearchKeyRef.current = searchKey;
+      const { cursor, match } = cursorRef.current;
+      const matchEntryId =
+        match?.loaded === true
+          ? entryIndexRef.current.entryIdByItemId.get(match.sourceItemId)
+          : undefined;
+      if (readerScrolledRef.current) captureOrigin();
+      else if (!cursor.anchored && matchEntryId !== undefined) {
+        originEntryIdRef.current = matchEntryId;
+      }
       dispatch({ type: "query" });
     } else {
       dispatch({ type: "results", settled });
@@ -251,21 +349,31 @@ export function useThreadFind(input: {
     if (hit === null || hit.threadKey !== threadKey) return;
     const index = matchesRef.current.findIndex((match) => match.messageId === hit.messageId);
     if (index >= 0) dispatch({ type: "pick", index });
-    if (index >= 0 || serverData !== null || !serverSearches) clearHit();
+    if (index >= 0 || serverData !== null || serverFailed || !serverSearches) clearHit();
   }, [
     captureOrigin,
     clearHit,
     dispatch,
     hit,
+    listRef,
     matches,
     searchKey,
     serverData,
+    serverFailed,
     serverSearches,
     threadKey,
   ]);
 
-  const current: ThreadFindMatch | null =
-    cursorState.index >= 0 ? (matches[cursorState.index] ?? null) : null;
+  // By key, so a match streamed in ahead of the cursor's does not point the
+  // cursor elsewhere for a render before the cursor catches up.
+  const currentIndex = useMemo(
+    () =>
+      cursorState.cursor.key === null
+        ? -1
+        : matches.findIndex((match) => match.key === cursorState.cursor.key),
+    [cursorState.cursor.key, matches],
+  );
+  const current: ThreadFindMatch | null = currentIndex >= 0 ? matches[currentIndex]! : null;
 
   // A match in history the client has not loaded pages it in, one page at a
   // time, until its row arrives.
@@ -311,15 +419,27 @@ export function useThreadFind(input: {
     () => new Set(paintKey.length === 0 ? [] : paintKey.split("\n")),
     [paintKey],
   );
+  const ticksKey = useMemo(
+    () =>
+      matches
+        .flatMap((match) => {
+          const entryId = match.loaded
+            ? entryIndex.entryIdByItemId.get(match.sourceItemId)
+            : undefined;
+          return entryId === undefined ? [] : [`${match.key}\t${entryId}`];
+        })
+        .join("\n"),
+    [entryIndex, matches],
+  );
   const ticks = useMemo(
     () =>
-      matches.flatMap((match) => {
-        const entryId = match.loaded
-          ? entryIndex.entryIdByItemId.get(match.sourceItemId)
-          : undefined;
-        return entryId === undefined ? [] : [{ key: match.key, entryId }];
-      }),
-    [entryIndex, matches],
+      ticksKey.length === 0
+        ? []
+        : ticksKey.split("\n").map((line) => {
+            const [key = "", entryId = ""] = line.split("\t");
+            return { key, entryId };
+          }),
+    [ticksKey],
   );
   const hasUnloadedMatches = matches.some((match) => !match.loaded);
   // Matches group under the prompt that started their turn.
@@ -370,31 +490,40 @@ export function useThreadFind(input: {
     ],
   );
 
-  // After a long jump, closing offers the way back for a few seconds.
-  const [backOffset, setBackOffset] = useState<number | null>(null);
+  // After a long jump, closing offers the way back for a few seconds, in the
+  // thread it was offered for.
+  const [back, setBack] = useState<{
+    readonly home: ScrollHome;
+    readonly threadKey: string;
+  } | null>(null);
   useEffect(() => {
-    if (backOffset === null) return;
-    const timer = window.setTimeout(() => setBackOffset(null), BACK_PILL_MS);
+    if (back === null) return;
+    const timer = window.setTimeout(() => setBack(null), BACK_PILL_MS);
     return () => window.clearTimeout(timer);
-  }, [backOffset]);
+  }, [back]);
   const closeFind = useThreadFindStore((state) => state.closeFind);
   const close = useCallback(() => {
-    const viewport = listRef.current?.getScrollableNode();
-    const origin = originRef.current;
+    const list = listRef.current;
+    const viewport = list?.getScrollableNode();
+    const home = homeRef.current;
     if (
+      list &&
       viewport &&
-      origin &&
-      Math.abs(viewport.scrollTop - origin.scrollTop) > viewport.clientHeight * 0.8
+      home &&
+      threadKey !== null &&
+      Math.abs(viewport.scrollTop - scrollHomeOffset(list, home)) > viewport.clientHeight * 0.8
     ) {
-      setBackOffset(origin.scrollTop);
+      setBack({ home, threadKey });
     }
     closeFind();
-  }, [closeFind, listRef]);
+  }, [closeFind, listRef, threadKey]);
   const goBack = useCallback(() => {
-    if (backOffset !== null)
-      void listRef.current?.scrollToOffset({ offset: backOffset, animated: false });
-    setBackOffset(null);
-  }, [backOffset, listRef]);
+    const list = listRef.current;
+    if (back !== null && list !== null) {
+      void list.scrollToOffset({ offset: scrollHomeOffset(list, back.home), animated: false });
+    }
+    setBack(null);
+  }, [back, listRef]);
   const step = useCallback(
     (direction: "older" | "newer") => dispatch({ type: "step", direction }),
     [dispatch],
@@ -403,7 +532,7 @@ export function useThreadFind(input: {
   const openFind = useThreadFindStore((state) => state.openFind);
   const reopen = useCallback(
     (prefill?: string) => {
-      setBackOffset(null);
+      setBack(null);
       openFind(prefill);
     },
     [openFind],
@@ -415,13 +544,13 @@ export function useThreadFind(input: {
     scope,
     results,
     current,
-    index: cursorState.index,
+    index: currentIndex,
     pending: serverPending,
     regexLocalOnly: regex && query.length > 0,
     wrapNoticeAt,
     groupLabel,
     timeline,
-    showBack: backOffset !== null,
+    showBack: back !== null && back.threadKey === threadKey,
     step,
     pick,
     openFind: reopen,
