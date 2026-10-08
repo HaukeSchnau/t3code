@@ -23,6 +23,7 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import { useThreadFindStore } from "../threadFindStore";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -83,8 +84,15 @@ function readInitialThreadSidebarWidth(): number {
 function SidebarControl() {
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar } = useSidebar();
+  const { isMobile, setOpen, setOpenMobile, toggleSidebar } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
+  // Find's "Search all threads" needs the sidebar, whose search takes the query.
+  const searchAllRequested = useThreadFindStore((state) => state.searchAllRequest !== null);
+  useEffect(() => {
+    if (!searchAllRequested) return;
+    if (isMobile) setOpenMobile(true);
+    else void setOpen(true);
+  }, [isMobile, searchAllRequested, setOpen, setOpenMobile]);
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",

@@ -4,6 +4,7 @@
  * detail it never receives, plus the cursor rules both clients share.
  */
 import type {
+  MessageId,
   OrchestrationFindInThreadResult,
   OrchestrationThreadFindExcerpt,
   OrchestrationThreadFindField,
@@ -19,6 +20,7 @@ import {
   findThreadMatches,
   THREAD_FIND_TEXT_EXCERPT,
   threadFindExcerpts,
+  threadFindItemMessageId,
   threadFindItemSource,
   threadFindItemText,
   type ThreadFindQuery,
@@ -56,6 +58,8 @@ export interface ThreadFindMatch {
   readonly itemKey: string;
   readonly sourceThreadId: ThreadId;
   readonly sourceItemId: TurnItemId;
+  /** Set for user and assistant messages. */
+  readonly messageId?: MessageId;
   readonly source: OrchestrationThreadFindSource;
   readonly field: OrchestrationThreadFindField;
   readonly occurrence: number;
@@ -88,6 +92,7 @@ function fromServer(match: OrchestrationThreadFindMatch, loaded: boolean): Threa
     itemKey,
     sourceThreadId: match.sourceThreadId,
     sourceItemId: match.sourceItemId,
+    ...(match.messageId === undefined ? {} : { messageId: match.messageId }),
     source: match.source,
     field: match.field,
     occurrence: match.occurrence,
@@ -153,12 +158,14 @@ export function deriveThreadFindResults(input: {
       const ranges = findThreadMatches(matcher, text, LOCAL_MATCH_LIMIT - localCount);
       localCount += ranges.length;
       const source = threadFindItemSource(row.item);
+      const messageId = threadFindItemMessageId(row.item);
       threadFindExcerpts(text, ranges, THREAD_FIND_TEXT_EXCERPT).forEach((excerpt, occurrence) =>
         all.push({
           key: matchKey(itemKey, "text", occurrence),
           itemKey,
           sourceThreadId: row.sourceThreadId,
           sourceItemId: row.sourceItemId,
+          ...(messageId === undefined ? {} : { messageId }),
           source,
           field: "text",
           occurrence,

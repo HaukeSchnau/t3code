@@ -3,6 +3,7 @@
  * match, and the nth match inside one text, means the same thing everywhere.
  */
 import type {
+  MessageId,
   OrchestrationThreadFindExcerpt,
   OrchestrationThreadFindSource,
   OrchestrationV2TurnItem,
@@ -230,6 +231,13 @@ export function threadFindItemSource(item: OrchestrationV2TurnItem): Orchestrati
     default:
       return "tool";
   }
+}
+
+/** The message a user or assistant message item shows, which thread search reports. */
+export function threadFindItemMessageId(item: OrchestrationV2TurnItem): MessageId | undefined {
+  return item.type === "user_message" || item.type === "assistant_message"
+    ? item.messageId
+    : undefined;
 }
 
 /** Non-empty matches in order, so an index into the result is a stable occurrence. */

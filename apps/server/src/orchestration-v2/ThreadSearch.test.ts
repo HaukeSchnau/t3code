@@ -163,10 +163,15 @@ it.layer(TestLayer)("ThreadSearch", (it) => {
 
       const result = yield* search.search({ query: "NEEDLE", limit: 20 });
       assert.deepEqual(
-        result.matches.map((match) => [match.threadId, match.source, match.snippet]),
+        result.matches.map((match) => [
+          match.threadId,
+          match.source,
+          match.messageId,
+          match.snippet,
+        ]),
         [
-          [both, "user", "newer needle question"],
-          [assistantOnly, "assistant", "needle in an answer"],
+          [both, "user", "both-user-new", "newer needle question"],
+          [assistantOnly, "assistant", "assistant-only", "needle in an answer"],
         ],
       );
       assert.lengthOf((yield* search.search({ query: "needle", limit: 1 })).matches, 1);

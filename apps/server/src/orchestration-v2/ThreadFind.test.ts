@@ -127,17 +127,18 @@ it.layer(TestLayer)("ThreadFind", (it) => {
       assert.deepStrictEqual(
         result.matches.map((match) => [
           match.sourceItemId,
+          match.messageId,
           match.position,
           match.source,
           match.field,
           match.occurrence,
         ]),
         [
-          ["item:user", 0, "user", "text", 0],
-          ["item:command", 1, "tool", "text", 0],
-          ["item:command", 1, "tool", "detail", 0],
-          ["item:command", 1, "tool", "detail", 1],
-          ["item:answer", 2, "assistant", "text", 0],
+          ["item:user", "message:user", 0, "user", "text", 0],
+          ["item:command", undefined, 1, "tool", "text", 0],
+          ["item:command", undefined, 1, "tool", "detail", 0],
+          ["item:command", undefined, 1, "tool", "detail", 1],
+          ["item:answer", "message:answer", 2, "assistant", "text", 0],
         ],
       );
       // Markdown is matched as rendered, so the excerpt has no emphasis markers.

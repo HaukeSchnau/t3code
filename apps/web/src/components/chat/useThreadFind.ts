@@ -1,4 +1,5 @@
 import type { LegendListRef } from "@legendapp/list/react";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   deriveThreadFindResults,
   nearestThreadFindMatch,
@@ -83,6 +84,8 @@ export function useThreadFind(input: {
   const wholeWord = useThreadFindStore((state) => state.wholeWord);
   const regex = useThreadFindStore((state) => state.regex);
   const scope = useThreadFindStore((state) => state.scope);
+  const hit = useThreadFindStore((state) => state.hit);
+  const clearHit = useThreadFindStore((state) => state.clearHit);
   const active = open && enabled && threadRef !== null;
 
   const findQuery = useMemo<ThreadFindQuery>(
@@ -104,6 +107,7 @@ export function useThreadFind(input: {
     compileThreadFind(findQuery)?._tag === "Valid"
       ? { threadId: threadRef.threadId, query, caseSensitive, wholeWord }
       : null;
+  const serverSearches = serverInput !== null;
   const serverKey =
     serverInput === null ? null : JSON.stringify([threadRef?.environmentId, serverInput]);
   const debouncedServerKey = useDebouncedValue(serverKey, SERVER_DEBOUNCE_MS);
@@ -219,7 +223,7 @@ export function useThreadFind(input: {
     [nearest],
   );
 
-  const threadKey = threadRef === null ? null : `${threadRef.environmentId}:${threadRef.threadId}`;
+  const threadKey = threadRef === null ? null : scopedThreadKey(threadRef);
   const searchKey = active ? JSON.stringify([threadKey, findQuery]) : null;
   const lastSearchKeyRef = useRef<string | null>(null);
   const lastThreadKeyRef = useRef<string | null>(null);
@@ -239,10 +243,26 @@ export function useThreadFind(input: {
     if (lastSearchKeyRef.current !== searchKey) {
       lastSearchKeyRef.current = searchKey;
       dispatch({ type: "query" });
-      return;
+    } else {
+      dispatch({ type: "results", settled });
     }
-    dispatch({ type: "results", settled });
-  }, [captureOrigin, dispatch, matches, searchKey, serverData, threadKey]);
+    // A thread search hit wins over the nearest match once it shows up. If
+    // the server's answer lacks it too, find stays at the nearest match.
+    if (hit === null || hit.threadKey !== threadKey) return;
+    const index = matchesRef.current.findIndex((match) => match.messageId === hit.messageId);
+    if (index >= 0) dispatch({ type: "pick", index });
+    if (index >= 0 || serverData !== null || !serverSearches) clearHit();
+  }, [
+    captureOrigin,
+    clearHit,
+    dispatch,
+    hit,
+    matches,
+    searchKey,
+    serverData,
+    serverSearches,
+    threadKey,
+  ]);
 
   const current: ThreadFindMatch | null =
     cursorState.index >= 0 ? (matches[cursorState.index] ?? null) : null;

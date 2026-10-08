@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
+  MessageId,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -23,6 +24,8 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   source: OrchestrationThreadSearchSource,
+  /** The matched message. Older servers omit it. */
+  messageId: Schema.optionalKey(MessageId),
   snippet: Schema.String.check(Schema.isMaxLength(240)),
   messageCreatedAt: Schema.NullOr(IsoDateTime),
 });
