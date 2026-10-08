@@ -3,6 +3,7 @@ import {
   Minimize2Icon,
   PanelBottomIcon,
   PanelRightIcon,
+  SearchIcon,
   SquareMenuIcon,
 } from "lucide-react";
 import { memo, type ReactElement } from "react";
@@ -13,6 +14,11 @@ import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface PanelLayoutControlsProps {
+  showFindControl?: boolean;
+  findAvailable?: boolean;
+  findOpen?: boolean;
+  findShortcutLabel?: string | null;
+  onToggleFind?: () => void;
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
@@ -34,6 +40,11 @@ export interface PanelLayoutControlsProps {
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
+  showFindControl = true,
+  findAvailable = false,
+  findOpen = false,
+  findShortcutLabel = null,
+  onToggleFind,
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
@@ -88,6 +99,28 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {showFindControl && onToggleFind ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="shrink-0 [-webkit-app-region:no-drag]"
+              pressed={findOpen}
+              onPressedChange={onToggleFind}
+              aria-label="Find in thread"
+              variant="ghost"
+              size="sm"
+              disabled={!findAvailable}
+            >
+              <SearchIcon className="size-4" />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {findAvailable
+              ? `Find in thread${findShortcutLabel ? ` (${findShortcutLabel})` : ""}`
+              : "Find is available once the thread has started"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showThreadPanelControl
         ? threadPanelPresentation === "popover"
           ? threadPanelTooltip(

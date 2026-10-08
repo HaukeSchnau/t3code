@@ -1,4 +1,4 @@
-import { memo, useState, useId } from "react";
+import { memo, useEffect, useState, useId } from "react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -39,14 +39,24 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   threadRef,
   cwd,
   workspaceRoot,
+  revealed = false,
+  keepOpen = false,
 }: {
   planMarkdown: string;
   environmentId: EnvironmentId;
   threadRef?: ScopedThreadRef | undefined;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
+  /** Find is showing a match in this plan. */
+  revealed?: boolean;
+  /** Find closed on this plan, so it stays open. */
+  keepOpen?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expandedByReader, setExpanded] = useState(false);
+  useEffect(() => {
+    if (keepOpen) setExpanded(true);
+  }, [keepOpen]);
+  const expanded = expandedByReader || revealed;
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [savePath, setSavePath] = useState("");
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);

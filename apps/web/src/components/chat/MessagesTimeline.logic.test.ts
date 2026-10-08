@@ -1345,6 +1345,58 @@ describe("deriveMessagesTimelineRows", () => {
     ).toBeDefined();
   });
 
+  it("expands the folds and groups that hide a revealed entry, and only while it is revealed", () => {
+    const runId = RunId.make("turn-1");
+    const work = (id: string, second: number) => ({
+      id,
+      kind: "work" as const,
+      createdAt: `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`,
+      entry: {
+        id,
+        createdAt: `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`,
+        runId,
+        label: "Ran command",
+        tone: "tool" as const,
+        itemType: "command_execution" as const,
+      },
+    });
+    const message = (id: string, role: "user" | "assistant", second: number, text: string) => ({
+      id,
+      kind: "message" as const,
+      createdAt: `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`,
+      message: {
+        id: id as never,
+        role,
+        text,
+        runId,
+        createdAt: `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`,
+        updatedAt: `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`,
+        streaming: false,
+      },
+    });
+    const timelineEntries = [
+      message("user", "user", 0, "Run the tests"),
+      work("cmd-1", 2),
+      work("cmd-2", 3),
+      message("final", "assistant", 9, "Done"),
+    ];
+    const derive = (revealEntryId: string | null) =>
+      deriveMessagesTimelineRows({
+        timelineEntries,
+        revealEntryId,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+    expect(derive(null).map((row) => row.id)).toEqual(["user", "turn-fold:turn-1", "final"]);
+    const revealed = derive("cmd-2");
+    expect(revealed.find((row) => row.kind === "turn-fold")).toMatchObject({ expanded: true });
+    expect(revealed.find((row) => row.kind === "work-toggle")).toMatchObject({ expanded: true });
+    expect(revealed.some((row) => row.id === "work-group:cmd-1:details")).toBe(true);
+  });
+
   it.each([1, 2, 3])("folds %i completed activities after the terminal response", (count) => {
     const runId = RunId.make("turn-1");
     const timelineEntries = [

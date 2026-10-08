@@ -1186,6 +1186,11 @@ export function deriveMessagesTimelineRows(input: {
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
   expandedWorkGroupIds?: ReadonlySet<string>;
+  /**
+   * An entry find is showing. Folds and groups that hide it render expanded
+   * for as long as it is set, without touching the expansion sets.
+   */
+  revealEntryId?: string | null;
   isWorking: boolean;
   /**
    * The live work has no app run (a provider-native subagent thread), so
@@ -1238,9 +1243,22 @@ export function deriveMessagesTimelineRows(input: {
     unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
     isWorking: input.isWorking,
   });
+  const reveal = input.revealEntryId ?? null;
+  const runFoldExpanded = (fold: { runId: RunId; hiddenEntryIds: ReadonlySet<string> }) =>
+    (input.expandedRunIds?.has(fold.runId) ?? false) ||
+    (reveal !== null && fold.hiddenEntryIds.has(reveal));
+  const attemptFoldExpanded = (fold: {
+    attemptId: RunAttemptId;
+    hiddenEntryIds: ReadonlySet<string>;
+  }) =>
+    (input.expandedAttemptIds?.has(fold.attemptId) ?? false) ||
+    (reveal !== null && fold.hiddenEntryIds.has(reveal));
+  const workGroupExpanded = (groupId: string, entries: ReadonlyArray<WorkLogEntry>) =>
+    (input.expandedWorkGroupIds?.has(groupId) ?? false) ||
+    (reveal !== null && entries.some((entry) => entry.id === reveal));
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
-    if (!input.expandedRunIds?.has(fold.runId)) {
+    if (!runFoldExpanded(fold)) {
       for (const entryId of fold.hiddenEntryIds) {
         collapsedEntryIds.add(entryId);
       }
@@ -1248,7 +1266,7 @@ export function deriveMessagesTimelineRows(input: {
   }
   const collapsedSupersededEntryIds = new Set<string>();
   for (const fold of supersededFoldsByAnchorEntryId.values()) {
-    if (!input.expandedAttemptIds?.has(fold.attemptId)) {
+    if (!attemptFoldExpanded(fold)) {
       for (const entryId of fold.hiddenEntryIds) {
         collapsedSupersededEntryIds.add(entryId);
       }
@@ -1332,7 +1350,10 @@ export function deriveMessagesTimelineRows(input: {
             entry: (latestRunningToolEntry ?? latestVisibleToolEntry).entry,
             groupedEntries: visibleActiveToolEntries.map((entry) => entry.entry),
             groupId,
-            expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
+            expanded: workGroupExpanded(
+              groupId,
+              visibleActiveToolEntries.map((entry) => entry.entry),
+            ),
             active: latestToolKeepsActivityLive,
           };
         })()
@@ -1394,7 +1415,7 @@ export function deriveMessagesTimelineRows(input: {
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
         label: turnFold.label,
-        expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
+        expanded: runFoldExpanded(turnFold),
       });
     }
 
@@ -1411,7 +1432,7 @@ export function deriveMessagesTimelineRows(input: {
         runId: supersededFold.runId,
         attemptId: supersededFold.attemptId,
         label: "Superseded attempt",
-        expanded: input.expandedAttemptIds?.has(supersededFold.attemptId) ?? false,
+        expanded: attemptFoldExpanded(supersededFold),
       });
     }
 
@@ -1490,7 +1511,7 @@ export function deriveMessagesTimelineRows(input: {
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
         if (activeInProgressToolEntries.length > 0) {
           const groupId = workGroupId(timelineEntry.id);
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          const expanded = workGroupExpanded(groupId, visibleGroupedEntries);
           const latestActiveToolEntry = activeInProgressToolEntries.at(-1)!;
           nextRows.push({
             kind: "work-live",
@@ -1526,7 +1547,7 @@ export function deriveMessagesTimelineRows(input: {
           });
         } else {
           const groupId = workGroupId(timelineEntry.id);
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          const expanded = workGroupExpanded(groupId, visibleGroupedEntries);
           const summaryKind = toolGroupSummaryKind(visibleGroupedEntries);
           const primarySourceEntry = visibleGroupedEntries.find(
             (entry) => entry.toolSource !== undefined,
