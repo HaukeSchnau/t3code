@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   compileThreadFind,
   findThreadMatches,
+  THREAD_FIND_DETAIL_EXCERPT,
+  THREAD_FIND_TEXT_EXCERPT,
   threadFindExcerpts,
   threadFindItemSource,
   threadFindItemText,
@@ -83,12 +85,16 @@ describe("threadFindMessageText", () => {
     expect(threadFindMessageText("Code `**kept**` and `[x](y)` stay raw")).toBe(
       "Code **kept** and [x](y) stay raw",
     );
+    expect(threadFindMessageText("costs \\$5, use \\`x\\` and __bold__")).toBe(
+      "costs $5, use `x` and bold",
+    );
   });
 
   it("leaves identifiers with underscores and stars alone", () => {
     expect(threadFindMessageText("probe_timeout_ms and 2*3*4 stay")).toBe(
       "probe_timeout_ms and 2*3*4 stay",
     );
+    expect(threadFindMessageText("foo__bar__baz")).toBe("foo__bar__baz");
   });
 
   it("drops block markers but keeps fenced code verbatim", () => {
@@ -101,11 +107,22 @@ describe("threadFindMessageText", () => {
       "const a = `**not bold**`;",
       "```",
       "after",
+      "10. nested",
+      "    ```py",
+      "    def __init__(self):",
+      "    ```",
     ].join("\n");
     expect(threadFindMessageText(markdown)).toBe(
-      ["Plan", "quoted text", "first step", "done", "const a = `**not bold**`;", "after"].join(
-        "\n",
-      ),
+      [
+        "Plan",
+        "quoted text",
+        "first step",
+        "done",
+        "const a = `**not bold**`;",
+        "after",
+        "nested",
+        "    def __init__(self):",
+      ].join("\n"),
     );
   });
 });
@@ -146,6 +163,8 @@ describe("findThreadMatches", () => {
     const text = "probe() probeTimeoutMs re-probe _probe";
     expect(find({ query: "probe", wholeWord: true }, text)).toEqual(["probe", "probe"]);
     expect(find({ query: "café", wholeWord: true }, "cafés café.")).toEqual(["café"]);
+    // Edges that are not word characters need no boundary, like VS Code.
+    expect(find({ query: "(x)", wholeWord: true }, "f(x) - g(x)y")).toEqual(["(x)", "(x)"]);
   });
 
   it("runs regex queries per line and skips empty matches", () => {
@@ -164,23 +183,40 @@ describe("findThreadMatches", () => {
 });
 
 describe("threadFindExcerpts", () => {
-  const text = "first\nsecond probe line\nthird\nfourth probe";
-  const matcher = compileThreadFind({ query: "probe" });
-  const ranges = matcher?._tag === "Valid" ? findThreadMatches(matcher, text) : [];
+  const ranges = (query: ThreadFindQuery, text: string) => {
+    const matcher = compileThreadFind(query);
+    if (matcher?._tag !== "Valid") throw new Error("expected a valid matcher");
+    return findThreadMatches(matcher, text);
+  };
 
-  it("keeps the line before and after and counts lines", () => {
-    const [middle, last] = threadFindExcerpts(text, ranges);
+  it("keeps the matching line, or the lines around it for detail", () => {
+    const text = "first\nsecond probe line\nthird\nfourth probe";
+    const found = ranges({ query: "probe" }, text);
+    const [middle, last] = threadFindExcerpts(text, found, THREAD_FIND_DETAIL_EXCERPT);
     expect(middle).toMatchObject({ text: "first\nsecond probe line\nthird", line: 2 });
     expect(middle!.text.slice(middle!.start, middle!.end)).toBe("probe");
     expect(last).toMatchObject({ text: "third\nfourth probe", line: 4 });
+    const [snippet] = threadFindExcerpts(text, found, THREAD_FIND_TEXT_EXCERPT);
+    expect(snippet).toMatchObject({ text: "second probe line", line: 2 });
+  });
+
+  it("never starts before the text when a match begins at a line break", () => {
+    const text = "\nfoo bar";
+    const [excerpt] = threadFindExcerpts(
+      text,
+      ranges({ query: "\\s+foo", regex: true }, text),
+      THREAD_FIND_DETAIL_EXCERPT,
+    );
+    expect(excerpt).toMatchObject({ start: 0, end: 4, line: 1 });
   });
 
   it("trims long lines around the match", () => {
     const long = `${"a".repeat(2000)} probe ${"b".repeat(2000)}`;
-    const longMatcher = compileThreadFind({ query: "probe" });
-    if (longMatcher?._tag !== "Valid") throw new Error("expected a valid matcher");
-    const [excerpt] = threadFindExcerpts(long, findThreadMatches(longMatcher, long), 9000);
-    expect(excerpt!.text.length).toBe(600);
+    const [excerpt] = threadFindExcerpts(long, ranges({ query: "probe" }, long), {
+      ...THREAD_FIND_DETAIL_EXCERPT,
+      totalLength: 9000,
+    });
+    expect(excerpt!.text.length).toBe(400);
     expect(excerpt!.text.slice(excerpt!.start, excerpt!.end)).toBe("probe");
     expect(excerpt!.totalLength).toBe(9000);
   });

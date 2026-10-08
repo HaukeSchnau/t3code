@@ -25,13 +25,14 @@ export const OrchestrationThreadFindField = Schema.Literals(["text", "detail"]);
 export type OrchestrationThreadFindField = typeof OrchestrationThreadFindField.Type;
 
 // The server's SQLite client is synchronous and single-connection. A find scans
-// one thread in pages and stops at a match limit and a byte budget.
+// one thread in pages and stops at a match limit and a payload byte budget.
+// There is no regex option: a pathological pattern would stall the server's
+// event loop, so clients match regex queries only against what they loaded.
 export const OrchestrationFindInThreadInput = Schema.Struct({
   threadId: ThreadId,
   query: Schema.String.check(Schema.isMinLength(2), Schema.isMaxLength(200)),
   caseSensitive: Schema.optionalKey(Schema.Boolean),
   wholeWord: Schema.optionalKey(Schema.Boolean),
-  regex: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationFindInThreadInput = typeof OrchestrationFindInThreadInput.Type;
 
@@ -62,7 +63,7 @@ export type OrchestrationThreadFindMatch = typeof OrchestrationThreadFindMatch.T
 
 export const OrchestrationFindInThreadResult = Schema.Struct({
   matches: Schema.Array(OrchestrationThreadFindMatch),
-  /** The scan stopped at the match limit or the byte budget. */
+  /** The scan stopped at the match limit or the payload byte budget. */
   truncated: Schema.Boolean,
 });
 export type OrchestrationFindInThreadResult = typeof OrchestrationFindInThreadResult.Type;

@@ -7,21 +7,26 @@ import type {
 import {
   compileThreadFind,
   findThreadMatches,
+  THREAD_FIND_DETAIL_EXCERPT,
+  THREAD_FIND_TEXT_EXCERPT,
   threadFindExcerpts,
   threadFindItemSource,
   threadFindItemText,
+  type ThreadFindExcerptOptions,
 } from "@t3tools/shared/threadFind";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { projectTurnItemForWire } from "./WireProjection.ts";
 
-const MATCH_LIMIT = 1000;
+// Keeps a response well under a megabyte even when every match has an excerpt.
+const MATCH_LIMIT = 500;
 // Tool output can run to megabytes. Only its start is searched.
 const DETAIL_SEARCH_CHARS = 256 * 1024;
-// Bounds one find's time on the shared SQLite connection and event loop.
-const SCAN_BUDGET_CHARS = 64 * 1024 * 1024;
+// Bounds how much one find reads and decodes on the shared SQLite connection.
+const PAYLOAD_BUDGET_BYTES = 64 * 1024 * 1024;
 
 /**
  * Finds matches in one thread's visible timeline, including rows inherited from
@@ -42,29 +47,20 @@ export const make = Effect.gen(function* () {
 
   const find: ThreadFind["Service"]["find"] = Effect.fn("ThreadFind.find")(function* (input) {
     const matcher = compileThreadFind(input);
-    // Clients validate regex before sending, so an invalid one finds nothing.
     if (matcher?._tag !== "Valid") return { matches: [], truncated: false };
 
     const matches: Array<OrchestrationThreadFindMatch> = [];
-    let scanned = 0;
-    let truncated = false;
-    yield* projections.scanTimeline(input.threadId, (rows) => {
-      for (const row of rows) {
-        const { text, detail } = threadFindItemText(row.item);
-        const fields: Array<[OrchestrationThreadFindField, string, number | undefined]> = [
-          ["text", text, undefined],
-        ];
-        if (detail !== undefined) {
-          fields.push(
-            detail.length > DETAIL_SEARCH_CHARS
-              ? ["detail", detail.slice(0, DETAIL_SEARCH_CHARS), detail.length]
-              : ["detail", detail, undefined],
-          );
-        }
-        for (const [field, value, totalLength] of fields) {
-          scanned += value.length;
+    const scan = yield* projections.scanTimeline(
+      input.threadId,
+      { maxPayloadBytes: PAYLOAD_BUDGET_BYTES },
+      (row) => {
+        const collect = (
+          field: OrchestrationThreadFindField,
+          value: string,
+          options: ThreadFindExcerptOptions,
+        ) => {
           const ranges = findThreadMatches(matcher, value, MATCH_LIMIT - matches.length);
-          threadFindExcerpts(value, ranges, totalLength).forEach((excerpt, occurrence) =>
+          threadFindExcerpts(value, ranges, options).forEach((excerpt, occurrence) =>
             matches.push({
               sourceThreadId: row.sourceThreadId,
               sourceItemId: row.sourceItemId,
@@ -75,15 +71,27 @@ export const make = Effect.gen(function* () {
               excerpt,
             }),
           );
-          if (matches.length >= MATCH_LIMIT || scanned >= SCAN_BUDGET_CHARS) {
-            truncated = true;
-            return false;
-          }
+        };
+        // Clients count what the wire sends them, so the server does too.
+        collect(
+          "text",
+          threadFindItemText(projectTurnItemForWire(row.item)).text,
+          THREAD_FIND_TEXT_EXCERPT,
+        );
+        const { detail } = threadFindItemText(row.item);
+        if (detail !== undefined && matches.length < MATCH_LIMIT) {
+          collect(
+            "detail",
+            detail.slice(0, DETAIL_SEARCH_CHARS),
+            detail.length > DETAIL_SEARCH_CHARS
+              ? { ...THREAD_FIND_DETAIL_EXCERPT, totalLength: detail.length }
+              : THREAD_FIND_DETAIL_EXCERPT,
+          );
         }
-      }
-      return true;
-    });
-    return { matches, truncated };
+        return matches.length < MATCH_LIMIT;
+      },
+    );
+    return { matches, truncated: matches.length >= MATCH_LIMIT || !scan.complete };
   });
 
   return ThreadFind.of({ find });
