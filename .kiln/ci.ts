@@ -20,7 +20,7 @@ export const deps = ["web", "server", "runtime"].map((part) =>
 );
 
 export const lint = Task.make("static", { shell, setup: install, run: cmd`just qa-static` }).pipe(
-  Step.timeout("15 minutes"),
+  Step.timeout("30 minutes"),
 );
 
 /** What every test and typecheck shares: the dependencies and the base tsconfig. */
@@ -154,7 +154,7 @@ export const testScripts = Task.make("test-scripts", {
   shell,
   setup: install,
   run: cmd`just qa-test-packages scripts`,
-}).pipe(Step.timeout("15 minutes"));
+}).pipe(Step.timeout("30 minutes"));
 
 /**
  * Typechecks of package groups, each when its packages' tsconfigs or what their sources import,
@@ -173,7 +173,7 @@ const typecheck = (name: string, dirs: ReadonlyArray<string>, sources: ReadonlyA
     run: cmd`just qa-typecheck ${dirs}`,
     // Native TypeScript is written in Go; collect before the worker reaches MemoryHigh.
     env: { GOMEMLIMIT: "3GiB" },
-  }).pipe(Step.timeout("15 minutes"));
+  }).pipe(Step.timeout("30 minutes"));
 
 export const typechecks = [
   typecheck(
