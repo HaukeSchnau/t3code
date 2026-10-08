@@ -164,6 +164,7 @@ import {
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ThreadFind from "./orchestration-v2/ThreadFind.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
@@ -551,7 +552,11 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(AgentWatches.layer.pipe(Layer.provide(ProviderProcessSpawnerLayerLive))),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
-  Layer.provideMerge(ManagedWorkspaces.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  Layer.provideMerge(
+    Layer.merge(ManagedWorkspaces.layer, ThreadFind.layer).pipe(
+      Layer.provide(ProjectionStoreV2.layer),
+    ),
+  ),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(ServerSettingsLayerLive),

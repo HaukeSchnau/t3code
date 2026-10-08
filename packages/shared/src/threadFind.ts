@@ -248,7 +248,7 @@ export function threadFindExcerpts(
   let line = 1;
   let counted = 0;
   return ranges.map(({ start, end }) => {
-    for (let index = text.indexOf("\n", counted); index !== -1 && index < start; ) {
+    for (let index = text.indexOf("\n", counted); index !== -1 && index < start;) {
       line += 1;
       counted = index + 1;
       index = text.indexOf("\n", counted);

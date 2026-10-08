@@ -310,6 +310,15 @@ export interface ProjectionStoreV2Shape {
     threadId: ThreadId,
     options: ProjectionTimelinePageOptions,
   ) => Effect.Effect<ProjectionTimelinePage, ProjectionStoreV2Error>;
+  /**
+   * Visits the thread's visible timeline oldest first, one page of decoded rows
+   * at a time, yielding between pages so a long thread never holds the single
+   * SQLite connection for its whole scan. Stops when `visit` returns false.
+   */
+  readonly scanTimeline: (
+    threadId: ThreadId,
+    visit: (rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) => boolean,
+  ) => Effect.Effect<void, ProjectionStoreV2Error>;
   readonly getMessageCount: (threadId: ThreadId) => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
@@ -886,6 +895,8 @@ function applyToProjectionReplayState(
 type PayloadRow = {
   readonly payload_json: string;
 };
+
+const TIMELINE_SCAN_PAGE_SIZE = 100;
 
 type ShellThreadRow = {
   readonly thread_id: string;
@@ -4700,6 +4711,56 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ),
         );
 
+    const scanTimeline: ProjectionStoreV2Shape["scanTimeline"] = (threadId, visit) =>
+      Effect.gen(function* () {
+        const index = yield* sql.withTransaction(readTimelineIndex(threadId, new Set()));
+        for (let start = 0; start < index.visible.length; start += TIMELINE_SCAN_PAGE_SIZE) {
+          const page = index.visible.slice(start, start + TIMELINE_SCAN_PAGE_SIZE);
+          const idsBySource = new Map<ThreadId, Array<TurnItemId>>();
+          for (const row of page) {
+            if (row.synthetic !== undefined) continue;
+            const ids = idsBySource.get(row.sourceThreadId) ?? [];
+            ids.push(row.sourceItemId);
+            idsBySource.set(row.sourceThreadId, ids);
+          }
+          const items = new Map<string, OrchestrationV2TurnItem>();
+          for (const [sourceThreadId, ids] of idsBySource) {
+            const rows = yield* sql<{
+              readonly turn_item_id: string;
+              readonly payload_json: string;
+            }>`SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
+              WHERE thread_id = ${sourceThreadId} AND turn_item_id IN ${sql.in(ids)}`;
+            const decoded = yield* decodeRows(decodeTurnItemPayload, sourceThreadId)(rows);
+            rows.forEach((row, offset) =>
+              items.set(`${sourceThreadId}:${row.turn_item_id}`, decoded[offset]!),
+            );
+          }
+          // Rows deleted after the index was read are skipped, not reported.
+          const projected = page.flatMap((row, offset) => {
+            const item = row.synthetic ?? items.get(`${row.sourceThreadId}:${row.sourceItemId}`);
+            return item === undefined
+              ? []
+              : [
+                  {
+                    position: start + offset,
+                    visibility: row.visibility,
+                    sourceThreadId: row.sourceThreadId,
+                    sourceItemId: row.sourceItemId,
+                    item,
+                  },
+                ];
+          });
+          if (!visit(projected)) return;
+          yield* Effect.yieldNow;
+        }
+      }).pipe(
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
+
     const getThreadSnapshotWindow: ProjectionStoreV2Shape["getThreadSnapshotWindow"] = (
       threadId,
       options,
@@ -5478,6 +5539,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadSnapshot,
       getThreadSnapshotWindow,
       getTimelinePage,
+      scanTimeline,
       getThreadAttachmentIds,
     } satisfies ProjectionStoreV2Shape;
   }),
@@ -6035,6 +6097,15 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               totalItems: projection.visibleTurnItems.length,
               hasMore: matching.length > options.limit,
             };
+          }),
+        ),
+      scanTimeline: (threadId, visit) =>
+        service.getThreadProjection(threadId).pipe(
+          Effect.map((projection) => {
+            const rows = projection.visibleTurnItems;
+            for (let start = 0; start < rows.length; start += TIMELINE_SCAN_PAGE_SIZE) {
+              if (!visit(rows.slice(start, start + TIMELINE_SCAN_PAGE_SIZE))) return;
+            }
           }),
         ),
       getThreadSnapshotWindow: (threadId, options) =>
