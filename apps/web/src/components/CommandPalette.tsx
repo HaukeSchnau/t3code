@@ -1432,10 +1432,19 @@ function OpenCommandPaletteDialog(props: {
             : undefined;
         },
         runThread: async (thread) => {
+          const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+          const messageId = threadContentMatchByKey.get(
+            threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+          )?.messageId;
           await navigate({
             to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id)),
+            params: buildThreadRouteParams(threadRef),
           });
+          if (messageId !== undefined) {
+            useThreadFindStore
+              .getState()
+              .openFindAtHit(threadRef, messageId, threadSearchQuery.trim());
+          }
         },
       }),
     [

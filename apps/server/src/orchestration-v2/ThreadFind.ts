@@ -10,6 +10,7 @@ import {
   THREAD_FIND_DETAIL_EXCERPT,
   THREAD_FIND_TEXT_EXCERPT,
   threadFindExcerpts,
+  threadFindItemMessageId,
   threadFindItemSource,
   threadFindItemText,
   type ThreadFindExcerptOptions,
@@ -60,10 +61,12 @@ export const make = Effect.gen(function* () {
           options: ThreadFindExcerptOptions,
         ) => {
           const ranges = findThreadMatches(matcher, value, MATCH_LIMIT - matches.length);
+          const messageId = threadFindItemMessageId(row.item);
           threadFindExcerpts(value, ranges, options).forEach((excerpt, occurrence) =>
             matches.push({
               sourceThreadId: row.sourceThreadId,
               sourceItemId: row.sourceItemId,
+              ...(messageId === undefined ? {} : { messageId }),
               position: row.position,
               source: threadFindItemSource(row.item),
               field,

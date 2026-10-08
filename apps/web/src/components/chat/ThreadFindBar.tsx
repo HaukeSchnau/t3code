@@ -118,7 +118,7 @@ function counterText(find: ThreadFindController): { text: string; tone: "muted" 
 /** Find in the open thread: the bar, its options and the match list. */
 export function ThreadFindBar(props: {
   readonly find: ThreadFindController;
-  readonly onSearchAllThreads?: ((query: string) => void) | undefined;
+  readonly onSearchAllThreads?: (() => void) | undefined;
 }) {
   const { find } = props;
   const query = useThreadFindStore((state) => state.query);
@@ -358,7 +358,7 @@ export function ThreadFindBar(props: {
           {props.onSearchAllThreads ? (
             <button
               type="button"
-              onClick={() => props.onSearchAllThreads?.(query)}
+              onClick={props.onSearchAllThreads}
               className="mt-1 flex w-full rounded-md border-t px-2 py-1.5 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               Search all threads for "{query}"

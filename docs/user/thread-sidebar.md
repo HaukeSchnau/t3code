@@ -191,7 +191,8 @@ The linked pull request participates in automatic settlement.
 
 On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads
 across connected environments. Message search starts after two characters and
-includes your messages and final agent responses.
+includes your messages and final agent responses. Opening a message match from
+the palette or the sidebar search opens the thread with find on that message.
 
 Press `Cmd/Ctrl+F` to find text in the open thread. Find covers history that
 has not loaded yet, folded work, command output, and diffs. Enter moves to older
@@ -199,7 +200,8 @@ matches and Shift+Enter to newer ones. While find is open, `Cmd/Ctrl+G` and
 `Cmd/Ctrl+Shift+G` do the same. `Cmd/Ctrl+E` finds the text you selected. The
 chips under the field limit matches to your messages, agent replies, tools, or
 reasoning. Find searches the first 256 KB of each tool's output. Regular
-expressions only search the part of the thread already loaded.
+expressions only search the part of the thread already loaded. The match list
+can hand your query to the sidebar search to look through every thread.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request

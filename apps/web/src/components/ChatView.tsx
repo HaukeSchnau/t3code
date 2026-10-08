@@ -320,6 +320,7 @@ import {
   useClientSettings,
   useClientSettingsHydrated,
   useEnvironmentSettings,
+  useLegacySidebarEnabled,
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
@@ -7426,6 +7427,9 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
 
   const openThreadFind = threadFind.openFind;
+  // The legacy sidebar has no thread search to hand the query to.
+  const legacySidebarEnabled = useLegacySidebarEnabled();
+  const searchAllThreads = useThreadFindStore((state) => state.searchAllThreads);
   const stepThreadFind = threadFind.step;
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -11018,7 +11022,12 @@ export default function ChatView(props: ChatViewProps) {
                   : { historyControls: threadHistoryControls })}
                 find={paintOnlyDisplayedTimeline ? null : threadFind.timeline}
               />
-              {threadFind.isOpen ? <ThreadFindBar find={threadFind} /> : null}
+              {threadFind.isOpen ? (
+                <ThreadFindBar
+                  find={threadFind}
+                  onSearchAllThreads={legacySidebarEnabled ? undefined : searchAllThreads}
+                />
+              ) : null}
               {threadFind.showBack ? (
                 <div
                   className="pointer-events-none absolute inset-x-0 z-30 flex justify-center"

@@ -110,6 +110,7 @@ describe("deriveThreadFindResults", () => {
       "thread:answer:text:0",
     ]);
     expect(local.matches[1]!.excerpt.text).toBe("The probe waits.");
+    expect(local.matches.map((match) => match.messageId)).toEqual([undefined, "answer"]);
 
     const scoped = deriveThreadFindResults({
       items,
