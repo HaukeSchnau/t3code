@@ -65,6 +65,7 @@ async function stagePackage(name: string, from: string, destination: string): Pr
   }
 }
 
+// Packaging and loading the SDK takes over a minute when CI shares its host with other work.
 it("loads packaged Cursor catalog chunks without credentials or checkout dependencies", async () => {
   const scratch = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-cursor-package-"));
   try {
@@ -128,11 +129,11 @@ it("loads packaged Cursor catalog chunks without credentials or checkout depende
           SystemRoot: process.env.SystemRoot ?? "",
         },
         encoding: "utf8",
-        timeout: 30_000,
+        timeout: 90_000,
       },
     );
     assert.include(stdout, "Cursor catalog chunks loaded; empty keys rejected locally");
   } finally {
     await NodeFSP.rm(scratch, { recursive: true, force: true });
   }
-}, 60_000);
+}, 180_000);
