@@ -25,16 +25,23 @@ export type ThreadFindMatcher =
   | { readonly _tag: "Invalid"; readonly message: string };
 
 const WORD_CHAR = String.raw`[\p{L}\p{M}\p{N}_]`;
+const IS_WORD_CHAR = new RegExp(`^${WORD_CHAR}$`, "u");
 
 /**
  * Returns null for an empty query. Literal queries use smart case: they ignore
  * case unless they contain an uppercase letter. Regex queries only match case
- * when asked to.
+ * when asked to. Like VS Code, whole word only adds a boundary on an edge of a
+ * literal query that is a word character.
  */
 export function compileThreadFind(input: ThreadFindQuery): ThreadFindMatcher | null {
   if (input.query.length === 0) return null;
   let source = input.regex ? input.query : input.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (input.wholeWord) source = `(?<!${WORD_CHAR})(?:${source})(?!${WORD_CHAR})`;
+  if (input.wholeWord) {
+    const characters = [...input.query];
+    const before = input.regex || IS_WORD_CHAR.test(characters[0]!) ? `(?<!${WORD_CHAR})` : "";
+    const after = input.regex || IS_WORD_CHAR.test(characters.at(-1)!) ? `(?!${WORD_CHAR})` : "";
+    source = `${before}(?:${source})${after}`;
+  }
   const caseSensitive = input.caseSensitive || (!input.regex && /\p{Lu}/u.test(input.query));
   try {
     return { _tag: "Valid", pattern: new RegExp(source, caseSensitive ? "gmu" : "gimu") };
@@ -43,37 +50,45 @@ export function compileThreadFind(input: ThreadFindQuery): ThreadFindMatcher | n
   }
 }
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE = /^\s*(`{3,}|~{3,})/;
 
 // Code spans and escaped characters hide in private-use placeholders while the
-// emphasis and link rules run, then come back verbatim.
+// emphasis and link rules run, then come back verbatim. Built from char codes
+// so the source never holds invisible characters.
+const SPAN_OPEN = String.fromCharCode(0xe000);
+const SPAN_CLOSE = String.fromCharCode(0xe001);
+const SPAN_PLACEHOLDER = new RegExp(`${SPAN_OPEN}(\\d+)${SPAN_CLOSE}`, "g");
 const ESCAPE_BASE = 0xe100;
+const ESCAPE_PLACEHOLDER = new RegExp("[\\uE100-\\uE17F]", "g");
+const hideEscape = (_: string, char: string) =>
+  String.fromCharCode(ESCAPE_BASE + char.charCodeAt(0));
 
 function stripInlineMarkdown(line: string): string {
   const spans: string[] = [];
   const stripped = line
-    .replace(/^ {0,3}(?:> ?)+/, "")
-    .replace(/^ {0,3}#{1,6}\s+/, "")
+    .replace(/^\s{0,3}(?:> ?)+/, "")
+    .replace(/^\s{0,3}#{1,6}\s+/, "")
     .replace(/^(\s*)(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?/, "$1")
+    // An escaped backtick never opens a code span.
+    .replace(/\\(`)/g, hideEscape)
     .replace(/(`+)(.+?)\1(?!`)/g, (_, _ticks: string, code: string) => {
       spans.push(
         code.length > 1 && code.startsWith(" ") && code.endsWith(" ") ? code.slice(1, -1) : code,
       );
-      return `${spans.length - 1}`;
+      return `${SPAN_OPEN}${spans.length - 1}${SPAN_CLOSE}`;
     })
-    .replace(/\\([\\`*_{}[\]()#+\-.!|>~<])/g, (_, char: string) =>
-      String.fromCharCode(ESCAPE_BASE + char.charCodeAt(0)),
-    )
+    .replace(/\\([!-/:-@[-`{-~])/g, hideEscape)
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
     .replace(/<((?:https?|mailto):[^>\s]+)>/g, "$1")
-    .replace(/(\*\*|__|~~)(?=\S)(.*?\S)\1/g, "$2")
+    .replace(/(\*\*|~~)(?=\S)(.*?\S)\1/g, "$2")
+    .replace(/(^|[^\p{L}\p{N}_])__(?=\S)(.*?\S)__(?![\p{L}\p{N}_])/gu, "$1$2")
     .replace(/(^|[^\p{L}\p{N}*])\*(?=\S)([^*\n]*?\S)\*(?![\p{L}\p{N}*])/gu, "$1$2")
     .replace(/(^|[^\p{L}\p{N}_])_(?=\S)([^_\n]*?\S)_(?![\p{L}\p{N}_])/gu, "$1$2");
   return stripped
-    .replace(/[-]/g, (char) => String.fromCharCode(char.charCodeAt(0) - ESCAPE_BASE))
-    .replace(/(\d+)/g, (_, index: string) => spans[Number(index)] ?? "");
+    .replace(ESCAPE_PLACEHOLDER, (char) => String.fromCharCode(char.charCodeAt(0) - ESCAPE_BASE))
+    .replace(SPAN_PLACEHOLDER, (_, index: string) => spans[Number(index)] ?? "");
 }
 
 /**
@@ -147,8 +162,10 @@ export function threadFindItemText(item: OrchestrationV2TurnItem): ThreadFindIte
       return { text: threadFindMessageText(item.text) };
     case "proposed_plan":
       return { text: threadFindMessageText(item.markdown) };
+    // Task lists and checkpoints show in the composer, not the timeline.
     case "todo_list":
-      return { text: lines(item.explanation, ...item.steps.map((step) => step.text)) };
+    case "checkpoint":
+      return { text: "" };
     case "command_execution":
       return withDetail(lines(item.title, item.input), item.output);
     case "file_change":
@@ -163,8 +180,6 @@ export function threadFindItemText(item: OrchestrationV2TurnItem): ThreadFindIte
       return { text: lines(item.title, item.pattern) };
     case "web_search":
       return { text: lines(item.title, ...(item.patterns ?? [])) };
-    case "checkpoint":
-      return { text: lines(item.title, ...item.files.map((file) => file.path)) };
     case "dynamic_tool":
       return withDetail(
         lines(item.title, item.toolName),
@@ -233,42 +248,65 @@ export function findThreadMatches(
   return ranges;
 }
 
-const EXCERPT_CHARS = 600;
+export interface ThreadFindExcerptOptions {
+  /** Lines of context kept on each side of the matching lines. */
+  readonly contextLines: 0 | 1;
+  readonly maxChars: number;
+  /** Length of the whole field when the searched text is only its prefix. */
+  readonly totalLength?: number | undefined;
+}
+
+/** A one-line snippet for lists, where only the matching line matters. */
+export const THREAD_FIND_TEXT_EXCERPT = { contextLines: 0, maxChars: 160 } as const;
+/** Lines shown in place of output the client never received. */
+export const THREAD_FIND_DETAIL_EXCERPT = { contextLines: 1, maxChars: 400 } as const;
 
 /**
- * The lines around each match: the line before, the matching lines and the
- * line after, trimmed around the match when they run long. Ranges must be in
- * order, so line numbers are counted once per text.
+ * The lines around each match, trimmed around the match when they run long.
+ * Ranges must be in order: lines are counted in one pass, so long single-line
+ * output costs no rescans.
  */
 export function threadFindExcerpts(
   text: string,
   ranges: ReadonlyArray<ThreadFindRange>,
-  totalLength?: number,
+  options: ThreadFindExcerptOptions,
 ): OrchestrationThreadFindExcerpt[] {
   let line = 1;
-  let counted = 0;
+  let lineStart = 0;
+  let previousLineStart = 0;
+  let nextBreak = text.indexOf("\n");
+  let followingBreakFor = -1;
+  let followingBreak = -1;
   return ranges.map(({ start, end }) => {
-    for (let index = text.indexOf("\n", counted); index !== -1 && index < start;) {
+    while (nextBreak !== -1 && nextBreak < start) {
       line += 1;
-      counted = index + 1;
-      index = text.indexOf("\n", counted);
+      previousLineStart = lineStart;
+      lineStart = nextBreak + 1;
+      nextBreak = text.indexOf("\n", lineStart);
     }
-    const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-    let from = lineStart > 0 ? text.lastIndexOf("\n", lineStart - 2) + 1 : 0;
-    const lineEnd = text.indexOf("\n", end);
-    const nextEnd = lineEnd === -1 ? -1 : text.indexOf("\n", lineEnd + 1);
-    let to = lineEnd === -1 || nextEnd === -1 ? text.length : nextEnd;
-    if (to - from > EXCERPT_CHARS) {
-      const room = Math.max(0, EXCERPT_CHARS - (end - start));
+    // A match can span lines; the excerpt runs to the end of its last line.
+    const lastBreak = nextBreak !== -1 && nextBreak < end ? text.indexOf("\n", end) : nextBreak;
+    let from = options.contextLines > 0 ? previousLineStart : lineStart;
+    let to = text.length;
+    if (lastBreak !== -1 && options.contextLines === 0) to = lastBreak;
+    if (lastBreak !== -1 && options.contextLines > 0) {
+      if (followingBreakFor !== lastBreak) {
+        followingBreakFor = lastBreak;
+        followingBreak = text.indexOf("\n", lastBreak + 1);
+      }
+      to = followingBreak === -1 ? text.length : followingBreak;
+    }
+    if (to - from > options.maxChars) {
+      const room = Math.max(0, options.maxChars - (end - start));
       from = Math.max(from, start - Math.floor(room / 2));
-      to = Math.min(to, from + EXCERPT_CHARS);
+      to = Math.min(to, from + options.maxChars);
     }
     return {
       text: text.slice(from, to),
       start: start - from,
       end: Math.min(end, to) - from,
       line,
-      ...(totalLength === undefined ? {} : { totalLength }),
+      ...(options.totalLength === undefined ? {} : { totalLength: options.totalLength }),
     };
   });
 }

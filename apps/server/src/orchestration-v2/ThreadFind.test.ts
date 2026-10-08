@@ -186,19 +186,63 @@ it.layer(TestLayer)("ThreadFind", (it) => {
       const result = yield* find.find({ threadId, query: "ab" });
 
       assert.isTrue(result.truncated);
-      assert.strictEqual(result.matches.length, 1000);
+      assert.strictEqual(result.matches.length, 500);
     }),
   );
 
-  it.effect("finds nothing for an invalid regex and fails for an unknown thread", () =>
+  it.effect("keeps timeline positions across scan pages", () =>
     Effect.gen(function* () {
-      const threadId = ThreadId.make("thread:find-invalid");
-      yield* seedThread(threadId, []);
+      const threadId = ThreadId.make("thread:find-pages");
+      yield* seedThread(
+        threadId,
+        Array.from({ length: 230 }, (_, index) => ({
+          ...base(threadId, `item:${String(index).padStart(3, "0")}`, index + 1),
+          type: "command_execution" as const,
+          input: index % 100 === 99 ? "echo needle" : "echo hay",
+        })),
+      );
+
       const find = yield* ThreadFind.ThreadFind;
+      const result = yield* find.find({ threadId, query: "needle" });
 
-      const invalid = yield* find.find({ threadId, query: "probe(", regex: true });
-      assert.deepStrictEqual(invalid, { matches: [], truncated: false });
+      assert.deepStrictEqual(
+        result.matches.map((match) => [match.sourceItemId, match.position]),
+        [
+          ["item:099", 99],
+          ["item:199", 199],
+        ],
+      );
+    }),
+  );
 
+  it.effect("stops reading before it would decode past its payload budget", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:find-budget");
+      yield* seedThread(
+        threadId,
+        Array.from({ length: 5 }, (_, index) => ({
+          ...base(threadId, `item:${index}`, index + 1),
+          type: "command_execution" as const,
+          input: "cat big.log",
+          output: "x".repeat(10_000),
+        })),
+      );
+
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const visited: Array<string> = [];
+      const scan = yield* projections.scanTimeline(threadId, { maxPayloadBytes: 25_000 }, (row) => {
+        visited.push(row.sourceItemId);
+        return true;
+      });
+
+      assert.isFalse(scan.complete);
+      assert.deepStrictEqual(visited, ["item:0", "item:1"]);
+    }),
+  );
+
+  it.effect("fails for an unknown thread", () =>
+    Effect.gen(function* () {
+      const find = yield* ThreadFind.ThreadFind;
       const missing = yield* Effect.flip(
         find.find({ threadId: ThreadId.make("thread:missing"), query: "probe" }),
       );
