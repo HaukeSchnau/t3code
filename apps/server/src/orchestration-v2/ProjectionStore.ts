@@ -310,6 +310,18 @@ export interface ProjectionStoreV2Shape {
     threadId: ThreadId,
     options: ProjectionTimelinePageOptions,
   ) => Effect.Effect<ProjectionTimelinePage, ProjectionStoreV2Error>;
+  /**
+   * Visits the thread's visible timeline oldest first, yielding between pages
+   * so a long scan never holds the single SQLite connection or the event loop.
+   * Payload sizes are read before decoding, so the scan stops before it would
+   * decode more than `maxPayloadBytes` and reports `complete: false`. Stops
+   * early when `visit` returns false.
+   */
+  readonly scanTimeline: (
+    threadId: ThreadId,
+    options: { readonly maxPayloadBytes: number },
+    visit: (row: OrchestrationV2ProjectedTurnItem) => boolean,
+  ) => Effect.Effect<{ readonly complete: boolean }, ProjectionStoreV2Error>;
   readonly getMessageCount: (threadId: ThreadId) => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
@@ -886,6 +898,9 @@ function applyToProjectionReplayState(
 type PayloadRow = {
   readonly payload_json: string;
 };
+
+const TIMELINE_SCAN_PAGE_SIZE = 100;
+const TIMELINE_SCAN_BATCH_BYTES = 4 * 1024 * 1024;
 
 type ShellThreadRow = {
   readonly thread_id: string;
@@ -4700,6 +4715,104 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ),
         );
 
+    const scanTimeline: ProjectionStoreV2Shape["scanTimeline"] = (threadId, options, visit) =>
+      Effect.gen(function* () {
+        const index = yield* sql.withTransaction(readTimelineIndex(threadId, new Set()));
+        let payloadBytes = 0;
+        for (let start = 0; start < index.visible.length; start += TIMELINE_SCAN_PAGE_SIZE) {
+          const page = index.visible.slice(start, start + TIMELINE_SCAN_PAGE_SIZE);
+          const sizes = new Map<string, number>();
+          const idsBySource = new Map<ThreadId, Array<TurnItemId>>();
+          for (const row of page) {
+            if (row.synthetic !== undefined) continue;
+            const ids = idsBySource.get(row.sourceThreadId) ?? [];
+            ids.push(row.sourceItemId);
+            idsBySource.set(row.sourceThreadId, ids);
+          }
+          for (const [sourceThreadId, ids] of idsBySource) {
+            // octet_length reads the stored size without loading the payload.
+            const rows = yield* sql<{
+              readonly turn_item_id: string;
+              readonly bytes: number;
+            }>`SELECT turn_item_id, octet_length(payload_json) AS bytes
+              FROM orchestration_v2_projection_turn_items
+              WHERE thread_id = ${sourceThreadId} AND turn_item_id IN ${sql.in(ids)}`;
+            for (const row of rows) sizes.set(`${sourceThreadId}:${row.turn_item_id}`, row.bytes);
+          }
+          // Decode in batches of a few megabytes so one page of large tool
+          // output never parses all at once.
+          const batches: Array<Array<{ readonly offset: number; readonly bytes: number }>> = [];
+          let batch: Array<{ readonly offset: number; readonly bytes: number }> = [];
+          let batchBytes = 0;
+          let complete = true;
+          for (const [offset, row] of page.entries()) {
+            const bytes =
+              row.synthetic === undefined
+                ? sizes.get(`${row.sourceThreadId}:${row.sourceItemId}`)
+                : 0;
+            // Rows deleted after the index was read are skipped, not reported.
+            if (bytes === undefined) continue;
+            if (payloadBytes + bytes > options.maxPayloadBytes) {
+              complete = false;
+              break;
+            }
+            payloadBytes += bytes;
+            if (batch.length > 0 && batchBytes + bytes > TIMELINE_SCAN_BATCH_BYTES) {
+              batches.push(batch);
+              batch = [];
+              batchBytes = 0;
+            }
+            batch.push({ offset, bytes });
+            batchBytes += bytes;
+          }
+          if (batch.length > 0) batches.push(batch);
+          for (const entries of batches) {
+            const items = new Map<string, OrchestrationV2TurnItem>();
+            const idsBySourceInBatch = new Map<ThreadId, Array<TurnItemId>>();
+            for (const { offset } of entries) {
+              const row = page[offset]!;
+              if (row.synthetic !== undefined) continue;
+              const ids = idsBySourceInBatch.get(row.sourceThreadId) ?? [];
+              ids.push(row.sourceItemId);
+              idsBySourceInBatch.set(row.sourceThreadId, ids);
+            }
+            for (const [sourceThreadId, ids] of idsBySourceInBatch) {
+              const rows = yield* sql<{
+                readonly turn_item_id: string;
+                readonly payload_json: string;
+              }>`SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
+                WHERE thread_id = ${sourceThreadId} AND turn_item_id IN ${sql.in(ids)}`;
+              const decoded = yield* decodeRows(decodeTurnItemPayload, sourceThreadId)(rows);
+              rows.forEach((row, index) =>
+                items.set(`${sourceThreadId}:${row.turn_item_id}`, decoded[index]!),
+              );
+            }
+            for (const { offset } of entries) {
+              const row = page[offset]!;
+              const item = row.synthetic ?? items.get(`${row.sourceThreadId}:${row.sourceItemId}`);
+              if (item === undefined) continue;
+              const keepGoing = visit({
+                position: start + offset,
+                visibility: row.visibility,
+                sourceThreadId: row.sourceThreadId,
+                sourceItemId: row.sourceItemId,
+                item,
+              });
+              if (!keepGoing) return { complete: true };
+            }
+          }
+          if (!complete) return { complete: false };
+          yield* Effect.yieldNow;
+        }
+        return { complete: true };
+      }).pipe(
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
+
     const getThreadSnapshotWindow: ProjectionStoreV2Shape["getThreadSnapshotWindow"] = (
       threadId,
       options,
@@ -5478,6 +5591,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadSnapshot,
       getThreadSnapshotWindow,
       getTimelinePage,
+      scanTimeline,
       getThreadAttachmentIds,
     } satisfies ProjectionStoreV2Shape;
   }),
@@ -6035,6 +6149,15 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               totalItems: projection.visibleTurnItems.length,
               hasMore: matching.length > options.limit,
             };
+          }),
+        ),
+      scanTimeline: (threadId, _options, visit) =>
+        service.getThreadProjection(threadId).pipe(
+          Effect.map((projection) => {
+            for (const row of projection.visibleTurnItems) {
+              if (!visit(row)) break;
+            }
+            return { complete: true };
           }),
         ),
       getThreadSnapshotWindow: (threadId, options) =>
