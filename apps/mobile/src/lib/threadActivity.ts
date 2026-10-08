@@ -168,6 +168,7 @@ type ThreadFeedEntryContent =
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly groupId: string;
+      readonly activities: ReadonlyArray<ThreadFeedActivity>;
       readonly hiddenCount: number;
       readonly expanded: boolean;
       readonly summary: string;
@@ -1141,6 +1142,38 @@ function settleSupersededReasoning(
   return settled;
 }
 
+function retainedFeedEntries(feed: ReadonlyArray<ThreadFeedEntry>) {
+  return feed.filter(
+    (entry): entry is Extract<ThreadFeedEntry, { readonly type: "message" | "activity-group" }> =>
+      entry.type !== "run-fold" && entry.type !== "work-toggle" && entry.type !== "thinking",
+  );
+}
+
+function feedIsWorking(
+  latestRun: ThreadFeedLatestRun | null,
+  activeWorkStartedAt: string | null,
+): boolean {
+  return activeWorkStartedAt !== null && latestRun?.status !== "preparing";
+}
+
+/** The run whose fold hides each entry while that fold is collapsed, by entry id. */
+export function threadFeedFoldedEntryRuns(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  latestRun: ThreadFeedLatestRun | null,
+  activeWorkStartedAt: string | null = null,
+): ReadonlyMap<string, RunId> {
+  const folds = deriveThreadFeedRunFolds(
+    retainedFeedEntries(feed),
+    latestRun,
+    feedIsWorking(latestRun, activeWorkStartedAt),
+  );
+  const runByEntryId = new Map<string, RunId>();
+  for (const fold of folds.values()) {
+    for (const entryId of fold.hiddenEntryIds) runByEntryId.set(entryId, fold.runId);
+  }
+  return runByEntryId;
+}
+
 export function deriveThreadFeedPresentation(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
@@ -1150,17 +1183,14 @@ export function deriveThreadFeedPresentation(
   /** The live work is a provider-native subagent's runless root turn. */
   runlessWorkActive = false,
 ): ThreadFeedEntry[] {
-  const retainedFeed = feed.filter(
-    (entry) =>
-      entry.type !== "run-fold" && entry.type !== "work-toggle" && entry.type !== "thinking",
-  );
+  const retainedFeed = retainedFeedEntries(feed);
   const sourceFeed = retainedFeed.map((entry, index) =>
     settleSupersededReasoning(entry, index === retainedFeed.length - 1),
   );
   const failedRunIds = failedFeedRunIds(sourceFeed, latestRun);
   const activeTailGroup = sourceFeed.at(-1);
   const activeRunId = unsettledRunId(latestRun);
-  const isWorking = activeWorkStartedAt !== null && latestRun?.status !== "preparing";
+  const isWorking = feedIsWorking(latestRun, activeWorkStartedAt);
   const foldsByAnchorId = deriveThreadFeedRunFolds(sourceFeed, latestRun, isWorking);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
@@ -1465,6 +1495,7 @@ function appendToolGroupRows(
     createdAt: sourceGroup.createdAt,
     runId: sourceGroup.runId,
     groupId,
+    activities,
     hiddenCount: activities.length,
     expanded,
     summary,
