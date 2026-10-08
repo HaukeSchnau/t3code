@@ -30,6 +30,7 @@ import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { openThreadFindAtHit } from "../threads/thread-find-store";
 import { ThreadSearchMatchExcerpt } from "../threads/thread-search-match";
 import {
   filterCommandPaletteItems,
@@ -395,6 +396,15 @@ export function CommandPalette(props: {
     setVisible(false);
   }
 
+  // A thread found by its messages opens with find on the matched message.
+  function runItem(item: CommandPaletteItem) {
+    const match = item.kind === "thread" ? contentMatchByKey.get(item.key) : undefined;
+    close(() => {
+      if (match) openThreadFindAtHit(match, query);
+      item.run();
+    });
+  }
+
   function onCommand(command: HardwareKeyboardCommand) {
     if (command === "commandPalette" || command === "paletteDismiss") {
       close();
@@ -405,7 +415,7 @@ export function CommandPalette(props: {
       );
     } else {
       const item = results[threadJumpIndex(command)];
-      if (item) close(item.run);
+      if (item) runItem(item);
     }
   }
 
@@ -467,7 +477,7 @@ export function CommandPalette(props: {
                     submitBehavior="submit"
                     onSubmitEditing={() => {
                       const item = results[selectedIndex];
-                      if (item) close(item.run);
+                      if (item) runItem(item);
                     }}
                   />
                 </View>
@@ -498,7 +508,7 @@ export function CommandPalette(props: {
                       item.kind === "thread" ? contentMatchByKey.get(item.key) : undefined
                     }
                     searchQuery={query}
-                    onSelect={() => close(item.run)}
+                    onSelect={() => runItem(item)}
                   />
                 )}
               />

@@ -203,6 +203,9 @@ reasoning. Find searches the first 256 KB of each tool's output. Regular
 expressions only search the part of the thread already loaded. The match list
 can hand your query to the sidebar search to look through every thread.
 
+In the mobile app, tap the search button in the thread header. With a hardware
+keyboard, `Cmd+F` opens find.
+
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
 link when available, otherwise its thread ID. See [keybindings](./keybindings.md)

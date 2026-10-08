@@ -9,10 +9,12 @@ import { useThreadHeaderOptions } from "./useThreadHeaderOptions";
 import {
   StackActions,
   useFocusEffect,
+  useIsFocused,
   useNavigation,
   type StaticScreenProps,
 } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -84,6 +86,8 @@ import {
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
 import { threadRouteIsHydrating } from "./thread-route-hydration";
+import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+import { clearThreadFindHit, clearThreadFindHitFor, threadFindHitAtom } from "./thread-find-store";
 
 function ThreadHeader(
   props: Parameters<typeof useThreadHeaderOptions>[0] & {
@@ -94,6 +98,7 @@ function ThreadHeader(
     readonly onToggleInspector: () => void;
     readonly onOpenGitInspector: () => void;
     readonly onOpenFilesInspector: () => void;
+    readonly onOpenFind: () => void;
   },
 ) {
   const navigation = useNavigation();
@@ -101,7 +106,9 @@ function ThreadHeader(
   const { onOpenTerminal, onMergeBack } = props.gitControls;
   const native = useThreadHeaderOptions(props);
   const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
-    const actions: ScreenHeaderAction[] = [];
+    const actions: ScreenHeaderAction[] = [
+      { accessibilityLabel: "Find in thread", icon: "magnifyingglass", onPress: props.onOpenFind },
+    ];
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -139,6 +146,7 @@ function ThreadHeader(
     }
     return actions;
   }, [
+    props.onOpenFind,
     props.inspectorMode,
     panes.auxiliaryPaneVisible,
     props.onOpenFilesInspector,
@@ -369,6 +377,44 @@ function ThreadRouteContent(
     };
   }, [loadEarlierHistory, selectedThread, selectedThreadDetailState.history]);
   const navigation = useNavigation();
+  // Each explicit request bumps the counter, so asking again refocuses an open
+  // find. A thread search hit opens find with no request, which keeps the
+  // keyboard from covering the match.
+  const [find, setFind] = useState<{
+    readonly open: boolean;
+    readonly focusRequest: number | null;
+  }>({ open: false, focusRequest: null });
+  const openFind = useCallback(() => {
+    setFind((current) => ({ open: true, focusRequest: (current.focusRequest ?? 0) + 1 }));
+    return true;
+  }, []);
+  const closeFind = useCallback(() => {
+    setFind((current) => (current.open ? { ...current, open: false } : current));
+    clearThreadFindHit();
+  }, []);
+  const findHit = useAtomValue(threadFindHitAtom);
+  const hitHere =
+    findHit !== null &&
+    selectedThread !== null &&
+    findHit.environmentId === selectedThread.environmentId &&
+    findHit.threadId === selectedThread.id;
+  useEffect(() => {
+    if (hitHere) {
+      setFind((current) => (current.open ? current : { open: true, focusRequest: null }));
+    }
+  }, [hitHere]);
+  // Leaving the thread closes find too, so a hit still waiting here must not
+  // reopen it on return.
+  const selectedEnvironmentId = selectedThread?.environmentId ?? null;
+  const selectedThreadId = selectedThread?.id ?? null;
+  useEffect(() => {
+    if (selectedEnvironmentId === null || selectedThreadId === null) return;
+    return () => clearThreadFindHitFor(selectedEnvironmentId, selectedThreadId);
+  }, [selectedEnvironmentId, selectedThreadId]);
+  // A screen pushed over the thread keeps it mounted; Cmd+F belongs to whatever is in front.
+  const focused = useIsFocused();
+  const findCommands = useMemo(() => (focused ? (["focusSearch"] as const) : []), [focused]);
+  useHardwareKeyboardCommand(findCommands, openFind);
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack, "merge thread back");
   const mergeBackTargetThreadId = resolveMergeBackTargetThreadId(selectedThreadDetail);
   const mergeBackRun =
@@ -829,6 +875,7 @@ function ThreadRouteContent(
       : [],
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,
+    onOpenFind: openFind,
     onOpenTerminal: handleOpenTerminal,
     onOpenNewTerminal: handleOpenNewTerminal,
     onRunProjectScript: handleRunProjectScript,
@@ -1081,6 +1128,9 @@ function ThreadRouteContent(
           onSubmitUserInput={requests.onSubmitUserInput}
           onSkipUserInput={requests.onSkipUserInput}
           onDismissUserInput={requests.onDismissUserInput}
+          findOpen={find.open}
+          findFocusRequest={find.focusRequest}
+          onCloseFind={closeFind}
         />
       </View>
     </>
@@ -1103,6 +1153,7 @@ function ThreadRouteContent(
         onOpenGitInspector={handleOpenGitInspector}
         onOpenFilesInspector={handleOpenFilesInspector}
         onReturnToThread={props.onReturnToThread}
+        onOpenFind={openFind}
       />
 
       {renderThreadRouteBody()}

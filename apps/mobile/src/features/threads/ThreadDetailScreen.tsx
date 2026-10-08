@@ -1,6 +1,6 @@
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { CodexOverloadRetryCard } from "./CodexOverloadRetryCard";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
@@ -55,6 +55,7 @@ import {
 import {
   Alert,
   AppState,
+  BackHandler,
   Keyboard,
   Platform,
   useWindowDimensions,
@@ -132,6 +133,12 @@ import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
+import { threadFindAnchorItemKey } from "./thread-find-feed";
+import { handOffThreadSearch } from "./thread-find-store";
+import { ThreadFindBar } from "./ThreadFindBar";
+import { useThreadFindSession } from "./use-thread-find";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED } from "../layout/native-mail-search-toolbar";
 
 export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
@@ -232,6 +239,15 @@ export interface ThreadDetailScreenProps {
   readonly onSkipUserInput: () => Promise<unknown>;
   readonly onDismissUserInput: () => Promise<unknown>;
   readonly showContent?: boolean;
+  /** Find in thread replaces the composer while open. */
+  readonly findOpen: boolean;
+  /**
+   * Changes on every explicit request to open find, including while it is
+   * open. Null when find opened on a thread search hit, which keeps the
+   * keyboard down.
+   */
+  readonly findFocusRequest: number | null;
+  readonly onCloseFind: () => void;
 }
 
 function latestStreamingAssistantMessage(
@@ -375,14 +391,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   // A provider-native subagent shows status instead of a composer.
   const isProviderSubagent = isProviderNativeSubagentThread(props.selectedThread.source);
+  // Find hides the composer, so every path that focuses the composer closes
+  // find first and waits a frame for the composer to show.
+  const { onCloseFind } = props;
   // Entering edit mode from the queue sheet should land in a ready composer,
   // not require a second tap on a composer already holding the message.
   const editingRunId = props.queuedRunEdit?.runId ?? null;
   useEffect(() => {
     if (editingRunId === null) return;
+    onCloseFind();
     const frame = requestAnimationFrame(() => composerEditorRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [editingRunId]);
+  }, [editingRunId, onCloseFind]);
   const draftMessageRef = useRef(props.draftMessage);
   draftMessageRef.current = props.draftMessage;
   const composerOverlayRef = useRef<ViewInstance>(null);
@@ -954,25 +974,31 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     ],
   );
 
-  const handleEditPendingMessage = useCallback(async (message: QueuedThreadMessage) => {
-    try {
-      if (
-        (await editPendingThreadMessage(message)) &&
-        selectedThreadKeyRef.current === scopedThreadKey(message.environmentId, message.threadId)
-      ) {
-        composerEditorRef.current?.focus();
+  const handleEditPendingMessage = useCallback(
+    async (message: QueuedThreadMessage) => {
+      try {
+        if (
+          (await editPendingThreadMessage(message)) &&
+          selectedThreadKeyRef.current === scopedThreadKey(message.environmentId, message.threadId)
+        ) {
+          onCloseFind();
+          requestAnimationFrame(() => composerEditorRef.current?.focus());
+        }
+      } catch (error) {
+        Alert.alert(
+          "Could not edit message",
+          error instanceof Error ? error.message : "Please try again.",
+        );
       }
-    } catch (error) {
-      Alert.alert(
-        "Could not edit message",
-        error instanceof Error ? error.message : "Please try again.",
-      );
-    }
-  }, []);
+    },
+    [onCloseFind],
+  );
 
+  const findOpen = props.findOpen;
   const collapseComposer = useCallback(() => {
-    composerEditorRef.current?.blur();
-  }, []);
+    if (findOpen) Keyboard.dismiss();
+    else composerEditorRef.current?.blur();
+  }, [findOpen]);
 
   const handleUseArtifactTemplate = useCallback(
     (template: CodexArtifactTemplate) => {
@@ -982,12 +1008,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         draftMessageRef.current = nextDraft;
         props.onChangeDraftMessage(nextDraft);
       }
+      onCloseFind();
       requestAnimationFrame(() => {
         composerEditorRef.current?.focus();
         composerEditorRef.current?.setSelection({ start: nextDraft.length, end: nextDraft.length });
       });
     },
-    [props.onChangeDraftMessage],
+    [onCloseFind, props.onChangeDraftMessage],
   );
 
   const handleScrollToEnd = useCallback(() => {
@@ -1000,6 +1027,78 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
   const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
+
+  // Find searches from what the reader is looking at.
+  const readFindAnchor = useCallback(() => {
+    const state = listRef.current?.getState();
+    return state ? threadFindAnchorItemKey(state.data, state.end) : null;
+  }, []);
+  const findReaderScrolledRef = useRef(false);
+  const markFindReaderScrolled = useCallback(() => {
+    findReaderScrolledRef.current = true;
+  }, []);
+  const findSession = useThreadFindSession({
+    active: findOpen,
+    environmentId: props.environmentId,
+    threadId: props.selectedThread.id,
+    feed: props.selectedThreadFeed,
+    history: props.historyControls,
+    readAnchor: readFindAnchor,
+    readerScrolledRef: findReaderScrolledRef,
+    appearance: themeAppearance,
+  });
+  const [findFocused, setFindFocused] = useState(false);
+  const handleFindFocusChange = useCallback(
+    (focused: boolean) => {
+      setFindFocused(focused);
+      handleOwnedInputFocusChange(focused);
+    },
+    [handleOwnedInputFocusChange],
+  );
+  const findBottomInset = (Platform.OS === "android" ? isKeyboardVisible : findFocused)
+    ? 0
+    : Math.max(insets.bottom, 12);
+  const closeFind = useCallback(() => {
+    Keyboard.dismiss();
+    onCloseFind();
+  }, [onCloseFind]);
+  // Only while the thread is in front: a screen pushed over it owns back.
+  useFocusEffect(
+    useCallback(() => {
+      if (!findOpen) return;
+      const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+        closeFind();
+        return true;
+      });
+      return () => subscription.remove();
+    }, [closeFind, findOpen]),
+  );
+  const { layout, panes, setPrimarySidebarSearchQuery, togglePrimarySidebar } =
+    useAdaptiveWorkspaceLayout();
+  // The iOS 26 Home search field cannot be filled from JS, so a query handed
+  // to Home would filter it invisibly. A native setText on the mail search
+  // toolbar would let iPhone offer this too.
+  const canSearchAllThreads = layout.usesSplitView || !NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED;
+  const searchAllThreads = useCallback(
+    (query: string) => {
+      closeFind();
+      if (layout.usesSplitView) {
+        setPrimarySidebarSearchQuery(query);
+        if (!panes.primarySidebarVisible) togglePrimarySidebar();
+        return;
+      }
+      handOffThreadSearch(query);
+      navigation.navigate("Home");
+    },
+    [
+      closeFind,
+      layout.usesSplitView,
+      navigation,
+      panes.primarySidebarVisible,
+      setPrimarySidebarSearchQuery,
+      togglePrimarySidebar,
+    ],
+  );
 
   const handleFeedTouchStart = useCallback((event: GestureResponderEvent) => {
     feedTouchStartRef.current = {
@@ -1096,6 +1195,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               onEndFollowEnabledChange={setEndFollowEnabled}
               skills={selectedProviderSkills}
               onUseArtifactTemplate={handleUseArtifactTemplate}
+              find={findSession.feedFind}
+              findActive={findOpen}
+              onUserScrollBegin={markFindReaderScrolled}
             />
           </RenderErrorBoundary>
         </View>
@@ -1250,13 +1352,27 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 ) : null}
               </View>
 
-              {/* Hidden (not unmounted) while a user-input request owns the
-                composer slot, so composer drafts and editor state survive.
+              {findOpen ? (
+                <ThreadFindBar
+                  session={findSession}
+                  focusRequest={props.findFocusRequest}
+                  bottomInset={findBottomInset}
+                  contentMaxWidth={contentMaxWidth}
+                  onFocusChange={handleFindFocusChange}
+                  onDone={closeFind}
+                  onSearchAllThreads={canSearchAllThreads ? searchAllThreads : undefined}
+                />
+              ) : null}
+
+              {/* Hidden (not unmounted) while a user-input request or find owns
+                the composer slot, so composer drafts and editor state survive.
                 A rejected creation has no thread to send to; the failure card
                 owns the slot instead. */}
               <View
                 style={
-                  activeUserInputRequestId !== null || props.creationState?.kind === "failed"
+                  activeUserInputRequestId !== null ||
+                  props.creationState?.kind === "failed" ||
+                  findOpen
                     ? { display: "none" }
                     : undefined
                 }

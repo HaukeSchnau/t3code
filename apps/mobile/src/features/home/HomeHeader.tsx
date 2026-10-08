@@ -1,5 +1,5 @@
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { SearchBarCommands } from "react-native-screens";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
@@ -25,6 +25,22 @@ export function HomeHeader(props: HomeHeaderProps) {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
   }, []);
+  // The native field owns its text. A query set from outside, such as find's
+  // "Search all threads", has to be written into it.
+  const nativeSearchText = useRef(props.searchQuery);
+  const onSearchQueryChange = props.onSearchQueryChange;
+  const handleNativeSearchText = useCallback(
+    (text: string) => {
+      nativeSearchText.current = text;
+      onSearchQueryChange(text);
+    },
+    [onSearchQueryChange],
+  );
+  useEffect(() => {
+    if (props.searchQuery === nativeSearchText.current) return;
+    nativeSearchText.current = props.searchQuery;
+    searchBarRef.current?.setText(props.searchQuery);
+  }, [props.searchQuery]);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const filterMenu = buildHomeListFilterMenu(props);
 
@@ -60,7 +76,7 @@ export function HomeHeader(props: HomeHeaderProps) {
                       ? "line.3.horizontal.decrease.circle.fill"
                       : "line.3.horizontal.decrease",
                     onComposePress: props.onStartNewTask,
-                    onSearchTextChange: props.onSearchQueryChange,
+                    onSearchTextChange: handleNativeSearchText,
                     placeholder: "Search",
                     searchTextChangeId: "home-search-text",
                     showsSearchDismissButton: true,
@@ -76,10 +92,10 @@ export function HomeHeader(props: HomeHeaderProps) {
                   hideNavigationBar: false,
                   placeholder: "Search",
                   onCancelButtonPress: () => {
-                    props.onSearchQueryChange("");
+                    handleNativeSearchText("");
                   },
                   onChangeText: (event) => {
-                    props.onSearchQueryChange(event.nativeEvent.text);
+                    handleNativeSearchText(event.nativeEvent.text);
                   },
                 },
               }),

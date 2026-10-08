@@ -23,6 +23,22 @@ export function useThreadHeaderOptions(props: {
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(props.gitControls);
   const compactRightHeaderItems = useThreadGitRightHeaderItems(props.gitControls);
+  const onOpenFind = props.gitControls.onOpenFind;
+  const findHeaderItems = useMemo<NativeHeaderItems>(
+    () =>
+      onOpenFind
+        ? [
+            withNativeGlassHeaderItem({
+              accessibilityLabel: "Find in thread",
+              icon: { name: "magnifyingglass", type: "sfSymbol" as const },
+              identifier: "thread-right-find",
+              onPress: onOpenFind,
+              type: "button" as const,
+            }),
+          ]
+        : [],
+    [onOpenFind],
+  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -103,8 +119,10 @@ export function useThreadHeaderOptions(props: {
     // Search lives in the persistent sidebar, so the split header keeps
     // the git controls on the RIGHT (no center items — center space is
     // reserved for future breadcrumbs/status).
-    unstable_headerRightItems: () =>
-      layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems,
+    unstable_headerRightItems: () => [
+      ...(layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems),
+      ...findHeaderItems,
+    ],
     unstable_headerSubtitle: props.usesNativeHeaderGlass ? props.subtitle : undefined,
     contentStyle: undefined,
   };

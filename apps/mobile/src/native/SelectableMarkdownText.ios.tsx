@@ -16,6 +16,8 @@ export type {
   SelectableMarkdownSkill,
 } from "@t3tools/mobile-markdown-text/types";
 
+export { countMarkdownHighlights } from "@t3tools/mobile-markdown-text/renderer";
+
 export function hasNativeSelectableMarkdownText(): boolean {
   return true;
 }

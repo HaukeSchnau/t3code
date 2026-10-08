@@ -140,6 +140,14 @@ function ThreadNavigationSidebarPane(
   const { savedConnectionsById } = useSavedRemoteConnections();
   const searchInputRef = useRef<TextInputInstance>(null);
   const searchBarRef = useRef<SearchBarCommands>(null);
+  // The native search bar owns its text, so a query set from outside, such as
+  // find's "Search all threads", has to be written into it.
+  const nativeSearchText = useRef(props.searchQuery);
+  useEffect(() => {
+    if (props.searchQuery === nativeSearchText.current) return;
+    nativeSearchText.current = props.searchQuery;
+    searchBarRef.current?.setText(props.searchQuery);
+  }, [props.searchQuery]);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const sidebarScrollGesture = useNativeGesture();
   const {
@@ -610,23 +618,28 @@ function ThreadNavigationSidebarPane(
     },
     [],
   );
+  // Registered once: the newest handler takes Cmd+F first, and re-registering on
+  // every sidebar toggle would take it from an open thread's find.
+  const latestProps = useRef(props);
+  latestProps.current = props;
   const focusSearch = useCallback(() => {
     if (Platform.OS === "android") return false;
+    const { nativeChrome, onRequestVisibility, visible } = latestProps.current;
     const focus = () => {
-      if (props.nativeChrome) {
+      if (nativeChrome) {
         searchBarRef.current?.focus();
         return;
       }
       searchInputRef.current?.focus();
     };
-    if (!props.visible) {
-      props.onRequestVisibility();
+    if (!visible) {
+      onRequestVisibility();
       setTimeout(focus, 240);
     } else {
       focus();
     }
     return true;
-  }, [props.nativeChrome, props.onRequestVisibility, props.visible]);
+  }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const renderListItem = useCallback(
     ({ item }: { readonly item: SidebarListItem }) => {
@@ -879,9 +892,11 @@ function ThreadNavigationSidebarPane(
               placeholder: "Search",
               placement: "stacked",
               onCancelButtonPress: () => {
+                nativeSearchText.current = "";
                 props.onSearchQueryChange("");
               },
               onChangeText: (event) => {
+                nativeSearchText.current = event.nativeEvent.text;
                 props.onSearchQueryChange(event.nativeEvent.text);
               },
             },

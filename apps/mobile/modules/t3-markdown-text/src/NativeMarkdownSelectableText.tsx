@@ -16,6 +16,11 @@ import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
 import { markdownFileIconSource, markdownIconAssetUri } from "./markdownFileIcons";
 import { markdownLinkIconSource } from "./markdownLinkIcons";
 import { resolveMarkdownFileIcon, resolveMarkdownLinkIcon } from "./markdownLinks";
+import {
+  highlightMarkdownRuns,
+  markdownRunsSearchText,
+  type MarkdownTextHighlight,
+} from "./markdownHighlight";
 import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
 import { nativeMarkdownContextCopyRanges } from "./nativeMarkdownText";
 import type {
@@ -84,6 +89,7 @@ function runKeySignature(run: NativeMarkdownTextRun): string {
     run.firstLineHeadIndent,
     run.headIndent,
     run.paragraphSpacing,
+    run.highlight,
   ].join(":");
 }
 
@@ -101,7 +107,11 @@ function resolveHeadingFontSize(textStyle: NativeMarkdownTextStyle, headingLevel
   return Math.max(12, Math.round((DEFAULT_HEADING_FONT_SIZES[index] ?? 15) * scale));
 }
 
-function runStyle(run: NativeMarkdownTextRun, textStyle: NativeMarkdownTextStyle): TextStyle {
+function runStyle(
+  run: NativeMarkdownTextRun,
+  textStyle: NativeMarkdownTextStyle,
+  highlight: MarkdownTextHighlight | undefined,
+): TextStyle {
   const isFile = run.fileIcon != null;
   const isSkill = run.skillName != null;
   const headingLevel = Math.max(1, Math.min(6, run.headingLevel ?? 1));
@@ -174,11 +184,16 @@ function runStyle(run: NativeMarkdownTextRun, textStyle: NativeMarkdownTextStyle
     fontStyle: run.italic ? "italic" : "normal",
     fontWeight: isHeading || run.bold || isFile || isSkill ? "700" : "400",
     textDecorationLine,
-    backgroundColor: isCodeBlock
-      ? textStyle.codeBlockBackgroundColor
-      : parseComposerContextHref(run.href ?? "")
-        ? textStyle.codeBackgroundColor
-        : undefined,
+    backgroundColor:
+      run.highlight && highlight
+        ? run.highlight === "current"
+          ? highlight.currentColor
+          : highlight.color
+        : isCodeBlock
+          ? textStyle.codeBlockBackgroundColor
+          : parseComposerContextHref(run.href ?? "")
+            ? textStyle.codeBackgroundColor
+            : undefined,
     ...(hasParagraphStyle
       ? {
           shadowColor: "transparent",
@@ -196,15 +211,28 @@ export function NativeMarkdownSelectableText(props: {
   readonly runs: ReadonlyArray<NativeMarkdownTextRun>;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
+  readonly highlight?: MarkdownTextHighlight | undefined;
 }) {
   const colorScheme = useColorScheme();
+  const highlight = props.highlight;
+  const highlightRanges = useMemo(
+    () => (highlight ? highlight.find(markdownRunsSearchText(props.runs)) : []),
+    [highlight, props.runs],
+  );
+  const runs = useMemo(
+    () =>
+      highlight && highlightRanges.length > 0
+        ? highlightMarkdownRuns(props.runs, highlightRanges, highlight.current)
+        : props.runs,
+    [highlight, highlightRanges, props.runs],
+  );
   const menu = useContext(MarkdownFileContextMenuContext);
   const contextClipboardFragment = useContext(MarkdownContextClipboardContext);
   const contextRecords = useMemo(
     () => decodeComposerContextFragment(contextClipboardFragment)?.records ?? [],
     [contextClipboardFragment],
   );
-  const containsInlineIcon = props.runs.some(
+  const containsInlineIcon = runs.some(
     (run) =>
       run.fileIcon != null ||
       run.skillName != null ||
@@ -214,7 +242,7 @@ export function NativeMarkdownSelectableText(props: {
   const keyedRuns = useMemo(() => {
     const occurrences = new Map<string, number>();
     const prefixedExternalLinks = new Set<string>();
-    return props.runs.map((run) => {
+    return runs.map((run) => {
       const signature = runKeySignature(run);
       const occurrence = occurrences.get(signature) ?? 0;
       occurrences.set(signature, occurrence + 1);
@@ -284,7 +312,7 @@ export function NativeMarkdownSelectableText(props: {
 
       return { key: `${signature}:${occurrence}`, run, text, linkIcon, chip, androidChip };
     });
-  }, [props.runs, props.textStyle, contextRecords]);
+  }, [runs, props.textStyle, contextRecords]);
   const ranges = nativeMarkdownContextCopyRanges(
     keyedRuns.map(({ run, text, linkIcon, androidChip }) => ({
       run,
@@ -326,6 +354,8 @@ export function NativeMarkdownSelectableText(props: {
     props.textStyle.quoteMarkerColor,
     props.textStyle.dividerColor,
     props.textStyle.contextChipBorderColor,
+    // Moving the current match between ranges only recolors runs.
+    highlight?.current ?? "",
   ].join(":");
 
   return (
@@ -335,7 +365,7 @@ export function NativeMarkdownSelectableText(props: {
       contextClipboardConfig={contextClipboardConfig}
       accessibilityLabel={
         Platform.OS === "android" && containsInlineIcon
-          ? props.runs.map((run) => run.skillLabel ?? run.text).join("")
+          ? runs.map((run) => run.skillLabel ?? run.text).join("")
           : undefined
       }
       uiTextView
@@ -385,7 +415,7 @@ export function NativeMarkdownSelectableText(props: {
             }
             contextMenuConfig={contextMenu ? JSON.stringify(contextMenu) : undefined}
             style={[
-              runStyle(run, props.textStyle),
+              runStyle(run, props.textStyle, highlight),
               chip ? { backgroundColor: "transparent" } : undefined,
             ]}
             onPress={onPress}

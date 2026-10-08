@@ -125,6 +125,7 @@ export function nativeMarkdownContextCopyRanges(
   });
 }
 
+import type { MarkdownHighlightMark } from "./markdownHighlight";
 import type { SelectableMarkdownSkill } from "./SelectableMarkdownText.types";
 import {
   resolveMarkdownInlineCodePresentation,
@@ -160,6 +161,7 @@ export interface NativeMarkdownTextRun {
   readonly firstLineHeadIndent?: number;
   readonly headIndent?: number;
   readonly paragraphSpacing?: number;
+  readonly highlight?: MarkdownHighlightMark;
 }
 
 export type NativeMarkdownDocumentChunk =
