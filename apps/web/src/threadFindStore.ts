@@ -31,7 +31,8 @@ interface ThreadFindState {
   readonly openFind: (query?: string) => void;
   /**
    * Opens find on a thread search hit. Thread search matches literal text in
-   * any role, so options that could hide the hit are reset.
+   * any role and ignores case, so options that could hide the hit are reset
+   * and the query is lowercased, which keeps smart case from applying.
    */
   readonly openFindAtHit: (threadRef: ScopedThreadRef, messageId: MessageId, query: string) => void;
   readonly clearHit: () => void;
@@ -64,7 +65,8 @@ export const useThreadFindStore = create<ThreadFindState>()((set) => ({
   openFindAtHit: (threadRef, messageId, query) =>
     set((state) => ({
       open: true,
-      query,
+      query: query.toLowerCase(),
+      caseSensitive: false,
       wholeWord: false,
       regex: false,
       scope: "all",

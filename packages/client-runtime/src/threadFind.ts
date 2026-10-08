@@ -23,6 +23,7 @@ import {
   threadFindItemMessageId,
   threadFindItemSource,
   threadFindItemText,
+  type ThreadFindMatcher,
   type ThreadFindQuery,
 } from "@t3tools/shared/threadFind";
 
@@ -39,8 +40,12 @@ export const THREAD_FIND_SCOPES: ReadonlyArray<ThreadFindScope> = [
 export const THREAD_FIND_SERVER_MIN_LENGTH = 2;
 const LOCAL_MATCH_LIMIT = 1000;
 
-// Items are immutable snapshots, so their visible text is computed once per
-// version instead of on every keystroke.
+type ValidMatcher = Extract<ThreadFindMatcher, { _tag: "Valid" }>;
+
+// Items are immutable snapshots. Their visible text is extracted once per
+// version, and their matches once per version and query, so a keystroke only
+// re-runs the regex, streaming re-matches only the item that changed, and
+// unchanged matches keep their identity.
 const visibleTextCache = new WeakMap<OrchestrationV2TurnItem, string>();
 function visibleText(item: OrchestrationV2TurnItem): string {
   let text = visibleTextCache.get(item);
@@ -49,6 +54,40 @@ function visibleText(item: OrchestrationV2TurnItem): string {
     visibleTextCache.set(item, text);
   }
   return text;
+}
+
+const localMatchCache = new WeakMap<
+  OrchestrationV2TurnItem,
+  { readonly key: string; readonly matches: ReadonlyArray<ThreadFindMatch> }
+>();
+function localMatches(
+  row: OrchestrationV2ProjectedTurnItem,
+  itemKey: string,
+  matcher: ValidMatcher,
+): ReadonlyArray<ThreadFindMatch> {
+  const key = `${itemKey}\0${matcher.pattern.flags}\0${matcher.pattern.source}`;
+  const cached = localMatchCache.get(row.item);
+  if (cached?.key === key) return cached.matches;
+  const text = visibleText(row.item);
+  const source = threadFindItemSource(row.item);
+  const messageId = threadFindItemMessageId(row.item);
+  const ranges = findThreadMatches(matcher, text, LOCAL_MATCH_LIMIT);
+  const matches = threadFindExcerpts(text, ranges, THREAD_FIND_TEXT_EXCERPT).map(
+    (excerpt, occurrence): ThreadFindMatch => ({
+      key: matchKey(itemKey, "text", occurrence),
+      itemKey,
+      sourceThreadId: row.sourceThreadId,
+      sourceItemId: row.sourceItemId,
+      ...(messageId === undefined ? {} : { messageId }),
+      source,
+      field: "text",
+      occurrence,
+      loaded: true,
+      excerpt,
+    }),
+  );
+  localMatchCache.set(row.item, { key, matches });
+  return matches;
 }
 
 export interface ThreadFindMatch {
@@ -85,9 +124,13 @@ export const threadFindItemKey = (sourceThreadId: ThreadId, sourceItemId: TurnIt
 const matchKey = (itemKey: string, field: OrchestrationThreadFindField, occurrence: number) =>
   `${itemKey}:${field}:${occurrence}`;
 
+// Server answers are reused across derivations, so their matches keep identity too.
+const serverMatchCache = new WeakMap<OrchestrationThreadFindMatch, ThreadFindMatch>();
 function fromServer(match: OrchestrationThreadFindMatch, loaded: boolean): ThreadFindMatch {
+  const cached = serverMatchCache.get(match);
+  if (cached?.loaded === loaded) return cached;
   const itemKey = threadFindItemKey(match.sourceThreadId, match.sourceItemId);
-  return {
+  const result: ThreadFindMatch = {
     key: matchKey(itemKey, match.field, match.occurrence),
     itemKey,
     sourceThreadId: match.sourceThreadId,
@@ -99,6 +142,8 @@ function fromServer(match: OrchestrationThreadFindMatch, loaded: boolean): Threa
     loaded,
     excerpt: match.excerpt,
   };
+  serverMatchCache.set(match, result);
+  return result;
 }
 
 const EMPTY_COUNTS: Record<ThreadFindScope, number> = {
@@ -113,6 +158,7 @@ const EMPTY_COUNTS: Record<ThreadFindScope, number> = {
  * Loaded rows are a contiguous suffix of the timeline, so server matches for
  * rows the client lacks come first. For loaded rows the client's own count of
  * visible text wins, since it reflects live updates; the server adds detail.
+ * The local cap keeps the newest matches, which are nearest the reader.
  */
 export function deriveThreadFindResults(input: {
   /** Every loaded timeline row, oldest first. */
@@ -150,31 +196,25 @@ export function deriveThreadFindResults(input: {
     }
   }
 
+  const newestFirst: Array<ReadonlyArray<ThreadFindMatch>> = [];
   let localCount = 0;
-  for (const row of rendered) {
+  for (let index = rendered.length - 1; index >= 0; index -= 1) {
+    const row = rendered[index]!;
     const itemKey = threadFindItemKey(row.sourceThreadId, row.sourceItemId);
+    let own: ReadonlyArray<ThreadFindMatch> = [];
+    // Past the cap, older rows are not matched at all.
     if (localCount < LOCAL_MATCH_LIMIT) {
-      const text = visibleText(row.item);
-      const ranges = findThreadMatches(matcher, text, LOCAL_MATCH_LIMIT - localCount);
-      localCount += ranges.length;
-      const source = threadFindItemSource(row.item);
-      const messageId = threadFindItemMessageId(row.item);
-      threadFindExcerpts(text, ranges, THREAD_FIND_TEXT_EXCERPT).forEach((excerpt, occurrence) =>
-        all.push({
-          key: matchKey(itemKey, "text", occurrence),
-          itemKey,
-          sourceThreadId: row.sourceThreadId,
-          sourceItemId: row.sourceItemId,
-          ...(messageId === undefined ? {} : { messageId }),
-          source,
-          field: "text",
-          occurrence,
-          loaded: true,
-          excerpt,
-        }),
-      );
+      own = localMatches(row, itemKey, matcher);
+      if (localCount + own.length > LOCAL_MATCH_LIMIT) {
+        own = own.slice(0, LOCAL_MATCH_LIMIT - localCount);
+      }
+      localCount += own.length;
     }
-    all.push(...(detailByItem.get(itemKey) ?? []));
+    const detail = detailByItem.get(itemKey);
+    newestFirst.push(detail === undefined ? own : [...own, ...detail]);
+  }
+  for (let index = newestFirst.length - 1; index >= 0; index -= 1) {
+    all.push(...newestFirst[index]!);
   }
 
   const counts = { ...EMPTY_COUNTS, all: all.length };

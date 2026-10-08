@@ -115,6 +115,8 @@ function counterText(find: ThreadFindController): { text: string; tone: "muted" 
     : { text: `${index + 1} of ${total}`, tone: "muted" };
 }
 
+let lastFocusRequest = 0;
+
 /** Find in the open thread: the bar, its options and the match list. */
 export function ThreadFindBar(props: {
   readonly find: ThreadFindController;
@@ -136,9 +138,17 @@ export function ThreadFindBar(props: {
   const listRef = useRef<HTMLDivElement>(null);
   const wrapped = useWrapNotice(find.wrapNoticeAt);
 
+  // Only a new request takes focus: the bar remounts across thread switches,
+  // and must not steal the composer's focus then. The frame lets a thread
+  // switch's composer focus run first.
   useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
+    if (focusRequest === lastFocusRequest) return;
+    const frame = window.requestAnimationFrame(() => {
+      lastFocusRequest = focusRequest;
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [focusRequest]);
 
   // Keep the selected row visible without scrolling the page around it.
@@ -189,6 +199,10 @@ export function ThreadFindBar(props: {
     <div
       role="search"
       aria-label="Find in thread"
+      // Clicking options, chips and matches keeps typing, Enter and Esc in the field.
+      onMouseDown={(event) => {
+        if (event.target !== inputRef.current) event.preventDefault();
+      }}
       className="pointer-events-auto absolute top-2 right-4 z-30 flex w-[min(32rem,calc(100%-2rem))] flex-col gap-1.5 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg"
     >
       <div className="flex items-center gap-1">

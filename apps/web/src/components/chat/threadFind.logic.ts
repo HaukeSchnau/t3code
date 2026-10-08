@@ -83,8 +83,12 @@ export function threadFindRowIndexByEntryId(
         for (const entry of row.groupedEntries) indexByEntryId.set(entry.id, index);
         break;
       case "proposed-plan":
-      case "event":
         indexByEntryId.set(row.id, index);
+        break;
+      case "event":
+        // Consecutive subagents share one row; each is an entry keyed by its item id.
+        indexByEntryId.set(row.id, index);
+        for (const subagent of row.subagents ?? []) indexByEntryId.set(subagent.item.id, index);
         break;
     }
   });

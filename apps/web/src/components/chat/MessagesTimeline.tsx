@@ -161,6 +161,7 @@ import {
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { threadFindRowIndexByEntryId } from "./threadFind.logic";
+import { useThreadFindStore } from "../../threadFindStore";
 import {
   ThreadFindExcerpt,
   ThreadFindRevealCtx,
@@ -803,14 +804,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const rows = useStableRows(rawRows, listIdentityKey);
   const findRowIndexByEntryId = useMemo(() => threadFindRowIndexByEntryId(rows), [rows]);
   // When find closes, the folds it opened for its last match become the
-  // reader's own, so nothing collapses under them.
+  // reader's own, so nothing collapses under them. `find` is also null while
+  // the query is empty or invalid and during thread switches; those only drop
+  // the reveal.
   const [findKeepOpenEntryId, setFindKeepOpenEntryId] = useState<string | null>(null);
   const findRowsRef = useRef(rows);
   const lastFindTargetRef = useRef(find?.target ?? null);
   useLayoutEffect(() => {
     const previousTarget = lastFindTargetRef.current;
     lastFindTargetRef.current = find?.target ?? null;
-    if (find !== null || previousTarget === null) {
+    if (find !== null || previousTarget === null || useThreadFindStore.getState().open) {
       if (find !== null) setFindKeepOpenEntryId(null);
       findRowsRef.current = rows;
       return;
@@ -1909,7 +1912,12 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
-      {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
+      {row.kind === "event" ? (
+        <>
+          <V2EventTimelineRow row={row} />
+          <EventFindExcerpt row={row} />
+        </>
+      ) : null}
     </div>
   );
 });
@@ -2884,6 +2892,24 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
         icon: WrenchIcon,
       };
   }
+}
+
+/**
+ * Event rows show a summary, so find shows what matched in them under the row.
+ * A grouped subagent is not the row's own entry, so the excerpt carries its id.
+ */
+function EventFindExcerpt({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
+  const { target } = use(ThreadFindRevealCtx);
+  if (target === null) return null;
+  const own = target.entryId === row.id;
+  if (!own && !row.subagents?.some((subagent) => subagent.item.id === target.entryId)) {
+    return null;
+  }
+  return (
+    <div data-find-entry={own ? undefined : target.entryId}>
+      <ThreadFindExcerpt match={target.match} label="Matched in this item" />
+    </div>
+  );
 }
 
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {

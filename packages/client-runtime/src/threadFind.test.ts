@@ -133,6 +133,37 @@ describe("deriveThreadFindResults", () => {
     expect(results.matches.map((match) => match.key)).toEqual(["thread:answer:text:0"]);
   });
 
+  it("keeps the newest local matches when there are too many", () => {
+    const crowded = ["old", "middle", "new"].map((id) => assistant(id, "e ".repeat(600)));
+    const results = deriveThreadFindResults({
+      items: crowded,
+      query: { query: "e" },
+      scope: "all",
+      server: null,
+    });
+    expect(results.truncated).toBe(true);
+    expect(results.counts.all).toBe(1000);
+    expect(results.matches.some((match) => match.sourceItemId === "old")).toBe(false);
+    expect(results.matches.at(-1)!.key).toBe("thread:new:text:599");
+  });
+
+  it("reuses matches of unchanged items, so streaming leaves them as they were", () => {
+    const first = deriveThreadFindResults({
+      items,
+      query: { query: "probe" },
+      scope: "all",
+      server: null,
+    });
+    const streamed = deriveThreadFindResults({
+      items: [...items, assistant("streaming", "still typing")],
+      query: { query: "probe" },
+      scope: "all",
+      server: null,
+    });
+    expect(streamed.matches).toEqual(first.matches);
+    expect(streamed.matches.every((match, index) => match === first.matches[index])).toBe(true);
+  });
+
   it("reports an invalid regex instead of matching", () => {
     const results = deriveThreadFindResults({
       items,
