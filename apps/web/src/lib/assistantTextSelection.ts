@@ -129,15 +129,19 @@ export function findAssistantCitationText(
 }
 
 type TextChunk = { node: Text; start: number; end: number };
+export type RenderedTextStream = {
+  readonly text: string;
+  readonly chunks: ReadonlyArray<TextChunk>;
+};
 
 /**
  * Uses DOM text order, with a line break between HTML blocks and at <br>.
  * Inline markup, including code and links, contributes its displayed text.
- * Controls and subtrees marked hidden/aria-hidden do not contribute. No layout
- * reads, CSS-generated content, or soft-wrap line breaks enter the stream, so
- * reflow cannot move it.
+ * Controls and subtrees marked hidden/aria-hidden do not contribute, nor do
+ * subtrees matching `skip`. No layout reads, CSS-generated content, or
+ * soft-wrap line breaks enter the stream, so reflow cannot move it.
  */
-function readAssistantText(root: HTMLElement) {
+export function readRenderedText(root: HTMLElement, skip?: string): RenderedTextStream {
   const parts: string[] = [];
   const chunks: TextChunk[] = [];
   let length = 0;
@@ -159,7 +163,9 @@ function readAssistantText(root: HTMLElement) {
     }
     if (node.nodeType !== 1) return;
     const element = node as Element;
-    if (element.matches(EXCLUDED_SELECTOR)) return;
+    // The root itself may be a control, such as a disclosure row.
+    if (element !== root && element.matches(EXCLUDED_SELECTOR)) return;
+    if (skip !== undefined && element !== root && element.matches(skip)) return;
     const block = element.matches(BLOCK_SELECTOR);
     if (block || element.tagName === "BR") separator = true;
     for (const child of element.childNodes) visit(child);
@@ -185,7 +191,7 @@ function isUsableRange(root: HTMLElement, range: Range): boolean {
   ) {
     return false;
   }
-  // Interior controls are allowed; readAssistantText omits them from the stream.
+  // Interior controls are allowed; readRenderedText omits them from the stream.
   return true;
 }
 
@@ -227,7 +233,7 @@ export function captureAssistantTextSelection(
   range.setEnd(last, last === range.endContainer ? range.endOffset : last.length);
   if (!isUsableRange(source, range)) return null;
 
-  const stream = readAssistantText(source);
+  const stream = readRenderedText(source);
   let rawStart: number | null = null;
   let rawEnd = 0;
   for (const chunk of stream.chunks) {
@@ -265,18 +271,29 @@ export function resolveAssistantCitationRange(
   selector: AssistantTextSelector,
 ): Range | null {
   if (excludedAncestor(root) !== null) return null;
-  const stream = readAssistantText(root);
+  const stream = readRenderedText(root);
   const match = findAssistantCitationText(stream.text, selector);
   if (match === null) return null;
 
   const start = rawTextOffset(stream.text, match.start);
   const end = rawTextOffset(stream.text, match.end);
+  const range = renderedTextRange(root, stream, start, end);
+  return range && isUsableRange(root, range) ? range : null;
+}
+
+/** A Range over stream offsets; the line breaks between blocks have no node. */
+export function renderedTextRange(
+  root: HTMLElement,
+  stream: RenderedTextStream,
+  start: number,
+  end: number,
+): Range | null {
   const first = stream.chunks.find((chunk) => chunk.end > start);
   const last = stream.chunks.findLast((chunk) => chunk.start < end);
-  if (first === undefined || last === undefined) return null;
+  if (first === undefined || last === undefined || first.start >= end) return null;
 
   const range = root.ownerDocument.createRange();
   range.setStart(first.node, Math.max(0, start - first.start));
   range.setEnd(last.node, Math.min(last.node.length, end - last.start));
-  return isUsableRange(root, range) ? range : null;
+  return range;
 }

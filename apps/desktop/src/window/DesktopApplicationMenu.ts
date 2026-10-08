@@ -150,6 +150,16 @@ export const make = Effect.gen(function* () {
       if (event.triggeredByAccelerator === true) return;
       runMenuEffect("paste-as-text", dispatchMenuAction("paste-as-text"));
     };
+    // Like Paste as Text: the renderer already handles the keystroke through
+    // its own keybinding, so only a menu click needs the round trip.
+    const findInThreadClick = (
+      _item: Electron.MenuItem,
+      _window: Electron.BaseWindow | undefined,
+      event: Electron.KeyboardEvent,
+    ) => {
+      if (event.triggeredByAccelerator === true) return;
+      runMenuEffect("find-in-thread", dispatchMenuAction("find-in-thread"));
+    };
     const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {
       runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
     };
@@ -216,6 +226,12 @@ export const make = Effect.gen(function* () {
           { role: "delete" },
           { type: "separator" },
           { role: "selectAll" },
+          { type: "separator" },
+          {
+            label: "Find in Thread",
+            accelerator: "CmdOrCtrl+F",
+            click: findInThreadClick,
+          },
           ...(environment.platform === "darwin"
             ? [
                 { type: "separator" as const },

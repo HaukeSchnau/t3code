@@ -119,6 +119,7 @@ import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
+import { useThreadFindStore } from "../threadFindStore";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
@@ -3103,13 +3104,33 @@ export default function Sidebar() {
     setThreadSearchQuery("");
     setActiveSearchResultIndex(0);
   }, []);
+  const openFindAtHit = useThreadFindStore((state) => state.openFindAtHit);
   const selectThreadSearchResult = useCallback(
     (thread: EnvironmentThreadShell) => {
+      const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+      const messageId = threadSearchMatchByKey.get(
+        threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+      )?.messageId;
+      const query = threadSearchQuery.trim();
       clearThreadSearch();
-      navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
+      void navigateToThread(threadRef).then(() => {
+        if (messageId !== undefined) openFindAtHit(threadRef, messageId, query);
+      });
     },
-    [clearThreadSearch, navigateToThread],
+    [clearThreadSearch, navigateToThread, openFindAtHit, threadSearchMatchByKey, threadSearchQuery],
   );
+  // Find's "Search all threads" hands its query to this search.
+  const searchAllRequest = useThreadFindStore((state) => state.searchAllRequest);
+  const clearSearchAllRequest = useThreadFindStore((state) => state.clearSearchAllRequest);
+  useEffect(() => {
+    if (searchAllRequest === null) return;
+    setThreadSearchQuery(searchAllRequest.query);
+    setActiveSearchResultIndex(0);
+    clearSearchAllRequest();
+    // The sidebar may be sliding in. Clearing the request re-runs this effect,
+    // so the focus frame is not cancelled on cleanup.
+    window.requestAnimationFrame(() => threadSearchInputRef.current?.focus());
+  }, [clearSearchAllRequest, searchAllRequest]);
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
       // IME composition (Japanese/Chinese input) uses the same keys; committing

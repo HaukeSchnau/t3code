@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  MessageId,
   NonNegativeInt,
   PositiveInt,
   ThreadId,
@@ -51,6 +52,8 @@ export const OrchestrationThreadFindMatch = Schema.Struct({
   /** Rows in the thread's visible timeline, including rows inherited from a fork source. */
   sourceThreadId: ThreadId,
   sourceItemId: TurnItemId,
+  /** Set for user and assistant messages, so a thread search hit can find its row. */
+  messageId: Schema.optionalKey(MessageId),
   /** Index in the visible timeline, oldest first. */
   position: NonNegativeInt,
   source: OrchestrationThreadFindSource,

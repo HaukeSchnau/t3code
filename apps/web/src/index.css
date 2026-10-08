@@ -601,6 +601,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   margin-left: var(--live-activity-focus-width);
 }
 
+/* One fade per landing; nothing animates while find stays open. */
+@keyframes thread-find-flash {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 @property --assistant-citation-highlight-opacity {
   syntax: "<number>";
   inherits: true;
@@ -617,6 +628,34 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
   ::highlight(t3-assistant-citation-comment) {
     background-color: color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+  /* Thread find. Fixed hues read on every theme; the current match is opaque. */
+  :root {
+    --thread-find-match: rgb(250 204 21 / 0.34);
+    --thread-find-current: rgb(251 146 60);
+  }
+  ::highlight(t3-find) {
+    background-color: var(--thread-find-match);
+  }
+  ::highlight(t3-find-current) {
+    background-color: var(--thread-find-current);
+    color: rgb(17 17 17);
+  }
+  .thread-find-tick-current {
+    background-color: var(--thread-find-current);
+  }
+  .thread-find-current-mark {
+    border-radius: 2px;
+    background-color: var(--thread-find-current);
+    color: rgb(17 17 17);
+  }
+  .thread-find-flash {
+    position: absolute;
+    z-index: 25;
+    border-radius: 4px;
+    pointer-events: none;
+    box-shadow: 0 0 0 2px var(--thread-find-current);
+    animation: thread-find-flash 0.8s ease-out forwards;
   }
   :root {
     /* Keep the original T3 Code artwork palettes as the defaults. Built-in
