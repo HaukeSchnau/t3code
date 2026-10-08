@@ -51,6 +51,7 @@ import {
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { openThreadFindAtHit } from "./thread-find-store";
 
 /**
  * Thread List v2 renders one flat native list: rich edge-to-edge rows for
@@ -1100,6 +1101,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 
+  const selectThread = () => {
+    if (props.searchMatch) openThreadFindAtHit(props.searchMatch, props.searchQuery ?? "");
+    onSelectThread(thread);
+  };
   const rowContent = (close: () => void) =>
     variant === "card" ? (
       <RowPressable
@@ -1115,7 +1120,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityState={{ selected }}
         onPress={() => {
           close();
-          onSelectThread(thread);
+          selectThread();
         }}
         style={rowAppearance.cardStyle}
       >
@@ -1148,7 +1153,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         className={rowAppearance.className}
         onPress={() => {
           close();
-          onSelectThread(thread);
+          selectThread();
         }}
         style={rowAppearance.style}
       >

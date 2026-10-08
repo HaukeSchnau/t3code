@@ -1,3 +1,5 @@
+import type { MarkdownTextHighlight } from "./markdownHighlight";
+
 export interface NativeMarkdownTextStyle {
   readonly selectionColor?: string;
   readonly selectionHandleColor?: string;
@@ -89,4 +91,6 @@ export interface SelectableMarkdownTextProps {
   readonly renderImage?: MarkdownImageRenderer;
   readonly marginTop?: number;
   readonly marginBottom?: number;
+  /** Marks found text, such as in-thread find matches. */
+  readonly highlight?: MarkdownTextHighlight | undefined;
 }
