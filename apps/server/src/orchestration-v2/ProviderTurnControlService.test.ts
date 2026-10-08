@@ -225,6 +225,7 @@ it.effect(
           hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
           getThreadAttachmentIds: () => Effect.die("Unused attachment lookup"),
           getTimelinePage: () => Effect.die("Unused timeline read"),
+          scanTimeline: () => Effect.die("Unused timeline scan"),
           getMessageCount: () => Effect.die("unused message count"),
           getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
           getThreadRecords: () => Effect.die("unused record read"),

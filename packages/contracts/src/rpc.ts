@@ -155,6 +155,11 @@ import {
   OrchestrationSearchThreadsResult,
 } from "./threadSearch.ts";
 import {
+  OrchestrationFindInThreadError,
+  OrchestrationFindInThreadInput,
+  OrchestrationFindInThreadResult,
+} from "./threadFind.ts";
+import {
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -1582,6 +1587,12 @@ const WsOrchestrationV2SearchThreadsRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.s
   error: Schema.Union([OrchestrationSearchThreadsError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationV2FindInThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.findInThread, {
+  payload: OrchestrationFindInThreadInput,
+  success: OrchestrationFindInThreadResult,
+  error: Schema.Union([OrchestrationFindInThreadError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2GetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
   {
@@ -1919,6 +1930,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetTurnDiffRpc,
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2SearchThreadsRpc,
+  WsOrchestrationV2FindInThreadRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
