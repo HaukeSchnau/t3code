@@ -97,6 +97,11 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
   { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },
   { key: "mod+z", command: "thread.undo", when: "!terminalFocus && !editableFocus" },
+  { key: "mod+f", command: "thread.find", when: "!terminalFocus" },
+  { key: "mod+g", command: "thread.findNext", when: "!terminalFocus" },
+  // Shares its key with composer.branch, so it only applies while find is open.
+  { key: "mod+shift+g", command: "thread.findPrevious", when: "threadFindOpen && !terminalFocus" },
+  { key: "mod+e", command: "thread.findSelection", when: "!terminalFocus" },
   ...THREAD_JUMP_KEYBINDING_COMMANDS.flatMap((command, index) =>
     clientSpecificKeybindings(command, {
       desktop: `mod+${index + 1}`,

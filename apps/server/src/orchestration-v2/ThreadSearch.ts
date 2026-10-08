@@ -1,5 +1,6 @@
 import {
   IsoDateTime,
+  MessageId,
   OrchestrationThreadSearchSource,
   type OrchestrationSearchThreadsInput,
   type OrchestrationSearchThreadsResult,
@@ -33,6 +34,7 @@ const SearchRow = Schema.Struct({
   source: OrchestrationThreadSearchSource,
   matchText: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
+  messageId: MessageId,
 });
 
 function escapeLikePattern(value: string): string {
@@ -112,6 +114,7 @@ export const make = Effect.gen(function* () {
           role AS source,
           match_text,
           message_created_at,
+          message_id,
           CASE role WHEN 'user' THEN 0 ELSE 1 END AS match_rank,
           thread_updated_at,
           ROW_NUMBER() OVER (
@@ -128,7 +131,8 @@ export const make = Effect.gen(function* () {
         project_id AS "projectId",
         source,
         match_text AS "matchText",
-        message_created_at AS "messageCreatedAt"
+        message_created_at AS "messageCreatedAt",
+        message_id AS "messageId"
       FROM ranked
       WHERE thread_match_rank = 1
       ORDER BY match_rank ASC, thread_updated_at DESC, thread_id ASC
@@ -155,6 +159,7 @@ export const make = Effect.gen(function* () {
           threadId: row.threadId,
           projectId: row.projectId,
           source: row.source,
+          messageId: row.messageId,
           snippet: buildSearchSnippet(row.matchText, input.query),
           messageCreatedAt: row.messageCreatedAt,
         })),
