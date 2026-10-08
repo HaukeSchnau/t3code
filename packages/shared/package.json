@@ -287,6 +287,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./threadFind": {
+      "types": "./src/threadFind.ts",
+      "import": "./src/threadFind.ts"
+    },
     "./markdownLinks": {
       "types": "./src/markdownLinks.ts",
       "import": "./src/markdownLinks.ts"
