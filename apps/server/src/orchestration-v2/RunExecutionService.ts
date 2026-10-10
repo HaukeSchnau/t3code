@@ -1272,6 +1272,38 @@ export const layer: Layer.Layer<
                     cause,
                   }).pipe(
                     Effect.andThen(
+                      Effect.gen(function* () {
+                        if (finalized || Cause.hasInterruptsOnly(cause)) return;
+                        if (
+                          (yield* Ref.get(providerThreadOwnerLost)) ||
+                          (input.shouldFinalizeRun !== undefined &&
+                            !(yield* input.shouldFinalizeRun()))
+                        )
+                          return;
+                        const providerTurnId = (yield* Ref.get(eventRouting)).rootProviderTurnId;
+                        if (providerTurnId === null) return;
+                        // Stop work before declaring failure when its output can no longer be recorded.
+                        yield* input.session
+                          .interruptTurn({
+                            providerThread: yield* Ref.get(latestProviderThread),
+                            providerTurnId,
+                            requestRuntimeRestart: true,
+                          })
+                          .pipe(
+                            Effect.catchCause((interruptCause) =>
+                              Effect.logWarning(
+                                "orchestration V2 failed to stop provider after ingestion failure",
+                                {
+                                  runId: input.run.id,
+                                  providerTurnId,
+                                  cause: interruptCause,
+                                },
+                              ),
+                            ),
+                          );
+                      }),
+                    ),
+                    Effect.andThen(
                       finalized
                         ? Effect.void
                         : Ref.get(latestProviderThread).pipe(
