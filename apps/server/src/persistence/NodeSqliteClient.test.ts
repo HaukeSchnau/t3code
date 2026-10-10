@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
+
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -159,3 +165,63 @@ it.effect("returns a typed failure when the database cannot be opened", () =>
     assert.equal(error.reason.operation, "open");
   }),
 );
+
+it.effect(
+  "reserves the writer before reading so another connection cannot invalidate the transaction",
+  () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-upgrade-"));
+    const filename = NodePath.join(directory, "state.sqlite");
+    const other = new NodeSqlite.DatabaseSync(filename);
+    other.exec("PRAGMA journal_mode=WAL; CREATE TABLE entries(name TEXT NOT NULL)");
+
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql`SELECT name FROM entries`;
+          yield* Effect.sync(() => assert.throws(() => other.exec("BEGIN IMMEDIATE"), /locked/));
+          yield* sql`INSERT INTO entries VALUES ('first')`;
+        }),
+      );
+      yield* Effect.sync(() =>
+        other.exec("BEGIN IMMEDIATE; INSERT INTO entries VALUES ('second'); COMMIT"),
+      );
+      assert.deepEqual(yield* sql`SELECT name FROM entries ORDER BY rowid`, [
+        { name: "first" },
+        { name: "second" },
+      ]);
+    }).pipe(
+      Effect.provide(SqliteClient.layer({ filename })),
+      Effect.ensuring(
+        Effect.sync(() => {
+          other.close();
+          NodeFS.rmSync(directory, { recursive: true, force: true });
+        }),
+      ),
+    );
+  },
+);
+
+it.effect("allows read-only transactions while another connection owns the writer", () => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-readonly-"));
+  const filename = NodePath.join(directory, "state.sqlite");
+  const writer = new NodeSqlite.DatabaseSync(filename);
+  writer.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE entries(name TEXT); INSERT INTO entries VALUES ('saved'); BEGIN IMMEDIATE",
+  );
+
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    assert.deepEqual(yield* sql.withTransaction(sql`SELECT name FROM entries`), [
+      { name: "saved" },
+    ]);
+  }).pipe(
+    Effect.provide(SqliteClient.layer({ filename, readonly: true })),
+    Effect.ensuring(
+      Effect.sync(() => {
+        writer.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }),
+    ),
+  );
+});
