@@ -3200,7 +3200,7 @@ it.effect("refreshes pull requests after a provider stream exits with an error",
           }),
         ),
     });
-    assert.deepEqual(observed, ["run:failed", "pull-requests-refreshed"]);
+    assert.deepEqual(observed, ["provider-interrupted", "run:failed", "pull-requests-refreshed"]);
     assert.deepEqual(
       written.map((item) => item.type),
       ["error"],
@@ -3240,6 +3240,34 @@ it.effect("refreshes pull requests only once when startup failure closes its eve
   }),
 );
 
+it.effect("stops the live provider before failing a run whose events cannot be persisted", () =>
+  Effect.gen(function* () {
+    const { observed, providerRunning } = yield* captureRootRunTermination({
+      key: "persistence-failure",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      events: (ids) => Stream.make(rootTerminalEvent(ids, "completed")),
+      ingestFailure: new Error("SQLITE(5) database is locked"),
+    });
+    assert.isFalse(providerRunning);
+    assert.deepEqual(observed, ["provider-interrupted", "run:failed", "pull-requests-refreshed"]);
+  }),
+);
+
+it.effect(
+  "does not interrupt the provider after a failed ingestion loses ownership to a newer run",
+  () =>
+    Effect.gen(function* () {
+      const { observed, providerRunning } = yield* captureRootRunTermination({
+        key: "stale-persistence-failure",
+        shouldFinalizeRun: () => Effect.succeed(false),
+        events: (ids) => Stream.make(rootTerminalEvent(ids, "completed")),
+        ingestFailure: new Error("SQLITE(5) database is locked"),
+      });
+      assert.isTrue(providerRunning);
+      assert.deepEqual(observed, []);
+    }),
+);
+
 it.effect("keeps completed runs completed when pull request refresh fails", () =>
   Effect.gen(function* () {
     const { observed } = yield* captureRootRunTermination({
@@ -3262,6 +3290,7 @@ function captureRootRunTermination(input: {
   ) => Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
   readonly startTurn?: ProviderAdapterV2SessionRuntime["startTurn"];
   readonly refreshAfterTurn?: Effect.Effect<void>;
+  readonly ingestFailure?: unknown;
 }) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(input.key);
@@ -3275,6 +3304,7 @@ function captureRootRunTermination(input: {
     });
     const writtenItems = yield* Ref.make<ReadonlyArray<OrchestrationV2TurnItem>>([]);
     const observed = yield* Ref.make<ReadonlyArray<string>>([]);
+    const providerRunning = yield* Ref.make(true);
     const ingestionDone = yield* Deferred.make<void>();
     const captureTurnItem = (payload: OrchestrationV2TurnItem) =>
       Ref.update(writtenItems, (current) => [...current, payload]);
@@ -3311,7 +3341,10 @@ function captureRootRunTermination(input: {
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
-            ingestNormalized: () => Effect.succeed([]),
+            ingestNormalized: () =>
+              input.ingestFailure === undefined
+                ? Effect.succeed([])
+                : Effect.die(input.ingestFailure),
           }),
           ServerSettings.layerTest(),
           Layer.succeed(RunFinalizationService.RunFinalizationObserver, {
@@ -3363,6 +3396,16 @@ function captureRootRunTermination(input: {
             close: Deferred.succeed(ingestionDone, undefined),
           }),
           startTurn: input.startTurn ?? (() => Effect.void),
+          interruptTurn: (
+            interrupted: Parameters<ProviderAdapterV2SessionRuntime["interruptTurn"]>[0],
+          ) =>
+            Effect.gen(function* () {
+              assert.equal(interrupted.providerThread.id, ids.providerThreadId);
+              assert.equal(interrupted.providerTurnId, ids.rootProviderTurnId);
+              assert.isTrue(interrupted.requestRuntimeRestart);
+              yield* Ref.set(providerRunning, false);
+              yield* Ref.update(observed, (current) => [...current, "provider-interrupted"]);
+            }),
         } as unknown as ProviderAdapterV2SessionRuntime,
         run: {
           id: ids.runId,
@@ -3416,7 +3459,11 @@ function captureRootRunTermination(input: {
     }).pipe(Effect.provide(testLayer));
 
     yield* Deferred.await(ingestionDone);
-    return { written: yield* Ref.get(writtenItems), observed: yield* Ref.get(observed) };
+    return {
+      written: yield* Ref.get(writtenItems),
+      observed: yield* Ref.get(observed),
+      providerRunning: yield* Ref.get(providerRunning),
+    };
   });
 }
 
