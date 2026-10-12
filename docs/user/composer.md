@@ -139,12 +139,13 @@ into a normal draft.
 On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to restore them as well.
-File restore is only offered for threads running in a worktree, and it is
+In Git projects, file restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
 restoring would erase their changes. A thread that works in the project directory
-rewinds the conversation only, as do jj workspaces and folders without Git, which have nothing
-to restore. The selected prompt and its attachments return to the composer for editing and
+rewinds the conversation only, as do folders without Git, which have nothing
+to restore. In jj repositories, restoring files removes only that thread's changes, so it works in
+a shared checkout too; see [Jujutsu (jj)](source-control.md#jujutsu-jj). The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
