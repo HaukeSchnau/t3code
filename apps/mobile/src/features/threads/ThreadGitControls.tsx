@@ -24,6 +24,7 @@ import {
   projectScriptMenuLabel,
   type TerminalMenuSession,
 } from "../terminal/terminalMenu";
+import { jjBreadcrumb, jjPushState, jjStackViewFromStatus } from "./git/jj-stack-presentation";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -117,7 +118,15 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const threadId = props.threadId;
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
-  const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD";
+  // A jj workspace swaps the branch label and the git overview for its stack.
+  const jjStack = useMemo(
+    () => jjStackViewFromStatus(gitStatus, String(threadId)),
+    [gitStatus, threadId],
+  );
+  const statusTitle = jjStack
+    ? jjBreadcrumb(jjStack)
+    : compactMenuBranchLabel(gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD");
+  const statusSubtitle = jjStack ? jjPushState(jjStack) : compactMenuStatus(gitStatus);
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -227,7 +236,15 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     });
   }, [environmentId, navigation, threadId]);
 
+  const isJj = jjStack !== null;
   const openGitInspector = useCallback(() => {
+    if (isJj) {
+      navigation.navigate("JjStack", {
+        environmentId: String(environmentId),
+        threadId: String(threadId),
+      });
+      return;
+    }
     if (props.onOpenGitInspector) {
       props.onOpenGitInspector();
       return;
@@ -236,10 +253,10 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
       environmentId: String(environmentId),
       threadId: String(threadId),
     });
-  }, [environmentId, props.onOpenGitInspector, navigation, threadId]);
+  }, [environmentId, isJj, props.onOpenGitInspector, navigation, threadId]);
 
   return {
-    currentBranchLabel,
+    isJj,
     isRepo,
     openFiles,
     openGitInspector,
@@ -248,6 +265,8 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     quickActionHint,
     quickActionIcon,
     runQuickAction,
+    statusSubtitle,
+    statusTitle,
   };
 }
 
@@ -331,24 +350,29 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         menu: {
           items: [
             {
-              description: compactMenuStatus(props.gitStatus),
+              description: model.statusSubtitle,
               disabled: true,
               icon: {
                 name: "point.topleft.down.curvedto.point.bottomright.up",
                 type: "sfSymbol",
               },
-              label: compactMenuBranchLabel(model.currentBranchLabel),
+              label: model.statusTitle,
               onPress: (): void => {},
               type: "action",
             },
-            {
-              description: model.quickActionHint ?? undefined,
-              disabled: model.quickAction.disabled,
-              icon: { name: model.quickActionIcon, type: "sfSymbol" },
-              label: model.quickAction.label,
-              onPress: (): void => void model.runQuickAction(),
-              type: "action",
-            },
+            // The quick action runs Git's stacked actions, which do not apply to a jj stack.
+            ...(model.isJj
+              ? []
+              : [
+                  {
+                    description: model.quickActionHint ?? undefined,
+                    disabled: model.quickAction.disabled,
+                    icon: { name: model.quickActionIcon, type: "sfSymbol" as const },
+                    label: model.quickAction.label,
+                    onPress: (): void => void model.runQuickAction(),
+                    type: "action" as const,
+                  },
+                ]),
             {
               description: "Turn diffs and worktree changes",
               disabled: !model.isRepo,
@@ -369,7 +393,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
                 ]
               : []),
             {
-              description: "Commit, files, branches",
+              description: model.isJj ? "Commit, push, pull request" : "Commit, files, branches",
               icon: { name: "ellipsis", type: "sfSymbol" },
               label: "More",
               onPress: model.openGitInspector,
@@ -384,7 +408,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       },
     }),
     [
-      model.currentBranchLabel,
+      model.isJj,
       model.isRepo,
       model.openFiles,
       model.openGitInspector,
@@ -394,9 +418,10 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       model.quickActionHint,
       model.quickActionIcon,
       model.runQuickAction,
+      model.statusSubtitle,
+      model.statusTitle,
       props.canOpenFiles,
       props.canOpenTerminal,
-      props.gitStatus,
       props.onMergeBack,
       props.onOpenNewTerminal,
       props.onOpenTerminal,
@@ -515,7 +540,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         />
       ) : null}
-      {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(props, model)) : null}
+      {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(model)) : null}
     </NativeHeaderToolbar>
   );
 }
@@ -532,11 +557,10 @@ export function ThreadGitMenu(props: ThreadGitMenuProps) {
 
 /** Returns menu data because native toolbars serialize direct items rather than rendering component children. */
 export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): ScreenHeaderMenu | null {
-  return threadGitMenuDefinition(props, useThreadGitControlModel(props));
+  return threadGitMenuDefinition(useThreadGitControlModel(props));
 }
 
 function threadGitMenuDefinition(
-  props: ThreadGitMenuProps,
   model: ReturnType<typeof useThreadGitControlModel>,
 ): ScreenHeaderMenu {
   return {
@@ -546,22 +570,26 @@ function threadGitMenuDefinition(
     items: [
       {
         id: "git-status",
-        title: compactMenuBranchLabel(model.currentBranchLabel),
+        title: model.statusTitle,
         icon: "point.topleft.down.curvedto.point.bottomright.up",
         disabled: true,
-        subtitle: compactMenuStatus(props.gitStatus),
+        subtitle: model.statusSubtitle,
         onPress: () => {},
       },
-      {
-        id: "git-quick-action",
-        title: model.quickAction.label,
-        icon: model.quickActionIcon,
-        disabled: model.quickAction.disabled,
-        subtitle: model.quickActionHint ?? undefined,
-        onPress: () => {
-          void model.runQuickAction();
-        },
-      },
+      ...(model.isJj
+        ? []
+        : [
+            {
+              id: "git-quick-action",
+              title: model.quickAction.label,
+              icon: model.quickActionIcon,
+              disabled: model.quickAction.disabled,
+              subtitle: model.quickActionHint ?? undefined,
+              onPress: () => {
+                void model.runQuickAction();
+              },
+            },
+          ]),
       {
         id: "git-review",
         title: "Review changes",
@@ -574,7 +602,7 @@ function threadGitMenuDefinition(
         id: "git-more",
         title: "More",
         icon: "ellipsis",
-        subtitle: "Commit, files, branches",
+        subtitle: model.isJj ? "Commit, push, pull request" : "Commit, files, branches",
         onPress: model.openGitInspector,
       },
     ],
