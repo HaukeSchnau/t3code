@@ -54,7 +54,7 @@ const makeCaptureStore = Effect.fn("test.makeCaptureStore")(function* (
 ) {
   const repository = yield* driver.detectRepository(cwd);
   if (repository === null) return yield* Effect.die("Expected a test Git repository");
-  const handle = { kind: repository.kind, repository, driver };
+  const handle = { kind: repository.kind, repository, driver, gitCompatible: true };
   return yield* CheckpointStore.make.pipe(
     Effect.provideService(VcsDriverRegistry.VcsDriverRegistry, {
       get: () => Effect.succeed(driver),

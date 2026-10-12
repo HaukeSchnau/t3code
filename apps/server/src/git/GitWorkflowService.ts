@@ -175,7 +175,7 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
+    if (!handle.gitCompatible) {
       return yield* new GitManagerError({
         operation,
         cwd,
@@ -200,7 +200,7 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
+    if (!handle.gitCompatible) {
       return yield* new GitCommandError({
         operation,
         command: "vcs-route",
@@ -226,7 +226,7 @@ export const make = Effect.gen(function* () {
       if (!handle) {
         return false;
       }
-      if (handle.kind !== "git") {
+      if (!handle.gitCompatible) {
         return yield* new GitManagerError({
           operation,
           cwd,
@@ -252,18 +252,8 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (!handle) {
-      return false;
-    }
-    if (handle.kind !== "git") {
-      return yield* new GitCommandError({
-        operation,
-        command: "vcs-route",
-        cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
-      });
-    }
-    return true;
+    // A jj repository without a Git worktree has no Git refs to list.
+    return handle?.gitCompatible === true;
   });
 
   const routeGitManager =
@@ -277,7 +267,7 @@ export const make = Effect.gen(function* () {
   return GitWorkflowService.of({
     isRepository: (cwd) =>
       registry.detect({ cwd }).pipe(
-        Effect.map((handle) => handle?.kind === "git"),
+        Effect.map((handle) => handle?.gitCompatible === true),
         Effect.mapError(
           (cause) =>
             new GitManagerError({

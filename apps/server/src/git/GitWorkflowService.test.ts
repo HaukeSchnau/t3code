@@ -26,7 +26,7 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
-  it.effect("reports a non-Git VCS repository as not a Git repository", () =>
+  it.effect("reports a jj repository without Git as not a Git repository", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       const isRepository = yield* workflow.isRepository("/jj-repo");
@@ -49,6 +49,7 @@ describe("GitWorkflowService", () => {
                 },
               },
               driver: {} as VcsDriverRegistry.VcsDriverHandle["driver"],
+              gitCompatible: false,
             }),
         }),
       ),
