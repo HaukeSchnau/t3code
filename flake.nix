@@ -3,6 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # T3's jj support needs jj 0.46 or newer, which the main pin predates. Drop
+    # this once `nixpkgs` is updated past it.
+    nixpkgs-jj.url = "github:NixOS/nixpkgs/6510408d147d8c5e6d76043e899e9251756f6a75";
     nix-infra-modules = {
       url = "github:HaukeSchnau/nix-infra-modules/c08469c9ed76a0e2223cb6bf1ac624580be6f98c";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -13,6 +16,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-jj,
       nix-infra-modules,
     }:
     let
@@ -34,6 +38,7 @@
         system:
         import nixpkgs {
           inherit system;
+          overlays = [ (_final: _prev: { inherit (nixpkgs-jj.legacyPackages.${system}) jujutsu; }) ];
         };
 
       mkPnpm = import ./nix/pnpm.nix;
@@ -645,7 +650,7 @@
               path = [
                 cfg.package
                 pkgs.git
-                pkgs.jujutsu
+                nixpkgs-jj.legacyPackages.${pkgs.stdenv.hostPlatform.system}.jujutsu
                 pkgs.openssh
               ]
               ++ cfg.providerPackages;
