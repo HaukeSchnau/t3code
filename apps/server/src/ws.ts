@@ -195,6 +195,9 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as JjThreadWork from "./jj/JjThreadWork.ts";
+import * as JjTurnService from "./jj/JjTurnService.ts";
+import * as JjWorkflow from "./jj/JjWorkflow.ts";
 import * as ManagedWorkspaces from "./workspace/ManagedWorkspaces.ts";
 import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
 import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
@@ -1149,6 +1152,9 @@ const makeWsRpcLayer = (
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const jjWorkflow = yield* JjWorkflow.JjWorkflow;
+      const jjTurns = yield* JjTurnService.JjTurnService;
+      const jjThreadWork = yield* JjThreadWork.JjThreadWork;
       const managedWorkspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
@@ -3278,6 +3284,24 @@ const makeWsRpcLayer = (
                   refreshGitStatus(input.cwd).pipe(Effect.ignore({ log: true }), Effect.as(result)),
               }),
             ),
+            { "rpc.aggregate": "git" },
+          ),
+        [WS_METHODS.vcsJjRunAction]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsJjRunAction, jjWorkflow.runAction(input), {
+            "rpc.aggregate": "git",
+          }),
+        [WS_METHODS.vcsJjThreadWork]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsJjThreadWork,
+            jjThreadWork
+              .find(input.threadId)
+              .pipe(Effect.map((repositories) => ({ repositories }))),
+            { "rpc.aggregate": "git" },
+          ),
+        [WS_METHODS.vcsJjAssignPaths]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsJjAssignPaths,
+            jjTurns.assignPaths(input).pipe(Effect.map((assigned) => ({ assigned }))),
             { "rpc.aggregate": "git" },
           ),
         [WS_METHODS.gitRunStackedAction]: (input) =>

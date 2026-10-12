@@ -989,6 +989,22 @@ function pathFromToolCall(toolCall: AcpToolCallState): string | undefined {
   return undefined;
 }
 
+/** Every file a tool call names in its locations or ACP v1 diff content. */
+function filePathsFromToolCall(toolCall: AcpToolCallState): Array<string> {
+  const { locations, content } = toolCall.data;
+  const entries = [
+    ...(Array.isArray(locations) ? locations : []),
+    ...(Array.isArray(content)
+      ? content.filter((entry) => unknownRecord(entry)?.type === "diff")
+      : []),
+  ];
+  const paths = entries.flatMap((entry) => {
+    const path = unknownRecord(entry)?.path;
+    return typeof path === "string" && path.trim().length > 0 ? [path.trim()] : [];
+  });
+  return [...new Set(paths)];
+}
+
 function providerRequestKind(kind: string | "unknown"): ProviderRequestKind {
   switch (kind) {
     case "execute":
@@ -3337,14 +3353,20 @@ export function makeAcpAdapterV2(
               }
               case "edit":
               case "delete":
-              case "move":
+              case "move": {
+                const operation = toolCall.kind === "edit" ? "update" : toolCall.kind;
+                const changedPaths = filePathsFromToolCall(toolCall);
                 turnItem = {
                   ...base,
                   type: "file_change",
                   fileName: path ?? toolCall.title ?? "File change",
+                  ...(changedPaths.length === 0
+                    ? {}
+                    : { changes: changedPaths.map((path) => ({ operation, path })) }),
                   ...(diffText === undefined ? {} : { diffStr: diffText }),
                 };
                 break;
+              }
               case "fetch":
                 turnItem = {
                   ...base,

@@ -46,12 +46,8 @@ import {
   findIsolatedWorkspace,
   isolatedWorkspacesAvailable,
 } from "./IsolatedWorkspaces.ts";
-import {
-  createJjWorkspace,
-  deleteJjWorkspace,
-  findRepositoryMarker,
-  listJjWorkspaces,
-} from "./JjWorkspaces.ts";
+import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
+import { createJjWorkspace, deleteJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
 import { ManagedWorkspaceError, removeWorkspaceDirectory } from "./WorkspaceCommand.ts";
 import {
   fallbackWorkspaceSeed,

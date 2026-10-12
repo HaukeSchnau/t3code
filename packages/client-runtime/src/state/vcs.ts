@@ -301,6 +301,23 @@ export function createVcsEnvironmentAtoms<R, E>(
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
     }),
+    jjRunAction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:jj-run-action",
+      tag: WS_METHODS.vcsJjRunAction,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+      onSettled: invalidateRefs,
+    }),
+    jjThreadWork: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:jj-thread-work",
+      tag: WS_METHODS.vcsJjThreadWork,
+    }),
+    jjAssignPaths: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:jj-assign-paths",
+      tag: WS_METHODS.vcsJjAssignPaths,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+    }),
     refreshStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-status",
       tag: WS_METHODS.vcsRefreshStatus,
@@ -361,3 +378,4 @@ export function createVcsEnvironmentAtoms<R, E>(
 export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
+export * from "./jjStack.ts";

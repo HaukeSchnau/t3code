@@ -25,6 +25,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { VcsTurnHooks } from "./VcsTurnHooks.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -38,10 +39,13 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "provider-turn-unavailable",
       "unexpected-failure",
       "shared-workspace",
+      "file-revert-refused",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     checkpointId: CheckpointId,
+    /** Why file revert was refused, for "file-revert-refused". */
+    detail: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -55,6 +59,8 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return `Provider turn for rollback target ${this.checkpointId} is unavailable on provider thread ${this.providerThreadId}.`;
       case "shared-workspace":
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
+      case "file-revert-refused":
+        return this.detail ?? "Files could not be reverted.";
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -102,6 +108,7 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const path = yield* Path.Path;
+    const vcsTurnHooks = yield* VcsTurnHooks;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -170,6 +177,32 @@ export const layer: Layer.Layer<
           providerThreadId: input.providerThreadId,
           checkpointId: input.checkpointId,
         });
+      }
+
+      // A jj working copy reverts only this thread's work, after other
+      // threads' turns there go idle. Both checks run before the provider rewinds.
+      const vcsOwnsRevert =
+        input.restoreFiles !== false && (yield* vcsTurnHooks.ownsFileRevert(scope.cwd));
+      if (vcsOwnsRevert) {
+        yield* vcsTurnHooks
+          .prepareFileRevert({
+            threadId: input.threadId,
+            cwd: scope.cwd,
+            checkpointRef: checkpoint.ref,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new CheckpointRollbackExecutionError({
+                  reason: "file-revert-refused",
+                  threadId: input.threadId,
+                  providerThreadId: input.providerThreadId,
+                  checkpointId: input.checkpointId,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
       }
 
       const modelSelection = projection.thread.modelSelection;
@@ -263,7 +296,15 @@ export const layer: Layer.Layer<
               target: rollbackTarget,
               providerThreadTurns,
             });
-      if (input.restoreFiles !== false) yield* checkpoints.restore({ scope, checkpoint });
+      if (vcsOwnsRevert) {
+        yield* vcsTurnHooks.revertFiles({
+          threadId: input.threadId,
+          cwd: scope.cwd,
+          checkpointRef: checkpoint.ref,
+        });
+      } else if (input.restoreFiles !== false) {
+        yield* checkpoints.restore({ scope, checkpoint });
+      }
       const staleCheckpoints = projection.checkpoints.filter(
         (candidate) =>
           candidate.scopeId === scope.id &&

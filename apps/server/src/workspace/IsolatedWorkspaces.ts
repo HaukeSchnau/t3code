@@ -12,7 +12,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { projectProviderView, readSeparateProject } from "../project/SeparateProjectRegistry.ts";
-import { findRepositoryMarker, resolveJjStartRevision } from "./JjWorkspaces.ts";
+import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
+import { resolveJjStartRevision } from "./JjWorkspaces.ts";
 import { slug } from "./WorkspaceNaming.ts";
 import {
   ManagedWorkspaceError,

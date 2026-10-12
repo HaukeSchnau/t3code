@@ -142,6 +142,15 @@ import {
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
+  JjActionError,
+  JjAssignPathsInput,
+  JjAssignPathsResult,
+  JjRunActionInput,
+  JjRunActionResult,
+  JjThreadWorkInput,
+  JjThreadWorkResult,
+} from "./jj.ts";
+import {
   ReviewDiffFileContentsInput,
   ReviewDiffFileContentsResult,
   ReviewDiffPreviewError,
@@ -418,6 +427,9 @@ export const WS_METHODS = {
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
+  vcsJjRunAction: "vcs.jj.runAction",
+  vcsJjAssignPaths: "vcs.jj.assignPaths",
+  vcsJjThreadWork: "vcs.jj.threadWork",
 
   // Git workflow methods
   gitRunStackedAction: "git.runStackedAction",
@@ -1379,6 +1391,24 @@ const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
   error: Schema.Union([VcsError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsJjRunActionRpc = Rpc.make(WS_METHODS.vcsJjRunAction, {
+  payload: JjRunActionInput,
+  success: JjRunActionResult,
+  error: Schema.Union([JjActionError, EnvironmentAuthorizationError]),
+});
+
+const WsVcsJjThreadWorkRpc = Rpc.make(WS_METHODS.vcsJjThreadWork, {
+  payload: JjThreadWorkInput,
+  success: JjThreadWorkResult,
+  error: Schema.Union([JjActionError, EnvironmentAuthorizationError]),
+});
+
+const WsVcsJjAssignPathsRpc = Rpc.make(WS_METHODS.vcsJjAssignPaths, {
+  payload: JjAssignPathsInput,
+  success: JjAssignPathsResult,
+  error: Schema.Union([JjActionError, EnvironmentAuthorizationError]),
+});
+
 /**
  * Ephemeral live diff preview for compact/mobile surfaces.
  * Not the persisted T3 Review model. Future review sessions should use
@@ -1888,6 +1918,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
+  WsVcsJjRunActionRpc,
+  WsVcsJjAssignPathsRpc,
+  WsVcsJjThreadWorkRpc,
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,
   WsTerminalOpenRpc,

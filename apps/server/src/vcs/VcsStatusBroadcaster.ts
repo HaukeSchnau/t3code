@@ -26,6 +26,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as JjStatusReader from "../jj/JjStatusReader.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
@@ -221,6 +222,13 @@ const normalizeCwd = (cwd: string) =>
 export const make = Effect.gen(function* () {
   const autoPullPolicy = yield* VcsAutoPullPolicy;
   const workflow = yield* GitWorkflowService.GitWorkflowService;
+  const jjStatus = yield* JjStatusReader.JjStatusReader;
+  // jj working copies add their jj block; one without a Git worktree has no remote status.
+  const localStatusFor = (cwd: string) => jjStatus.localStatus(cwd, workflow.localStatus({ cwd }));
+  const remoteStatusFor = (cwd: string, options?: Parameters<typeof workflow.remoteStatus>[1]) =>
+    Effect.flatMap(jjStatus.isJjWithoutGit(cwd), (jjWithoutGit) =>
+      jjWithoutGit ? Effect.succeed(null) : workflow.remoteStatus({ cwd }, options),
+    );
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const fs = yield* FileSystem.FileSystem;
   const changesPubSub = yield* Effect.acquireRelease(
@@ -356,7 +364,7 @@ export const make = Effect.gen(function* () {
   const loadLocalStatus = Effect.fn("VcsStatusBroadcaster.loadLocalStatus")(function* (
     cwd: string,
   ) {
-    const local = yield* workflow.localStatus({ cwd });
+    const local = yield* localStatusFor(cwd);
     return yield* updateCachedLocalStatus(cwd, local);
   });
 
@@ -386,8 +394,8 @@ export const make = Effect.gen(function* () {
         const latest = yield* getCachedStatus(cwd);
         const [local, remote] = yield* Effect.all(
           [
-            latest?.local ? Effect.succeed(latest.local.value) : workflow.localStatus({ cwd }),
-            latest?.remote ? Effect.succeed(latest.remote.value) : workflow.remoteStatus({ cwd }),
+            latest?.local ? Effect.succeed(latest.local.value) : localStatusFor(cwd),
+            latest?.remote ? Effect.succeed(latest.remote.value) : remoteStatusFor(cwd),
           ],
           { concurrency: "unbounded" },
         );
@@ -399,7 +407,7 @@ export const make = Effect.gen(function* () {
   const refreshLocalStatusCore = Effect.fn("VcsStatusBroadcaster.refreshLocalStatusCore")(
     function* (cwd: string) {
       yield* workflow.invalidateLocalStatus(cwd);
-      const local = yield* workflow.localStatus({ cwd });
+      const local = yield* localStatusFor(cwd);
       return yield* updateCachedLocalStatus(cwd, local, { publish: true });
     },
   );
@@ -431,13 +439,13 @@ export const make = Effect.gen(function* () {
       }
 
       yield* workflow.invalidateLocalStatus(cwd);
-      const local = yield* workflow.localStatus({ cwd });
+      const local = yield* localStatusFor(cwd);
       if (!local.isRepo || !local.isDefaultRef || local.hasWorkingTreeChanges) return null;
 
       yield* workflow.pullCurrentBranch(cwd);
       yield* workflow.invalidateStatus(cwd);
       const [refreshedLocal, refreshedRemote] = yield* Effect.all(
-        [workflow.localStatus({ cwd }), workflow.remoteStatus({ cwd }, { refreshUpstream: false })],
+        [localStatusFor(cwd), remoteStatusFor(cwd, { refreshUpstream: false })],
         { concurrency: "unbounded" },
       );
       yield* updateCachedStatus(cwd, refreshedLocal, refreshedRemote, { publish: true });
@@ -462,7 +470,7 @@ export const make = Effect.gen(function* () {
         if (options?.refreshUpstream !== false) {
           yield* workflow.invalidateRemoteStatus(cwd);
         }
-        const remote = yield* workflow.remoteStatus({ cwd }, options);
+        const remote = yield* remoteStatusFor(cwd, options);
         const pulled = yield* maybeAutoPull(cwd, remote, options?.policyCwds ?? [cwd]);
         if (pulled !== null) return pulled.remote;
         return yield* updateCachedRemoteStatus(cwd, remote, { publish: true });
@@ -480,10 +488,9 @@ export const make = Effect.gen(function* () {
       cwd,
       Effect.gen(function* () {
         yield* workflow.invalidateStatus(cwd);
-        const [local, remote] = yield* Effect.all(
-          [workflow.localStatus({ cwd }), workflow.remoteStatus({ cwd })],
-          { concurrency: "unbounded" },
-        );
+        const [local, remote] = yield* Effect.all([localStatusFor(cwd), remoteStatusFor(cwd)], {
+          concurrency: "unbounded",
+        });
         const pulled = yield* maybeAutoPull(cwd, remote, [rawCwd]);
         if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
         return yield* updateCachedStatus(cwd, local, remote, { publish: true });
@@ -510,10 +517,10 @@ export const make = Effect.gen(function* () {
           if (!shouldRefresh) return null;
           // Resolve the checked-out branch again. A cached PR can belong to
           // the previous branch after an agent checks out another branch.
-          const remote = yield* workflow.remoteStatus(
-            { cwd },
-            { refreshUpstream: false, refreshMissingPullRequest: true },
-          );
+          const remote = yield* remoteStatusFor(cwd, {
+            refreshUpstream: false,
+            refreshMissingPullRequest: true,
+          });
           return yield* updateCachedRemoteStatus(cwd, remote, { publish: true });
         }),
       );

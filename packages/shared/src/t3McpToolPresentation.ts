@@ -41,6 +41,8 @@ export type T3McpToolSummaryAction =
   | "worktree-handoff"
   | "worktree-list"
   | "worktree-status"
+  | "jj-status"
+  | "jj-action"
   | "project-list"
   | "project-read"
   | "project-create"
@@ -131,6 +133,9 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "worktree-handoff",
   ),
   t3_worktree_status: tool(["Get", "Getting", "Got", "thread worktree status"], "worktree-status"),
+  t3_jj_status: tool(["Read", "Reading", "Read", "the jj change stack"], "jj-status"),
+  t3_jj_action: tool(["Run", "Running", "Ran", "a jj action"], "jj-action"),
+  t3_jj_thread_work: tool(["Find", "Finding", "Found", "the thread's jj work"], "jj-status"),
   preview_status: tool(["Get", "Getting", "Got", "preview browser status"], "browser", "browser"),
   preview_open: tool(
     ["Open", "Opening", "Opened", "a page in the preview browser"],

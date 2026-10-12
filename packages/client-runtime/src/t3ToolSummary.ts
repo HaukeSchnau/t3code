@@ -298,6 +298,12 @@ export function summarizeT3ToolCalls(
     case "worktree-status":
       label = phrase("Checked", "check", `worktree status ${times}`);
       break;
+    case "jj-status":
+      label = phrase("Checked", "check", `the jj stack ${times}`);
+      break;
+    case "jj-action":
+      label = phrase("Ran", "run", `jj actions ${times}`);
+      break;
     case "project-list":
       label = phrase("Listed", "list", `projects ${times}`);
       break;

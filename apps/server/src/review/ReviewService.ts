@@ -103,7 +103,7 @@ export const make = Effect.gen(function* () {
 
     const getDriverDiffPreview = handle.driver.getDiffPreview;
     if (!getDriverDiffPreview) {
-      if (handle.kind === "git") {
+      if (handle.gitCompatible) {
         return yield* git.getReviewDiffPreview(input);
       }
       return yield* new VcsUnsupportedOperationError({
@@ -122,7 +122,7 @@ export const make = Effect.gen(function* () {
     yield* assertWorkspaceBoundCwd("ReviewService.getDiffFileContents", input.cwd);
 
     const handle = yield* vcsRegistry.detect({ cwd: input.cwd, requestedKind: "auto" });
-    if (handle?.kind !== "git") {
+    if (handle?.gitCompatible !== true) {
       return yield* new VcsUnsupportedOperationError({
         operation: "ReviewService.getDiffFileContents",
         kind: handle?.kind ?? "unknown",

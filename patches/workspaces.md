@@ -21,7 +21,8 @@ The server picks the backend from the project (`workspace/ManagedWorkspaces.ts`)
    forks through `agent-exec fork`, with Familiar as the default profile and Minimal under
    Advanced. Deletion retires the runtime with `--remove-checkout`.
 2. A jj workspace (`jj workspace add`, shared store) when the nearest repository marker is `.jj`.
-   Colocated repositories count as jj. `git worktree` never runs there.
+   Colocated repositories count as jj and get colocated workspaces (`--colocate`), so jj creates
+   the Git worktree; T3 never runs `git worktree` there.
 3. Upstream's Git worktree when the marker is `.git`.
 4. A guarded directory copy otherwise. It keeps the old size limit
    (`T3CODE_DIRECTORY_COPY_MAX_BYTES`, 5 GiB), free-space and sensitive-root checks, bounded
@@ -44,9 +45,8 @@ Setup scripts run in the workspace terminal as upstream does. Inside an isolated
 source checkout is not mounted there.
 
 `checkpoint.rollback` with `restoreFiles: false` accepts `missing` and `error` checkpoints, so
-"Edit from here" rewinds the conversation in jj workspaces and folders without Git. Files cannot
-be restored there, because v2 checkpoints are Git refs written through the Git driver and a
-secondary jj workspace has no `.git`. Colocated default jj workspaces keep normal Git checkpoints.
+"Edit from here" rewinds the conversation in folders without Git. jj workspaces have checkpoints
+and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 
 ## Contract
 
@@ -85,7 +85,6 @@ startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The serve
 
 - The CLI flags `t3 thread create --worktree --workspace-profile` and `--workspace ID`; v2 has no
   `t3 thread` command.
-- File checkpoints and the diff panel inside secondary jj workspaces (see above).
 - jj workspaces no thread ever used are not listed in the pickers.
 - Mobile keeps the profile choice for the app session only.
 - Multi-model sends stay Git-only, as upstream; on isolated hosts the server still routes them
@@ -94,5 +93,4 @@ startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The serve
 ## Removal
 
 Drop this patch when upstream creates workspaces for jj repositories and non-Git projects, and
-offers a pluggable execution backend that agent-exec can implement. jj-aware Git checkpoints
-(`GIT_DIR` on the shared store with the jj workspace as work tree) would close the checkpoint gap.
+offers a pluggable execution backend that agent-exec can implement.

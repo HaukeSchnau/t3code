@@ -52,8 +52,9 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
     label: "Jujutsu",
     executable: "jj",
     versionArgs: ["--version"],
-    implemented: false,
-    installHint: "Install Jujutsu with `brew install jj` or from https://github.com/jj-vcs/jj.",
+    implemented: true,
+    installHint:
+      "Install Jujutsu 0.46 or newer with `brew install jj` or from https://github.com/jj-vcs/jj.",
   },
 ];
 

@@ -78,6 +78,7 @@ import {
 } from "../ProviderAdapterDriver.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { ProviderThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   makePiRpcConnection,
   parsePiModelSlug,
@@ -412,9 +413,10 @@ export function makePiAdapterV2(
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      const threadEnvironment = yield* (yield* ProviderThreadEnvironment).forThread(input.threadId);
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment: options.environment,
+        environment: { ...options.environment, ...threadEnvironment },
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
@@ -996,6 +998,7 @@ export function makePiAdapterV2(
                 title: toolName,
                 type: "file_change",
                 fileName,
+                changes: [{ operation: "update", path: fileName }],
               },
             });
             return;
