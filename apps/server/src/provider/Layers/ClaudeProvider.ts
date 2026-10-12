@@ -209,6 +209,7 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly abortController: AbortController;
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string | undefined;
+  readonly spawnClaudeCodeProcess?: ClaudeQueryOptions["spawnClaudeCodeProcess"] | undefined;
 }): ClaudeQueryOptions {
   return {
     persistSession: false,
@@ -237,6 +238,9 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
       CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
     },
     ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(input.spawnClaudeCodeProcess === undefined
+      ? {}
+      : { spawnClaudeCodeProcess: input.spawnClaudeCodeProcess }),
     stderr: () => {},
   };
 }
@@ -354,6 +358,7 @@ const probeClaudeCapabilities = (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
+  spawnClaudeCodeProcess?: ClaudeQueryOptions["spawnClaudeCodeProcess"],
 ) => {
   const abort = new AbortController();
   return Effect.gen(function* () {
@@ -375,6 +380,7 @@ const probeClaudeCapabilities = (
           abortController: abort,
           environment: claudeEnvironment,
           cwd,
+          spawnClaudeCodeProcess,
         }),
       });
       const init = await q.initializationResult();

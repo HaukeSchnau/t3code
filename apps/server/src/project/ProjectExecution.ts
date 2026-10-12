@@ -1,5 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Claude's SDK requires a synchronous Node-compatible spawn callback.
-import * as NodeChildProcess from "node:child_process";
 import * as Effect from "effect/Effect";
 import * as PlatformError from "effect/PlatformError";
 import { isSeparateProject, projectProviderView } from "./SeparateProjectRegistry.ts";
@@ -144,24 +142,4 @@ export function separateProjectPolicy<Policy extends { readonly cwd: string | nu
   return project !== undefined && policy.cwd === project.hostCwd
     ? { ...policy, cwd: project.cwd }
     : policy;
-}
-
-/** Claude's SDK spawns its CLI itself; this launches it in the project environment instead. */
-export function separateProjectSpawn(project: SeparateProjectProvider) {
-  return (options: {
-    readonly command: string;
-    readonly args: ReadonlyArray<string>;
-    readonly env: NodeJS.ProcessEnv;
-    readonly signal: AbortSignal;
-  }) =>
-    NodeChildProcess.spawn(
-      project.launcher,
-      projectExecutionArguments(project.hostCwd, options.command, options.args),
-      {
-        cwd: project.hostCwd,
-        env: options.env,
-        signal: options.signal,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
 }

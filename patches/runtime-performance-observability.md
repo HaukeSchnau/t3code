@@ -33,6 +33,13 @@ layer wraps the provider instance registry and the OpenCode runtime in `server.t
 resource controls on the slice and must stop leftover scopes in `ExecStopPost`. Desktop and
 development installs leave the variable unset.
 
+The Claude Agent SDK spawns its CLI with Node instead of the Effect spawner, so the layer never sees
+it. `ClaudeAdapterV2` and the Claude capability probe pass `nativeProviderSpawn` as the SDK's
+`spawnClaudeCodeProcess`. It applies the same scope and the separate-project launcher. Without a
+scope or a separate project the SDK keeps its own spawn. With one, the SDK no longer records the
+CLI's stderr, so its exit errors lose that tail. The Cursor SDK runs in the server process and
+spawns tool shells itself. Those still land in the server unit.
+
 ## Upstream touch points
 
 - `apps/server/src/observability/Layers/Observability.ts`: the protobuf pin and the
@@ -41,6 +48,9 @@ development installs leave the variable unset.
   instead of upstream's `@t3tools/shared/nodeSqliteClient`. The fork copy carries the timing, so
   port upstream changes to `packages/shared/src/nodeSqliteClient.ts` into it during syncs.
 - `apps/server/src/server.ts`: the provider process spawner layer.
+- `apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts`,
+  `apps/server/src/provider/Drivers/ClaudeDriver.ts` and
+  `apps/server/src/provider/Layers/ClaudeProvider.ts`: the SDK spawn hook.
 
 ## Removal
 
@@ -52,4 +62,5 @@ upstream's shared client records transaction and statement timing.
 `Observability.test.ts` covers protobuf metrics beside JSON traces. `RuntimeMetrics.test.ts` covers
 present files, normal WAL absence, and collection errors. `NodeSqliteClient.test.ts` covers
 committed and rolled-back transaction timing and statement timing. `ProviderProcessSpawner.test.ts`
-covers the scope command.
+covers the scope command and a native launch through the project launcher. `ClaudeAdapterV2.test.ts`
+covers the SDK spawn hook with and without opted-in scopes.

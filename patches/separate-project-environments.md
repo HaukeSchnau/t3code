@@ -14,8 +14,8 @@ continuing those threads must keep working. Upstream has no project execution ba
   arguments kept separate. Unregistered commands never touch the launcher. A registered cwd without
   `T3CODE_EXECUTION_LAUNCHER` fails; it never falls back to host execution.
 - Route every process entry point: provider subprocesses and text generation through
-  `ProviderProcessSpawner`, the Claude SDK through `separateProjectSpawn`, `ProcessRunner`, and
-  `TerminalManager`.
+  `ProviderProcessSpawner`, the Claude SDK through `ProviderProcessSpawner.nativeProviderSpawn`,
+  `ProcessRunner`, and `TerminalManager`.
 - Codex and Claude v2 sessions use the host cwd for the subprocess and the visible cwd in thread
   and turn parameters (`CodexAdapterV2.ts`, `ClaudeAdapterV2.ts`). Local MCP URLs use the
   environment's host gateway, because v2 reaches its orchestration and preview tools over MCP.
