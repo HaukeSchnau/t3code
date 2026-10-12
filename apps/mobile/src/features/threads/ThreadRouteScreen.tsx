@@ -577,12 +577,13 @@ function ThreadRouteContent(
   );
   const gitActionProgress = useGitActionProgress(gitActionProgressTarget);
 
+  const opensJjStack = gitStatus.data?.kind === "jj" && gitStatus.data.jj !== undefined;
   const handleOpenGitInspector = useCallback(() => {
-    if (!fileInspector.supported) {
+    if (!fileInspector.supported || opensJjStack) {
       if (selectedThread === null) {
         return;
       }
-      navigation.navigate("GitOverview", {
+      navigation.navigate(opensJjStack ? "JjStack" : "GitOverview", {
         environmentId: String(selectedThread.environmentId),
         threadId: String(selectedThread.id),
       });
@@ -590,7 +591,14 @@ function ThreadRouteContent(
     }
     setInspectorSelection({ routeThreadIdentity, mode: "git" });
     showAuxiliaryPane("inspector");
-  }, [fileInspector.supported, navigation, routeThreadIdentity, selectedThread, showAuxiliaryPane]);
+  }, [
+    fileInspector.supported,
+    navigation,
+    opensJjStack,
+    routeThreadIdentity,
+    selectedThread,
+    showAuxiliaryPane,
+  ]);
   const handleOpenFilesInspector = useCallback(() => {
     if (selectedThread === null || selectedThreadCwd === null) {
       return;
