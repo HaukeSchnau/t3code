@@ -116,6 +116,7 @@ import {
   isForkableSourceRunStatus,
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
+import { VcsTurnHooks } from "./VcsTurnHooks.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { acceptsGeneratedTitle } from "./threadTitleMode.ts";
 
@@ -683,6 +684,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerSwitchService = yield* ProviderSwitchServiceV2;
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
+  const vcsTurnHooks = yield* VcsTurnHooks;
   const threadDispatch = yield* ThreadCommandExecutor;
 
   const mapDispatchError =
@@ -3203,7 +3205,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         type: "fork",
       }),
     );
-    const { targetThread, transfer } = yield* threadForkService
+    const planned = yield* threadForkService
       .plan({
         sourceProjection,
         sourceRun,
@@ -3217,6 +3219,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         createdAt: now,
       })
       .pipe(mapDispatchError(command));
+    const forkWorkspace = yield* vcsTurnHooks.prepareForkWorkspace({
+      sourceThreadId: command.sourceThreadId,
+      targetThreadId: command.targetThreadId,
+      title: planned.targetThread.title,
+    });
+    const targetThread =
+      forkWorkspace === null
+        ? planned.targetThread
+        : { ...planned.targetThread, worktreePath: forkWorkspace };
+    const { transfer } = planned;
 
     yield* emitEvent({
       type: "thread.created",
@@ -3317,6 +3329,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
+    // A fork in its own jj workspace brings its changes back with the context.
+    yield* vcsTurnHooks
+      .mergeBackFiles({
+        sourceThreadId: command.sourceThreadId,
+        targetThreadId: command.targetThreadId,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: cause.message,
+            }),
+        ),
+      );
     const sourceProviderThread = providerThreadForRun(sourceProjection, sourceRun);
     const now = command.createdAt ?? (yield* DateTime.now);
     const emitEvent = emit(events, command);
