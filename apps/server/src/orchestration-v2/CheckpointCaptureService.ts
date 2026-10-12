@@ -19,6 +19,7 @@ import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { VcsTurnHooks } from "./VcsTurnHooks.ts";
 
 export class CheckpointCaptureExecutionError extends Schema.TaggedError<CheckpointCaptureExecutionError>()(
   "CheckpointCaptureExecutionError",
@@ -59,6 +60,7 @@ export const layer: Layer.Layer<
     const eventSink = yield* EventSink.EventSinkV2;
     const ids = yield* IdAllocator.IdAllocatorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const vcsTurnHooks = yield* VcsTurnHooks;
 
     const execute = Effect.fn("orchestrationV2.checkpointCapture.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -67,9 +69,10 @@ export const layer: Layer.Layer<
     }) {
       const { run, rootNode, scope, providerThread, readyCheckpointOrdinals } =
         yield* projections.getCheckpointCaptureContext(input.threadId, input);
-      // A stopped run is already terminal. Its checkpoint is the rollback point
-      // for the message after it, so capture leaves its status alone.
-      const stopped = run?.status === "interrupted" || run?.status === "cancelled";
+      // A stopped or failed run is already terminal. Its checkpoint is the
+      // rollback point for the message after it, so capture leaves its status alone.
+      const stopped =
+        run?.status === "interrupted" || run?.status === "cancelled" || run?.status === "failed";
 
       // The effect is at-least-once. A settled run with a checkpoint proves
       // that an earlier execution committed its result.
@@ -84,6 +87,10 @@ export const layer: Layer.Layer<
       // runs, e.g. while a failed capture waits to retry. The workspace now
       // holds the rollback target, and the run must stay discarded.
       if (run?.status === "rolled_back") {
+        return;
+      }
+      // A run that failed before its provider thread started has no turn to capture.
+      if (run?.status === "failed" && (rootNode === undefined || providerThread === undefined)) {
         return;
       }
 
@@ -103,6 +110,15 @@ export const layer: Layer.Layer<
         });
       }
 
+      // jj working copies seal the turn's files first; the checkpoint records
+      // `@` after the seal, so reverting to this turn keeps its own change.
+      yield* vcsTurnHooks.sealTurn({
+        threadId: input.threadId,
+        runId: run.id,
+        ordinal: run.ordinal,
+        cwd: scope.cwd,
+        failed: run.status === "failed",
+      });
       const capturedAt = yield* DateTime.now;
       const baselineOrdinalWithinScope = Math.max(0, run.ordinal - 1);
       const hasReadyCheckpoint = (ordinalWithinScope: number) =>
