@@ -4178,6 +4178,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  const vcsKind = gitStatusQuery.data?.kind;
   // Fork: managed workspaces need no Git (patches/workspaces.md).
   const managedWorkspaces = useManagedWorkspaces(environmentId, activeProject?.workspaceRoot);
   const canChooseWorkspace = isGitRepo || managedWorkspaces !== null;
@@ -6570,7 +6571,8 @@ export default function ChatView(props: ChatViewProps) {
   });
   const localCheckoutBranchMismatch = useMemo(
     () =>
-      isServerThread
+      // jj keeps Git's HEAD detached, so a missing branch there is normal.
+      isServerThread && vcsKind !== "jj"
         ? resolveLocalCheckoutBranchMismatch({
             effectiveEnvMode: envMode,
             activeWorktreePath,
@@ -6578,7 +6580,14 @@ export default function ChatView(props: ChatViewProps) {
             currentGitBranch: gitStatusQuery.data?.refName ?? null,
           })
         : null,
-    [activeThreadBranch, activeWorktreePath, envMode, gitStatusQuery.data?.refName, isServerThread],
+    [
+      activeThreadBranch,
+      activeWorktreePath,
+      envMode,
+      gitStatusQuery.data?.refName,
+      isServerThread,
+      vcsKind,
+    ],
   );
   const publishComposerOverlayHeight = useCallback(
     (height: number) => {
@@ -10696,6 +10705,7 @@ export default function ChatView(props: ChatViewProps) {
     showOpenInPicker,
     gitCwd,
     isGitRepo,
+    vcsKind,
     envLocked,
     availableEnvironments: logicalProjectEnvironments,
     autoEnvironmentLabel,
@@ -11400,6 +11410,7 @@ export default function ChatView(props: ChatViewProps) {
                                 availableEnvironments={logicalProjectEnvironments}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
+                                jjCwd={vcsKind === "jj" ? gitCwd : null}
                               />
                             </div>
                           )}

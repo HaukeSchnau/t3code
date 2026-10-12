@@ -40,6 +40,7 @@ import {
 } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { JjStackControl } from "./JjStackControl";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ManagedWorkspaceSelector } from "./ManagedWorkspaceSelector";
 import { useManagedWorkspaces } from "../lib/managedWorkspaces";
@@ -93,6 +94,8 @@ interface BranchToolbarProps {
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
+  /** A jj checkout shows its stack in the composer strip instead of a branch. */
+  jjCwd?: string | null;
 }
 
 interface MobileRunContextSelectorProps {
@@ -524,6 +527,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onEnvironmentChange,
   composerControlsHostRef,
   contextStripVisible = true,
+  jjCwd = null,
 }: BranchToolbarProps) {
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = useMemo(
@@ -772,7 +776,15 @@ export const BranchToolbar = memo(function BranchToolbar({
         />
       ) : null}
 
-      {showGitControls ? (
+      {showGitControls && jjCwd !== null ? (
+        <JjStackControl
+          displayMode="toolbar"
+          className="flex-initial justify-end @3xl/composer-surface:ml-auto"
+          environmentId={environmentId}
+          threadId={threadId}
+          cwd={jjCwd}
+        />
+      ) : showGitControls ? (
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}
           ref={branchSelectorRef}
