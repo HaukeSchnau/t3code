@@ -1,5 +1,6 @@
 import * as NodeOS from "node:os";
 
+import { HostProcessStdoutIsTerminal } from "@t3tools/shared/hostProcess";
 import { QrCode } from "@t3tools/shared/qrCode";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
@@ -130,7 +131,7 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
     "",
   ].join("\n");
 
-export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
+const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const httpServer = yield* HttpServer.HttpServer;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -145,4 +146,15 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
     token: issued.credential,
     pairingUrl: buildPairingUrl(connectionString, issued.credential),
   } satisfies HeadlessServeAccessInfo;
+});
+
+/**
+ * The startup token grants admin access, so only a terminal gets it. Pipes and
+ * service managers keep stdout in logs, so they get a hint and no token is minted.
+ */
+export const headlessServeOutput = Effect.fn("headlessServeOutput")(function* () {
+  if (!(yield* HostProcessStdoutIsTerminal)) {
+    return "T3 Code server is ready. Pairing details print only to a terminal; run `t3 pair` on this host to create a pairing URL.";
+  }
+  return formatHeadlessServeOutput(yield* issueHeadlessServeAccessInfo());
 });
