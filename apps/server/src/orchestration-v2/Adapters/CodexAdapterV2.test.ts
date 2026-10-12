@@ -612,7 +612,7 @@ describe("CodexAdapterV2 runtime policy", () => {
 });
 
 describe("CodexAdapterV2 process spawning", () => {
-  it("injects cwd, model, and MCP authorization into thread-scoped params", () => {
+  it("injects cwd, model, thread environment, and MCP authorization into thread-scoped params", () => {
     const threadId = ThreadId.make("thread-codex-mcp");
     McpProviderSession.setMcpProviderSession({
       environmentId: EnvironmentId.make("environment-codex-mcp"),
@@ -634,12 +634,14 @@ describe("CodexAdapterV2 process spawning", () => {
             interactionMode: "default",
             cwd: "/workspace/thread-codex-mcp",
           },
+          threadEnvironment: { JJ_CONFIG: "/home/user/.jjconfig.toml:/t3/thread.toml" },
         }),
         {
           cwd: "/workspace/thread-codex-mcp",
           model: "gpt-5.4",
           config: {
             "tools.update_plan.enabled": true,
+            "shell_environment_policy.set.JJ_CONFIG": "/home/user/.jjconfig.toml:/t3/thread.toml",
             mcp_servers: {
               "t3-code": {
                 url: "http://127.0.0.1:43123/mcp",
@@ -3107,6 +3109,87 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isAtLeast(recoveredIndex, 0);
         assert.isAbove(resumedCommandIndex, recoveredIndex);
         assert.isAbove(terminalIndex, resumedCommandIndex);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("reports every path of a multi-file patch, including moves", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-multi-file-change";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Refactor." }),
+            {
+              type: "emit_inbound",
+              label: "item/completed/file-change",
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622445010,
+                  item: {
+                    type: "fileChange",
+                    id: "file-change-multi",
+                    status: "completed",
+                    changes: [
+                      { path: "/workspace/a.ts", kind: { type: "update" }, diff: "-a\n+b\n" },
+                      {
+                        path: "/workspace/old.ts",
+                        kind: { type: "update", move_path: "/workspace/new.ts" },
+                        diff: "",
+                      },
+                      { path: "/workspace/gone.ts", kind: { type: "delete" }, diff: "-x\n" },
+                    ],
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-multi-file-change"),
+            text: "Refactor.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "Codex file change");
+
+        const fileChanges = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "file_change"
+            ? [event.turnItem]
+            : [],
+        );
+        assert.lengthOf(fileChanges, 1);
+        assert.deepInclude(fileChanges[0], {
+          fileName: "/workspace/a.ts",
+          diffStr: "-a\n+b\n",
+          changes: [
+            { operation: "update", path: "/workspace/a.ts" },
+            { operation: "move", path: "/workspace/new.ts", oldPath: "/workspace/old.ts" },
+            { operation: "delete", path: "/workspace/gone.ts" },
+          ],
+        });
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );

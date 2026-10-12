@@ -134,6 +134,7 @@ import {
   makeProviderRetryTurnItem,
 } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { ProviderThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   isProviderNativeImageAttachment,
   providerMessageTextWithAttachmentPaths,
@@ -1065,6 +1066,7 @@ interface ActiveCodexProviderRetry {
 interface TrackedRunningCommandItem {
   readonly id: string;
   readonly command: string;
+  readonly cwd: string;
   readonly aggregatedOutput?: string;
   readonly processId?: string;
 }
@@ -1222,6 +1224,7 @@ export function codexThreadRuntimeParams(input: {
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
   readonly separateProject?: SeparateProjectProvider | undefined;
+  readonly threadEnvironment?: Readonly<Record<string, string>>;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1237,6 +1240,14 @@ export function codexThreadRuntimeParams(input: {
     config: {
       ...CODEX_THREAD_CONFIG,
       ...SkillPackProviderScope.codexThreadSkillConfig(input.threadId),
+      // The app-server process may serve several threads, so the thread's
+      // environment goes to its shell commands through config, not the process.
+      ...Object.fromEntries(
+        Object.entries(input.threadEnvironment ?? {}).map(([name, value]) => [
+          `shell_environment_policy.set.${name}`,
+          value,
+        ]),
+      ),
       ...(mcpSession === undefined
         ? {}
         : {
@@ -1252,6 +1263,16 @@ export function codexThreadRuntimeParams(input: {
     },
   };
 }
+
+const resolveCodexThreadRuntimeParams = Effect.fnUntraced(function* (
+  input: Omit<Parameters<typeof codexThreadRuntimeParams>[0], "threadEnvironment">,
+) {
+  const threadEnvironment =
+    input.threadId === null
+      ? {}
+      : yield* (yield* ProviderThreadEnvironment).forThread(input.threadId);
+  return codexThreadRuntimeParams({ ...input, threadEnvironment });
+});
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({ thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }) }),
@@ -2078,6 +2099,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 updatedAt: completedAt,
                 type: "command_execution",
                 input: tracked.command,
+                cwd: tracked.cwd,
                 ...(tracked.aggregatedOutput === undefined
                   ? {}
                   : { output: tracked.aggregatedOutput }),
@@ -3236,6 +3258,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               updatedAt,
               type: "command_execution",
               input: item.command,
+              cwd: item.cwd,
               ...(item.aggregatedOutput === null || item.aggregatedOutput === undefined
                 ? {}
                 : { output: item.aggregatedOutput }),
@@ -3306,6 +3329,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               type: "file_change",
               fileName: firstChange.path,
               diffStr: firstChange.diff,
+              changes: item.changes.map((change) =>
+                change.kind.type === "update" && change.kind.move_path
+                  ? { operation: "move", path: change.kind.move_path, oldPath: change.path }
+                  : { operation: change.kind.type, path: change.path },
+              ),
             };
             return { node, turnItem };
           });
@@ -4153,6 +4181,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 yield* trackRunningCommandItem(payload.turnId, {
                   id: payload.item.id,
                   command: payload.item.command,
+                  cwd: payload.item.cwd,
                   ...(payload.item.aggregatedOutput === null ||
                   payload.item.aggregatedOutput === undefined
                     ? {}
@@ -5481,16 +5510,14 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
               Effect.andThen(
-                client.request(
-                  "thread/start",
-                  codexThreadRuntimeParams({
-                    threadId: threadInput.threadId,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                    separateProject,
-                  }),
-                ),
+                resolveCodexThreadRuntimeParams({
+                  threadId: threadInput.threadId,
+                  modelSelection: threadInput.modelSelection,
+                  runtimePolicy: threadInput.runtimePolicy,
+                  separateProject,
+                }),
               ),
+              Effect.flatMap((params) => client.request("thread/start", params)),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
                   appThreadId: threadInput.threadId,
@@ -5513,6 +5540,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           resumeThread: (threadInput) =>
             Effect.gen(function* () {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              const params = yield* resolveCodexThreadRuntimeParams({
+                threadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
+                ...(threadInput.modelSelection === undefined
+                  ? {}
+                  : { modelSelection: threadInput.modelSelection }),
+                ...(threadInput.runtimePolicy === undefined
+                  ? {}
+                  : { runtimePolicy: threadInput.runtimePolicy }),
+                separateProject,
+              });
 
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
@@ -5520,16 +5557,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   client.raw.request("thread/resume", {
                     threadId: nativeThreadId,
                     excludeTurns: true,
-                    ...codexThreadRuntimeParams({
-                      threadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
-                      ...(threadInput.modelSelection === undefined
-                        ? {}
-                        : { modelSelection: threadInput.modelSelection }),
-                      ...(threadInput.runtimePolicy === undefined
-                        ? {}
-                        : { runtimePolicy: threadInput.runtimePolicy }),
-                      separateProject,
-                    }),
+                    ...params,
                   }),
                 ),
                 Effect.flatMap(decodeCodexResumeMetadata),
@@ -6249,12 +6277,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 yield* client.raw.request("thread/resume", {
                   threadId,
                   excludeTurns: true,
-                  ...codexThreadRuntimeParams({
+                  ...(yield* resolveCodexThreadRuntimeParams({
                     threadId: threadInput.providerThread.appThreadId,
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
                     separateProject,
-                  }),
+                  })),
                 });
               }
               const response = yield* ensureInitialized.pipe(
@@ -6292,6 +6320,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(threadInput.sourceProviderThread);
               const boundary = yield* resolveCodexForkBoundary(threadInput);
+              const params = yield* resolveCodexThreadRuntimeParams({
+                threadId: threadInput.targetThreadId,
+                ...(threadInput.modelSelection === undefined
+                  ? {}
+                  : { modelSelection: threadInput.modelSelection }),
+                ...(threadInput.runtimePolicy === undefined
+                  ? {}
+                  : { runtimePolicy: threadInput.runtimePolicy }),
+                separateProject,
+              });
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
                   client.request("thread/fork", {
@@ -6299,16 +6337,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     ...(boundary.lastTurnId === undefined
                       ? {}
                       : { lastTurnId: boundary.lastTurnId }),
-                    ...codexThreadRuntimeParams({
-                      threadId: threadInput.targetThreadId,
-                      ...(threadInput.modelSelection === undefined
-                        ? {}
-                        : { modelSelection: threadInput.modelSelection }),
-                      ...(threadInput.runtimePolicy === undefined
-                        ? {}
-                        : { runtimePolicy: threadInput.runtimePolicy }),
-                      separateProject,
-                    }),
+                    ...params,
                   }),
                 ),
                 Effect.mapError(
