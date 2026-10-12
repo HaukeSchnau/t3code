@@ -32,6 +32,14 @@ export const HostProcessEnvironment = Context.Reference<NodeJS.ProcessEnv>(
   },
 );
 
+/** False when stdout is a pipe, a file, or a service manager's log. */
+export const HostProcessStdoutIsTerminal = Context.Reference<boolean>(
+  "@t3tools/shared/hostProcess/HostProcessStdoutIsTerminal",
+  {
+    defaultValue: () => process.stdout.isTTY === true,
+  },
+);
+
 export const HostProcessWorkingDirectory = Context.Reference<string>(
   "@t3tools/shared/hostProcess/HostProcessWorkingDirectory",
   {
