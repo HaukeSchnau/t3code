@@ -8,6 +8,9 @@ import * as Layer from "effect/Layer";
 import type { VcsDriverKind, VcsError, VcsRepositoryIdentity } from "@t3tools/contracts";
 import { VcsUnsupportedOperationError } from "@t3tools/contracts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import * as JjCli from "./JjCli.ts";
+import * as JjVcsDriver from "./JjVcsDriver.ts";
+import { findRepositoryMarker } from "./RepositoryMarker.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 
@@ -23,6 +26,8 @@ export interface VcsDriverHandle {
   readonly kind: VcsDriverKind;
   readonly repository: VcsRepositoryIdentity;
   readonly driver: VcsDriver.VcsDriver["Service"];
+  /** Git commands work here: a Git repository, or a jj repository colocated with one. */
+  readonly gitCompatible: boolean;
 }
 
 export class VcsDriverRegistry extends Context.Service<
@@ -63,8 +68,10 @@ function parseDetectionCacheKey(key: string): {
 export const make = Effect.gen(function* () {
   const projectConfig = yield* VcsProjectConfig.VcsProjectConfig;
   const git = yield* GitVcsDriver.makeVcsDriver;
+  const jj = yield* JjVcsDriver.makeVcsDriverShape();
   const drivers: Partial<Record<VcsDriverKind, VcsDriver.VcsDriver["Service"]>> = {
     git,
+    jj,
   };
 
   const get: VcsDriverRegistry["Service"]["get"] = (kind) => {
@@ -94,6 +101,7 @@ export const make = Effect.gen(function* () {
       kind,
       repository,
       driver,
+      gitCompatible: kind === "git" || findRepositoryMarker(cwd)?.colocated === true,
     } satisfies VcsDriverHandle;
   });
 
@@ -108,6 +116,12 @@ export const make = Effect.gen(function* () {
       return yield* detectWithDriver(requestedKind, driver, input.cwd);
     }
 
+    // A colocated repository is a jj repository. An unsupported jj version
+    // falls back to Git, which still works in a colocated repository.
+    if (findRepositoryMarker(input.cwd)?.kind === "jj") {
+      const detected = yield* detectWithDriver("jj", jj, input.cwd);
+      if (detected) return detected;
+    }
     return yield* detectWithDriver("git", git, input.cwd);
   });
 
@@ -156,5 +170,5 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(VcsDriverRegistry, make).pipe(
-  Layer.provide(VcsProjectConfig.layer),
+  Layer.provide([VcsProjectConfig.layer, JjCli.layer]),
 );

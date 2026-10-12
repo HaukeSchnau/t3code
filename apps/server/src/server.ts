@@ -106,6 +106,14 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as JjCli from "./vcs/JjCli.ts";
+import * as JjCommitWriter from "./jj/JjCommitWriter.ts";
+import * as JjStatusReader from "./jj/JjStatusReader.ts";
+import * as JjThreadLayer from "./jj/JjThreadLayer.ts";
+import * as JjTurnHooks from "./jj/JjTurnHooks.ts";
+import * as JjTurnService from "./jj/JjTurnService.ts";
+import * as JjThreadWork from "./jj/JjThreadWork.ts";
+import * as JjWorkflow from "./jj/JjWorkflow.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
@@ -393,6 +401,7 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(
     VcsStatusBroadcaster.layer.pipe(
       Layer.provide(GitWorkflowLayerLive),
+      Layer.provide(JjStatusReader.layer.pipe(Layer.provide(JjCli.layer))),
       // Auto-pull reads the project row. The orchestration runtime also
       // consumes the broadcaster (run finalization), so the policy cannot read
       // the store from the runtime's output.
@@ -401,6 +410,15 @@ const VcsLayerLive = Layer.empty.pipe(
       ),
     ),
   ),
+);
+
+// One JjCli instance, so seals, reverts and actions share its working-copy locks.
+const JjLayerLive = Layer.merge(JjWorkflow.layer, JjThreadWork.layer).pipe(
+  Layer.provideMerge(JjTurnService.layer),
+  Layer.provideMerge(JjCommitWriter.layer),
+  Layer.provideMerge(JjThreadLayer.layer),
+  Layer.provideMerge(JjCli.layer),
+  Layer.provide(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
 );
 
 const CheckpointStoreLayerLive = CheckpointStore.layer.pipe(
@@ -552,6 +570,10 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(AgentWatches.layer.pipe(Layer.provide(ProviderProcessSpawnerLayerLive))),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
+  // References read by request fibers too (revert admission, session opens),
+  // so they join the runtime context rather than one layer's construction.
+  Layer.provideMerge(Layer.merge(JjTurnHooks.layer, JjThreadLayer.providerEnvironmentLayer)),
+  Layer.provideMerge(JjLayerLive),
   Layer.provideMerge(
     Layer.merge(ManagedWorkspaces.layer, ThreadFind.layer).pipe(
       Layer.provide(ProjectionStoreV2.layer),

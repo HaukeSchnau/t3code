@@ -24,6 +24,7 @@ import type {
 } from "@t3tools/contracts";
 import { GitManagerError } from "@t3tools/contracts";
 
+import * as JjStatusReader from "../jj/JjStatusReader.ts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -69,6 +70,16 @@ const baseStatus: VcsStatusResult = {
   ...baseRemoteStatus,
 };
 
+// These cases cover Git repositories; jj status is the reader's own test.
+const BroadcasterLayer = VcsStatusBroadcaster.layer.pipe(
+  Layer.provide(
+    Layer.mock(JjStatusReader.JjStatusReader)({
+      localStatus: (_cwd, gitStatus) => gitStatus,
+      isJjWithoutGit: () => Effect.succeed(false),
+    }),
+  ),
+);
+
 function makeTestLayer(state: {
   currentLocalStatus: VcsStatusLocalResult;
   currentRemoteStatus: VcsStatusRemoteResult | null;
@@ -79,7 +90,7 @@ function makeTestLayer(state: {
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
   backgroundWorkEnabled?: boolean;
 }) {
-  return VcsStatusBroadcaster.layer.pipe(
+  return BroadcasterLayer.pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(makeBackgroundPolicyLayer(() => state.backgroundWorkEnabled !== false)),
     Layer.provide(
@@ -156,7 +167,7 @@ describe("VcsStatusBroadcaster", () => {
         isDefaultRef: true,
         refName: "main",
       };
-      const testLayer = VcsStatusBroadcaster.layer.pipe(
+      const testLayer = BroadcasterLayer.pipe(
         Layer.provideMerge(NodeServices.layer),
         Layer.provide(makeBackgroundPolicyLayer(() => true)),
         Layer.provide(
@@ -272,7 +283,7 @@ describe("VcsStatusBroadcaster", () => {
     const releaseFirstPoll = Deferred.makeUnsafe<void>();
     const firstPollStarted = Deferred.makeUnsafe<void>();
     let remoteReads = 0;
-    const layer = VcsStatusBroadcaster.layer.pipe(
+    const layer = BroadcasterLayer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -317,7 +328,7 @@ describe("VcsStatusBroadcaster", () => {
     const firstReadStarted = Deferred.makeUnsafe<void>();
     const releaseFirstRead = Deferred.makeUnsafe<void>();
     let remoteReads = 0;
-    const layer = VcsStatusBroadcaster.layer.pipe(
+    const layer = BroadcasterLayer.pipe(
       Layer.provide(FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) })),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
@@ -425,7 +436,7 @@ describe("VcsStatusBroadcaster", () => {
       remoteInvalidationCalls: 0,
       failRemoteStatus: false,
     };
-    const testLayer = VcsStatusBroadcaster.layer.pipe(
+    const testLayer = BroadcasterLayer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -535,7 +546,7 @@ describe("VcsStatusBroadcaster", () => {
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
       };
-      const testLayer = VcsStatusBroadcaster.layer.pipe(
+      const testLayer = BroadcasterLayer.pipe(
         Layer.provideMerge(NodeServices.layer),
         Layer.provide(makeBackgroundPolicyLayer(() => true)),
         Layer.provide(
@@ -700,7 +711,7 @@ describe("VcsStatusBroadcaster", () => {
       messages.push(message as ReadonlyArray<unknown>);
     });
     let firstRemoteAttemptDeferred: Deferred.Deferred<void> | null = null;
-    const testLayer = VcsStatusBroadcaster.layer.pipe(
+    const testLayer = BroadcasterLayer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -900,7 +911,7 @@ describe("VcsStatusBroadcaster", () => {
       localInvalidationCalls: 0,
       remoteInvalidationCalls: 0,
     };
-    const testLayer = VcsStatusBroadcaster.layer.pipe(
+    const testLayer = BroadcasterLayer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => false)),
       Layer.provide(
@@ -953,7 +964,7 @@ describe("VcsStatusBroadcaster", () => {
     };
     let remoteInterruptedDeferred: Deferred.Deferred<void, never> | null = null;
     let remoteStartedDeferred: Deferred.Deferred<void, never> | null = null;
-    const testLayer = VcsStatusBroadcaster.layer.pipe(
+    const testLayer = BroadcasterLayer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(

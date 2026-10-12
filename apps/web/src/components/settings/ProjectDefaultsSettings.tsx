@@ -7,6 +7,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
+import { useRef } from "react";
 
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
@@ -22,6 +23,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { runtimeModeConfig, runtimeModeOptions } from "../chat/runtimeModeConfig";
 import { PULL_REQUEST_MERGE_METHOD_LABELS } from "../pullRequest/pullRequestDetail.logic";
 import { TraitsPicker } from "../chat/TraitsPicker";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
@@ -80,6 +82,10 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
+  const mixedJjTrailers = useScopedSettingsMixed(["jjCommitTrailers"]);
+  const mixedJjStripRemotes = useScopedSettingsMixed(["jjStripTrailersRemotes"]);
+  const jjStripRemotesEdited = useRef(false);
+  const scopeKey = targets.map((entry) => `${entry.environmentId}:${entry.projectId}`).join(",");
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const unavailable = connectedEnvironments.length === 0;
@@ -458,6 +464,85 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                   <SelectItem value="rebase">{PULL_REQUEST_MERGE_METHOD_LABELS.rebase}</SelectItem>
                 </SelectPopup>
               </Select>
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["jjCommitTrailers"]}
+            mixed={mixedJjTrailers}
+            {...searchableSetting("jj-commit-trailers")}
+            description={
+              isProjectScope
+                ? "Commits that agents or T3 make in this jj repository get T3-Thread and T3-Turn trailers that link them to the thread and turn."
+                : "Commits that agents or T3 make in jj repositories get T3-Thread and T3-Turn trailers that link them to the thread and turn. Projects can override it."
+            }
+            resetAction={
+              settings.jjCommitTrailers !== DEFAULT_SERVER_SETTINGS.jjCommitTrailers ? (
+                <SettingResetButton
+                  label="jj commit trailers"
+                  onClick={() =>
+                    updateSettings({ jjCommitTrailers: DEFAULT_SERVER_SETTINGS.jjCommitTrailers })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Add T3 trailers to jj commits"
+                mixed={mixedJjTrailers}
+                checked={mixedJjTrailers ? false : settings.jjCommitTrailers}
+                onCheckedChange={(enabled) => updateSettings({ jjCommitTrailers: enabled })}
+              />
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["jjStripTrailersRemotes"]}
+            mixed={mixedJjStripRemotes}
+            {...searchableSetting("jj-strip-trailers-remotes")}
+            description={
+              isProjectScope
+                ? "Pushes from this project to these remotes drop the T3 trailers first. Separate remote names with commas."
+                : "Pushes to these remotes drop the T3 trailers first. Separate remote names with commas. Projects can override it."
+            }
+            resetAction={
+              settings.jjStripTrailersRemotes.length > 0 ? (
+                <SettingResetButton
+                  label="remotes that strip T3 trailers"
+                  onClick={() => updateSettings({ jjStripTrailersRemotes: [] })}
+                />
+              ) : null
+            }
+            control={
+              <Input
+                key={`${scopeKey}:${mixedJjStripRemotes}:${settings.jjStripTrailersRemotes.join(",")}`}
+                aria-label="Strip T3 trailers when pushing to"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder={mixedJjStripRemotes ? "Mixed" : "No remotes"}
+                defaultValue={mixedJjStripRemotes ? "" : settings.jjStripTrailersRemotes.join(", ")}
+                onChange={() => {
+                  jjStripRemotesEdited.current = true;
+                }}
+                onBlur={(event) => {
+                  const remotes = [
+                    ...new Set(
+                      event.target.value
+                        .split(",")
+                        .map((remote) => remote.trim())
+                        .filter((remote) => remote.length > 0),
+                    ),
+                  ];
+                  if (
+                    jjStripRemotesEdited.current &&
+                    (mixedJjStripRemotes ||
+                      remotes.join(",") !== settings.jjStripTrailersRemotes.join(","))
+                  ) {
+                    updateSettings({ jjStripTrailersRemotes: remotes });
+                  }
+                  jjStripRemotesEdited.current = false;
+                }}
+              />
             }
           />
         </>

@@ -71,6 +71,7 @@ import * as OpenCodeRuntime from "../../provider/opencodeRuntime.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { ProviderThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import { providerMessageTextWithAttachmentPaths } from "../AttachmentPrompt.ts";
 import * as ProviderAdapter from "../ProviderAdapter.ts";
 import {
@@ -955,14 +956,18 @@ export function makeOpenCodeAdapterV2(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const scope = yield* Effect.scope;
         const cwd = input.runtimePolicy.cwd ?? serverConfig.cwd;
+        const threadEnvironment = yield* (yield* ProviderThreadEnvironment).forThread(
+          input.threadId,
+        );
+        // The environment only reaches a server T3 spawns for this session.
         const connection = yield* runtime.connectToOpenCodeServer({
           binaryPath: options.settings.binaryPath,
           directory: cwd,
           serverUrl: options.settings.serverUrl,
-          environment: SkillPackProviderScope.withOpenCodeSkillPacks(
-            input.threadId,
-            options.environment,
-          ),
+          environment: SkillPackProviderScope.withOpenCodeSkillPacks(input.threadId, {
+            ...options.environment,
+            ...threadEnvironment,
+          }),
         });
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,

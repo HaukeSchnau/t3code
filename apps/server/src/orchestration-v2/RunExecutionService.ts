@@ -49,6 +49,7 @@ import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFailure.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import { VcsTurnHooks } from "./VcsTurnHooks.ts";
 
 export interface ProviderEventRoutingState {
   readonly ownedThreadIds: ReadonlySet<ThreadId>;
@@ -550,6 +551,7 @@ export const layer: Layer.Layer<
     const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
+    const vcsTurnHooks = yield* VcsTurnHooks;
 
     const writeFinalRunEvents = (input: {
       readonly run: OrchestrationV2Run;
@@ -659,14 +661,16 @@ export const layer: Layer.Layer<
         const checkpointCaptureCommandId = CommandId.make(
           `command:effect:checkpoint.capture:${input.run.id}`,
         );
-        // Stopped runs capture too: their checkpoint is the rollback point for
-        // the next message. The capture is enqueued with these terminal events,
+        // Stopped and failed runs capture too: their checkpoint is the rollback
+        // point for the next message, and finalization seals their files in jj
+        // working copies. The capture is enqueued with these terminal events,
         // ahead of any later run's start on this thread's effect lane.
         const finalization = {
           effects:
             input.terminal.status === "completed" ||
             input.terminal.status === "interrupted" ||
-            input.terminal.status === "cancelled"
+            input.terminal.status === "cancelled" ||
+            input.terminal.status === "failed"
               ? [
                   {
                     id: `effect:checkpoint.capture:${input.run.id}`,
@@ -832,6 +836,12 @@ export const layer: Layer.Layer<
                     .responseStreamingMode,
               ),
             );
+            yield* vcsTurnHooks.turnStarted({
+              threadId: input.run.threadId,
+              runId: input.run.id,
+              ordinal: input.run.ordinal,
+              cwd: input.checkpointScope.cwd,
+            });
             yield* checkpointService
               .captureBaseline({
                 scope: input.checkpointScope,

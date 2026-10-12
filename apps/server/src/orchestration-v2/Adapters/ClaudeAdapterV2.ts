@@ -121,6 +121,7 @@ import {
 import * as IdAllocator from "../IdAllocator.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { ProviderThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import { providerMessageTextWithAttachmentPaths } from "../AttachmentPrompt.ts";
 import * as ProviderAdapter from "../ProviderAdapter.ts";
 import {
@@ -1772,11 +1773,14 @@ function parseClaudeBackgroundTaskEntry(
   });
 }
 
-function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
-  return (
-    firstStringInputField(input, ["file_path", "path", "filename", "fileName"]) ??
-    `${toolName} result`
-  );
+const CLAUDE_FILE_PATH_FIELDS = ["file_path", "notebook_path", "path", "filename", "fileName"];
+
+/** Write's structured result says whether it created the file; other file tools update one. */
+function claudeFileChangeOperation(output: ClaudeNativeToolOutput): "add" | "update" {
+  const value = output.type === "structured_tool_use_result" ? output.value : undefined;
+  return typeof value === "object" && value !== null && Reflect.get(value, "type") === "create"
+    ? "add"
+    : "update";
 }
 
 type ClaudeNativeToolOutput =
@@ -1905,7 +1909,7 @@ function summarizeClaudeToolRequest(toolName: string, input: ClaudeNativeToolInp
   if (command !== undefined) {
     return `${toolName}: ${command.slice(0, 400)}`;
   }
-  const path = firstStringInputField(input, ["file_path", "path", "filename", "fileName"]);
+  const path = firstStringInputField(input, CLAUDE_FILE_PATH_FIELDS);
   if (path !== undefined) {
     return `${toolName}: ${path.slice(0, 400)}`;
   }
@@ -3693,6 +3697,10 @@ export function makeClaudeAdapterV2(
               ? readPath
               : undefined;
           const itemType = input.classification.itemType;
+          const filePath =
+            itemType === "file_change"
+              ? firstStringInputField(input.toolInput, CLAUDE_FILE_PATH_FIELDS)
+              : undefined;
           const webSearchPatterns = webSearchPatternsFromClaudeTool({
             toolInput: input.toolInput,
             output: input.output,
@@ -3712,7 +3720,14 @@ export function makeClaudeAdapterV2(
                 ? {
                     ...itemBase,
                     type: "file_change",
-                    fileName: fileNameFromClaudeTool(input.toolName, input.toolInput),
+                    fileName: filePath ?? `${input.toolName} result`,
+                    ...(filePath === undefined
+                      ? {}
+                      : {
+                          changes: [
+                            { operation: claudeFileChangeOperation(input.output), path: filePath },
+                          ],
+                        }),
                     ...(outputText.length === 0 ? {} : { diffStr: outputText }),
                   }
                 : itemType === "web_search"
@@ -6721,6 +6736,9 @@ export function makeClaudeAdapterV2(
           const hasPersistedProviderTurn = turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+          const threadEnvironment = yield* (yield* ProviderThreadEnvironment).forThread(
+            turnInput.threadId,
+          );
           const querySession = yield* queryRunner
             .open({
               threadId: turnInput.threadId,
@@ -6733,7 +6751,7 @@ export function makeClaudeAdapterV2(
                 cwd: separateProjectPolicy(separateProject, turnInput.runtimePolicy).cwd,
                 attachmentsDir,
                 settings: adapterOptions.settings,
-                environment: adapterOptions.environment,
+                environment: { ...adapterOptions.environment, ...threadEnvironment },
                 ...(separateProject === undefined
                   ? {}
                   : { spawnClaudeCodeProcess: separateProjectSpawn(separateProject) }),

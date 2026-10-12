@@ -4,6 +4,7 @@ import type {
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
+  VcsDriverKind,
 } from "@t3tools/contracts";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 
@@ -13,6 +14,7 @@ import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import GitActionsControl from "../GitActionsControl";
+import { JjStackControl } from "../JjStackControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
@@ -47,6 +49,7 @@ export interface ThreadDetailsPanelProps extends Pick<
   showOpenInPicker: boolean;
   gitCwd: string | null;
   isGitRepo: boolean;
+  vcsKind?: VcsDriverKind | undefined;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
   autoEnvironmentLabel?: string | undefined;
@@ -188,22 +191,34 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               separated={density === "full"}
             >
               <div className="flex flex-col">
-                {props.isGitRepo ? (
-                  <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
-                ) : null}
-                {props.activeProjectName ? (
-                  <GitActionsControl
+                {props.vcsKind === "jj" ? (
+                  <JjStackControl
                     displayMode="panel"
-                    compact={density !== "full"}
-                    gitCwd={props.gitCwd}
-                    activeThreadRef={{
-                      environmentId: props.environmentId,
-                      threadId: props.threadId,
-                    }}
-                    {...(props.draftId ? { draftId: props.draftId } : {})}
+                    environmentId={props.environmentId}
+                    threadId={props.threadId}
+                    cwd={props.gitCwd}
                     {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
                   />
-                ) : null}
+                ) : (
+                  <>
+                    {props.isGitRepo ? (
+                      <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
+                    ) : null}
+                    {props.activeProjectName ? (
+                      <GitActionsControl
+                        displayMode="panel"
+                        compact={density !== "full"}
+                        gitCwd={props.gitCwd}
+                        activeThreadRef={{
+                          environmentId: props.environmentId,
+                          threadId: props.threadId,
+                        }}
+                        {...(props.draftId ? { draftId: props.draftId } : {})}
+                        {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
+                      />
+                    ) : null}
+                  </>
+                )}
               </div>
             </ThreadDetailsSection>
           ) : null}

@@ -2883,6 +2883,97 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
   );
 
+  it.effect("reports the changed path and operation of Claude file tools", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const now = yield* DateTime.now;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-file-tools"),
+          text: "Edit the files",
+          attachments: [],
+        }),
+      );
+      const tools = [
+        {
+          id: "notebook",
+          name: "NotebookEdit",
+          input: { notebook_path: "/workspace/a.ipynb", new_source: "x" },
+        },
+        { id: "write", name: "Write", input: { file_path: "/workspace/new.ts", content: "x" } },
+      ];
+      yield* Queue.offer(
+        harness.sdkMessages,
+        claudeSdkFrame({
+          type: "assistant",
+          uuid: "00000000-0000-4000-8000-000000000611",
+          session_id: WAKE_NATIVE_SESSION,
+          parent_tool_use_id: null,
+          message: {
+            id: "msg_file_tools",
+            model: "claude-sonnet-4-6",
+            type: "message",
+            role: "assistant",
+            content: tools.map((tool) => ({ type: "tool_use", ...tool })),
+            stop_reason: "tool_use",
+            stop_sequence: null,
+            usage: {
+              input_tokens: 1,
+              output_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+          },
+        }),
+      );
+      for (const [index, tool] of tools.entries()) {
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "user",
+            uuid: `00000000-0000-4000-8000-00000000061${index + 2}`,
+            session_id: WAKE_NATIVE_SESSION,
+            parent_tool_use_id: null,
+            message: {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: tool.id, content: "ok" }],
+            },
+            ...(tool.id === "write"
+              ? {
+                  tool_use_result: {
+                    type: "create",
+                    filePath: "/workspace/new.ts",
+                    content: "x",
+                    structuredPatch: [],
+                    originalFile: null,
+                  },
+                }
+              : {}),
+          }),
+        );
+      }
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000619", result: "Edited" }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      const changes = harness.events.flatMap((event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.type === "file_change" &&
+        event.turnItem.status === "completed"
+          ? [[event.turnItem.fileName, event.turnItem.changes]]
+          : [],
+      );
+      assert.deepEqual(changes, [
+        ["/workspace/a.ipynb", [{ operation: "update", path: "/workspace/a.ipynb" }]],
+        ["/workspace/new.ts", [{ operation: "add", path: "/workspace/new.ts" }]],
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
+  );
+
   it.effect("preserves typed Claude plans and todos through generic tool completion", () =>
     Effect.scoped(
       Effect.gen(function* () {

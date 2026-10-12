@@ -44,6 +44,8 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { JjToolkitHandlersLive } from "./toolkits/jj/handlers.ts";
+import { JjToolkit } from "./toolkits/jj/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { WatchToolkitRegistrationLive } from "./toolkits/watch/handlers.ts";
@@ -676,6 +678,10 @@ const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
   Layer.provide(WorktreeMcpService.layer),
 );
 
+const JjToolkitRegistrationLive = McpServer.toolkit(JjToolkit).pipe(
+  Layer.provide(JjToolkitHandlersLive),
+);
+
 const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
   Layer.provide(PreviewControlsHandlersLive),
 );
@@ -725,6 +731,7 @@ export const layer = Layer.mergeAll(
   EnvironmentRegistrationLive,
   PreviewControlsRegistrationLive,
   WorktreeToolkitRegistrationLive,
+  JjToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
   WatchToolkitRegistrationLive,

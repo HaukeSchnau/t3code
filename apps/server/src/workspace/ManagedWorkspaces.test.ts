@@ -171,7 +171,8 @@ describe("ManagedWorkspaces", () => {
         "fix-login-redirect",
         "fix-login-redirect-2",
       ]);
-      assert.isFalse(NodeFS.existsSync(NodePath.join(first.worktreePath, ".git")));
+      // The project is colocated, so its workspaces are too.
+      assert.isTrue(NodeFS.existsSync(NodePath.join(first.worktreePath, ".git")));
 
       yield* workspaces.removeWorktree({ cwd: project, path: first.worktreePath });
       yield* workspaces.discard(second.worktreePath);
