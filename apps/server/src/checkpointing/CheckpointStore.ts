@@ -1,8 +1,8 @@
 /**
  * CheckpointStore - Repository interface for filesystem-backed workspace checkpoints.
  *
- * Owns hidden Git-ref checkpoint capture/restore and diff computation for a
- * workspace thread timeline. It does not store user-facing checkpoint metadata
+ * Owns checkpoint capture/restore and diff computation for a workspace thread
+ * timeline: hidden Git refs, or recorded jj commit ids. It does not store user-facing checkpoint metadata
  * and does not coordinate provider conversation rollback.
  *
  * The live adapter resolves the active VCS driver once per checkpoint operation
@@ -51,8 +51,8 @@ export interface DeleteCheckpointRefsInput {
 export class CheckpointStore extends Context.Service<
   CheckpointStore,
   {
-    /** Check whether cwd is inside a Git worktree. */
-    readonly isGitRepository: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
+    /** Check whether cwd is inside a repository whose VCS driver can checkpoint it. */
+    readonly isCheckpointable: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
 
     /**
      * Capture a checkpoint commit and store it at the provided checkpoint ref.
@@ -117,10 +117,10 @@ export const make = Effect.gen(function* () {
     return handle.driver.checkpoints satisfies VcsCheckpointOps;
   });
 
-  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = (cwd) =>
+  const isCheckpointable: CheckpointStore["Service"]["isCheckpointable"] = (cwd) =>
     vcsRegistry
-      .detect({ cwd, requestedKind: "git" })
-      .pipe(Effect.map((repository) => repository !== null));
+      .detect({ cwd })
+      .pipe(Effect.map((handle) => handle?.driver.checkpoints !== undefined));
 
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(
     "captureCheckpoint",
@@ -161,7 +161,7 @@ export const make = Effect.gen(function* () {
   });
 
   return CheckpointStore.of({
-    isGitRepository,
+    isCheckpointable,
     captureCheckpoint,
     hasCheckpointRef,
     restoreCheckpoint,

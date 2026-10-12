@@ -2,15 +2,17 @@
 /**
  * jj workspaces as managed workspaces. A new workspace shares the project's
  * repository store (`jj workspace add`), so changes are visible from every
- * workspace without pushing. Git worktrees are never used for jj repositories.
+ * workspace without pushing. In a colocated repository jj also creates a Git
+ * worktree for it; T3 never runs `git worktree` itself for jj repositories.
  *
  * @module JjWorkspaces
  */
-import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
 
+import { STABLE_OUTPUT_ARGS } from "../vcs/JjCli.ts";
+import { findRepositoryMarker, realpathOrResolve as realpath } from "../vcs/RepositoryMarker.ts";
 import {
   ManagedWorkspaceError,
   removeWorkspaceDirectory,
@@ -18,41 +20,11 @@ import {
   runWorkspaceCommandOrFail,
 } from "./WorkspaceCommand.ts";
 
-function realpath(path: string): string {
-  try {
-    return NodeFS.realpathSync.native(path);
-  } catch {
-    return NodePath.resolve(path);
-  }
-}
-
-interface RepositoryMarker {
-  readonly kind: "jj" | "git";
-  readonly root: string;
-}
-
-/**
- * The nearest repository boundary at or above `path`. A colocated repository
- * (`.jj` next to `.git`) is a jj repository.
- */
-export function findRepositoryMarker(path: string): RepositoryMarker | null {
-  let current = realpath(path);
-  while (true) {
-    if (NodeFS.statSync(NodePath.join(current, ".jj"), { throwIfNoEntry: false })?.isDirectory()) {
-      return { kind: "jj", root: current };
-    }
-    if (NodeFS.existsSync(NodePath.join(current, ".git"))) return { kind: "git", root: current };
-    const parent = NodePath.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
-}
-
 const jj = (operation: string, repository: string, args: ReadonlyArray<string>) =>
   runWorkspaceCommandOrFail({
     operation,
     command: "jj",
-    args: ["--no-pager", "--color=never", "-R", repository, ...args],
+    args: [...STABLE_OUTPUT_ARGS, "-R", repository, ...args],
     timeout: "3 minutes",
   });
 
@@ -169,6 +141,9 @@ export const createJjWorkspace = Effect.fn("JjWorkspaces.create")(function* (inp
   yield* jj("JjWorkspaces.add", repository, [
     "workspace",
     "add",
+    // A colocated repository gets colocated workspaces, so Git tooling and
+    // T3's Git-backed features work in them too.
+    ...(marker.colocated ? ["--colocate"] : []),
     "--name",
     input.name,
     "--message",
