@@ -12,7 +12,7 @@ in
     nodejs
     pnpm
     pkgs.git
-    pkgs.jujutsu
+    inputs.nixpkgs-jj.legacyPackages.${pkgs.stdenv.system}.jujutsu
     pkgs.openssh
     pkgs.pkg-config
     pkgs.python3
