@@ -3,7 +3,7 @@
  * Both report a tool as a name, a JSON input, text output, and free-form
  * metadata; only how they deliver those differs.
  */
-import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
+import type { OrchestrationV2FileChangeDetail, OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 
 type ToolItemBase = Omit<
@@ -69,6 +69,48 @@ function stableJson(value: unknown): string {
 }
 
 /**
+ * Files an apply_patch call touches. The finished call's metadata lists them;
+ * while it runs, only the patch text's file headers name them.
+ */
+function patchFileChanges(
+  input: Record<string, unknown>,
+  completedMetadata: unknown,
+): Array<OrchestrationV2FileChangeDetail> {
+  const files =
+    typeof completedMetadata === "object" && completedMetadata !== null
+      ? (completedMetadata as Record<string, unknown>).files
+      : undefined;
+  if (Array.isArray(files)) {
+    return files.flatMap((file): Array<OrchestrationV2FileChangeDetail> => {
+      const path = recordString(file, "filePath")?.trim();
+      const operation = recordString(file, "type")?.trim();
+      if (path === undefined || operation === undefined) return [];
+      const movePath = recordString(file, "movePath")?.trim();
+      return [
+        movePath === undefined
+          ? { operation, path }
+          : { operation: "move", path: movePath, oldPath: path },
+      ];
+    });
+  }
+  const changes: Array<OrchestrationV2FileChangeDetail> = [];
+  for (const line of (recordString(input, "patchText") ?? "").split(/\r?\n/)) {
+    const file = /^\*\*\* (Add|Update|Delete) File:(.+)$/.exec(line);
+    const path = file?.[2]?.trim();
+    if (file?.[1] !== undefined && path) {
+      changes.push({ operation: file[1].toLowerCase(), path });
+      continue;
+    }
+    const movePath = /^\*\*\* Move to:(.+)$/.exec(line)?.[1]?.trim();
+    const previous = changes.at(-1);
+    if (movePath && previous?.operation === "update") {
+      changes[changes.length - 1] = { operation: "move", path: movePath, oldPath: previous.path };
+    }
+  }
+  return changes;
+}
+
+/**
  * The turn item for one tool call. `completedMetadata` is the tool's metadata
  * once it succeeded: exit codes and diffs are only trusted from a finished call.
  */
@@ -85,10 +127,12 @@ export function openCodeToolTurnItem(
   switch (openCodeToolProjectionKind(tool.name)) {
     case "command_execution": {
       const exitCode = recordNumber(tool.completedMetadata, "exit", "exitCode");
+      const cwd = recordString(input, "workdir")?.trim();
       return {
         ...base,
         type: "command_execution",
         input: recordString(input, "command", "cmd") ?? stableJson(input),
+        ...(cwd === undefined ? {} : { cwd }),
         ...(output === undefined ? {} : { output }),
         ...(exitCode === undefined ? {} : { exitCode }),
       };
@@ -97,10 +141,14 @@ export function openCodeToolTurnItem(
       const oldStr = recordString(input, "oldString", "oldText");
       const newStr = recordString(input, "newString", "content", "newText");
       const diffStr = recordString(tool.completedMetadata, "diff", "patch");
+      const changes = tool.name.toLowerCase().includes("patch")
+        ? patchFileChanges(input, tool.completedMetadata)
+        : [];
       return {
         ...base,
         type: "file_change",
-        fileName: recordString(input, "filePath", "path", "file") ?? tool.name,
+        fileName: changes[0]?.path ?? recordString(input, "filePath", "path", "file") ?? tool.name,
+        ...(changes.length === 0 ? {} : { changes }),
         ...(oldStr === undefined ? {} : { oldStr }),
         ...(newStr === undefined ? {} : { newStr }),
         ...(diffStr === undefined ? {} : { diffStr }),
