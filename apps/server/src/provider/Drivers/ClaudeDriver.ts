@@ -52,6 +52,7 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import * as ProviderProcessSpawner from "../ProviderProcessSpawner.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -192,13 +193,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         modelCatalog,
       );
 
+      const probeSpawn = ProviderProcessSpawner.nativeProviderSpawn({
+        scope: yield* ProviderProcessSpawner.nativeScope,
+      });
       // Per-instance capabilities cache: keyed on binary + resolved HOME so
       // account-specific probes never share auth metadata across instances.
       const capabilitiesProbeCache = yield* Cache.make({
         capacity: 1,
         timeToLive: CAPABILITIES_PROBE_TTL,
         lookup: () =>
-          probeClaudeCapabilities(effectiveConfig, processEnv, cwd).pipe(
+          probeClaudeCapabilities(effectiveConfig, processEnv, cwd, probeSpawn).pipe(
             Effect.provideService(Path.Path, path),
           ),
       });
