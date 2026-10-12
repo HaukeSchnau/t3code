@@ -195,3 +195,40 @@ the scope and merge strategy. GitHub rebases the remaining stack after merging.
 It can rewrite history and restart checks. If a layer fails, earlier updates remain; resolve that
 layer before retrying. GitHub may require manual conflict resolution after a lower layer is amended,
 even when its changes look independent. Stack actions require an environment that supports them.
+
+## Jujutsu (jj)
+
+T3 Code works with [Jujutsu](https://jj-vcs.github.io/jj/) repositories when jj 0.46 or newer is
+installed on the server. A repository with a `.jj` folder is treated as jj, including one that also
+has a `.git` folder. Colocated repositories, the default for `jj git init` and `jj git clone`, keep
+every Git feature as well. New workspaces for a colocated repository are colocated too.
+
+Every turn ends in a change of its own. When the agent commits its work with jj, T3 Code leaves it
+alone. Otherwise T3 Code commits the files the turn changed and has your commit writer describe them,
+so you can review, squash, or push each turn separately. Turns that fail are kept the same way,
+marked in the description.
+
+Commits carry `T3-Thread` and `T3-Turn` trailers that link them to the thread and turn that made
+them, including commits the agent makes itself. Turn this off per project in
+**Settings → Source Control → Add T3 trailers to jj commits**. To keep the trailers out of a remote,
+list it under **Strip T3 trailers when pushing to**; this applies to pushes T3 Code makes.
+
+Open **Version Control** in the thread details to see the stack from `trunk()` to your working copy.
+From there you can describe, commit, squash, abandon, or edit a change, set bookmarks, fetch, rebase
+onto trunk, push, open a pull request, and undo the last operation T3 Code ran. A change without a
+bookmark is pushed as `t3code/<name>`. Agents can do the same through T3 Code's tools.
+
+Several threads can work in one checkout. Each turn keeps only the files it changed, using the
+edits the agent reported. A file no turn can claim stays in the working copy and is listed in the
+stack, where you can assign it to the thread. Reverting a thread with **Revert files too** removes
+only that thread's changes, and waits until the other threads' turns in that checkout finish.
+Changes T3 Code cannot attribute to the thread, such as a branch the agent merged in, stay.
+**Undo last T3 operation** in the stack brings the files back; the conversation stays rewound.
+
+Forking a thread in a jj repository gives the fork a workspace of its own, starting below the
+thread's working copy. If the working copy holds uncommitted files at that moment, the fork shares
+the original thread's checkout instead. Merging the fork back moves its changes into the original thread's stack,
+below its working copy, as long as no turn is running there. On servers that run threads in
+isolated workspaces, forks share the original thread's checkout instead, so their changes are
+already in its stack. **Work in other repositories** in the stack lists this thread's changes in
+every repository on the environment.
