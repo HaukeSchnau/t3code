@@ -8,6 +8,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
+import { JjStatus } from "./jj.ts";
 import { VcsDriverKind } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
@@ -219,6 +220,10 @@ const VcsStatusChangeRequest = Schema.Struct({
 
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,
+  /** Optional for older servers, which only report Git. */
+  kind: Schema.optional(VcsDriverKind),
+  /** Present when the repository is a jj repository. */
+  jj: Schema.optional(JjStatus),
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
   hasPrimaryRemote: Schema.Boolean,
   isDefaultRef: Schema.Boolean,
