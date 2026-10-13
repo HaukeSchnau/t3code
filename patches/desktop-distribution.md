@@ -13,9 +13,10 @@ passkeys) don't apply to the fork.
   `main` passed and was promoted, and its `desktop-publish` step writes it to the feed from srv-2.
   The deploy never waits for m1, so a paused or busy builder delays only the desktop build, and a
   desktop failure never holds up the deploy or the mobile update.
-- Builds are versioned `<version>-schnau.<seconds since 1970 at packaging>` with
-  `scripts/update-release-package-versions.ts`. electron-updater only installs a strictly higher
-  version. The numbering continues above the CI run numbers of the first builds.
+- `scripts/desktop-package.ts` versions builds `<version>-schnau.<seconds since 1970 at packaging>`
+  through `scripts/update-release-package-versions.ts`, then packages and signs them.
+  electron-updater only installs a strictly higher version. The numbering continues above the CI
+  run numbers of the first builds.
 - Signing uses Urbs UG's Apple Development identity from the builder's login keychain
   (`CSC_NAME`), without notarization. Gatekeeper only checks notarization on quarantined files.
   curl and the updater don't quarantine, so installs go through `scripts/desktop-install.sh`
@@ -48,5 +49,5 @@ passkeys) don't apply to the fork.
 Keep the fork identity, feed and signing through upstream merges. Upstream's GitHub publish
 config and mandatory passkey signing must not return. `CSC_NAME` changes if the App Store
 Connect key `85N8Y9CZC4` is replaced. Moving to Developer ID with notarization only changes
-`just ci-desktop-package`, keeps the update chain thanks to the team requirement, and would allow browser
-downloads. Drop the pinned channel and hidden picker if the fork ever publishes a second feed.
+`scripts/desktop-package.ts`, keeps the update chain thanks to the team requirement, and would allow
+browser downloads. Drop the pinned channel and hidden picker if the fork ever publishes a second feed.

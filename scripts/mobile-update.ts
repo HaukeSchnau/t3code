@@ -12,6 +12,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -62,7 +63,12 @@ const decodePublishedManifest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(PublishedManifest),
 );
 const decodeResolvedRuntime = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ runtimeVersion: Schema.String })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      // A path segment on the update host, which only serves names of this shape.
+      runtimeVersion: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)),
+    }),
+  ),
 );
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -281,15 +287,21 @@ const updatesUrlFlag = Flag.String("updates-url").pipe(
   Flag.withDescription("Manifest URL that builds poll, e.g. https://updates.example/manifest."),
 );
 
+const resolveRuntimeVersion = Effect.fn("mobileUpdate.resolveRuntimeVersion")(function* (
+  platform: "ios" | "android",
+  updatesUrl: URL,
+) {
+  const output = yield* expo("expo-updates", ["runtimeversion:resolve", "--platform", platform], {
+    T3CODE_MOBILE_UPDATES_URL: updatesUrl.href,
+  });
+  return (yield* decodeResolvedRuntime(output)).runtimeVersion;
+});
+
 const runtimeVersionCommand = Command.make(
   "runtime-version",
   { platform: platformFlag, updatesUrl: updatesUrlFlag },
-  Effect.fn("mobileUpdate.runtimeVersion")(function* ({ platform, updatesUrl }) {
-    const output = yield* expo("expo-updates", ["runtimeversion:resolve", "--platform", platform], {
-      T3CODE_MOBILE_UPDATES_URL: updatesUrl.href,
-    });
-    yield* Console.log((yield* decodeResolvedRuntime(output)).runtimeVersion);
-  }),
+  ({ platform, updatesUrl }) =>
+    resolveRuntimeVersion(platform, updatesUrl).pipe(Effect.flatMap(Console.log)),
 ).pipe(
   Command.withDescription(
     "Print the fingerprint runtime version. Distribution builds pin this value so every host agrees.",
@@ -301,19 +313,25 @@ const publishCommand = Command.make(
   {
     platform: platformFlag,
     updatesUrl: updatesUrlFlag,
-    runtimeVersion: Flag.String("runtime-version").pipe(
-      Flag.withSchema(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/))),
+    updatesDir: Flag.Directory("updates-dir", { mustExist: true }).pipe(
+      Flag.withFallbackConfig(Config.String("T3CODE_MOBILE_UPDATES_DIR")),
     ),
-    updatesDir: Flag.Directory("updates-dir", { mustExist: true }),
+    runtimeVersionFile: Flag.String("runtime-version-file").pipe(
+      Flag.withDescription(
+        "Also write the runtime version to this file, for the TestFlight build of the same runtime.",
+      ),
+      Flag.optional,
+    ),
   },
   Effect.fn("mobileUpdate.publish")(function* ({
     platform,
     updatesUrl,
-    runtimeVersion,
     updatesDir,
+    runtimeVersionFile,
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const runtimeVersion = yield* resolveRuntimeVersion(platform, updatesUrl);
     const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mobile-update-" });
     const exportDir = path.join(scratch, "export");
     const env = {
@@ -374,6 +392,9 @@ const publishCommand = Command.make(
     yield* Console.log(
       `Published ${platform} update ${manifest.id} for runtime ${runtimeVersion} (${assets.length} assets; pruned ${pruned.manifests} runtimes, ${pruned.assets} assets).`,
     );
+    if (Option.isSome(runtimeVersionFile)) {
+      yield* fs.writeFileString(runtimeVersionFile.value, `${runtimeVersion}\n`);
+    }
   }, Effect.scoped),
 ).pipe(Command.withDescription("Export the bundle and publish it as the runtime's newest update."));
 
