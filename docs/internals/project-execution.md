@@ -1,9 +1,12 @@
 # Project execution
 
-The optional `agent-exec` launcher is an environment capability owned by the companion infra
-repository. It owns project registration, private runtime state, mounts, and the preview bridge.
-T3 Code only reads registrations (`project/SeparateProjectRegistry.ts`) and routes processes for
-registered directories through the launcher (`project/ProjectExecution.ts`).
+The `agent-exec` launcher (`native/agent-exec`) owns project registration, private runtime state,
+mounts, and the preview bridge. The Linux Release ships it and points `T3CODE_EXECUTION_LAUNCHER`
+at its own copy, so the launcher and its caller always come from the same commit. The host
+supplies what a package cannot: FUSE and the `agent-workspace-files@` user unit, which infra
+starts through an `agent-exec` command that runs the active Release's copy. T3 Code only reads
+registrations (`project/SeparateProjectRegistry.ts`) and routes processes for registered
+directories through the launcher (`project/ProjectExecution.ts`).
 
 Registrations are keyed by canonical root, so T3 walks a cwd's ancestors to find one. An
 unregistered cwd never touches the launcher. A registered cwd whose launcher is missing fails
@@ -11,7 +14,8 @@ instead of falling back to host execution.
 
 Every process entry point resolves execution before spawning: `ProviderProcessSpawner` for
 provider subprocesses and text generation, `ProcessRunner`, and `TerminalManager`. The Claude SDK
-spawns through `separateProjectSpawn`.
+spawns through `ProviderProcessSpawner.nativeProviderSpawn`. On hosts with provider scopes it
+starts the launcher inside the scope, as the Effect spawner does.
 
 The server stays on the host. Provider traffic continues over stdio, so the v2 adapters keep the
 host cwd for the subprocess but show the agent its visible cwd (`workspace.visibleRoot`) in thread

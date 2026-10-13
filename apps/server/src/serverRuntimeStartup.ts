@@ -46,12 +46,7 @@ import { forkParked, forkParkedFiber } from "./serverActivation.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import {
-  formatHeadlessServeOutput,
-  formatHostForUrl,
-  isWildcardHost,
-  issueHeadlessServeAccessInfo,
-} from "./startupAccess.ts";
+import { formatHostForUrl, headlessServeOutput, isWildcardHost } from "./startupAccess.ts";
 
 export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -574,11 +569,8 @@ const make = (options?: StartupOptions) =>
           );
           if (serverConfig.startupPresentation === "headless") {
             yield* Effect.logDebug("startup phase: headless access info");
-            const accessInfo = yield* issueHeadlessServeAccessInfo();
-            yield* runStartupPhase(
-              "headless.output",
-              Console.log(formatHeadlessServeOutput(accessInfo)),
-            );
+            const output = yield* headlessServeOutput();
+            yield* runStartupPhase("headless.output", Console.log(output));
           } else {
             yield* Effect.logDebug("startup phase: browser open check");
             const startupBrowserTarget = yield* resolveStartupBrowserTarget;

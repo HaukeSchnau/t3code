@@ -7,7 +7,11 @@ The flake exposes:
 
 - `packages.default`: a packaged `t3` server with the bundled web client and production dependencies.
 - `apps.t3`: a runnable `t3` app entrypoint. The flake intentionally has no default app.
-- `packages.projectRelease`: the immutable server artifact and its idle-gated release actions.
+- `packages.projectRelease`: the immutable server artifact and its idle-gated release actions. On Linux it
+  also contains `bin/agent-exec`, and the web action sets `T3CODE_EXECUTION_LAUNCHER` to it unless the host
+  already set one.
+- `packages.agent-exec` (Linux): the isolated workspace launcher from `native/agent-exec`. It pins devenv
+  2.3.1 through the `devenv` input, on the same revision as infra's Projects devenv manager.
 - `project.nix`: shared typed requirements, parameters and release policy.
 - `devenv.nix`: native dependency setup, web/server development and Metro, using the same pinned toolchain.
   Managed previews supply endpoint and per-instance state bindings. Standalone `devenv up` uses `.devenv`

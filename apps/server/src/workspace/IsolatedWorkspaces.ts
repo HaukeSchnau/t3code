@@ -1,5 +1,5 @@
 /**
- * Isolated workspaces through the infra `agent-exec` launcher. The launcher
+ * Isolated workspaces through the `agent-exec` launcher (`native/agent-exec`). The launcher
  * owns cloning, private homes, mounts, networking and retirement; T3 asks it
  * to fork the project and reads back the registration that project execution
  * (`project/ProjectExecution.ts`) later uses to route processes.

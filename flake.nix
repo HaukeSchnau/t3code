@@ -10,6 +10,10 @@
       url = "github:HaukeSchnau/nix-infra-modules/c08469c9ed76a0e2223cb6bf1ac624580be6f98c";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # agent-exec runs devenv in isolated workspaces, where infra's Projects
+    # devenv manager drives the same `.devenv` state through 2.3.1's private
+    # daemon protocol. Keep this on infra's `devenv` revision.
+    devenv.url = "github:cachix/devenv/2418e1b43797c44de5166176622c8d8fa0149871";
   };
 
   outputs =
@@ -18,6 +22,7 @@
       nixpkgs,
       nixpkgs-jj,
       nix-infra-modules,
+      devenv,
     }:
     let
       inherit (nixpkgs) lib;
@@ -333,11 +338,19 @@
 
       mkT3CodePackage = pkgs: mkT3CodePackageWith { inherit pkgs; };
 
+      mkAgentExec =
+        pkgs:
+        pkgs.callPackage ./nix/agent-exec.nix {
+          devenv = devenv.packages.${pkgs.stdenv.hostPlatform.system}.devenv;
+        };
+
       mkProjectRelease =
         system:
         let
           pkgs = mkPkgs system;
           package = mkT3CodePackage pkgs;
+          inherit (pkgs.stdenv.hostPlatform) isLinux;
+          agentExec = mkAgentExec pkgs;
           runtimeIdentity = ''
             export HOME CODEX_HOME T3CODE_HOME
             HOME="$(project-context parameter homeDirectory)"
@@ -354,6 +367,11 @@
             T3CODE_OTLP_METRICS_URL="$(project-context parameter otlpMetricsUrl)"
             T3CODE_OTLP_TRACES_URL="$(project-context parameter otlpTracesUrl)"
             T3CODE_OTLP_SERVICE_NAME="$(project-context parameter otlpServiceName)"
+          ''
+          # TODO: Drop the host override once no host sets T3CODE_EXECUTION_LAUNCHER, which
+          # infra did while it installed its own agent-exec.
+          + lib.optionalString isLinux ''
+            export T3CODE_EXECUTION_LAUNCHER="''${T3CODE_EXECUTION_LAUNCHER:-${lib.getExe agentExec}}"
           '';
           webAction = pkgs.writeShellApplication {
             name = "t3code-release-web";
@@ -382,7 +400,7 @@
         nix-infra-modules.lib.projectRuntime.mkServiceRelease {
           inherit pkgs;
           descriptor = projectDescriptor;
-          payloads = [ package ];
+          payloads = [ package ] ++ lib.optional isLinux agentExec;
           actions = {
             web = webAction;
             idle = idleAction;
@@ -406,6 +424,9 @@
           t3code = mkT3CodePackage pkgs;
           default = t3code;
           projectRelease = projectReleases.${system}.package;
+        }
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          agent-exec = mkAgentExec pkgs;
         }
       );
 
