@@ -16,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -206,16 +207,28 @@ const exportOptions = (teamId: string) => `<?xml version="1.0" encoding="UTF-8"?
 </plist>
 `;
 
+const RuntimeVersion = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/));
+
 const releaseCommand = Command.make(
   "mobile-testflight",
   {
     runtimeVersion: Flag.String("runtime-version").pipe(
-      Flag.withSchema(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/))),
+      Flag.withSchema(RuntimeVersion),
       Flag.withDescription("Runtime version resolved by `mobile-update.ts runtime-version`."),
+      Flag.orElse(() =>
+        Flag.FileText("runtime-version-file").pipe(
+          Flag.map((text) => text.trim()),
+          Flag.withSchema(RuntimeVersion),
+          Flag.withDescription("The file `mobile-update.ts publish` wrote the runtime version to."),
+        ),
+      ),
     ),
     updatesUrl: Flag.String("updates-url").pipe(Flag.withSchema(Schema.URLFromString)),
     notes: Flag.String("notes").pipe(
-      Flag.withDescription("Shown to testers above the runtime line, e.g. the commit subject."),
+      Flag.withDescription(
+        "Shown to testers above the runtime line; the commit subject by default.",
+      ),
+      Flag.optional,
     ),
     force: Flag.Boolean("force").pipe(
       Flag.withDefault(false),
@@ -232,6 +245,13 @@ const releaseCommand = Command.make(
       yield* path.fromFileUrl(new URL("../", import.meta.url)),
       "apps/mobile",
     );
+    const testerNotes = yield* Option.match(notes, {
+      onSome: Effect.succeed,
+      onNone: () =>
+        run("git", ["log", "-1", "--format=%s"], { cwd: mobile, capture: true }).pipe(
+          Effect.map((subject) => subject.trim()),
+        ),
+    });
     const env = {
       APP_VARIANT: "production",
       CI: "1",
@@ -354,7 +374,7 @@ const releaseCommand = Command.make(
       ),
       Effect.retry({ schedule: Schedule.spaced("30 seconds"), times: 60 }),
     );
-    const whatsNew = `${notes}\n\n${runtimeNote(runtimeVersion)}`;
+    const whatsNew = `${testerNotes}\n\n${runtimeNote(runtimeVersion)}`;
     const existing = uploaded.localizations.find(
       (entry) =>
         entry.attributes.locale === "en-US" &&
