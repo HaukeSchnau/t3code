@@ -1,7 +1,7 @@
 # Separate project environments
 
-Directories registered with the infra `agent-exec` launcher run their agents inside a separate
-filesystem environment, while T3 Code itself stays on the host. On srv-2 this covers the fork's
+Directories registered with the `agent-exec` launcher (`native/agent-exec`, shipped in the Linux
+Release) run their agents inside a separate filesystem environment, while T3 Code itself stays on the host. On srv-2 this covers the fork's
 separate projects and every isolated workspace created before the orchestration v2 merge, so
 continuing those threads must keep working. Upstream has no project execution backend.
 
