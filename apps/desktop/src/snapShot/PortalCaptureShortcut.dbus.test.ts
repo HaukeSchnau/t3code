@@ -2,7 +2,6 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import { Message, NameFlag, Variant, sessionBus, type MessageBus } from "dbus-next";
@@ -12,7 +11,8 @@ import { PortalCaptureShortcut } from "./PortalCaptureShortcut.ts";
 it.runIf(NodeChildProcess.spawnSync("dbus-daemon", ["--version"]).status === 0)(
   "registers, rebinds saved keys, receives activations, and replaces sessions over real D-Bus",
   async () => {
-    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-shortcut-dbus-"));
+    // dbus-daemon refuses socket paths over 99 bytes, which a deep TMPDIR can exceed.
+    const dir = await NodeFSP.mkdtemp("/tmp/t3-shortcut-dbus-");
     let daemon: NodeChildProcess.ChildProcess | undefined;
     let server: MessageBus | undefined;
     const clients: PortalCaptureShortcut[] = [];
@@ -30,11 +30,13 @@ it.runIf(NodeChildProcess.spawnSync("dbus-daemon", ["--version"]).status === 0)(
         ],
         { stdio: ["ignore", "pipe", "pipe"] },
       );
+      let stderr = "";
+      daemon.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
       const lines = NodeReadline.createInterface({ input: daemon.stdout! });
       const [address] = await Promise.race([
         NodeEvents.EventEmitter.once(lines, "line"),
-        NodeEvents.EventEmitter.once(daemon, "exit").then(() => {
-          throw new Error("Private bus failed to start");
+        NodeEvents.EventEmitter.once(daemon, "close").then(() => {
+          throw new Error(`Private bus failed to start: ${stderr.trim()}`);
         }),
       ]);
       lines.close();
