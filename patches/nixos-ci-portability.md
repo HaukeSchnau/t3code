@@ -27,6 +27,9 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   private bus socket lives under `/tmp` instead of TMPDIR, and a daemon that fails to start reports its
   stderr. dbus-daemon refuses socket paths over 99 bytes, and a trusted Kiln slot's TMPDIR, nested once more
   by `nix develop`, made them 100 and 101 bytes long.
+- `apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts`: the replay page retention check
+  yields before counting live pages. One synchronous fiber run usually spans a page boundary, so the frames
+  that consumed the previous page could still hold it when the check ran.
 
 ## Removing it
 

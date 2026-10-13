@@ -506,12 +506,14 @@ it.effect("releases consumed application replay pages", () =>
       })
       .pipe(
         Stream.runForEach((event) =>
-          Effect.sync(() => {
-            if (count % 500 === 0) {
-              Object.assign(event, { replayPage: new ReplayPage() });
-              assert.isAtMost(NodeV8.queryObjects(ReplayPage, { format: "count" }), 1);
-            }
-            count++;
+          Effect.gen(function* () {
+            if (count++ % 500 !== 0) return;
+            // A page boundary usually runs in one synchronous stretch of the fiber, and the stack
+            // frames that consumed the previous page may still reference it. After a yield, only
+            // what the stream itself keeps is left.
+            yield* Effect.yieldNow;
+            Object.assign(event, { replayPage: new ReplayPage() });
+            assert.isAtMost(NodeV8.queryObjects(ReplayPage, { format: "count" }), 1);
           }),
         ),
       );
