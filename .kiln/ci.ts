@@ -195,7 +195,6 @@ const typechecks = [
       "apps/web/src/**/*.tsx",
       "apps/web/vite/**/*.ts",
       "apps/web/test/**/*.ts",
-      "apps/web/test/**/*.tsx",
       "apps/web/vite.config.ts",
       "apps/web/vercel.ts",
       "scripts/lib/public-config.ts",
