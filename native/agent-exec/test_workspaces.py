@@ -246,6 +246,27 @@ class IndependentWorkspaceTests(unittest.TestCase):
         run.assert_not_called()
         self.assertTrue(root.exists())
 
+    def test_deleting_a_workspace_removes_its_private_state(self):
+        root = self.base / "workspace"
+        root.mkdir()
+        record = {"version": 1, "root": str(root), "workspace": {"layout": "repository"}}
+        runtime.record_path(root).parent.mkdir(parents=True)
+        runtime.write_text(runtime.record_path(root), json.dumps(record))
+        module = runtime.project_state(record) / "home/go/pkg/mod/example"
+        module.mkdir(parents=True)
+        (module / "go.mod").write_text("module example\n")
+        module.chmod(0o555)
+        environments = runtime.STATE / "environments"
+        (environments / ".removed-interrupted/home").mkdir(parents=True)
+        other = runtime.project_state({"root": str(self.base / "other")})
+        other.mkdir()
+
+        project_files.remove_checkout(runtime, record)
+
+        self.assertFalse(root.exists())
+        self.assertFalse(runtime.record_path(root).exists())
+        self.assertEqual(list(environments.iterdir()), [other])
+
     @unittest.skipUnless(shutil.which("jj"), "jj is needed for repository integration")
     def test_fork_and_collect_preserve_change_identity_and_other_unfinished_work(self):
         source = self.base / "source"
