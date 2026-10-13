@@ -15,11 +15,11 @@ const install = Pnpm.install({
 });
 
 /** The filtered pnpm stores the release builds from; a stale hash fails here first. */
-export const deps = ["web", "server", "runtime"].map((part) =>
+const deps = ["web", "server", "runtime"].map((part) =>
   Nix.build(Flake.select(flake.packages.t3code, `pnpmDeps.${part}`), { name: `deps-${part}` }),
 );
 
-export const lint = Task.make("static", { shell, setup: install, run: cmd`just qa-static` }).pipe(
+const lint = Task.make("static", { shell, setup: install, run: cmd`just qa-static` }).pipe(
   Step.timeout("30 minutes"),
 );
 
@@ -70,7 +70,7 @@ const vitest = (options: {
     report: Report.vitest(`${options.dir}/.vitest-report.json`),
   });
 
-export const testServer = vitest({
+const testServer = vitest({
   name: "test-server",
   dir: "apps/server",
   tests: ["**/*.test.ts"],
@@ -87,7 +87,7 @@ export const testServer = vitest({
   recipe: "qa-test-server",
 }).pipe(Step.timeout("45 minutes"));
 
-export const testWeb = vitest({
+const testWeb = vitest({
   name: "test-web",
   dir: "apps/web",
   tests: ["src/**/*.test.ts", "src/**/*.test.tsx"],
@@ -95,7 +95,7 @@ export const testWeb = vitest({
   shards: 2,
 }).pipe(Step.timeout("30 minutes"));
 
-export const testMobile = vitest({
+const testMobile = vitest({
   name: "test-mobile",
   dir: "apps/mobile",
   tests: ["**/*.test.ts", "**/*.test.tsx"],
@@ -105,7 +105,7 @@ export const testMobile = vitest({
   ),
 }).pipe(Step.timeout("20 minutes"));
 
-export const testDesktop = vitest({
+const testDesktop = vitest({
   name: "test-desktop",
   dir: "apps/desktop",
   tests: ["**/*.test.ts", "**/*.test.js", "**/*.test.mjs"],
@@ -113,14 +113,14 @@ export const testDesktop = vitest({
   recipe: "qa-test-desktop",
 }).pipe(Step.timeout("20 minutes"));
 
-export const testClientRuntime = vitest({
+const testClientRuntime = vitest({
   name: "test-client-runtime",
   dir: "packages/client-runtime",
   tests: ["src/**/*.test.ts"],
   config: Files.imports(["packages/client-runtime/vite.config.ts", longTempDir]),
 }).pipe(Step.timeout("20 minutes"));
 
-export const testShared = vitest({
+const testShared = vitest({
   name: "test-shared",
   dir: "packages/shared",
   tests: ["src/**/*.test.ts"],
@@ -138,7 +138,7 @@ const smallSuites = [
   "oxlint-plugin-t3code",
 ];
 
-export const testPackages = Task.make("test-packages", {
+const testPackages = Task.make("test-packages", {
   shell,
   setup: install,
   inputs: Files.union(
@@ -150,7 +150,7 @@ export const testPackages = Task.make("test-packages", {
 }).pipe(Step.timeout("20 minutes"));
 
 /** The repository scripts' tests read manifests, lockfiles and configs all over the repository. */
-export const testScripts = Task.make("test-scripts", {
+const testScripts = Task.make("test-scripts", {
   shell,
   setup: install,
   run: cmd`just qa-test-packages scripts`,
@@ -175,7 +175,7 @@ const typecheck = (name: string, dirs: ReadonlyArray<string>, sources: ReadonlyA
     env: { GOMEMLIMIT: "3GiB" },
   }).pipe(Step.timeout("30 minutes"));
 
-export const typechecks = [
+const typechecks = [
   typecheck(
     "server",
     ["apps/server"],
@@ -235,7 +235,7 @@ export const typechecks = [
 ];
 
 /** The release smoke resolves the dependency graph from the manifests, lockfiles and patches. */
-export const smoke = Task.make("release-smoke", {
+const smoke = Task.make("release-smoke", {
   shell,
   setup: install,
   inputs: Files.union(
