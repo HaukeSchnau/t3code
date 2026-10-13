@@ -36,6 +36,7 @@ import type {
   ServerProvider,
   ThreadId,
   SnapShotSource,
+  UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import {
   ProviderDriverKind,
@@ -1350,6 +1351,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   usageLimitsProvider: ServerProvider | null;
+  usageLimitSources: UsageLimitSourceSnapshots;
+  environmentId: EnvironmentId;
   activeContextWindow: ContextWindowSnapshot | null;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
@@ -1388,7 +1391,11 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   return (
     <>
       {props.usageLimitsProvider ? (
-        <ComposerUsageMeter provider={props.usageLimitsProvider} />
+        <ComposerUsageMeter
+          environmentId={props.environmentId}
+          provider={props.usageLimitsProvider}
+          sources={props.usageLimitSources}
+        />
       ) : null}
       {props.activeContextWindow ? (
         <ContextWindowMeter
@@ -1592,6 +1599,7 @@ export interface ChatComposerProps {
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
+  usageLimitSources: UsageLimitSourceSnapshots;
   /** False until the environment's server config has arrived at least once. */
   providerCatalogKnown: boolean;
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
@@ -1743,6 +1751,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     interactionMode: requestedInteractionMode,
     lockedProvider,
     providerStatuses,
+    usageLimitSources,
     providerCatalogKnown,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
@@ -7531,6 +7540,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         ? null
                         : selectedProviderStatus
                     }
+                    usageLimitSources={usageLimitSources}
+                    environmentId={environmentId}
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
                     }
