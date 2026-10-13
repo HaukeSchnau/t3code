@@ -1,8 +1,19 @@
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
+import { HostProcessStdoutIsTerminal } from "@t3tools/shared/hostProcess";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as ServerConfig from "./config.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import {
   buildPairingUrl,
   formatHeadlessServeOutput,
+  headlessServeOutput,
   renderTerminalQrCode,
   resolveHeadlessConnectionHost,
   resolveHeadlessConnectionString,
@@ -76,4 +87,45 @@ it("formats headless serve output with the connection string, token, pairing url
   expect(output).toContain("Token: PAIRCODE");
   expect(output).toContain("Pairing URL: http://192.168.1.42:3773/pair#token=PAIRCODE");
   assert.isTrue(output.includes("█") || output.includes("▀") || output.includes("▄"));
+});
+
+const headlessServeLayer = EnvironmentAuth.layer.pipe(
+  Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provide(ServerEnvironment.identityLayer),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-startup-access-" })),
+  Layer.provideMerge(NodeHttpServer.layerTest),
+);
+
+const headlessServe = (stdoutIsTerminal: boolean) =>
+  Effect.gen(function* () {
+    const output = yield* headlessServeOutput().pipe(
+      Effect.provideService(HostProcessStdoutIsTerminal, stdoutIsTerminal),
+    );
+    const pairingLinks = yield* (yield* EnvironmentAuth.EnvironmentAuth).listPairingLinks({
+      excludeSubjects: [],
+    });
+    return { output, pairingLinks };
+  });
+
+it.layer(NodeServices.layer)("headless serve output", (it) => {
+  it.effect("prints the pairing banner to a terminal", () =>
+    Effect.gen(function* () {
+      const { output, pairingLinks } = yield* headlessServe(true);
+
+      expect(output).toMatch(/Pairing URL: http:\/\/\S+\/pair#token=\S+/);
+      expect(pairingLinks).toHaveLength(1);
+    }).pipe(Effect.provide(headlessServeLayer)),
+  );
+
+  it.effect("prints a pairing hint without a token when stdout is not a terminal", () =>
+    Effect.gen(function* () {
+      const { output, pairingLinks } = yield* headlessServe(false);
+
+      expect(output.split("\n")).toHaveLength(1);
+      expect(output).toContain("t3 pair");
+      expect(output).not.toMatch(/token|█|▀|▄/i);
+      expect(pairingLinks).toHaveLength(0);
+    }).pipe(Effect.provide(headlessServeLayer)),
+  );
 });

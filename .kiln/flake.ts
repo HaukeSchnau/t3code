@@ -2,7 +2,7 @@
 import { Flake } from "@kiln/core";
 
 export const flake = Flake.make({
-  packages: ["default", "projectRelease", "t3code"],
+  packages: ["agent-exec", "default", "projectRelease", "t3code"],
   checks: ["package", "projectReleaseGate", "projectReleaseInterface"],
   devShells: ["ci", "default"],
 });

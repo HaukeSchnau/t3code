@@ -1,0 +1,12 @@
+--- a/src/readdir.c
++++ b/src/readdir.c
+@@ -40,9 +40,6 @@ static bool hide_meta_files(int branch, const char *path, struct dirent *de)
+ 
+ 	if (uopt.hide_meta_files == false) RETURN(false);
+ 
+-	fprintf(stderr, "uopt.branches[branch].path = %s path = %s\n", uopt.branches[branch].path, path);
+-	fprintf(stderr, "METANAME = %s, de->d_name = %s\n", METANAME, de->d_name);
+-
+ 	// TODO Would it be faster to add hash comparison?
+ 
+ 	// HIDE out .unionfs directory

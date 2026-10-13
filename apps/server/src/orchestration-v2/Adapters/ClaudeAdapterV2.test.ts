@@ -1,4 +1,5 @@
 import * as NodeOS from "node:os";
+import * as NodeStreamConsumers from "node:stream/consumers";
 
 import type {
   Query as ClaudeQuery,
@@ -45,6 +46,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Tool } from "effect/unstable/ai";
 import { formatClaudeResumeCompactionQuestion } from "@t3tools/shared/claudeCompaction";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
@@ -1146,6 +1148,118 @@ describe("ClaudeAdapterV2 executable path", () => {
         );
 
         assert.deepEqual(executablePaths, [path.join(NodeOS.homedir(), "bin", "claude")]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+});
+
+describe("ClaudeAdapterV2 provider scopes", () => {
+  const openedQueryOptions = (environment: NodeJS.ProcessEnv) =>
+    Effect.gen(function* () {
+      let opened: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+      const adapter = yield* ClaudeAdapterV2.createClaudeAdapterV2(
+        {
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          displayName: undefined,
+          environment: [],
+          enabled: true,
+          config: DEFAULT_CLAUDE_SETTINGS,
+        },
+        {},
+      ).pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-claude-scope-" })),
+        Effect.provideService(ClaudeAdapterV2.ClaudeAgentSdkQueryRunner, {
+          allocateSessionId: Effect.succeed("native-thread-claude-scope"),
+          open: (input) =>
+            Effect.sync(() => {
+              opened = input.options;
+              return {
+                messages: Stream.never,
+                offer: () => Effect.void,
+                setModel: () => Effect.void,
+                interrupt: Effect.void,
+                close: Effect.void,
+              };
+            }),
+          forkSession: () => Effect.die("unused"),
+          subagentLaunchToolUseId: () => Effect.succeed(null),
+          assertComplete: Effect.void,
+        }),
+        Effect.provideService(HostProcessPlatform, "linux"),
+        Effect.provideService(HostProcessEnvironment, environment),
+      );
+      const threadId = ThreadId.make("thread-claude-scope");
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-claude-scope"),
+        modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+        runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+        runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+      });
+      yield* runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId,
+          providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-claude-scope"),
+          text: "hello",
+          attachments: [],
+        }),
+      );
+      assert.isDefined(opened);
+      return opened;
+    });
+
+  // The stand-in systemd-run is a shell script.
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+    "starts the Claude CLI in its own systemd scope on opted-in hosts",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const binDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-systemd-run-",
+          });
+          const systemdRun = path.join(binDir, "systemd-run");
+          yield* fileSystem.writeFileString(systemdRun, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
+          yield* fileSystem.chmod(systemdRun, 0o755);
+
+          const options = yield* openedQueryOptions({
+            T3_PROVIDER_SYSTEMD_SCOPE: "1",
+            PATH: binDir,
+          });
+          const spawn = options.spawnClaudeCodeProcess;
+          assert.isDefined(spawn);
+          const child = spawn({
+            command: "claude",
+            args: ["--output-format", "stream-json"],
+            env: { PATH: binDir },
+            signal: new AbortController().signal,
+          });
+          const argv = (yield* Effect.promise(() => NodeStreamConsumers.text(child.stdout)))
+            .trimEnd()
+            .split("\n");
+
+          assert.includeMembers(argv, ["--user", "--scope", "--slice=t3-providers.slice"]);
+          assert.match(
+            argv.find((arg) => arg.startsWith("--unit=")) ?? "",
+            /^--unit=t3-provider-[0-9a-f]{32}-1$/,
+          );
+          assert.deepEqual(argv.slice(-3), ["claude", "--output-format", "stream-json"]);
+        }),
+      ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+
+  it.effect("keeps the SDK's own spawn when provider scopes are off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const options = yield* openedQueryOptions({});
+        assert.isUndefined(options.spawnClaudeCodeProcess);
       }),
     ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );

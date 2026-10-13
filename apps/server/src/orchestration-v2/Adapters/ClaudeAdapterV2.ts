@@ -115,9 +115,9 @@ import * as SkillPackProviderScope from "../../skills/SkillPackProviderScope.ts"
 import {
   resolveSeparateProjectProvider,
   separateProjectPolicy,
-  separateProjectSpawn,
   type SeparateProjectProvider,
 } from "../../project/ProjectExecution.ts";
+import * as ProviderProcessSpawner from "../../provider/ProviderProcessSpawner.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
@@ -791,7 +791,7 @@ export function makeClaudeQueryOptions(input: {
   readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
-  readonly spawnClaudeCodeProcess?: ClaudeQueryOptions["spawnClaudeCodeProcess"];
+  readonly spawnClaudeCodeProcess?: ClaudeQueryOptions["spawnClaudeCodeProcess"] | undefined;
   /** Fork: selected skill packs as local plugins (patches/skill-packs.md). */
   readonly plugins?: ReadonlyArray<{ readonly type: "local"; readonly path: string }>;
 }): ClaudeAgentSdkQueryOptions {
@@ -2823,6 +2823,7 @@ export interface ClaudeAdapterV2Options {
   readonly path: Path.Path;
   readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
+  readonly nativeScope?: ProviderProcessSpawner.NativeProviderScope | undefined;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
@@ -6752,9 +6753,10 @@ export function makeClaudeAdapterV2(
                 attachmentsDir,
                 settings: adapterOptions.settings,
                 environment: { ...adapterOptions.environment, ...threadEnvironment },
-                ...(separateProject === undefined
-                  ? {}
-                  : { spawnClaudeCodeProcess: separateProjectSpawn(separateProject) }),
+                spawnClaudeCodeProcess: ProviderProcessSpawner.nativeProviderSpawn({
+                  scope: adapterOptions.nativeScope,
+                  project: separateProject,
+                }),
                 tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
                 ...mcpOverrides,
                 ...SkillPackProviderScope.claudeSkillPackPlugins(turnInput.threadId),
@@ -7508,6 +7510,7 @@ export function makeClaudeAdapterV2(
 
 export type ClaudeAdapterV2DriverEnv =
   | ClaudeAgentSdkQueryRunner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
@@ -7537,6 +7540,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       path,
       idAllocator,
       queryRunner,
+      nativeScope: yield* ProviderProcessSpawner.nativeScope,
       continuationRequests,
       ...hooks,
     });

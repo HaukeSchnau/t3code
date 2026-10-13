@@ -19,7 +19,8 @@ The server picks the backend from the project (`workspace/ManagedWorkspaces.ts`)
 
 1. An isolated runtime when the host is Linux and the launcher is configured. Every source kind
    forks through `agent-exec fork`, with Familiar as the default profile and Minimal under
-   Advanced. Deletion retires the runtime with `--remove-checkout`.
+   Advanced. Deletion retires the runtime with `--remove-checkout`, which also removes the
+   workspace's private home and state.
 2. A jj workspace (`jj workspace add`, shared store) when the nearest repository marker is `.jj`.
    Colocated repositories count as jj and get colocated workspaces (`--colocate`), so jj creates
    the Git worktree; T3 never runs `git worktree` there.
