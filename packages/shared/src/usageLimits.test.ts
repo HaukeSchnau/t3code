@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderUsageLimits,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -857,6 +858,45 @@ describe("collectLimitNotices", () => {
       serverConfig: { providers: [], usageLimitSources: [] },
     });
     expect(collectLimitNotices(one)[0]).toBe("Laptop · Claude Max: Could not read limits.");
+  });
+
+  it("counts hub accounts it could not read without printing their emails", () => {
+    const account = (id: string, usageLimits: ServerProviderUsageLimits) => ({
+      id,
+      driver: claude,
+      email: `${id}@example.com`,
+      usageLimits,
+    });
+    const unread = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
+    const notices = collectLimitNotices(
+      new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            ...laptop,
+            serverConfig: {
+              providers: [],
+              usageLimitSources: [
+                {
+                  ...hub,
+                  accounts: [
+                    account("read", { checkedAt, windows: [window] }),
+                    account("throttled", unread),
+                  ],
+                },
+                {
+                  ...hub,
+                  id: UsageLimitSourceId.make("pool"),
+                  label: "pool",
+                  accounts: [account("first", unread), account("second", unread)],
+                },
+              ],
+            },
+          },
+        ],
+      ]),
+    );
+    expect(notices).toEqual(["hub: Could not read 1 account.", "pool: Could not read 2 accounts."]);
   });
 });
 
