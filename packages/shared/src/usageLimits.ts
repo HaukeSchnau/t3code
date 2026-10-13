@@ -287,8 +287,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
 }
 
 /**
- * What the pooled views cannot draw as a bar: a hub that failed to read, a
- * provider whose probe failed. Accounts that can never report (API keys)
+ * What the pooled views cannot draw as a bar: a hub or hub account that failed
+ * to read, a provider whose probe failed. Accounts that can never report (API keys)
  * are left out; there is nothing for the user to act on. The environment
  * is named only when more than one is connected.
  */
@@ -307,10 +307,18 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
       if (notice) notices.push(`${label(environmentLabel, name)}: ${notice}`);
     }
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
+      // Counted, not named: the pooled views never print an account's email.
+      const unread = source.accounts.filter(
+        (account) => account.usageLimits.unavailable?.reason === "probeFailed",
+      ).length;
       if (source.error) {
         notices.push(`${label(environmentLabel, source.label)}: ${source.error}`);
       } else if (source.accounts.length === 0) {
         notices.push(`${label(environmentLabel, source.label)}: No accounts reported.`);
+      } else if (unread > 0) {
+        notices.push(
+          `${label(environmentLabel, source.label)}: Could not read ${unread} ${unread === 1 ? "account" : "accounts"}.`,
+        );
       }
     }
   }

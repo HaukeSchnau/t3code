@@ -6,7 +6,9 @@
  * provider health-check interval and on every settings change, then
  * published as one snapshot per source over `subscribeServerConfig`. A source
  * that fails keeps its row with `error` set so the user can see it is
- * configured but unreachable. Nothing is persisted: like provider status,
+ * configured but unreachable. An account whose own read fails keeps its last
+ * good reading, as a failed provider probe does, because the providers
+ * rate-limit their quota endpoints. Nothing is persisted: like provider status,
  * this is live state that re-derives on boot.
  *
  * @module usage/UsageLimitSources
@@ -34,6 +36,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import { resolveUsageLimitsAfterProbe } from "../provider/providerUsageLimits.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
@@ -85,7 +88,20 @@ export const make = Effect.gen(function* () {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
       return { ...base, accounts: [], error: accounts.failure.detail };
     }
-    return { ...base, accounts: accounts.success };
+    const published = (yield* Ref.get(stateRef)).find((source) => source.id === id)?.accounts;
+    return {
+      ...base,
+      accounts: accounts.success.map((account) => {
+        const last = published?.find((candidate) => candidate.id === account.id);
+        if (!last) return account;
+        const usageLimits = resolveUsageLimitsAfterProbe({
+          published: last.usageLimits,
+          probed: account.usageLimits,
+        });
+        // The whole account, since a failed read also loses the plan.
+        return usageLimits === last.usageLimits ? last : account;
+      }),
+    };
   });
 
   const publish = (next: ReadonlyArray<UsageLimitSourceSnapshot>) =>
