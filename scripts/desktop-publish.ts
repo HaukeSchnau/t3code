@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Publishes a signed macOS build to the fork's desktop update feed
-// (patches/desktop-distribution.md). The CI workflow runs it on srv-2 after the
-// Apple builder packaged the app and CI passed.
+// (patches/desktop-distribution.md). Kiln's desktop-publish step runs it on srv-2
+// after desktop-package.ts built the app on the Apple builder.
 //
 // Layout under --updates-dir, which the update host serves as /desktop/:
 //   latest-mac.yml               electron-updater's feed, replaced last
@@ -11,6 +11,7 @@
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -35,7 +36,10 @@ const PublishedBuildJson = Schema.fromJsonString(PublishedBuild);
 const decodePublishedBuild = Schema.decodeUnknownEffect(PublishedBuildJson);
 const encodePublishedBuild = Schema.encodeEffect(PublishedBuildJson);
 
-/** CI stamps `<base>-schnau.<run>`; Gitea run numbers only grow, whatever the base version. */
+/**
+ * desktop-package.ts stamps `<base>-schnau.<seconds since 1970>`, which only grows, whatever the
+ * base version. The first builds carried CI run numbers.
+ */
 export function buildRunNumber(version: string): number | undefined {
   const match = /-schnau\.(\d+)$/.exec(version);
   return match?.[1] === undefined ? undefined : Number(match[1]);
@@ -147,12 +151,16 @@ const publishCommand = Command.make(
         "electron-builder output with latest-mac.yml, the zip and its blockmap.",
       ),
     ),
-    updatesDir: Flag.Directory("updates-dir", { mustExist: true }),
-    commit: Flag.String("commit").pipe(Flag.withDescription("Commit the build came from.")),
+    updatesDir: Flag.Directory("updates-dir", { mustExist: true }).pipe(
+      Flag.withFallbackConfig(Config.String("T3CODE_DESKTOP_UPDATES_DIR")),
+    ),
+    commit: Flag.String("commit").pipe(
+      Flag.withFallbackConfig(Config.String("KILN_REVISION")),
+      Flag.withDescription("Commit the build came from."),
+    ),
     feedUrl: Flag.String("feed-url").pipe(
       Flag.withDefault("https://t3code-updates.schnau.dev/desktop"),
     ),
-    // CI's workspace sync leaves .git behind, so the job points this at its own checkout.
     repo: Flag.Directory("repo", { mustExist: true }).pipe(
       Flag.withDescription("Git checkout that holds the commit history for release notes."),
       Flag.withDefault("."),
