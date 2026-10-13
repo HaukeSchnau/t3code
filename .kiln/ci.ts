@@ -280,10 +280,12 @@ const apps = (promote: Step.Any) => {
     run: cmd`nix shell nixpkgs#cargo nixpkgs#rustc --command node scripts/desktop-package.ts --output-dir ${release}`,
     outputs: { release },
   }).pipe(Step.timeout("60 minutes"));
+  // The update feed's directories exist on srv-2 only, so these two never move to an agent.
   const desktopPublish = Task.make("desktop-publish", {
     shell,
     setup: install,
     run: cmd`node scripts/desktop-publish.ts --artifacts-dir ${desktopPackage.outputs.release}`,
+    offload: false,
   }).pipe(Step.timeout("15 minutes"));
   const runtime = "mobile-runtime-version";
   const mobileUpdate = Task.make("mobile-update", {
@@ -292,6 +294,7 @@ const apps = (promote: Step.Any) => {
     after: [promote],
     run: cmd`node scripts/mobile-update.ts publish --updates-url ${updatesUrl} --runtime-version-file ${runtime}`,
     outputs: { runtime },
+    offload: false,
   }).pipe(Step.timeout("30 minutes"));
   const testflight = Task.make("testflight", {
     platform: "aarch64-darwin",
