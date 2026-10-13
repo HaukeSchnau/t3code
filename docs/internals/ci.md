@@ -5,13 +5,14 @@
 ## Fork release pipeline
 
 Kiln runs the fork's pipeline, defined in [`.kiln/ci.ts`](../../.kiln/ci.ts), on pull requests and on
-pushes to the Gitea `main` branch. The format, type-check, test, and release-smoke tasks run in
-parallel in persistent workspaces (the server tests as six shards of one step). Three builds of the
-web, server, and runtime pnpm stores start immediately, so a stale fixed-output hash fails before the
-release contract (`gate`). Each step reports a `kiln/<step>` commit status, and branch protection
-requires them. On `main`, `promote` deploys the release to srv-1 and srv-2 after every check passed,
-then `apple` dispatches the desktop and mobile workflows to the Apple builder. Inspect runs at
-https://kiln.schnau.dev, and check the pipeline with `kiln plan --event push:main` or
+pushes to the Gitea `main` branch. The format, type-check, test, release-smoke, and lockfile tasks
+run the tools directly, in parallel in persistent workspaces (the server tests as six shards of one
+step). Three builds of the web, server, and runtime pnpm stores start immediately, so a stale
+fixed-output hash fails before the release contract (`gate`). Each step reports a `kiln/<step>`
+commit status, and branch protection requires them. On `main`, `promote` deploys the release to
+srv-1 and srv-2 after every check passed, then the desktop and mobile steps ship the apps from the
+Apple builder (`patches/desktop-distribution.md`, `patches/mobile-distribution.md`). Inspect runs
+at https://kiln.schnau.dev, and check the pipeline with `kiln plan --event push:main` or
 `kiln plan --event pr:1`.
 
 Dependency changes use one generated-file workflow:

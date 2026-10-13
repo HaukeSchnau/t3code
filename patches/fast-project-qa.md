@@ -10,23 +10,27 @@ and fork lockfile check.
 
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
 - Kiln (`.kiln/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
-  (`Pnpm.install` from `@kiln/std`) installs dependencies once per lockfile state and keeps the
-  apps' builds and caches between tasks; each task starts from a copy of the prepared workspace.
+  (`Pnpm.install` from `@kiln/std`) installs dependencies once per lockfile state and keeps
+  `node_modules`, with Vite+'s task cache and Vitest's module cache, and TypeScript build info
+  between tasks; each task starts from a copy of the prepared workspace. Build output doesn't carry
+  over, since a task would read what another revision built.
 - CI installs the committed lockfile with `--frozen-lockfile --trust-lockfile`, matching Nix release
   builds. Dependency changes retain normal pnpm policy checks when resolving the lockfile; CI does
   not recheck every locked version against live registry metadata. That pnpm 11.10 verification
   exhausted the 15-minute setup budget in run 387 before any QA command ran.
 - Server-test temporary files live below T3 Code's persistent CI cache. The worker's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
-- `Justfile` owns the QA commands, and `.kiln/ci.ts` makes them steps: formatting and linting, six
-  typecheck groups, a test step for each package with a sizeable suite, one for the small packages,
-  one for the repository scripts, and the release smoke.
+- `.kiln/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
+  six typecheck groups, a test step for each package with a sizeable suite, one for the small
+  packages, one for the repository scripts, the release smoke, and the fork and deploy lockfile
+  checks.
 - The server, web, mobile, desktop, client-runtime and shared suites run file by file (Kiln's `each`
   over `Files.imports`). A test file runs again only when it, something it imports or its package's
   other files changed, and Kiln splits the files that run across jobs by their recorded durations.
-  `qa-test-server` and `qa-test-package` run Vitest directly on the given files and write the
-  package's `.vitest-report.json`, which tells Kiln what passed. They bypass `vp run --cache`, so a
-  report never holds replayed results. A nightly run repeats every check without reuse.
+  `Vitest.files` from `@kiln/std` runs Vitest in the package on the given files, with the flags of
+  the package's test script, and writes the JSON report that tells Kiln what passed. It bypasses
+  `vp run --cache`, so a report never holds replayed results. A nightly run repeats every check
+  without reuse.
 - The server and web suites each run as two Vitest projects. Most files share one module graph per
   worker (`isolate: false`) and keep transformed modules in `node_modules/.vitest-cache`
   (`fsModuleCache`), which Kiln keeps between runs. Files that call `vi.mock`, `vi.doMock`,
@@ -42,8 +46,9 @@ and fork lockfile check.
 - The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, relay
   and the oxlint plugin) run together when their directories or anything their tests import changed.
   The repository scripts' tests read manifests, lockfiles and configs all over the repository, so
-  they run on every change. The release smoke depends only on the manifests, lockfiles, workspace
-  file, patches and its three scripts.
+  they run on every change. The release smoke and the lockfile checks depend only on what the
+  install reads (manifests, lockfiles, workspace file and patches) and the scripts and configs
+  they run.
 - Typecheck groups are keyed by what their tsconfigs include and everything it imports, types
   included. Each group checks its packages one at a time with Vite+'s task cache. The server checks
   alone, since tsgo needs about 4 GB for it, and incrementally: its `tsconfig.json` sets

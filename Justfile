@@ -9,8 +9,7 @@ agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE
 default:
     @just --list
 
-# CI calls the individual tasks in parallel jobs. `just qa` remains the complete,
-# resource-bounded local gate and deliberately runs the groups in order.
+# The complete local gate, one group after another; Kiln runs these checks side by side.
 qa: qa-nix-deps qa-static qa-typecheck-clients qa-typecheck-rest qa-test-non-server qa-test-server qa-release
 
 qa-static:
@@ -29,50 +28,8 @@ qa-test-non-server:
     ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/desktop' test --maxWorkers {{ quote(non_server_test_workers) }}
     cd apps/desktop && ../../node_modules/.bin/vp test run --passWithNoTests --maxWorkers {{ quote(non_server_test_workers) }}
 
-# The server's tests, or only the given files (repository paths). Kiln reads the results from
-# apps/server/.vitest-report.json.
-[positional-arguments]
-qa-test-server *files:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root=$PWD
-    cd apps/server
-    ../../node_modules/.bin/vp test run --reporter verbose --reporter json --outputFile.json=.vitest-report.json "${@/#/$root/}"
-
-# A package's tests, or only the given files (repository paths). Kiln reads the results from the
-# package's .vitest-report.json.
-[positional-arguments]
-qa-test-package dir *files:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root=$PWD
-    cd "$1"
-    shift
-    node --run test -- --maxWorkers {{ quote(non_server_test_workers) }} --reporter default --reporter json --outputFile.json=.vitest-report.json "${@/#/$root/}"
-
-[positional-arguments]
-qa-test-desktop *files:
-    ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
-    just qa-test-package apps/desktop "$@"
-
-# The tests of the packages in the given directories, one package at a time.
-[positional-arguments]
-qa-test-packages +dirs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    filters=()
-    for dir in "$@"; do filters+=(--filter "./$dir"); done
-    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 "${filters[@]}" test --maxWorkers {{ quote(non_server_test_workers) }}
-
-# Typechecks the packages in the given directories, one at a time.
-[positional-arguments]
-qa-typecheck +dirs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    filters=()
-    for dir in "$@"; do filters+=(--filter "./$dir"); done
-    if [[ " $* " == *" apps/desktop "* ]]; then ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron; fi
-    ./node_modules/.bin/vp run --cache --concurrency-limit 1 "${filters[@]}" typecheck
+qa-test-server:
+    cd apps/server && ../../node_modules/.bin/vp test run
 
 qa-release:
     node scripts/release-smoke.ts
@@ -92,71 +49,6 @@ prefetch-pnpm-deps: deps-nix-refresh
 # Follow CI for the newest descendant of a revision on origin/main.
 ci-watch revision="main@origin":
     ./node_modules/.bin/vp run --workspace-root ci:watch -- --revision {{ quote(revision) }}
-
-# Publish the mobile JavaScript bundle as an OTA update. Entry point for Kiln's mobile-update step;
-# leaves the runtime version in mobile-runtime-version for the TestFlight step on the Apple builder.
-ci-mobile-update:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${T3CODE_MOBILE_UPDATES_DIR:?The host must provide a writable update directory.}"
-    runtime_version="$(node scripts/mobile-update.ts runtime-version --updates-url "$T3CODE_MOBILE_UPDATES_URL")"
-    printf '%s\n' "$runtime_version" > mobile-runtime-version
-    node scripts/mobile-update.ts publish \
-      --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
-      --runtime-version "$runtime_version" \
-      --updates-dir "$T3CODE_MOBILE_UPDATES_DIR"
-
-# Upload a TestFlight build when the runtime in `runtime_file` has none yet. Entry point for Kiln's
-# testflight step on the Apple builder, which provides Xcode, CocoaPods, Node and the App Store
-# Connect key; this flake's pinned Node and CocoaPods misbehave on macOS 27.
-ci-mobile-testflight runtime_file: _apple-install
-    #!/usr/bin/env bash
-    set -euo pipefail
-    node scripts/mobile-testflight.ts \
-      --runtime-version "$(cat {{ quote(runtime_file) }})" \
-      --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
-      --notes "$(git log -1 --format=%s)"
-
-# Package and sign the macOS desktop app into desktop-release. Entry point for Kiln's
-# desktop-package step on the Apple builder.
-ci-desktop-package: _apple-install
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # electron-updater only installs a strictly higher version.
-    base_version="$(node -p "require('./apps/desktop/package.json').version")"
-    node scripts/update-release-package-versions.ts "${base_version}-schnau.$(date +%s)"
-    # Urbs UG's Apple Development identity in the builder's login keychain. The team-based
-    # designated requirement keeps updates and macOS permissions working when it is replaced.
-    export CSC_NAME="Apple Development: Created via API (85N8Y9CZC4)" T3CODE_APPLE_TEAM_ID=2243J9RD68
-    export T3CODE_DESKTOP_UPDATE_URL=https://t3code-updates.schnau.dev/desktop
-    export PATH="$PWD/node_modules/.bin:/run/current-system/sw/bin:$PATH"
-    rm -rf desktop-release
-    # Rust comes from the builder's own pinned nixpkgs registry entry.
-    nix shell nixpkgs#cargo nixpkgs#rustc --command \
-      node scripts/build-desktop-artifact.ts --platform mac --target zip --arch arm64 --signed --output-dir desktop-release
-    # Only what the update feed serves leaves the builder.
-    find desktop-release -mindepth 1 -maxdepth 1 \
-      ! -name '*-arm64.zip' ! -name '*-arm64.zip.blockmap' ! -name latest-mac.yml -exec rm -rf {} +
-
-# The Apple builder sits behind a slow home uplink; pnpm's 60 s default aborts large tarballs when
-# many download at once.
-_apple-install:
-    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm_config_fetch_timeout=600000 \
-      corepack pnpm install --frozen-lockfile --trust-lockfile --network-concurrency 4
-
-# Publish the desktop build in `artifacts_dir` to the update feed. Entry point for Kiln's
-# desktop-publish step.
-ci-desktop-publish artifacts_dir commit=env("KILN_REVISION"):
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${T3CODE_DESKTOP_UPDATES_DIR:?The host must provide a writable desktop update directory.}"
-    # Release notes list the first-parent commits since the previous build.
-    git fetch -q --no-tags --depth=100 origin {{ quote(commit) }} || true
-    node scripts/desktop-publish.ts \
-      --artifacts-dir {{ quote(artifacts_dir) }} \
-      --updates-dir "$T3CODE_DESKTOP_UPDATES_DIR" \
-      --commit {{ quote(commit) }} \
-      --repo "$PWD"
 
 # Build and install the iOS development app on the configured device.
 mobile-dev:
