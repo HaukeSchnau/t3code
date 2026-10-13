@@ -23,6 +23,10 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   terminal gate before the turn is observable, and the fan-out case waits for the first delivery turn
   before swapping gates. On a loaded worker the run reported running first, the swap won, and the
   delivery waited on the next gate until the test timed out.
+- `apps/desktop/src/snapShot/LinuxSnapShot.dbus.test.ts` and `PortalCaptureShortcut.dbus.test.ts`: the
+  private bus socket lives under `/tmp` instead of TMPDIR, and a daemon that fails to start reports its
+  stderr. dbus-daemon refuses socket paths over 99 bytes, and a trusted Kiln slot's TMPDIR, nested once more
+  by `nix develop`, made them 100 and 101 bytes long.
 
 ## Removing it
 
