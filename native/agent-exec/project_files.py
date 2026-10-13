@@ -8,6 +8,7 @@ import signal
 import socket
 import subprocess
 import time
+import uuid
 
 
 DISCOVERY_EXCLUDES = {
@@ -164,7 +165,20 @@ def remove_checkout(runtime, record):
         runtime.run(["systemctl", "--user", "disable", unit], capture_output=True)
         if os.path.ismount(root):
             raise ValueError("The workspace filesystem is still mounted")
-        shutil.rmtree(runtime.project_state(record) / "files", ignore_errors=False)
     if root.exists():
         shutil.rmtree(root)
     runtime.record_path(root).unlink(missing_ok=True)
+    remove_private_state(runtime, record)
+
+
+def remove_private_state(runtime, record):
+    """A deleted workspace leaves no private home, provider state or tool caches behind."""
+    environments = runtime.STATE / "environments"
+    state = runtime.project_state(record)
+    if state.exists():
+        # Under a fresh name, an interrupted removal cannot reach a later workspace at this root.
+        state.rename(environments / f".removed-{state.name}-{uuid.uuid4().hex[:8]}")
+    for removed in environments.glob(".removed-*"):
+        # Private homes can hold read-only trees, such as Go's module cache.
+        runtime.run(["chmod", "-R", "u+rwX", str(removed)], capture_output=True)
+        shutil.rmtree(removed)

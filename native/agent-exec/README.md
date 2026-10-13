@@ -30,7 +30,7 @@ Agents reach T3 itself through its MCP tools, which work inside the environment.
 
 No browser is launched during package tests. Run `python3 -B -m unittest discover -s native/agent-exec -p 'test_*.py'` with `tomli-w` installed for focused launcher tests. The derivation also runs these tests.
 
-Removing a T3 project does not remove its files or private environment state. Stop its previews with `agent-service` and its threads through T3 before manually retiring the registration/state. Automatic garbage collection and native session imports are not implemented.
+Deleting a workspace in T3 runs `retire ROOT --remove-checkout`, which removes the checkout, the registration and the private state: home, provider state and tool caches. Published files stay. Removing a T3 project does not remove its files or private environment state. Stop its previews with `agent-service` and its threads through T3 before manually retiring the registration/state. Native session imports are not implemented.
 
 ## Project file publishing
 

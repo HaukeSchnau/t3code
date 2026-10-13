@@ -1060,7 +1060,7 @@ def main():
     )
     stop.add_argument("root")
     stop.add_argument("--remove-checkout", action="store_true",
-                      help="Also remove the checkout; used after T3's workspace deletion checks")
+                      help="Also remove the checkout and private state; used after T3's workspace deletion checks")
     for name in ["auto", "exec"]:
         command = sub.add_parser(name)
         command.add_argument("--cwd", required=True)
