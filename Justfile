@@ -9,7 +9,7 @@ agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE
 default:
     @just --list
 
-# The complete local gate, one group after another; Kiln runs these checks side by side.
+# The complete local gate, one group after another; Calder runs these checks side by side.
 qa: qa-nix-deps qa-static qa-typecheck-clients qa-typecheck-rest qa-test-non-server qa-test-server qa-release
 
 qa-static:

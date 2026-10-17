@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeURL from "node:url";
 
-/** A Gitea commit status. Kiln reports the whole run as the `kiln` context. */
+/** A Gitea commit status. Calder reports the whole run as the `calder` context. */
 interface CommitStatus {
   readonly id: number;
   readonly status: string;
@@ -144,7 +144,7 @@ export async function watchMainCi(options: WatchOptions): Promise<CommitStatus> 
       options.log?.(
         status
           ? `${head.slice(0, 12)}: ${options.context} is ${status.status} — ${status.url}`
-          : `${head.slice(0, 12)}: waiting for Kiln to report ${options.context}`,
+          : `${head.slice(0, 12)}: waiting for Calder to report ${options.context}`,
       );
       previousState = state;
     }
@@ -199,7 +199,7 @@ export function parseOptions(args: ReadonlyArray<string>): WatchOptions {
     branch: optionValue(optionArgs, "--branch", "main"),
     remote: optionValue(optionArgs, "--remote", "origin"),
     revision: optionValue(optionArgs, "--revision", "main@origin"),
-    context: optionValue(optionArgs, "--context", "kiln"),
+    context: optionValue(optionArgs, "--context", "calder"),
     pollMilliseconds: pollSeconds * 1_000,
     log: console.log,
   };

@@ -512,7 +512,7 @@
 
             shellHook = ''
               export npm_config_nodedir="${nodejs}"
-              # Tests match English tool messages; Kiln workers inherit the host's German locale.
+              # Tests match English tool messages; Calder workers inherit the host's German locale.
               export LC_ALL=C.UTF-8
             '';
           };
