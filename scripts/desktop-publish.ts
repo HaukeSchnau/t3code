@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Publishes a signed macOS build to the fork's desktop update feed
-// (patches/desktop-distribution.md). Kiln's desktop-publish step runs it on srv-2
+// (patches/desktop-distribution.md). Calder's desktop-publish step runs it on srv-2
 // after desktop-package.ts built the app on the Apple builder.
 //
 // Layout under --updates-dir, which the update host serves as /desktop/:
@@ -155,7 +155,7 @@ const publishCommand = Command.make(
       Flag.withFallbackConfig(Config.String("T3CODE_DESKTOP_UPDATES_DIR")),
     ),
     commit: Flag.String("commit").pipe(
-      Flag.withFallbackConfig(Config.String("KILN_REVISION")),
+      Flag.withFallbackConfig(Config.String("CALDER_REVISION")),
       Flag.withDescription("Commit the build came from."),
     ),
     feedUrl: Flag.String("feed-url").pipe(

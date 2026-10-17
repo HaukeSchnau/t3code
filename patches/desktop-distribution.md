@@ -9,7 +9,7 @@ passkeys) don't apply to the fork.
 
 ## Implementation
 
-- Kiln's `desktop-package` step builds and signs the app on the m1 Apple builder once a push to
+- Calder's `desktop-package` step builds and signs the app on the m1 Apple builder once a push to
   `main` passed and was promoted, and its `desktop-publish` step writes it to the feed from srv-2.
   The deploy never waits for m1, so a paused or busy builder delays only the desktop build, and a
   desktop failure never holds up the deploy or the mobile update.

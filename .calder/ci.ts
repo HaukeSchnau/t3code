@@ -1,5 +1,5 @@
-import { Files, Flake, Nix, Setup, Step, Task, cmd } from "@kiln/core";
-import { Pnpm, Project, Vitest } from "@kiln/std";
+import { Files, Flake, Nix, Setup, Step, Task, cmd } from "@calder-ci/core";
+import { Pnpm, Project, Vitest } from "@calder-ci/std";
 import { flake } from "./flake.ts";
 
 const shell = flake.devShells.ci;
