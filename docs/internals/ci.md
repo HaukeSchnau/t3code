@@ -12,7 +12,7 @@ fixed-output hash fails before the release contract (`gate`). Each step reports 
 commit status, and branch protection requires them. On `main`, `promote` deploys the release to
 srv-1 and srv-2 after every check passed, then the desktop and mobile steps ship the apps from the
 Apple builder (`patches/desktop-distribution.md`, `patches/mobile-distribution.md`). Inspect runs
-at https://calder.schnau.dev, and check the pipeline with `calder plan --event push:main` or
+at https://calder.schnau.dev/app/, and check the pipeline with `calder plan --event push:main` or
 `calder plan --event pr:1`.
 
 Dependency changes use one generated-file workflow:
