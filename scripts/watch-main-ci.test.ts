@@ -4,21 +4,31 @@ import { assert, describe, it } from "@effect/vitest";
 import { newestStatus, parseOptions, parseStatuses } from "./watch-main-ci.ts";
 
 describe("main CI watcher", () => {
-  it("selects the newest status of the Kiln context", () => {
+  it("selects the newest status of the Calder context", () => {
     const statuses = parseStatuses([
-      { id: 10, status: "failure", context: "kiln", target_url: "https://kiln.test/run/1" },
-      { id: 12, status: "pending", context: "kiln", target_url: "https://kiln.test/run/2" },
-      { id: 11, status: "success", context: "kiln/static", target_url: "https://kiln.test/run/2" },
+      { id: 10, status: "failure", context: "calder", target_url: "https://calder.test/run/1" },
+      { id: 12, status: "pending", context: "calder", target_url: "https://calder.test/run/2" },
+      {
+        id: 11,
+        status: "success",
+        context: "calder/static",
+        target_url: "https://calder.test/run/2",
+      },
     ]);
 
-    assert.strictEqual(newestStatus(statuses, "kiln")?.id, 12);
+    assert.strictEqual(newestStatus(statuses, "calder")?.id, 12);
   });
 
   it("ignores other contexts", () => {
     const statuses = parseStatuses([
-      { id: 13, status: "success", context: "kiln/static", target_url: "https://kiln.test/run/3" },
+      {
+        id: 13,
+        status: "success",
+        context: "calder/static",
+        target_url: "https://calder.test/run/3",
+      },
     ]);
-    assert.strictEqual(newestStatus(statuses, "kiln"), undefined);
+    assert.strictEqual(newestStatus(statuses, "calder"), undefined);
   });
 
   it("rejects malformed API responses", () => {
@@ -30,6 +40,6 @@ describe("main CI watcher", () => {
 
     assert.strictEqual(options.revision, "abc123");
     assert.strictEqual(options.pollMilliseconds, 15_000);
-    assert.strictEqual(options.context, "kiln");
+    assert.strictEqual(options.context, "calder");
   });
 });

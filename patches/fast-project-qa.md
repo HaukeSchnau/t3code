@@ -2,15 +2,15 @@
 
 ## Fork requirement
 
-Changes pushed to the fork must reach the release gate within a few minutes on Kiln, the fleet's
+Changes pushed to the fork must reach the release gate within a few minutes on Calder, the fleet's
 self-hosted CI. CI must still run the complete static checks, TypeScript checks, tests, release smoke,
 and fork lockfile check.
 
 ## Implementation
 
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
-- Kiln (`.kiln/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
-  (`Pnpm.install` from `@kiln/std`) installs dependencies once per lockfile state and keeps
+- Calder (`.calder/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
+  (`Pnpm.install` from `@calder-ci/std`) installs dependencies once per lockfile state and keeps
   `node_modules`, with Vite+'s task cache and Vitest's module cache, and TypeScript build info
   between tasks; each task starts from a copy of the prepared workspace. Build output doesn't carry
   over, since a task would read what another revision built.
@@ -20,26 +20,26 @@ and fork lockfile check.
   exhausted the 15-minute setup budget in run 387 before any QA command ran.
 - Server-test temporary files live below T3 Code's persistent CI cache. The worker's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
-- `.kiln/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
+- `.calder/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
   six typecheck groups, a test step for each package with a sizeable suite, one for the small
   packages, one for the repository scripts, the release smoke, and the fork and deploy lockfile
   checks.
-- The server, web, mobile, desktop, client-runtime and shared suites run file by file (Kiln's `each`
+- The server, web, mobile, desktop, client-runtime and shared suites run file by file (Calder's `each`
   over `Files.imports`). A test file runs again only when it, something it imports or its package's
-  other files changed, and Kiln splits the files that run across jobs by their recorded durations.
-  `Vitest.files` from `@kiln/std` runs Vitest in the package on the given files, with the flags of
-  the package's test script, and writes the JSON report that tells Kiln what passed. It bypasses
+  other files changed, and Calder splits the files that run across jobs by their recorded durations.
+  `Vitest.files` from `@calder-ci/std` runs Vitest in the package on the given files, with the flags of
+  the package's test script, and writes the JSON report that tells Calder what passed. It bypasses
   `vp run --cache`, so a report never holds replayed results. A nightly run repeats every check
   without reuse.
 - The server and web suites each run as two Vitest projects. Most files share one module graph per
   worker (`isolate: false`) and keep transformed modules in `node_modules/.vitest-cache`
-  (`fsModuleCache`), which Kiln keeps between runs. Files that call `vi.mock`, `vi.doMock`,
+  (`fsModuleCache`), which Calder keeps between runs. Files that call `vi.mock`, `vi.doMock`,
   `vi.stubGlobal` or `vi.stubEnv` run isolated, since a mock or stub only reaches modules evaluated
   after it; `packages/shared/src/testing/isolatedTestFiles.ts` finds them, plus a listed few that
   fail for other reasons. On srv-2 the whole web suite went from 1167 to 551 CPU seconds with a warm
   cache, and a 40-file sample of small server files from 102 to 15. Upstream isolates every file;
   when an upstream test fails only in the shared project, add it to the config's list.
-- A test that reads repository files its imports don't show has a `// kiln: always` comment line and
+- A test that reads repository files its imports don't show has a `// calder: always` comment line and
   runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook and
   `apps/mobile/src/dependency-graph.test.ts` the whole source tree. Keep the comments when upstream
   changes those files, and add one to a test that starts reading files by path.
@@ -52,12 +52,12 @@ and fork lockfile check.
 - Typecheck groups are keyed by what their tsconfigs include and everything it imports, types
   included. Each group checks its packages one at a time with Vite+'s task cache. The server checks
   alone, since tsgo needs about 4 GB for it, and incrementally: its `tsconfig.json` sets
-  `incremental`, and Kiln keeps `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 at load 35
+  `incremental`, and Calder keeps `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 at load 35
   to 45 a cold check took 387 s, an unchanged one 16 s and one after a one-file edit 125 s. Vite+
   never caches it because it rewrites the build info it read. Remove `incremental` if upstream makes
   the server incremental or composite.
 - Upstream runs the orchestrator replay fixtures as one file, `OrchestratorReplayFixtures.integration.test.ts`:
-  123 replays that took 12 to 21 minutes on Kiln, and a file is the smallest unit Kiln and Vitest
+  123 replays that took 12 to 21 minutes on Calder, and a file is the smallest unit Calder and Vitest
   split. The fork moves its code to `OrchestratorReplayFixtures.testkit.ts` and runs it as six
   `OrchestratorReplayFixtures.part<N>.integration.test.ts` files of about two minutes each. Port
   upstream changes to the old file into the testkit. Remove the split once upstream splits the file.
