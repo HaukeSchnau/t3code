@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Packages and signs the macOS build of the fork's desktop update feed
-// (patches/desktop-distribution.md). Kiln's desktop-package step runs it on the
+// (patches/desktop-distribution.md). Calder's desktop-package step runs it on the
 // Apple builder; desktop-publish.ts then publishes what it leaves in --output-dir.
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";

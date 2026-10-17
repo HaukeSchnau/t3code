@@ -1,6 +1,6 @@
 # NixOS CI portability
 
-Kiln runs the fork's checks on loaded NixOS aarch64 workers. Upstream's CI runs on Ubuntu and macOS, so a few
+Calder runs the fork's checks on loaded NixOS aarch64 workers. Upstream's CI runs on Ubuntu and macOS, so a few
 upstream tests and one wrapper script assume an FHS system: tools under `/bin` and `/usr/bin`, a coreutils
 that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, and English tool messages.
 
@@ -25,7 +25,7 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   delivery waited on the next gate until the test timed out.
 - `apps/desktop/src/snapShot/LinuxSnapShot.dbus.test.ts` and `PortalCaptureShortcut.dbus.test.ts`: the
   private bus socket lives under `/tmp` instead of TMPDIR, and a daemon that fails to start reports its
-  stderr. dbus-daemon refuses socket paths over 99 bytes, and a trusted Kiln slot's TMPDIR, nested once more
+  stderr. dbus-daemon refuses socket paths over 99 bytes, and a trusted Calder slot's TMPDIR, nested once more
   by `nix develop`, made them 100 and 101 bytes long.
 - `apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts`: the replay page retention check
   yields before counting live pages. One synchronous fiber run usually spans a page boundary, so the frames
@@ -34,4 +34,4 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 ## Removing it
 
 Each change is a portability fix upstream can take as is. Drop the matching line here once upstream has an
-equivalent. The locale and `jujutsu` lines stay as long as Kiln runs the checks.
+equivalent. The locale and `jujutsu` lines stay as long as Calder runs the checks.

@@ -32,7 +32,7 @@ export default defineConfig(async (configEnv) => {
       // Transformed modules persist in node_modules/.vitest-cache between runs.
       fsModuleCache: true,
       // A VM worker's heap grows with every file. At the default limit three workers grew to 3.5 GB,
-      // close to a Kiln worker's 4.5 GB MemoryHigh. Replacing them at 512 MB cost no CPU.
+      // close to a Calder worker's 4.5 GB MemoryHigh. Replacing them at 512 MB cost no CPU.
       vmMemoryLimit: "512MB",
       projects: [
         // Most files share one module graph per worker: a fresh one per file took more CPU than
