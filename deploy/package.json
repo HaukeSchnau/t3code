@@ -1,0 +1,11 @@
+{
+  "name": "t3code-deploy",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@effect/platform-node": "4.0.5",
+    "@schnau/fleet": "0.1.0",
+    "alchemy": "2.0.0-beta.83",
+    "effect": "4.0.5"
+  }
+}
