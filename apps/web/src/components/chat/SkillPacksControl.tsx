@@ -17,7 +17,7 @@ import {
   type SkillPackSelection,
 } from "@t3tools/client-runtime/skillPacks";
 import { BlocksIcon, ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import { useEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -37,7 +37,7 @@ import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "
 import { useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
 
-/** Fork: skill packs (patches/skill-packs.md). */
+/** Skill packs (patches/skill-packs.md). */
 export interface SkillPacksEditor {
   readonly catalog: SkillPackCatalog;
   readonly selection: SkillPackSelection;
@@ -274,26 +274,16 @@ export function ComposerSkillPacksControl(props: {
   const [open, setOpen] = useComposerMenuState(props.hidden);
 
   const projectDefaultPackIds = state?.projectDefaultPackIds;
-  const applyPackIds = useCallback(
-    (packIds: ReadonlyArray<SkillPackId> | null) => {
-      if (isServerThread) {
-        void setThreadPacks({
-          environmentId,
-          input: { threadId, packIds: packIds ?? projectDefaultPackIds ?? [] },
-        });
-        return;
-      }
-      setDraftPackIds(environmentId, threadId, packIds);
-    },
-    [
-      environmentId,
-      isServerThread,
-      projectDefaultPackIds,
-      setDraftPackIds,
-      setThreadPacks,
-      threadId,
-    ],
-  );
+  const applyPackIds = (packIds: ReadonlyArray<SkillPackId> | null) => {
+    if (isServerThread) {
+      void setThreadPacks({
+        environmentId,
+        input: { threadId, packIds: packIds ?? projectDefaultPackIds ?? [] },
+      });
+      return;
+    }
+    setDraftPackIds(environmentId, threadId, packIds);
+  };
 
   if (catalog === null) return null;
   const selection = resolveSkillPackSelection({

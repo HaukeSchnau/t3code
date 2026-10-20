@@ -1,560 +1,415 @@
-import type { LegendListRef } from "@legendapp/list/react";
+import type { InlineSkill } from "@t3tools/shared/inlineSkills";
+import type {
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2SearchThreadResult,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useStableCallback } from "~/hooks/useStableCallback";
+import { orchestrationEnvironment } from "~/state/orchestration";
+import { useEnvironmentQuery } from "~/state/query";
+import { useDebouncedValue } from "~/state/queries";
 import {
-  deriveThreadFindResults,
-  nearestThreadFindMatch,
-  reduceThreadFindCursor,
-  THREAD_FIND_CURSOR_START,
-  THREAD_FIND_SCOPES,
-  THREAD_FIND_SERVER_MIN_LENGTH,
-  type ThreadFindCursor,
-  type ThreadFindCursorEvent,
-  type ThreadFindMatch,
-  type ThreadFindResults,
-} from "@t3tools/client-runtime/thread-find";
-import type { OrchestrationV2ProjectedTurnItem, ScopedThreadRef } from "@t3tools/contracts";
-import { compileThreadFind, type ThreadFindQuery } from "@t3tools/shared/threadFind";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+  type ThreadFindPositionReader,
+  type ThreadFindStart,
+  stepThreadFindIndex,
+} from "./threadFind";
+import { subscribeThreadFindOpen } from "./threadFindActionBus";
+import { toastManager } from "../ui/toast";
 
-import type { TimelineEntry } from "../../session-logic";
-import { orchestrationEnvironment } from "../../state/orchestration";
-import { useDebouncedValue } from "../../state/queries";
-import { useEnvironmentQuery } from "../../state/query";
-import { useThreadFindStore } from "../../threadFindStore";
-import { buildThreadFindEntryIndex, isAtOrAboveOrigin } from "./threadFind.logic";
-import type { ThreadFindTimelineState, ThreadFindTimelineTarget } from "./threadFindTimeline";
+const EMPTY_SKILLS: readonly InlineSkill[] = [];
 
-// Mirrors the sidebar's thread search debounce.
-const SERVER_DEBOUNCE_MS = 200;
-// New or finished tool rows may hold matches; streaming text never does.
-const SERVER_REFRESH_DELAY_MS = 1000;
-const MAX_HISTORY_PAGES = 20;
-const BACK_PILL_MS = 6000;
-
-export interface ThreadFindHistory {
-  readonly hasMoreHistory: boolean;
-  readonly loading: boolean;
-  readonly onLoadEarlier: () => void;
-}
-
-interface CursorState {
-  readonly cursor: ThreadFindCursor;
-  readonly index: number;
-  /** The match navigated to, kept as it was so streaming does not churn it. */
-  readonly match: ThreadFindMatch | null;
-  /** Bumped by every navigation the timeline must perform. */
-  readonly requestId: number;
-}
-
-const NO_RESULTS: ThreadFindResults = {
-  matches: [],
-  counts: { all: 0, user: 0, assistant: 0, tool: 0, reasoning: 0 },
-  invalid: null,
-  truncated: false,
+const CLOSED_FIND = {
+  threadKey: null as string | null,
+  query: "",
+  offset: 0,
+  start: undefined as ThreadFindStart | undefined,
+  focusRequestId: 0,
+  navigationId: 0,
+  requestId: 0,
+  localSelection: null as {
+    base: OrchestrationV2SearchThreadResult;
+    baseNavigationId: number;
+    activeIndex: number;
+    match: NonNullable<OrchestrationV2SearchThreadResult["match"]>;
+    navigationId: number;
+  } | null,
 };
 
-// Matches keep their identity while their items are unchanged, so this holds
-// whenever streaming touched nothing that matches.
-function sameResults(left: ThreadFindResults, right: ThreadFindResults): boolean {
-  return (
-    left.invalid === right.invalid &&
-    left.truncated === right.truncated &&
-    left.matches.length === right.matches.length &&
-    left.matches.every((match, index) => match === right.matches[index]) &&
-    THREAD_FIND_SCOPES.every((scope) => left.counts[scope] === right.counts[scope])
-  );
-}
-
-/** Where the reader is: the newest entry showing above the viewport bottom. */
-function readerEntryId(
-  viewport: HTMLElement,
-  orderByEntryId: ReadonlyMap<string, number>,
-): string | null {
-  const bottom = viewport.getBoundingClientRect().bottom;
-  let best: { readonly id: string; readonly order: number } | null = null;
-  for (const element of viewport.querySelectorAll<HTMLElement>("[data-find-entry]")) {
-    const rect = element.getBoundingClientRect();
-    if (rect.height === 0 || rect.top >= bottom) continue;
-    const id = element.dataset.findEntry ?? "";
-    const order = orderByEntryId.get(id);
-    if (order !== undefined && (best === null || order > best.order)) best = { id, order };
-  }
-  return best?.id ?? null;
-}
-
-/**
- * The scroll position as the topmost visible row plus an offset into it, so
- * returning there survives history prepended above it.
- */
-interface ScrollHome {
-  readonly rowKey: string | null;
-  readonly delta: number;
-  readonly scrollTop: number;
-}
-
-function captureScrollHome(list: LegendListRef): ScrollHome | null {
-  const viewport = list.getScrollableNode();
-  if (!viewport) return null;
-  const top = viewport.getBoundingClientRect().top;
-  let rowKey: string | null = null;
-  let rowTop = Number.POSITIVE_INFINITY;
-  for (const element of viewport.querySelectorAll<HTMLElement>("[data-timeline-row-id]")) {
-    const rect = element.getBoundingClientRect();
-    if (rect.height === 0 || rect.bottom <= top || rect.top >= rowTop) continue;
-    rowKey = element.dataset.timelineRowId ?? null;
-    rowTop = rect.top;
-  }
-  const position = rowKey === null ? undefined : list.getState().positionByKey(rowKey);
-  return position === undefined
-    ? { rowKey: null, delta: 0, scrollTop: viewport.scrollTop }
-    : { rowKey, delta: viewport.scrollTop - position, scrollTop: viewport.scrollTop };
-}
-
-function scrollHomeOffset(list: LegendListRef, home: ScrollHome): number {
-  const position = home.rowKey === null ? undefined : list.getState().positionByKey(home.rowKey);
-  return position === undefined ? home.scrollTop : position + home.delta;
-}
-
-/** Text the reader selected inside the timeline, if it fits a single-line query. */
-export function threadFindSelectionText(viewport: HTMLElement | null): string | null {
-  const selection = viewport?.ownerDocument.getSelection();
-  if (!viewport || !selection || selection.isCollapsed) return null;
-  if (!selection.anchorNode || !viewport.contains(selection.anchorNode)) return null;
-  const text = selection.toString().trim();
-  return text.length > 0 && text.length <= 200 && !text.includes("\n") ? text : null;
-}
-
-export type ThreadFindController = ReturnType<typeof useThreadFind>;
-
-/**
- * Find in the open thread: local matches over loaded rows merged with the
- * server's, the selected match, and what the timeline needs to show it.
- */
-export function useThreadFind(input: {
-  readonly threadRef: ScopedThreadRef | null;
-  /** False while the timeline paints a previous thread during a switch. */
-  readonly enabled: boolean;
-  readonly items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
-  readonly entries: ReadonlyArray<TimelineEntry>;
-  readonly history: ThreadFindHistory | undefined;
-  readonly listRef: RefObject<LegendListRef | null>;
+export function useThreadFind({
+  thread,
+  enabled,
+  progressive = false,
+  skills = EMPTY_SKILLS,
+  content,
+}: {
+  thread: ScopedThreadRef | null;
+  enabled: boolean;
+  progressive?: boolean;
+  skills?: readonly InlineSkill[];
+  content: Pick<OrchestrationV2ThreadProjection, "visibleTurnItems" | "runs"> | undefined;
 }) {
-  const { threadRef, enabled, items, entries, history, listRef } = input;
-  const open = useThreadFindStore((state) => state.open);
-  const query = useThreadFindStore((state) => state.query);
-  const caseSensitive = useThreadFindStore((state) => state.caseSensitive);
-  const wholeWord = useThreadFindStore((state) => state.wholeWord);
-  const regex = useThreadFindStore((state) => state.regex);
-  const scope = useThreadFindStore((state) => state.scope);
-  const hit = useThreadFindStore((state) => state.hit);
-  const clearHit = useThreadFindStore((state) => state.clearHit);
-  const active = open && enabled && threadRef !== null;
-
-  const findQuery = useMemo<ThreadFindQuery>(
-    () => ({ query, caseSensitive, wholeWord, regex }),
-    [query, caseSensitive, wholeWord, regex],
-  );
-  const entryIndex = useMemo(() => buildThreadFindEntryIndex(entries), [entries]);
-  const isRendered = useCallback(
-    (row: OrchestrationV2ProjectedTurnItem) => entryIndex.entryIdByItemId.has(row.sourceItemId),
-    [entryIndex],
-  );
-
-  // Regex runs only over loaded rows: the server refuses it, since a
-  // pathological pattern would stall it.
-  const serverInput =
-    active &&
-    !regex &&
-    query.length >= THREAD_FIND_SERVER_MIN_LENGTH &&
-    compileThreadFind(findQuery)?._tag === "Valid"
-      ? { threadId: threadRef.threadId, query, caseSensitive, wholeWord }
-      : null;
-  const serverSearches = serverInput !== null;
-  const serverKey =
-    serverInput === null ? null : JSON.stringify([threadRef?.environmentId, serverInput]);
-  const debouncedServerKey = useDebouncedValue(serverKey, SERVER_DEBOUNCE_MS);
-  const serverSettledInput = serverKey !== null && debouncedServerKey === serverKey;
-  const server = useEnvironmentQuery(
-    serverSettledInput && serverInput !== null && threadRef !== null
-      ? orchestrationEnvironment.threadFind({
-          environmentId: threadRef.environmentId,
-          input: serverInput,
-        })
-      : null,
-  );
-  const serverData = serverSettledInput ? server.data : null;
-  const serverFailed = serverSettledInput && server.error !== null;
-  const serverPending = serverInput !== null && serverData === null && !serverFailed;
-
-  // Re-run the server find when rows are added or finish, not per token.
-  const contentRevision = useMemo(
-    () => `${items.length}:${items.filter((row) => row.item.status === "completed").length}`,
-    [items],
-  );
-  const refreshServer = server.refresh;
-  const lastRevisionRef = useRef(contentRevision);
-  useEffect(() => {
-    if (lastRevisionRef.current === contentRevision) return;
-    lastRevisionRef.current = contentRevision;
-    if (serverData === null) return;
-    const timer = window.setTimeout(refreshServer, SERVER_REFRESH_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [contentRevision, refreshServer, serverData]);
-
-  const derived = useMemo(
-    () =>
-      active
-        ? deriveThreadFindResults({
-            items,
-            query: findQuery,
-            scope,
-            server: serverData,
-            isRendered,
-          })
-        : NO_RESULTS,
-    [active, findQuery, isRendered, items, scope, serverData],
-  );
-  // Streaming re-derives on every token; keep the previous results when
-  // nothing changed so the list, ticks and painter are left alone.
-  const [results, setResults] = useState(derived);
-  if (results !== derived && !sameResults(results, derived)) setResults(derived);
-  const matches = results.matches;
-  // Cursor events read the latest matches; effects below run after this one.
-  const matchesRef = useRef(matches);
-  useLayoutEffect(() => {
-    matchesRef.current = matches;
-  }, [matches]);
-
-  // Entries change on every streamed token; cursor callbacks read them here
-  // so they keep their identity.
-  const entryIndexRef = useRef(entryIndex);
-  useLayoutEffect(() => {
-    entryIndexRef.current = entryIndex;
-  }, [entryIndex]);
-
-  // Typing searches from where the reader is, by entry, so history prepended
-  // later does not shift it. That is where find opened, the match the reader
-  // stepped or picked to, or wherever they scrolled since. Find's own jumps do
-  // not move it, or each keystroke would walk further down.
-  const originEntryIdRef = useRef<string | null>(null);
-  const readerScrolledRef = useRef(false);
-  const captureOrigin = useCallback(() => {
-    const viewport = listRef.current?.getScrollableNode() ?? null;
-    originEntryIdRef.current =
-      viewport === null ? null : readerEntryId(viewport, entryIndexRef.current.orderByEntryId);
-    readerScrolledRef.current = false;
-  }, [listRef]);
-  useEffect(() => {
-    const viewport = active ? listRef.current?.getScrollableNode() : null;
-    if (!viewport) return;
-    const scrolled = () => {
-      readerScrolledRef.current = true;
-    };
-    const events = ["wheel", "touchmove", "pointerdown"] as const;
-    for (const event of events) viewport.addEventListener(event, scrolled, { passive: true });
-    return () => {
-      for (const event of events) viewport.removeEventListener(event, scrolled);
-    };
-  }, [active, listRef]);
-  // Where the reader was when find opened, for the way back.
-  const homeRef = useRef<ScrollHome | null>(null);
-
-  const nearest = useCallback(() => {
-    const index = entryIndexRef.current;
-    const originId = originEntryIdRef.current;
-    const origin =
-      (originId === null ? undefined : index.orderByEntryId.get(originId)) ??
-      index.orderByEntryId.size - 1;
-    return nearestThreadFindMatch(matchesRef.current, (match) =>
-      isAtOrAboveOrigin(match, index, origin),
-    );
-  }, []);
-
-  const [cursorState, setCursorState] = useState<CursorState>({
-    cursor: THREAD_FIND_CURSOR_START,
-    index: -1,
-    match: null,
-    requestId: 0,
-  });
-  const cursorRef = useRef(cursorState);
-  const [wrapNoticeAt, setWrapNoticeAt] = useState<number | null>(null);
-  const dispatch = useCallback(
-    (event: ThreadFindCursorEvent) => {
-      const previous = cursorRef.current;
-      const next = reduceThreadFindCursor(previous.cursor, matchesRef.current, event, nearest);
-      if (next.wrapped !== null) setWrapNoticeAt(Date.now());
-      const navigates =
-        event.type === "pick" || event.type === "step" || next.cursor.key !== previous.cursor.key;
-      if (
-        !navigates &&
-        next.index === previous.index &&
-        next.cursor.anchored === previous.cursor.anchored
-      ) {
-        return;
-      }
-      cursorRef.current = {
-        cursor: next.cursor,
-        index: next.index,
-        match: navigates ? (matchesRef.current[next.index] ?? null) : previous.match,
-        requestId: navigates ? previous.requestId + 1 : previous.requestId,
-      };
-      setCursorState(cursorRef.current);
-    },
-    [nearest],
-  );
-
-  const threadKey = threadRef === null ? null : scopedThreadKey(threadRef);
-  const searchKey = active ? JSON.stringify([threadKey, findQuery]) : null;
-  const lastSearchKeyRef = useRef<string | null>(null);
-  const lastThreadKeyRef = useRef<string | null>(null);
-  const lastServerDataRef = useRef(serverData);
-  useEffect(() => {
-    if (searchKey === null) {
-      lastSearchKeyRef.current = null;
-      lastThreadKeyRef.current = null;
+  // Held in state so the timeline props that carry it can be stored in state too.
+  const [positionReader] = useState<RefObject<ThreadFindPositionReader | null>>(() => ({
+    current: null,
+  }));
+  const lastContentRef = useRef(content);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshAfterSearchRef = useRef(false);
+  const threadKey = thread ? scopedThreadKey(thread) : null;
+  const [state, setState] = useState(CLOSED_FIND);
+  if (state.threadKey !== null && (!enabled || state.threadKey !== threadKey))
+    setState(CLOSED_FIND);
+  const isOpen = enabled && threadKey !== null && state.threadKey === threadKey;
+  const open = useStableCallback(() => {
+    if (threadKey === null) return;
+    if (!enabled) {
+      toastManager.add({
+        id: "thread-find-unavailable",
+        title: "Thread search is unavailable on this server.",
+        description: "Update the server to enable it.",
+      });
       return;
     }
-    if (lastThreadKeyRef.current !== threadKey) {
-      lastThreadKeyRef.current = threadKey;
-      homeRef.current = listRef.current === null ? null : captureScrollHome(listRef.current);
-      captureOrigin();
-    }
-    const settled = serverData !== null && serverData !== lastServerDataRef.current;
-    lastServerDataRef.current = serverData;
-    if (lastSearchKeyRef.current !== searchKey) {
-      lastSearchKeyRef.current = searchKey;
-      const { cursor, match } = cursorRef.current;
-      const matchEntryId =
-        match?.loaded === true
-          ? entryIndexRef.current.entryIdByItemId.get(match.sourceItemId)
-          : undefined;
-      if (readerScrolledRef.current) captureOrigin();
-      else if (!cursor.anchored && matchEntryId !== undefined) {
-        originEntryIdRef.current = matchEntryId;
-      }
-      dispatch({ type: "query" });
-    } else {
-      dispatch({ type: "results", settled });
-    }
-    // A thread search hit wins over the nearest match once it shows up. If
-    // the server's answer lacks it too, find stays at the nearest match.
-    if (hit === null || hit.threadKey !== threadKey) return;
-    const index = matchesRef.current.findIndex((match) => match.messageId === hit.messageId);
-    if (index >= 0) dispatch({ type: "pick", index });
-    if (index >= 0 || serverData !== null || serverFailed || !serverSearches) clearHit();
-  }, [
-    captureOrigin,
-    clearHit,
-    dispatch,
-    hit,
-    listRef,
-    matches,
-    searchKey,
-    serverData,
-    serverFailed,
-    serverSearches,
-    threadKey,
-  ]);
+    const start =
+      state.threadKey === threadKey && state.query.trim()
+        ? positionReader.current?.(state.query.trim())
+        : undefined;
+    setState((previous) => {
+      const current = previous.threadKey === threadKey ? previous : CLOSED_FIND;
+      return {
+        ...current,
+        threadKey,
+        focusRequestId: previous.focusRequestId + 1,
+        ...(current.query.trim()
+          ? {
+              start,
+              offset: 0,
+              localSelection: null,
+              navigationId: current.navigationId + 1,
+              requestId: current.navigationId + 1,
+            }
+          : {}),
+      };
+    });
+  });
+  const close = useStableCallback(() => setState(CLOSED_FIND));
+  useEffect(() => subscribeThreadFindOpen(open), [open]);
 
-  // By key, so a match streamed in ahead of the cursor's does not point the
-  // cursor elsewhere for a render before the cursor catches up.
-  const currentIndex = useMemo(
-    () =>
-      cursorState.cursor.key === null
-        ? -1
-        : matches.findIndex((match) => match.key === cursorState.cursor.key),
-    [cursorState.cursor.key, matches],
+  const remote = useServerResults(
+    isOpen ? thread : null,
+    state.query,
+    state.offset,
+    state.requestId,
+    state.start,
+    skills,
+    progressive,
   );
-  const current: ThreadFindMatch | null = currentIndex >= 0 ? matches[currentIndex]! : null;
-
-  // A match in history the client has not loaded pages it in, one page at a
-  // time, until its row arrives.
-  const historyPagesRef = useRef({ key: null as string | null, pages: 0 });
-  useEffect(() => {
-    if (!active || current === null || current.loaded || history === undefined) return;
-    if (historyPagesRef.current.key !== current.key) {
-      historyPagesRef.current = { key: current.key, pages: 0 };
-    }
-    if (!history.hasMoreHistory || history.loading) return;
-    if (historyPagesRef.current.pages >= MAX_HISTORY_PAGES) return;
-    historyPagesRef.current.pages += 1;
-    history.onLoadEarlier();
-  }, [active, current, history]);
-
-  // The cursor's match once its row is loaded. Until the cursor catches up
-  // with new results, `current` may be another match, so the keys must agree.
-  const currentEntryId =
-    current !== null && current.key === cursorState.cursor.key && current.loaded
-      ? (entryIndex.entryIdByItemId.get(current.sourceItemId) ?? null)
+  const status: "loading" | "error" | null = remote.error
+    ? "error"
+    : remote.isPending && remote.data === null
+      ? "loading"
       : null;
-  // Stable across streaming, so revealed rows do not re-render per token.
-  const navigatedMatch = cursorState.match;
-  const target = useMemo<ThreadFindTimelineTarget | null>(
-    () =>
-      currentEntryId === null || navigatedMatch === null
-        ? null
-        : { entryId: currentEntryId, match: navigatedMatch, requestId: cursorState.requestId },
-    [currentEntryId, cursorState.requestId, navigatedMatch],
+  const localSelection = rebaseLocalSelection(
+    state.localSelection,
+    remote.data,
+    remote.navigationId,
   );
-
-  // Keyed by content, so streaming that adds no new entry repaints nothing.
-  const paintKey = useMemo(() => {
-    const ids = new Set<string>();
-    for (const match of matches) {
-      if (!match.loaded || match.field !== "text") continue;
-      const entryId = entryIndex.entryIdByItemId.get(match.sourceItemId);
-      if (entryId !== undefined) ids.add(entryId);
-    }
-    return [...ids].join("\n");
-  }, [entryIndex, matches]);
-  const paintEntryIds = useMemo<ReadonlySet<string>>(
-    () => new Set(paintKey.length === 0 ? [] : paintKey.split("\n")),
-    [paintKey],
-  );
-  const ticksKey = useMemo(
-    () =>
-      matches
-        .flatMap((match) => {
-          const entryId = match.loaded
-            ? entryIndex.entryIdByItemId.get(match.sourceItemId)
-            : undefined;
-          return entryId === undefined ? [] : [`${match.key}\t${entryId}`];
-        })
-        .join("\n"),
-    [entryIndex, matches],
-  );
-  const ticks = useMemo(
-    () =>
-      ticksKey.length === 0
-        ? []
-        : ticksKey.split("\n").map((line) => {
-            const [key = "", entryId = ""] = line.split("\t");
-            return { key, entryId };
-          }),
-    [ticksKey],
-  );
-  const hasUnloadedMatches = matches.some((match) => !match.loaded);
-  // Matches group under the prompt that started their turn.
-  const turnPrompts = useMemo(() => {
-    const runByItemId = new Map<string, string>();
-    const promptByRunId = new Map<string, string>();
-    for (const row of items) {
-      const runId = row.item.runId;
-      if (runId === null) continue;
-      runByItemId.set(row.sourceItemId, runId);
-      if (row.item.type === "user_message" && !promptByRunId.has(runId)) {
-        promptByRunId.set(runId, row.item.text.replace(/\s+/g, " ").trim());
-      }
-    }
-    return { runByItemId, promptByRunId };
-  }, [items]);
-  const groupLabel = useCallback(
-    (match: ThreadFindMatch) => {
-      if (!match.loaded) return "Earlier in this thread, not loaded yet";
-      const runId = turnPrompts.runByItemId.get(match.sourceItemId);
-      const prompt = runId === undefined ? undefined : turnPrompts.promptByRunId.get(runId);
-      return prompt === undefined || prompt.length === 0 ? "This thread" : prompt;
-    },
-    [turnPrompts],
-  );
-  const pickKey = useCallback(
-    (key: string) => {
-      const index = matchesRef.current.findIndex((match) => match.key === key);
-      if (index >= 0) dispatch({ type: "pick", index });
-    },
-    [dispatch],
-  );
-  const timeline = useMemo<ThreadFindTimelineState | null>(
-    () =>
-      active && results.invalid === null && query.length > 0
-        ? { query: findQuery, paintEntryIds, target, ticks, hasUnloadedMatches, onPick: pickKey }
+  const count = remote.data?.totalMatches ?? 0;
+  const activeIndex = localSelection?.activeIndex ?? remote.data?.activeIndex ?? 0;
+  const selectedMatch = localSelection?.match ?? remote.data?.match;
+  const entryId = selectedMatch?.entryId;
+  const runId = selectedMatch?.runId;
+  const occurrence = selectedMatch?.occurrence;
+  const counting = remote.data?.complete === false;
+  const navigationId = localSelection?.navigationId ?? remote.navigationId;
+  const findExpanded = isOpen && state.query.trim().length > 0;
+  const findQuery = isOpen && remote.data?.match ? state.query : "";
+  const nextTimeline = {
+    findOpen: isOpen,
+    findExpanded,
+    findQuery,
+    activeFindMatch:
+      entryId !== undefined && occurrence !== undefined
+        ? { entryId, runId: runId ?? null, occurrence }
         : null,
-    [
-      active,
-      findQuery,
-      hasUnloadedMatches,
-      paintEntryIds,
-      pickKey,
-      query,
-      results.invalid,
-      target,
-      ticks,
-    ],
-  );
+    findNavigationId: navigationId,
+  };
+  // Finishing the count or a pending response must not rerender the timeline or
+  // request another jump, so these keep their identity until a field changes.
+  const [storedTimeline, setTimeline] = useState(() => ({
+    fields: nextTimeline,
+    props: { ...nextTimeline, findPositionReaderRef: positionReader },
+  }));
+  let timeline = storedTimeline;
+  if (!sameTimeline(timeline.fields, nextTimeline)) {
+    timeline = {
+      fields: nextTimeline,
+      props: { ...nextTimeline, findPositionReaderRef: positionReader },
+    };
+    setTimeline(timeline);
+  }
+  const match = timeline.fields.activeFindMatch;
+  const step = (delta: number) => {
+    if (count === 0 || counting) return;
+    setState((previous) => {
+      const local = rebaseLocalSelection(previous.localSelection, remote.data, remote.navigationId);
+      const pending = previous.navigationId !== (local?.navigationId ?? remote.navigationId);
+      const selected = local?.match ?? remote.data?.match;
+      const nextIndex = stepThreadFindIndex(
+        local?.activeIndex ?? remote.data?.activeIndex ?? 0,
+        count,
+        delta,
+      );
+      const entry = remote.data?.navigation?.find(
+        (entry) => nextIndex >= entry.startIndex && nextIndex < entry.startIndex + entry.count,
+      );
+      const nextNavigationId = previous.navigationId + 1;
+      if (
+        !pending &&
+        !remote.isPending &&
+        entry &&
+        remote.data &&
+        (!local ||
+          local.base === remote.data ||
+          remote.data.navigation?.some(
+            (entry) =>
+              entry.entryId === local.match.entryId && local.match.occurrence < entry.count,
+          )) &&
+        refreshTimerRef.current === null &&
+        lastContentRef.current === content
+      ) {
+        return {
+          ...previous,
+          navigationId: nextNavigationId,
+          localSelection: {
+            base: remote.data,
+            baseNavigationId: remote.navigationId,
+            activeIndex: nextIndex,
+            match: {
+              entryId: entry.entryId,
+              runId: entry.runId,
+              occurrence: nextIndex - entry.startIndex,
+            },
+            navigationId: nextNavigationId,
+          },
+        };
+      }
+      return {
+        ...previous,
+        start:
+          pending || !selected
+            ? previous.start
+            : { entryId: selected.entryId, occurrence: selected.occurrence },
+        offset: pending ? previous.offset + delta : delta,
+        navigationId: nextNavigationId,
+        requestId: nextNavigationId,
+      };
+    });
+  };
 
-  // After a long jump, closing offers the way back for a few seconds, in the
-  // thread it was offered for.
-  const [back, setBack] = useState<{
-    readonly home: ScrollHome;
-    readonly threadKey: string;
-  } | null>(null);
+  const refreshLiveResultsRef = useRef(() => {});
+  useLayoutEffect(() => {
+    refreshLiveResultsRef.current = () => {
+      if (!isOpen || !state.query.trim()) return;
+      // Paging can change client content while the server is still counting.
+      // Coalesce those updates instead of repeatedly restarting the scan.
+      if (progressive && remote.isPending) {
+        refreshAfterSearchRef.current = true;
+        return;
+      }
+      if (!match || state.navigationId !== navigationId) {
+        remote.refresh();
+        return;
+      }
+      const start = { entryId: match.entryId, occurrence: match.occurrence };
+      if (
+        state.offset === 0 &&
+        state.start?.entryId === start.entryId &&
+        state.start.occurrence === start.occurrence &&
+        state.requestId === state.navigationId
+      ) {
+        remote.refresh();
+      } else {
+        setState((previous) => ({
+          ...previous,
+          start,
+          offset: 0,
+          requestId: previous.navigationId,
+        }));
+      }
+    };
+  });
   useEffect(() => {
-    if (back === null) return;
-    const timer = window.setTimeout(() => setBack(null), BACK_PILL_MS);
-    return () => window.clearTimeout(timer);
-  }, [back]);
-  const closeFind = useThreadFindStore((state) => state.closeFind);
-  const close = useCallback(() => {
-    const list = listRef.current;
-    const viewport = list?.getScrollableNode();
-    const home = homeRef.current;
-    if (
-      list &&
-      viewport &&
-      home &&
-      threadKey !== null &&
-      Math.abs(viewport.scrollTop - scrollHomeOffset(list, home)) > viewport.clientHeight * 0.8
-    ) {
-      setBack({ home, threadKey });
-    }
-    closeFind();
-  }, [closeFind, listRef, threadKey]);
-  const goBack = useCallback(() => {
-    const list = listRef.current;
-    if (back !== null && list !== null) {
-      void list.scrollToOffset({ offset: scrollHomeOffset(list, back.home), animated: false });
-    }
-    setBack(null);
-  }, [back, listRef]);
-  const step = useCallback(
-    (direction: "older" | "newer") => dispatch({ type: "step", direction }),
-    [dispatch],
-  );
-  const pick = useCallback((index: number) => dispatch({ type: "pick", index }), [dispatch]);
-  const openFind = useThreadFindStore((state) => state.openFind);
-  const reopen = useCallback(
-    (prefill?: string) => {
-      setBack(null);
-      openFind(prefill);
-    },
-    [openFind],
-  );
+    if (!refreshAfterSearchRef.current || remote.isPending) return;
+    refreshAfterSearchRef.current = false;
+    if (!remote.error) refreshLiveResultsRef.current();
+  }, [remote.isPending, remote.error]);
+  useEffect(() => {
+    if (lastContentRef.current === content) return;
+    lastContentRef.current = content;
+    if (!isOpen || !state.query.trim() || refreshTimerRef.current !== null) return;
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshLiveResultsRef.current();
+    }, 300);
+  }, [content, isOpen, state.query]);
+  useEffect(() => {
+    if (!isOpen || threadKey === null || !state.query.trim()) return;
+    return () => {
+      if (refreshTimerRef.current !== null) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+      refreshAfterSearchRef.current = false;
+    };
+  }, [threadKey, isOpen, state.query]);
 
   return {
-    isOpen: active,
-    query: findQuery,
-    scope,
-    results,
-    current,
-    index: currentIndex,
-    pending: serverPending,
-    regexLocalOnly: regex && query.length > 0,
-    wrapNoticeAt,
-    groupLabel,
-    timeline,
-    showBack: back !== null && back.threadKey === threadKey,
-    step,
-    pick,
-    openFind: reopen,
+    isOpen,
+    open,
     close,
-    goBack,
+    barProps: {
+      open: isOpen,
+      query: state.query,
+      matchCount: count,
+      counting,
+      activeIndex,
+      status,
+      focusRequestId: state.focusRequestId,
+      onRetry: remote.refresh,
+      onQueryChange: (query: string) => {
+        const start = positionReader.current?.(query.trim());
+        setState((previous) => ({
+          ...previous,
+          query,
+          offset: 0,
+          start,
+          localSelection: null,
+          navigationId: previous.navigationId + 1,
+          requestId: previous.navigationId + 1,
+        }));
+      },
+      onNext: () => step(1),
+      onPrevious: () => step(-1),
+      onClose: close,
+    },
+    timelineProps: timeline.props,
   };
+}
+
+type TimelineFields = Omit<
+  ReturnType<typeof useThreadFind>["timelineProps"],
+  "findPositionReaderRef"
+>;
+
+function sameTimeline(a: TimelineFields, b: TimelineFields) {
+  const aMatch = a.activeFindMatch;
+  const bMatch = b.activeFindMatch;
+  return (
+    a.findOpen === b.findOpen &&
+    a.findExpanded === b.findExpanded &&
+    a.findQuery === b.findQuery &&
+    a.findNavigationId === b.findNavigationId &&
+    (aMatch === null || bMatch === null
+      ? aMatch === bMatch
+      : aMatch.entryId === bMatch.entryId &&
+        aMatch.runId === bMatch.runId &&
+        aMatch.occurrence === bMatch.occurrence)
+  );
+}
+
+function rebaseLocalSelection(
+  selection: typeof CLOSED_FIND.localSelection,
+  data: OrchestrationV2SearchThreadResult | null,
+  navigationId: number,
+) {
+  if (!selection || !data) return null;
+  if (selection.base === data && selection.baseNavigationId === navigationId) return selection;
+  if (navigationId >= selection.navigationId) return null;
+  const entry = data.navigation?.find((entry) => entry.entryId === selection.match.entryId);
+  if (!entry || selection.match.occurrence >= entry.count) return selection;
+  const activeIndex = entry.startIndex + selection.match.occurrence;
+  return activeIndex === selection.activeIndex ? selection : { ...selection, activeIndex };
+}
+
+function useServerResults(
+  thread: ScopedThreadRef | null,
+  query: string,
+  offset: number,
+  navigationId: number,
+  start: ThreadFindStart | undefined,
+  skills: readonly InlineSkill[],
+  progressive: boolean,
+) {
+  const skillLabels = skills.map(({ name, displayName }) => ({ name, displayName }));
+  const normalizedQuery = query.trim();
+  const debouncedQuery = useDebouncedValue(normalizedQuery, 100);
+  const environmentId = thread?.environmentId;
+  const threadId = thread?.threadId;
+  const target =
+    environmentId && threadId && debouncedQuery && normalizedQuery === debouncedQuery
+      ? {
+          environmentId,
+          input: {
+            threadId,
+            query: debouncedQuery,
+            ...(start ? { start } : {}),
+            ...(offset !== 0 ? { offset } : {}),
+            skills: skillLabels,
+          },
+        }
+      : null;
+  const targetKey = target ? JSON.stringify([progressive, target]) : null;
+  // Resolving the atom only when the request changes keeps unrelated renders from
+  // touching the atom family.
+  const [storedAtom, setStoredAtom] = useState(() => ({
+    key: targetKey,
+    atom: resolveThreadFindAtom(target, progressive),
+  }));
+  let atom = storedAtom.atom;
+  if (storedAtom.key !== targetKey) {
+    atom = resolveThreadFindAtom(target, progressive);
+    setStoredAtom({ key: targetKey, atom });
+  }
+  const result = useEnvironmentQuery(atom);
+  const key = thread
+    ? JSON.stringify([thread.environmentId, thread.threadId, normalizedQuery, skillLabels])
+    : null;
+  const [previous, setPrevious] = useState({
+    key,
+    data: result.data,
+    navigationId,
+  });
+  if (
+    previous.key !== key ||
+    (result.data !== null &&
+      (!result.isPending || (progressive && previous.data !== result.data)) &&
+      (previous.data !== result.data || previous.navigationId !== navigationId))
+  ) {
+    const response = result.data;
+    setPrevious({
+      key,
+      data: response,
+      navigationId,
+    });
+  }
+  return {
+    ...result,
+    data: key === previous.key && !result.error ? previous.data : null,
+    navigationId: previous.navigationId,
+    isPending:
+      thread !== null &&
+      normalizedQuery.length > 0 &&
+      (normalizedQuery !== debouncedQuery || result.isPending),
+  };
+}
+
+function resolveThreadFindAtom(
+  target: Parameters<typeof orchestrationEnvironment.threadFind>[0] | null,
+  progressive: boolean,
+) {
+  if (!target) return null;
+  return progressive
+    ? orchestrationEnvironment.threadFindProgressive(target)
+    : orchestrationEnvironment.threadFind(target);
 }

@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 
 import type { JjAction, JjRunActionResult } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { appAtomRegistry } from "./atom-registry";
 import { useAtomCommand } from "./use-atom-command";

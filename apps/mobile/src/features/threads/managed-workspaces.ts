@@ -10,7 +10,7 @@ import type {
   ServerConfig,
   WorkspaceProfile,
 } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 

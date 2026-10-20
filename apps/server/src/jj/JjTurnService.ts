@@ -195,24 +195,25 @@ const make = Effect.gen(function* () {
     yield* Deferred.succeed(previous, undefined);
   });
 
-  const jjRoot = (cwd: string) =>
-    Effect.gen(function* () {
-      const marker = findRepositoryMarker(cwd);
-      if (marker?.kind !== "jj" || !(yield* jj.supported)) return null;
-      return marker.root;
-    });
+  const jjRoot = Effect.fn("JjTurnService.jjRoot")(function* (cwd: string) {
+    const marker = findRepositoryMarker(cwd);
+    if (marker?.kind !== "jj" || !(yield* jj.supported)) return null;
+    return marker.root;
+  });
 
   const isJjWorkingCopy: JjTurnService["Service"]["isJjWorkingCopy"] = (cwd) =>
     Effect.map(jjRoot(cwd), (root) => root !== null);
 
-  const trailersEnabled = (threadId: ThreadId) =>
-    Effect.gen(function* () {
+  const trailersEnabled = Effect.fn("JjTurnService.trailersEnabled")(
+    function* (threadId: ThreadId) {
       const settings = yield* settingsService.getSettings;
       const thread = yield* projections
         .getThreadShell(threadId)
         .pipe(Effect.orElseSucceed(() => null));
       return resolveProjectSettings(settings, thread?.projectId ?? null).settings.jjCommitTrailers;
-    }).pipe(Effect.orElseSucceed(() => true));
+    },
+    Effect.orElseSucceed(() => true),
+  );
 
   const readRevision = (root: string, operation: string, revision: string, template: string) =>
     jj.read({
@@ -286,22 +287,24 @@ const make = Effect.gen(function* () {
   });
 
   /** Drops runs a restart or crash left behind; `keep` stays even though it just ended. */
-  const pruneFinishedRuns = (state: WorkingCopyState, keep?: string) =>
-    Effect.gen(function* () {
-      const active: Record<string, ActiveRun> = {};
-      for (const run of Object.values(state.active)) {
-        if (run.runId === keep) {
-          active[run.runId] = run;
-          continue;
-        }
-        const records = yield* projections
-          .getThreadRecords(run.threadId as ThreadId, ["runs"], { runIds: [run.runId as RunId] })
-          .pipe(Effect.orElseSucceed(() => null));
-        const status = records?.runs.find((candidate) => candidate.id === run.runId)?.status;
-        if (status !== undefined && ACTIVE_RUN_STATUSES.has(status)) active[run.runId] = run;
+  const pruneFinishedRuns = Effect.fn("JjTurnService.pruneFinishedRuns")(function* (
+    state: WorkingCopyState,
+    keep?: string,
+  ) {
+    const active: Record<string, ActiveRun> = {};
+    for (const run of Object.values(state.active)) {
+      if (run.runId === keep) {
+        active[run.runId] = run;
+        continue;
       }
-      return { ...state, active };
-    });
+      const records = yield* projections
+        .getThreadRecords(run.threadId as ThreadId, ["runs"], { runIds: [run.runId as RunId] })
+        .pipe(Effect.orElseSucceed(() => null));
+      const status = records?.runs.find((candidate) => candidate.id === run.runId)?.status;
+      if (status !== undefined && ACTIVE_RUN_STATUSES.has(status)) active[run.runId] = run;
+    }
+    return { ...state, active };
+  });
 
   /** Snapshots and attributes everything that changed since the last observation. */
   const observe = Effect.fn("JjTurnService.observe")(function* (
@@ -344,8 +347,10 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const turnStarted: JjTurnService["Service"]["turnStarted"] = (input) =>
-    Effect.gen(function* () {
+  const turnStarted: JjTurnService["Service"]["turnStarted"] = Effect.fn(
+    "JjTurnService.turnStarted",
+  )(
+    function* (input) {
       const root = yield* jjRoot(input.cwd);
       if (root === null) return;
       yield* threadLayer.writeForTurn({
@@ -378,11 +383,14 @@ const make = Effect.gen(function* () {
         }),
       );
       yield* notify;
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("jj turn start bookkeeping failed", { runId: input.runId, cause }),
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("jj turn start bookkeeping failed", { runId: input.runId, cause }),
+        ),
       ),
-    );
+  );
 
   /**
    * Changes the agent made during the turn. A change that existed when the
@@ -392,8 +400,8 @@ const make = Effect.gen(function* () {
    * the working copy, only commits with this thread's trailer are provably
    * the agent's.
    */
-  const agentChanges = (root: string, run: ActiveRun, state: WorkingCopyState) =>
-    Effect.gen(function* () {
+  const agentChanges = Effect.fn("JjTurnService.agentChanges")(
+    function* (root: string, run: ActiveRun, state: WorkingCopyState) {
       if (run.startCommit === null) return [];
       const candidates = yield* readRevision(
         root,
@@ -455,7 +463,9 @@ const make = Effect.gen(function* () {
         if (threads.some((thread) => thread !== run.threadId)) return false;
         return provable || threads.includes(run.threadId);
       });
-    }).pipe(Effect.orElseSucceed((): ReadonlyArray<AgentChange> => []));
+    },
+    Effect.orElseSucceed((): ReadonlyArray<AgentChange> => []),
+  );
 
   /** Whether another workspace's `@` descends from the change, so rewriting it would make that workspace stale. */
   const otherWorkspacesBuildOn = (root: string, changeId: string) =>
@@ -478,8 +488,8 @@ const make = Effect.gen(function* () {
     });
 
   /** Replaces a seal's provisional message with the commit writer's, unless someone edited it. */
-  const describeLater = (input: DescribeLater) =>
-    Effect.gen(function* () {
+  const describeLater = Effect.fn("JjTurnService.describeLater")(
+    function* (input: DescribeLater) {
       const message = yield* writer.commitMessage({
         root: input.root,
         threadId: input.threadId,
@@ -510,17 +520,20 @@ const make = Effect.gen(function* () {
           );
         }),
       );
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("jj seal description update failed", {
-          changeId: input.changeId,
-          cause,
-        }),
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("jj seal description update failed", {
+            changeId: input.changeId,
+            cause,
+          }),
+        ),
       ),
-    );
+  );
 
-  const sealTurn: JjTurnService["Service"]["sealTurn"] = (input) =>
-    Effect.gen(function* () {
+  const sealTurn: JjTurnService["Service"]["sealTurn"] = Effect.fn("JjTurnService.sealTurn")(
+    function* (input) {
       const root = yield* jjRoot(input.cwd);
       if (root === null) return;
       const trailers = yield* trailersEnabled(input.threadId);
@@ -647,17 +660,20 @@ const make = Effect.gen(function* () {
       );
       yield* notify;
       if (later !== null) yield* Effect.forkDetach(describeLater(later));
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("jj seal failed; the turn's files stay in the working copy", {
-          runId: input.runId,
-          cause,
-        }).pipe(Effect.andThen(notify)),
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("jj seal failed; the turn's files stay in the working copy", {
+            runId: input.runId,
+            cause,
+          }).pipe(Effect.andThen(notify)),
+        ),
       ),
-    );
+  );
 
-  const awaitIdleSiblings = (input: { readonly threadId: ThreadId; readonly cwd: string }) =>
-    Effect.gen(function* () {
+  const awaitIdleSiblings = Effect.fn("JjTurnService.awaitIdleSiblings")(
+    function* (input: { readonly threadId: ThreadId; readonly cwd: string }) {
       const root = yield* jjRoot(input.cwd);
       if (root === null) return;
       while (true) {
@@ -670,21 +686,24 @@ const make = Effect.gen(function* () {
         if (!busy) return;
         yield* Deferred.await(signal);
       }
-    }).pipe(
-      Effect.timeoutOption(SIBLING_IDLE_TIMEOUT),
-      Effect.flatMap((result) =>
-        result._tag === "Some"
-          ? Effect.void
-          : Effect.fail(
-              new JjTurnError({
-                operation: "JjTurnService.awaitIdleSiblings",
-                cwd: input.cwd,
-                detail:
-                  "Another thread kept a turn running in this checkout, so files were not reverted.",
-              }),
-            ),
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.timeoutOption(SIBLING_IDLE_TIMEOUT),
+        Effect.flatMap((result) =>
+          result._tag === "Some"
+            ? Effect.void
+            : Effect.fail(
+                new JjTurnError({
+                  operation: "JjTurnService.awaitIdleSiblings",
+                  cwd: input.cwd,
+                  detail:
+                    "Another thread kept a turn running in this checkout, so files were not reverted.",
+                }),
+              ),
+        ),
       ),
-    );
+  );
 
   /** Paths the changes touch, both sides of renames. */
   const filesOf = (root: string, changes: ReadonlyArray<{ readonly changeId: string }>) =>
@@ -706,42 +725,35 @@ const make = Effect.gen(function* () {
           ),
         );
 
-  const prepareRevert: JjTurnService["Service"]["prepareRevert"] = (input) =>
-    Effect.gen(function* () {
-      const root = yield* jjRoot(input.cwd);
-      if (root === null) return;
-      const checkpoint = yield* readCheckpointCommit(io, root, input.checkpointRef);
-      const known =
-        checkpoint !== null &&
-        (yield* jj
-          .run({
-            operation: "JjTurnService.prepareRevert",
-            root,
-            args: [
-              "--ignore-working-copy",
-              "log",
-              "--no-graph",
-              "-r",
-              checkpoint,
-              "-T",
-              "commit_id",
-            ],
-            allowNonZeroExit: true,
-          })
-          .pipe(
-            Effect.map((result) => result.exitCode === 0),
-            Effect.orElseSucceed(() => false),
-          ));
-      if (!known) {
-        return yield* new JjTurnError({
+  const prepareRevert: JjTurnService["Service"]["prepareRevert"] = Effect.fn(
+    "JjTurnService.prepareRevert",
+  )(function* (input) {
+    const root = yield* jjRoot(input.cwd);
+    if (root === null) return;
+    const checkpoint = yield* readCheckpointCommit(io, root, input.checkpointRef);
+    const known =
+      checkpoint !== null &&
+      (yield* jj
+        .run({
           operation: "JjTurnService.prepareRevert",
-          cwd: input.cwd,
-          detail:
-            "jj has no record of this turn's files, for example because the turn ran before T3 Code used jj here. Rewind the conversation without restoring files instead.",
-        });
-      }
-      yield* awaitIdleSiblings(input);
-    });
+          root,
+          args: ["--ignore-working-copy", "log", "--no-graph", "-r", checkpoint, "-T", "commit_id"],
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.map((result) => result.exitCode === 0),
+          Effect.orElseSucceed(() => false),
+        ));
+    if (!known) {
+      return yield* new JjTurnError({
+        operation: "JjTurnService.prepareRevert",
+        cwd: input.cwd,
+        detail:
+          "jj has no record of this turn's files, for example because the turn ran before T3 Code used jj here. Rewind the conversation without restoring files instead.",
+      });
+    }
+    yield* awaitIdleSiblings(input);
+  });
 
   const listChanges = (root: string, revset: string) =>
     readRevision(
@@ -761,8 +773,8 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const revert: JjTurnService["Service"]["revert"] = (input) =>
-    Effect.gen(function* () {
+  const revert: JjTurnService["Service"]["revert"] = Effect.fn("JjTurnService.revert")(
+    function* (input) {
       const root = yield* jjRoot(input.cwd);
       if (root === null) {
         return yield* new JjTurnError({
@@ -890,51 +902,53 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-    });
+    },
+  );
 
-  const assignPaths: JjTurnService["Service"]["assignPaths"] = (input) =>
-    Effect.gen(function* () {
-      const root = yield* jjRoot(input.cwd);
-      if (root === null) {
-        return yield* new JjActionError({
-          action: "assignPaths",
-          cwd: input.cwd,
-          detail: "Not a jj working copy.",
-        });
-      }
-      return yield* withState(root, (state) =>
-        Effect.succeed([
-          input.paths.length,
-          {
-            ...state,
-            owners: {
-              ...state.owners,
-              ...Object.fromEntries(
-                input.paths.map((path) => [
-                  path,
-                  {
-                    runId: null,
-                    threadId: input.threadId,
-                    ordinal: 0,
-                    source: "assigned" as const,
-                  },
-                ]),
-              ),
-            },
+  const assignPaths: JjTurnService["Service"]["assignPaths"] = Effect.fn(
+    "JjTurnService.assignPaths",
+  )(function* (input) {
+    const root = yield* jjRoot(input.cwd);
+    if (root === null) {
+      return yield* new JjActionError({
+        action: "assignPaths",
+        cwd: input.cwd,
+        detail: "Not a jj working copy.",
+      });
+    }
+    return yield* withState(root, (state) =>
+      Effect.succeed([
+        input.paths.length,
+        {
+          ...state,
+          owners: {
+            ...state.owners,
+            ...Object.fromEntries(
+              input.paths.map((path) => [
+                path,
+                {
+                  runId: null,
+                  threadId: input.threadId,
+                  ordinal: 0,
+                  source: "assigned" as const,
+                },
+              ]),
+            ),
           },
-        ] as const),
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new JjActionError({
-              action: "assignPaths",
-              cwd: input.cwd,
-              detail: "Could not record the assignment.",
-              cause,
-            }),
-        ),
-      );
-    });
+        },
+      ] as const),
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new JjActionError({
+            action: "assignPaths",
+            cwd: input.cwd,
+            detail: "Could not record the assignment.",
+            cause,
+          }),
+      ),
+    );
+  });
 
   const recordOperationFor: JjTurnService["Service"]["recordOperation"] = (root, operation) =>
     withState(root, (state) =>
@@ -969,8 +983,8 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const forkBase: JjTurnService["Service"]["forkBase"] = (cwd) =>
-    Effect.gen(function* () {
+  const forkBase: JjTurnService["Service"]["forkBase"] = Effect.fn("JjTurnService.forkBase")(
+    function* (cwd) {
       const root = yield* jjRoot(cwd);
       if (root === null) return null;
       return yield* jj.withWorkingCopyLock(
@@ -987,10 +1001,12 @@ const make = Effect.gen(function* () {
           return empty === "true" && parentCommits.length === 1 ? parentCommits[0]! : null;
         }),
       );
-    }).pipe(Effect.orElseSucceed(() => null));
+    },
+    Effect.orElseSucceed(() => null),
+  );
 
-  const mergeBack: JjTurnService["Service"]["mergeBack"] = (input) =>
-    Effect.gen(function* () {
+  const mergeBack: JjTurnService["Service"]["mergeBack"] = Effect.fn("JjTurnService.mergeBack")(
+    function* (input) {
       const forkRoot = yield* jjRoot(input.forkCwd);
       const parentRoot = yield* jjRoot(input.parentCwd);
       if (forkRoot === null || parentRoot === null || forkRoot === parentRoot) return;
@@ -1042,18 +1058,21 @@ const make = Effect.gen(function* () {
           return [undefined, next] as const;
         }),
       );
-    }).pipe(
-      Effect.mapError((cause) =>
-        cause._tag === "JjTurnError"
-          ? cause
-          : new JjTurnError({
-              operation: "JjTurnService.mergeBack",
-              cwd: input.parentCwd,
-              detail: "Could not move the fork's changes into the parent.",
-              cause,
-            }),
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.mapError((cause) =>
+          cause._tag === "JjTurnError"
+            ? cause
+            : new JjTurnError({
+                operation: "JjTurnService.mergeBack",
+                cwd: input.parentCwd,
+                detail: "Could not move the fork's changes into the parent.",
+                cause,
+              }),
+        ),
       ),
-    );
+  );
 
   return JjTurnService.of({
     turnStarted,

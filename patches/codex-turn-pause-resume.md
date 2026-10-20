@@ -34,6 +34,9 @@ five times, about 5, 10, 20, 40 and 80 seconds apart, across server restarts.
 - Codex usage-limit stops resume without a message too. The automatic resume at reset
   (`UsageLimitRecoveryWorker.ts`) is upstream's and still sends its visible message.
 - Other providers keep Stop and upstream's Resume message. Mobile shows Resume only for Codex.
+- Upstream's "Resume queue" (#21473) uses the same composer slot. While the thread's queue is held,
+  Resume releases the queue as upstream does; otherwise it continues the paused Codex run without a
+  message. Web and mobile follow the same rule.
 
 ## Upstream hooks
 

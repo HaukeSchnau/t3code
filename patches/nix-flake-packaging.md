@@ -37,6 +37,8 @@ production dependencies as independent derivations:
    to `PATH`.
 
 The dependency fetches use pnpm's matching workspace filters instead of installing all workspaces. The runtime
+fetch takes the whole `t3...` closure too: the deploy injects the server's workspace dependencies, and their
+own dependencies must be in the offline store. The runtime
 uses pnpm's current injected-workspace deploy algorithm with the dedicated `pnpm-deploy-lock.yaml`; the normal
 `pnpm-lock.yaml` and workspace configuration retain linked-workspace semantics for development installs.
 `supportedArchitectures` is limited to the build platform, preventing foreign
@@ -53,7 +55,9 @@ when pnpm fails.
 The three derivations deliberately have separate source filters. Web-only edits do not invalidate the server
 bundle or runtime dependencies; server-only edits do not invalidate the web bundle; documentation changes do
 not invalidate dependency fetches. Lockfile and manifest changes remain shared inputs because they can change
-any dependency graph.
+any dependency graph. Both bundles import every `packages/provider-*` and `packages/source-control-*`
+package except the test kits, so `integrationPackages` in `flake.nix` selects those by name and picks up
+packages upstream adds.
 
 Production Nix builds disable web and server source maps. Local and development builds retain source maps by
 default; set `T3CODE_WEB_SOURCEMAP=false` or `T3CODE_SERVER_SOURCEMAP=false` to reproduce the production mode.
@@ -89,8 +93,9 @@ node_modules without an interactive prompt. Production keeps its independent fla
 `wait-for-idle` pre-deploy action; migrating development must not force restart an active T3 server.
 
 Native setup owns dependency installation. `scripts/setup-worktree.ts` runs the devenv
-`t3:dependencies` task when started inside the devenv root, and `pnpm install --frozen-lockfile`
-elsewhere, instead of upstream's `vp i`. It does not warm the Vite dependency cache; the dev server
+`t3:dependencies` task when started inside the devenv root, and `pnpm install --frozen-lockfile --yes`
+elsewhere, instead of upstream's `vp i`. Like upstream, it closes stdin so a prompt fails instead of
+hanging. It does not warm the Vite dependency cache; the dev server
 does that on start. Metro starts the installed Expo binary
 directly so pnpm does not attempt a second install when entering a managed
 workspace. The local `.pnpm-store` cache is ignored and excluded from source
@@ -132,11 +137,13 @@ create the v2 copy or rewrite the schema under the older running server, holding
 until the task timed out.
 
 CLI commands therefore attach without migrating (`layerConfigAttached` in
-`persistence/Layers/Sqlite.ts`). The auth CLI, offline `t3 project` and `t3 status idle` use it.
-They open `statev2.sqlite` when it exists and `state.sqlite` otherwise. They never create
-`statev2.sqlite` or call `initializeV2Database`, because the next v2 server start would then skip
-importing the v1 state. They run migrations only on a database without a migrations table. Only
-the server migrates a database in use. Remove this once upstream stops migrating from CLI
+`persistence/Sqlite.ts`). The auth CLI and `t3 status idle` use it. Offline `t3 project` keeps
+upstream's migrating layer, because it first takes the server ownership lock
+(`serverOwnership.ts`), so no server can be running underneath. Attached commands open
+`statev2.sqlite` when it exists and `state.sqlite` otherwise. They never create `statev2.sqlite`
+or call `initializeV2Database`, because the next v2 server start would then skip importing the v1
+state. They run migrations only on a database without a migrations table. Only the server migrates
+a database in use. Remove this once upstream stops migrating from CLI
 processes or the idle check no longer opens the database.
 
 ## Service behavior
@@ -158,5 +165,6 @@ them through `services.t3code.providerPackages` or configure absolute binary pat
 
 The Nix web build runs upstream's third-party license generation. Its SPDX templates come from a
 pinned fixed-output source in `nix/spdx.nix`, because sandboxed builds cannot fetch them on demand.
+When upstream's `third-party-licenses.config.json` uses a new license id, add its hash there.
 Package overrides supply verified MIT notices that the fastdom, strictdom and khroma npm packages
 omit. Remove those overrides when the published packages contain usable notices.

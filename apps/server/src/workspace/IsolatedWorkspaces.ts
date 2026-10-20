@@ -7,7 +7,7 @@
  * @module IsolatedWorkspaces
  */
 import type { ManagedWorkspacesCapability, ProjectId, WorkspaceProfile } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -52,8 +52,8 @@ const fail = (operation: string, detail: string, cause?: unknown) =>
   new ManagedWorkspaceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 
 const requireLauncher = Effect.fn("IsolatedWorkspaces.launcher")(function* (operation: string) {
-  const platform = yield* HostProcessPlatform;
-  const environment = yield* HostProcessEnvironment;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
   const launcher = environment.T3CODE_EXECUTION_LAUNCHER;
   if (!launcher || !isolatedWorkspacesAvailable(platform, environment)) {
     return yield* fail(operation, "This host cannot create or remove isolated workspaces.");
@@ -105,7 +105,7 @@ export const createIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.create")(fu
   readonly startFromOrigin?: boolean | undefined;
 }) {
   const launcher = yield* requireLauncher("IsolatedWorkspaces.create");
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const marker = findRepositoryMarker(input.source);
   const revision =
     marker?.kind === "jj"
@@ -166,7 +166,7 @@ export const createIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.create")(fu
 
 /** The registered isolated workspace containing `path`, if any. */
 export const findIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.find")(function* (path: string) {
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const record = yield* Effect.tryPromise({
     try: () => readSeparateProject(path, environment.AGENT_EXEC_STATE),
     catch: (cause) =>
@@ -197,7 +197,7 @@ export const setupScriptPaths = Effect.fn("IsolatedWorkspaces.setupScriptPaths")
   readonly projectRoot: string;
   readonly worktreePath: string;
 }) {
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const view = yield* Effect.tryPromise({
     try: () => projectProviderView(input.worktreePath, environment.AGENT_EXEC_STATE),
     catch: (cause) =>

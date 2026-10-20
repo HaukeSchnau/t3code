@@ -6,6 +6,7 @@
  *
  * @module JjVcsDriver
  */
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- checkpoint file names hash the ref synchronously.
 import * as NodeCrypto from "node:crypto";
 
 import * as DateTime from "effect/DateTime";
@@ -86,8 +87,8 @@ export const makeVcsDriverShape = Effect.fn("makeJjVcsDriverShape")(function* ()
     ignoreClassifier: "native" as const,
   };
 
-  const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
-    Effect.gen(function* () {
+  const execute: VcsDriver.VcsDriver["Service"]["execute"] = Effect.fn("JjVcsDriver.execute")(
+    function* (input) {
       const marker = yield* requireRoot(input.operation, input.cwd);
       return yield* jj.run({
         operation: input.operation,
@@ -101,7 +102,8 @@ export const makeVcsDriverShape = Effect.fn("makeJjVcsDriverShape")(function* ()
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
       });
-    });
+    },
+  );
 
   const detectRepository: VcsDriver.VcsDriver["Service"]["detectRepository"] = Effect.fn(
     "JjVcsDriver.detectRepository",
@@ -323,6 +325,9 @@ export const makeVcsDriverShape = Effect.fn("makeJjVcsDriverShape")(function* ()
       });
       return result.stdout;
     }),
+
+    // Null keeps every changed path. Telling imported changes apart would need jj's operation log.
+    listAuthoredPaths: () => Effect.succeed(null),
 
     // Later checkpoints stay recorded after a rollback, so undoing it can still
     // reach them. Ordinals are never reused, so nothing overwrites them.

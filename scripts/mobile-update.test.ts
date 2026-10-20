@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - recomputes the MD5 asset keys Expo Updates expects.
 import * as NodeCrypto from "node:crypto";
 
 import {

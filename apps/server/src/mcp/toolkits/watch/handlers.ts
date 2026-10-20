@@ -1,10 +1,9 @@
 import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { McpServer } from "effect/unstable/ai";
 
 import * as AgentWatches from "../../../watches/AgentWatches.ts";
-import { readCaller, readMutationCaller } from "../../threadAccess.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { WatchToolkit } from "./tools.ts";
 
 const toFailure = (
@@ -34,35 +33,47 @@ const toFailure = (
   }
 };
 
-const WatchToolkitHandlersLive = WatchToolkit.toLayer({
-  t3_watch: (input) =>
+/** Watches wake the calling thread, so only an agent inside T3 Code can hold one. */
+const callingThreadId = Effect.gen(function* () {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
+  if (!scope.capabilities.has("orchestration")) {
+    return yield* new OrchestratorMcpFailure({
+      code: "capability_denied",
+      message: "This credential cannot control threads.",
+    });
+  }
+  const { thread } = yield* McpInvocationContext.requireThreadScope(scope, "Watching");
+  return thread.threadId;
+});
+
+const handlers = {
+  t3_watch: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readMutationCaller();
+      const watcherThreadId = yield* callingThreadId;
       const watches = yield* AgentWatches.AgentWatches;
-      return yield* watches
-        .create({ watcherThreadId: caller.id, ...input })
-        .pipe(Effect.mapError(toFailure));
+      return yield* watches.create({ watcherThreadId, ...input }).pipe(Effect.mapError(toFailure));
     }),
-  t3_watch_list: (input) =>
+  ),
+  t3_watch_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readCaller();
+      const watcherThreadId = yield* callingThreadId;
       const watches = yield* AgentWatches.AgentWatches;
       return {
         watches: yield* watches
-          .list({ watcherThreadId: caller.id, includeClosed: input.includeClosed === true })
+          .list({ watcherThreadId, includeClosed: input.includeClosed === true })
           .pipe(Effect.mapError(toFailure)),
       };
     }),
-  t3_watch_cancel: (input) =>
+  ),
+  t3_watch_cancel: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readMutationCaller();
+      const watcherThreadId = yield* callingThreadId;
       const watches = yield* AgentWatches.AgentWatches;
       return yield* watches
-        .cancel({ watcherThreadId: caller.id, watchId: input.watchId })
+        .cancel({ watcherThreadId, watchId: input.watchId })
         .pipe(Effect.mapError(toFailure));
     }),
-});
+  ),
+} satisfies McpToolAccess.Handlers<typeof WatchToolkit.tools>;
 
-export const WatchToolkitRegistrationLive = McpServer.toolkit(WatchToolkit).pipe(
-  Layer.provide(WatchToolkitHandlersLive),
-);
+export const layer = McpToolAccess.toLayer(WatchToolkit, handlers);

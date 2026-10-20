@@ -13,7 +13,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const threadId = ThreadId.make("thread:observed-image-deletion");
@@ -121,10 +121,10 @@ it.effect.each(["sqlite", "memory"] as const)(
       Effect.provide(
         storage === "sqlite"
           ? Layer.mergeAll(
-              SqlitePersistenceMemory,
-              ProjectionStore.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
+              SqlitePersistence.layerMemory,
+              ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
             )
-          : Layer.merge(SqlitePersistenceMemory, ProjectionStore.layerMemory),
+          : Layer.merge(SqlitePersistence.layerMemory, ProjectionStore.layerMemory),
       ),
     ),
 );

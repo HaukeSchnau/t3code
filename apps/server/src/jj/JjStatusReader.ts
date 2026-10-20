@@ -110,15 +110,14 @@ const make = Effect.gen(function* () {
   const jj = yield* JjCli.JjCli;
   const io = { fileSystem: yield* FileSystem.FileSystem, path: yield* Path.Path };
 
-  const jjRoot = (cwd: string) =>
-    Effect.gen(function* () {
-      const marker = findRepositoryMarker(cwd);
-      if (marker?.kind !== "jj" || !(yield* jj.supported)) return null;
-      return marker;
-    });
+  const jjRoot = Effect.fn("JjStatusReader.jjRoot")(function* (cwd: string) {
+    const marker = findRepositoryMarker(cwd);
+    if (marker?.kind !== "jj" || !(yield* jj.supported)) return null;
+    return marker;
+  });
 
-  const read: JjStatusReader["Service"]["read"] = (cwd) =>
-    Effect.gen(function* () {
+  const read: JjStatusReader["Service"]["read"] = Effect.fn("JjStatusReader.read")(
+    function* (cwd) {
       const marker = yield* jjRoot(cwd);
       if (marker === null) return null;
       const root = marker.root;
@@ -181,88 +180,94 @@ const make = Effect.gen(function* () {
           .map(([path]) => path)
           .toSorted(),
       } satisfies JjStatus;
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("could not read jj status", { cwd, cause }).pipe(Effect.as(null)),
+    },
+    (effect, cwd) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("could not read jj status", { cwd, cause }).pipe(Effect.as(null)),
+        ),
       ),
-    );
+  );
 
   /** Status for a jj working copy that has no Git worktree. */
-  const jjOnlyLocal = (root: string, status: JjStatus) =>
-    Effect.gen(function* () {
-      const workingCopy = status.stack.find((entry) => entry.workingCopy);
-      const parent = yield* jj
-        .read({
-          operation: "JjStatusReader.parent",
-          root,
-          args: [
-            "--ignore-working-copy",
-            "log",
-            "--no-graph",
-            "-r",
-            "@-",
-            "-T",
-            'commit_id ++ "\\n"',
-          ],
-        })
-        .pipe(Effect.map((output) => output.split("\n")[0]?.trim() ?? ""));
-      const numstat =
-        workingCopy === undefined || workingCopy.empty || parent.length === 0
-          ? ""
-          : (yield* jj.git({
-              operation: "JjStatusReader.numstat",
-              root,
-              args: ["diff", "--numstat", "-z", parent, workingCopy.commitId],
-              allowNonZeroExit: true,
-            })).stdout;
-      const files = parseTurnDiffFilesFromNumstat(numstat).map((file) => ({
-        path: file.path,
-        insertions: file.additions,
-        deletions: file.deletions,
-      }));
-      const remotes = yield* jj
-        .read({
-          operation: "JjStatusReader.remotes",
-          root,
-          args: ["--ignore-working-copy", "git", "remote", "list"],
-        })
-        .pipe(Effect.orElseSucceed(() => ""));
-      return {
-        isRepo: true,
-        hasPrimaryRemote: remotes.split("\n").some((line) => line.split(/\s+/)[0] === "origin"),
-        isDefaultRef: false,
-        refName: null,
-        hasWorkingTreeChanges: files.length > 0,
-        workingTree: {
-          files,
-          insertions: files.reduce((sum, file) => sum + file.insertions, 0),
-          deletions: files.reduce((sum, file) => sum + file.deletions, 0),
-        },
-      } satisfies VcsStatusLocalResult;
-    });
+  const jjOnlyLocal = Effect.fn("JjStatusReader.jjOnlyLocal")(function* (
+    root: string,
+    status: JjStatus,
+  ) {
+    const workingCopy = status.stack.find((entry) => entry.workingCopy);
+    const parent = yield* jj
+      .read({
+        operation: "JjStatusReader.parent",
+        root,
+        args: [
+          "--ignore-working-copy",
+          "log",
+          "--no-graph",
+          "-r",
+          "@-",
+          "-T",
+          'commit_id ++ "\\n"',
+        ],
+      })
+      .pipe(Effect.map((output) => output.split("\n")[0]?.trim() ?? ""));
+    const numstat =
+      workingCopy === undefined || workingCopy.empty || parent.length === 0
+        ? ""
+        : (yield* jj.git({
+            operation: "JjStatusReader.numstat",
+            root,
+            args: ["diff", "--numstat", "-z", parent, workingCopy.commitId],
+            allowNonZeroExit: true,
+          })).stdout;
+    const files = parseTurnDiffFilesFromNumstat(numstat).map((file) => ({
+      path: file.path,
+      insertions: file.additions,
+      deletions: file.deletions,
+    }));
+    const remotes = yield* jj
+      .read({
+        operation: "JjStatusReader.remotes",
+        root,
+        args: ["--ignore-working-copy", "git", "remote", "list"],
+      })
+      .pipe(Effect.orElseSucceed(() => ""));
+    return {
+      isRepo: true,
+      hasPrimaryRemote: remotes.split("\n").some((line) => line.split(/\s+/)[0] === "origin"),
+      isDefaultRef: false,
+      refName: null,
+      hasWorkingTreeChanges: files.length > 0,
+      workingTree: {
+        files,
+        insertions: files.reduce((sum, file) => sum + file.insertions, 0),
+        deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+      },
+    } satisfies VcsStatusLocalResult;
+  });
 
-  const localStatus: JjStatusReader["Service"]["localStatus"] = (cwd, gitStatus) =>
-    Effect.gen(function* () {
-      const marker = yield* jjRoot(cwd);
-      if (marker === null) {
-        const local = yield* gitStatus;
-        return local.isRepo ? { ...local, kind: "git" as const } : local;
-      }
-      const status = yield* read(cwd);
-      if (marker.colocated) {
-        const local = yield* gitStatus;
-        return { ...local, kind: "jj" as const, ...(status === null ? {} : { jj: status }) };
-      }
-      if (status === null) return yield* gitStatus;
-      const local = yield* jjOnlyLocal(marker.root, status).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("could not build jj status", { cwd, cause }).pipe(
-            Effect.andThen(gitStatus),
-          ),
+  const localStatus: JjStatusReader["Service"]["localStatus"] = Effect.fn(
+    "JjStatusReader.localStatus",
+  )(function* (cwd, gitStatus) {
+    const marker = yield* jjRoot(cwd);
+    if (marker === null) {
+      const local = yield* gitStatus;
+      return local.isRepo ? { ...local, kind: "git" as const } : local;
+    }
+    const status = yield* read(cwd);
+    if (marker.colocated) {
+      const local = yield* gitStatus;
+      return { ...local, kind: "jj" as const, ...(status === null ? {} : { jj: status }) };
+    }
+    if (status === null) return yield* gitStatus;
+    const local = yield* jjOnlyLocal(marker.root, status).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("could not build jj status", { cwd, cause }).pipe(
+          Effect.andThen(gitStatus),
         ),
-      );
-      return { ...local, kind: "jj" as const, jj: status };
-    });
+      ),
+    );
+    return { ...local, kind: "jj" as const, jj: status };
+  });
 
   const isJjWithoutGit: JjStatusReader["Service"]["isJjWithoutGit"] = (cwd) =>
     Effect.map(jjRoot(cwd), (marker) => marker !== null && !marker.colocated);

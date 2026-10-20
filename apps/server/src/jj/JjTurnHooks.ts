@@ -21,8 +21,8 @@ export const layer = Layer.effect(
       new VcsTurnHookError({ detail: cause.message, cause });
 
     /** A thread's working copy: its workspace, or its project's checkout. */
-    const workingCopyOf = (threadId: ThreadId) =>
-      Effect.gen(function* () {
+    const workingCopyOf = Effect.fn("JjTurnHooks.workingCopyOf")(
+      function* (threadId: ThreadId) {
         const thread = yield* threads.getThreadShell(threadId);
         if (thread === null) return null;
         const project = yield* projects.get(thread.projectId);
@@ -32,7 +32,9 @@ export const layer = Layer.effect(
           projectRoot: project.value.workspaceRoot,
           cwd: thread.worktreePath ?? project.value.workspaceRoot,
         };
-      }).pipe(Effect.orElseSucceed(() => null));
+      },
+      Effect.orElseSucceed(() => null),
+    );
 
     return {
       turnStarted: turns.turnStarted,
@@ -43,8 +45,8 @@ export const layer = Layer.effect(
       // A fork of a jj thread starts in its own workspace below the parent's
       // working copy. Isolated runtimes are separate clones, so forks there
       // keep sharing the parent's directory.
-      prepareForkWorkspace: (input) =>
-        Effect.gen(function* () {
+      prepareForkWorkspace: Effect.fn("JjTurnHooks.prepareForkWorkspace")(
+        function* (input) {
           const source = yield* workingCopyOf(input.sourceThreadId);
           if (source === null || !(yield* turns.isJjWorkingCopy(source.cwd))) return null;
           if ((yield* workspaces.backendFor(source.projectRoot)) !== "jj") return null;
@@ -58,22 +60,21 @@ export const layer = Layer.effect(
             baseRef: base,
           });
           return created.worktreePath;
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("could not create a jj workspace for the fork", { cause }).pipe(
-              Effect.as(null),
-            ),
+        },
+        Effect.catchCause((cause) =>
+          Effect.logWarning("could not create a jj workspace for the fork", { cause }).pipe(
+            Effect.as(null),
           ),
         ),
-      mergeBackFiles: (input) =>
-        Effect.gen(function* () {
-          const fork = yield* workingCopyOf(input.sourceThreadId);
-          const parent = yield* workingCopyOf(input.targetThreadId);
-          if (fork === null || parent === null) return;
-          yield* turns
-            .mergeBack({ forkCwd: fork.cwd, parentCwd: parent.cwd })
-            .pipe(Effect.mapError(toHookError));
-        }),
+      ),
+      mergeBackFiles: Effect.fn("JjTurnHooks.mergeBackFiles")(function* (input) {
+        const fork = yield* workingCopyOf(input.sourceThreadId);
+        const parent = yield* workingCopyOf(input.targetThreadId);
+        if (fork === null || parent === null) return;
+        yield* turns
+          .mergeBack({ forkCwd: fork.cwd, parentCwd: parent.cwd })
+          .pipe(Effect.mapError(toHookError));
+      }),
     };
   }),
 ).pipe(Layer.provide(Layer.merge(ProjectionStore.layer, ProjectStore.layer)));

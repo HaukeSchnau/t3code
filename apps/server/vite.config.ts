@@ -1,14 +1,7 @@
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
 
-// The bundle used to inline only workspace packages, leaving every third-party
-// runtime dep external. External deps must exist on the real filesystem (the WSL
-// backend runs plain `wsl.exe -- node`, which cannot read inside an asar), so the
-// desktop build unpacked `**\/node_modules\/**` wholesale: 13,875 loose files to
-// support 20 native binaries. NSIS install time tracks file count, not bytes.
-//
-// Inverted here — bundle everything except the packages that genuinely cannot be
-// inlined. See scripts/lib/cli-external-packages.ts for what earns an exemption.
+// NSIS install time tracks file count, not bytes.
 import {
   isExternalCliDependency,
   shouldBundleCliDependency,
@@ -22,20 +15,22 @@ const buildSourcemap = sourcemapEnv !== "0" && sourcemapEnv !== "false";
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
   ? "nightly"
   : "latest";
+// Sent with every analytics event. Release workflows set it for pingdotgg/t3code
+// builds only, so local builds and forks report "dev". A typo fails the build
+// instead of mislabeling events.
+const TELEMETRY_CHANNELS = ["stable", "nightly", "preview", "dev"];
+const telemetryChannel = process.env.T3CODE_TELEMETRY_CHANNEL?.trim() || "dev";
+if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
+  throw new Error(
+    `T3CODE_TELEMETRY_CHANNEL must be one of ${TELEMETRY_CHANNELS.join(", ")}, got "${telemetryChannel}".`,
+  );
+}
 
 // `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
 // step refuses multi-chunk output and counts the sourcemap as a chunk, and the
 // executable needs a host Node that supports `--build-sea` (25.7+), so this is
 // a separate mode rather than a second entry in the default build.
 const packExecutable = process.env.T3CODE_PACK_EXE === "1";
-// `<platform>-<arch>` in nodejs.org naming (darwin-x64, linux-arm64, win-x64).
-// When set, tsdown injects the bundle into a downloaded Node of that target
-// instead of the host Node, which is how the arm64 macOS runner produces the
-// x64 archive. Cross-building is safe because the code cache is off.
-//
-// The Node inside the executable is pinned here rather than taken from the
-// build host, so every archive of a release embeds the same runtime no matter
-// which Node happens to run the build.
 const SEA_NODE_VERSION = "26.8.2";
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
@@ -63,13 +58,6 @@ const packExecutableTargets = packExecutableTarget
 export default {
   run: {
     tasks: {
-      typecheck: {
-        // Four checkers peak near 6.5 GB on this package; one stays near 3.8 GB, inside a
-        // Calder worker's 4.5 GB. Drop the flag once Calder can budget memory per step.
-        command: "tsc --noEmit --checkers 1",
-        // Compiler GC tuning affects resource usage, not the typecheck result.
-        cache: { untrackedEnv: ["GOMEMLIMIT"] },
-      },
       build: {
         command: "node scripts/cli.ts build",
         dependsOn: ["@t3tools/web#build"],
@@ -91,20 +79,16 @@ export default {
             outDir: "dist-exe",
             ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
             // Node's SEA docs: `import()` does not work when useCodeCache is
-            // true, and the server reaches several modules that way. The
-            // cache is also platform-bound, so leaving it off keeps the
-            // build correct on any host.
+            // true, and the server reaches several modules that way.
             seaConfig: { useCodeCache: false },
           },
         }
       : {}),
     deps: {
-      // Both halves are required. `alwaysBundle` forces the JS dependencies in
-      // (declared deps are external by default, which is what this change is
-      // undoing). `neverBundle` forces the native packages out: returning
-      // false from `alwaysBundle` only means "no opinion", so a transitive
-      // dependency would still be bundled — which silently inlined native
-      // loaders such as node-gyp-build, losing native acceleration.
+      // `neverBundle` forces the native packages out: returning false from
+      // `alwaysBundle` only means "no opinion", so a transitive dependency
+      // would still be bundled — which silently inlined native loaders such
+      // as node-gyp-build, losing native acceleration.
       alwaysBundle: shouldBundleCliDependency,
       neverBundle: (id: string) => isExternalCliDependency(id),
       onlyBundle: false,
@@ -114,6 +98,7 @@ export default {
     },
     define: {
       __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+      __T3CODE_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
       __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
       __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
         repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

@@ -3,7 +3,8 @@
 ## Goal
 
 Open a local directory in the desktop app from a terminal with a custom URL and `open`. Upstream
-offers `t3 app <path>` but registers no URL for it.
+offers `t3 app <path>` but registers no URL for it. Its own links (`t3code://new?prompt=…` and
+`t3code://threads/…`) open a prompt or a thread, not a directory.
 
 ## Supported URLs
 
@@ -20,10 +21,10 @@ path contains spaces or other URL-sensitive characters.
 - `apps/desktop/src/app/DesktopOpenWorkspace.ts` parses `<scheme>://open?cwd=<path>` for
   `t3code`, `t3code-dev` and the legacy `t3` scheme. `dispatchUrl` answers synchronously, because
   Electron's handlers decide on the spot whether to call `preventDefault`.
-- `DesktopClerk.configure` registers the schemes and handles `open-url` and `second-instance`,
-  because upstream's Clerk bridge owns the single-instance lock. The deeplink check runs after
-  upstream's provider-auth handlers, and only a handled URL calls `preventDefault`. Removing the
-  Clerk bridge also removes deeplink delivery.
+- `DesktopClerk.configure` registers the schemes and checks every URL upstream's handlers see: the
+  launch arguments, `open-url`, and second launches, which upstream buffers until `configure` runs.
+  The deeplink check runs after upstream's provider-auth, web and prompt link handlers, and only a
+  handled URL calls `preventDefault`. Removing the Clerk service also removes deeplink delivery.
 - Links that arrive before Electron is ready wait in a queue. `layerAppActivationDelivery`, wired
   in `main.ts`, sends each one through `DesktopAppActivation.request` as an `open-workspace`
   request. That is upstream's broker for `t3 app <path>`. It holds the request until the renderer

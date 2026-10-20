@@ -81,13 +81,19 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   flag; the offline toast only when a send cannot queue; the composer's disconnected state only when
   a send cannot queue; the outbox branch before uploads; the explicit command id and handoff on the
   direct send; `restoreOutboxMessageToComposer`; and the `DurableOutboxStrip` mount below
-  `TrainNetworkStatus`.
+  `EnvironmentNetworkStatus`. The outbox branch runs after upstream's operate-scope check and stores
+  upstream's `turnDispatchMode`, so a send made while worktree setup runs still queues behind it. It
+  skips upstream's compact-before-send for a stale Claude session: an outbox entry carries one
+  message, not the `/compact` run ahead of it.
 - `apps/web/src/routes/_chat.tsx`: mounts `DurableOutboxDelivery`, which starts delivery for the
   session and shows a toast with an Open action when a message is rejected.
 - `packages/client-runtime/package.json`: the `./state/command-outbox` export.
 
 ## Known limits
 
+- Sending needs the environment's operate scope, which the client reads from the auth session. A
+  client that has never fetched a session for the environment, such as a cold start while it is
+  offline, cannot send and so cannot queue.
 - The server sweeps pending uploads after 24 hours, and it claims attachments before it checks
   receipts. An unconfirmed message with attachments that is retried after that window shows as
   rejected even if its first attempt arrived. Opening the thread removes it once the message shows;

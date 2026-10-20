@@ -59,8 +59,9 @@ Upstream-owned hooks:
   `acceptsGeneratedTitle` and sets the mode to automatic; the first-message title block skips
   manual titles.
 - `apps/server/src/server.ts`: starts the refresh reactor next to the other thread workers.
-- `apps/server/src/textGeneration/TextGeneration.ts`, `TextGenerationPrompts.ts`, and each
-  provider's `*TextGeneration.ts`: the `automaticRefresh` flag and its stricter prompt rule.
+- `packages/provider-core/src/server/textGeneration.ts`, `textGenerationPrompts.ts`, and
+  `textGenerationOperations.ts`, which every provider's title generation goes through: the
+  `automaticRefresh` flag and its stricter prompt rule.
 - `apps/web/src/components/settings/SettingsPanels.tsx` and `settingsSearch.ts`: the settings row,
   its search entry, dirty label, and reset.
 - `apps/mobile/src/features/settings/SettingsThreadsRouteScreen.tsx`: the mobile switch.
@@ -75,4 +76,4 @@ titles after later turns with the same stability rule, rename protection, and co
 - `apps/server/src/orchestration-v2/ThreadTitleRefresh.test.ts` covers mode transitions, manual
   first-message titles, a coalesced refresh after later turns, the first-turn, manual, and
   disabled cases, and a rename winning over an in-flight refresh.
-- `apps/server/src/textGeneration/TextGenerationPrompts.test.ts` covers the refresh prompt rule.
+- `packages/provider-core/src/server/textGenerationPrompts.test.ts` covers the refresh prompt rule.

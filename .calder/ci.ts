@@ -56,14 +56,31 @@ const testServer = Vitest.files({
   shards: 6,
 }).pipe(Step.timeout("45 minutes"));
 
+/**
+ * The web browser project runs in headless Chromium. Playwright's downloaded build does not run on
+ * NixOS, so the suite runs inside a shell with nixpkgs' Chromium and points the config at it. An
+ * inherited `NODE_ENV=production` would make Vite serve React's production build, which has no `act`.
+ */
+const withNixChromium = [
+  "nix",
+  "shell",
+  "nixpkgs#chromium",
+  "--command",
+  "sh",
+  "-c",
+  'unset NODE_ENV; export T3CODE_BROWSER_TEST_CHROMIUM="$(command -v chromium)"; exec "$@"',
+  "sh",
+];
+
 const testWeb = Vitest.files({
   ...suite,
   name: "test-web",
   dir: "apps/web",
+  vitest: [...withNixChromium, ...suite.vitest],
   tests: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   inputs: Files.imports("apps/web/vitest.config.ts"),
   shards: 2,
-  args: ["--passWithNoTests", "--project", "unit*", ...workers],
+  args: ["--passWithNoTests", "--project", "unit*", "--project", "browser", ...workers],
 }).pipe(Step.timeout("30 minutes"));
 
 const testMobile = Vitest.files({
@@ -71,11 +88,8 @@ const testMobile = Vitest.files({
   name: "test-mobile",
   dir: "apps/mobile",
   tests: ["**/*.test.ts", "**/*.test.tsx"],
-  inputs: Files.union(
-    Files.of("vitest.config.ts"),
-    Files.imports([longTempDir, aliases["expo-crypto"]]),
-  ),
-  args: ["--config", "../../vitest.config.ts", "--dir", ".", ...workers],
+  inputs: Files.imports(["apps/mobile/vitest.config.ts", longTempDir, aliases["expo-crypto"]]),
+  args: ["--config", "vitest.config.ts", "--project", "unit", "--project", "react", ...workers],
 }).pipe(Step.timeout("20 minutes"));
 
 const testDesktop = Vitest.files({
@@ -109,6 +123,27 @@ const testShared = Vitest.files({
 /** Vite+ `--filter` arguments that select the packages in `dirs`. */
 const filters = (dirs: ReadonlyArray<string>) => dirs.flatMap((dir) => ["--filter", `./${dir}`]);
 
+/** One package per provider and per source-control host. */
+const integrationPackages = [
+  "packages/provider-acp",
+  "packages/provider-acp-registry",
+  "packages/provider-core",
+  "packages/provider-cursor",
+  "packages/provider-grok",
+  "packages/provider-muse",
+  "packages/provider-opencode",
+  "packages/provider-pi",
+  "packages/provider-testing",
+  "packages/source-control-azure-devops",
+  "packages/source-control-bitbucket",
+  "packages/source-control-core",
+  "packages/source-control-forgejo",
+  "packages/source-control-gitcafe",
+  "packages/source-control-github",
+  "packages/source-control-gitlab",
+  "packages/source-control-testing",
+];
+
 /** Packages with small suites run whole when they or anything their tests import changed. */
 const smallSuites = [
   "packages/contracts",
@@ -116,6 +151,8 @@ const smallSuites = [
   "packages/effect-codex-app-server",
   "packages/ssh",
   "packages/tailscale",
+  // The source-control test kit has no tests of its own.
+  ...integrationPackages.filter((dir) => dir !== "packages/source-control-testing"),
   "infra/relay",
   "oxlint-plugin-t3code",
 ];
@@ -139,10 +176,15 @@ const testScripts = Task.make("test-scripts", {
 
 /**
  * Typechecks of package groups, one package at a time, each when its packages' tsconfigs or what
- * their sources import, types included, changed. `sources` are what the tsconfigs include. The
- * server checks alone: tsgo needs about 4 GB for it.
+ * their sources import, types included, changed. `sources` are what the tsconfigs include. `args`
+ * go to each package's typecheck script.
  */
-const typecheck = (name: string, dirs: ReadonlyArray<string>, sources: ReadonlyArray<string>) =>
+const typecheck = (
+  name: string,
+  dirs: ReadonlyArray<string>,
+  sources: ReadonlyArray<string>,
+  args: ReadonlyArray<string> = [],
+) =>
   Task.make(`typecheck-${name}`, {
     shell,
     setup: install,
@@ -150,10 +192,22 @@ const typecheck = (name: string, dirs: ReadonlyArray<string>, sources: ReadonlyA
       Files.of("tsconfig.base.json", ...dirs.map((dir) => `${dir}/tsconfig.json`)),
       Files.imports(sources, { aliases, types: true }),
     ),
-    run: cmd`vp run --cache --concurrency-limit 1 ${filters(dirs)} typecheck`,
+    run: cmd`vp run --cache --concurrency-limit 1 ${filters(dirs)} typecheck ${args}`,
   }).pipe(Step.timeout("30 minutes"));
 
+const corePackages = [
+  "packages/client-runtime",
+  "packages/contracts",
+  "packages/shared",
+  "packages/effect-acp",
+  "packages/effect-codex-app-server",
+  "packages/ssh",
+  "packages/tailscale",
+];
+
 const typechecks = [
+  // The server checks alone and with one checker: a cold check peaked at 4.7 GB with tsc-rs's
+  // default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
   typecheck(
     "server",
     ["apps/server"],
@@ -164,6 +218,7 @@ const typechecks = [
       "apps/server/vite.config.ts",
       "scripts/lib/**/*.ts",
     ],
+    ["--checkers", "1"],
   ),
   typecheck(
     "web",
@@ -185,18 +240,17 @@ const typechecks = [
     ["apps/desktop"],
     ["apps/desktop/src/**/*.ts", "apps/desktop/vite.config.ts", "scripts/lib/**/*.ts"],
   ),
+  typecheck("packages", corePackages, [
+    ...corePackages.map((dir) => `${dir}/src/**/*.ts`),
+    "packages/effect-acp/scripts/**/*.ts",
+    "packages/effect-acp/test/**/*.ts",
+    "packages/effect-codex-app-server/scripts/**/*.ts",
+    "packages/effect-codex-app-server/test/**/*.ts",
+  ]),
   typecheck(
-    "packages",
-    [
-      "packages/client-runtime",
-      "packages/contracts",
-      "packages/shared",
-      "packages/effect-acp",
-      "packages/effect-codex-app-server",
-      "packages/ssh",
-      "packages/tailscale",
-    ],
-    ["packages/*/src/**/*.ts", "packages/*/scripts/**/*.ts", "packages/*/test/**/*.ts"],
+    "integrations",
+    integrationPackages,
+    integrationPackages.map((dir) => `${dir}/src/**/*.ts`),
   ),
   // Astro checks .astro files, whose imports aren't followed, so marketing counts as a whole.
   typecheck(

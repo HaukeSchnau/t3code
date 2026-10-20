@@ -13,16 +13,20 @@ characters per record.
 
 ## Implementation
 
-- `provider/Layers/ProviderEventLoggers.ts` opens one global file per stream, `native.log` and
-  `canonical.log`, in the provider logs directory. Upstream opens a file per thread.
-- `provider/Layers/ProviderEventMetadata.ts` reduces each event to bounded identity fields (event
-  name, id, provider, provider instance and thread, turn, item), the body's value type, and a
-  character, byte, item or field count. Payload values and payload key names never reach the
+- Both streams write to one global file, upstream's `providerEventLogPath`
+  (`logs/provider/events.log`), which `t3 triage` points agents at. Records keep their `NTIVE` or
+  `CANON` label. Upstream opens a file per thread below that path. `apps/server/src/server.ts`
+  builds the store unchanged (`layerProviderEventLoggers`).
+- `apps/server/src/provider/ProviderEventMetadata.ts` reduces each event to bounded identity fields
+  (event name, id, provider, provider instance and thread, turn, item), the body's value type, and
+  a character, byte, item or field count. Payload values and payload key names never reach the
   record.
-- `provider/Layers/EventNdjsonLogger.ts` caps each encoded record at 1 KiB. A high-frequency event,
-  such as a delta or progress update, keeps its first eight records per thread and event name and
-  then every 256th, noting how many it skipped. Other events, such as lifecycle and error events,
-  are never sampled. Rotation and retention keep upstream's defaults.
+- `apps/server/src/provider/EventNdjsonLogger.ts` writes every record to that one file and caps each
+  encoded record at 1 KiB. A high-frequency event, such as a delta or progress update, keeps its
+  first eight records per thread and event name and then every 256th, noting how many it skipped.
+  Other events, such as lifecycle and error events, are never sampled. Running OpenCode tool
+  snapshots, which repeat the whole growing output, are skipped. Rotation and retention keep
+  upstream's defaults.
 - The logger still exports upstream's `shouldPersistProviderEvent` and
   `boundProviderEventForLogging`, because the orchestration v2 adapters call them before handing an
   event to the logger. Keep those exports when upstream changes them.

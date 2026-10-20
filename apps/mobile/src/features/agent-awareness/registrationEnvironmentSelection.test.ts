@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { type AgentAwarenessRegistrationResult, EnvironmentId } from "@t3tools/contracts";
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
 
 import { runFirstConfiguredRegistration } from "./registrationEnvironmentSelection";
 

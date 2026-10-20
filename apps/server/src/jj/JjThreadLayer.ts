@@ -11,6 +11,7 @@
  *
  * @module JjThreadLayer
  */
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- layer file names hash the thread id synchronously.
 import * as NodeCrypto from "node:crypto";
 
 import * as Context from "effect/Context";
@@ -21,7 +22,6 @@ import * as Path from "effect/Path";
 
 import { JJ_THREAD_TRAILER, JJ_TURN_TRAILER } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
-import { ProviderThreadEnvironment } from "../orchestration-v2/ProviderThreadEnvironment.ts";
 import * as JjCli from "../vcs/JjCli.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { jjString } from "../vcs/JjVcsDriver.ts";
@@ -134,18 +134,19 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const environmentFor: JjThreadLayer["Service"]["environmentFor"] = (threadId) =>
-    Effect.gen(function* () {
-      if (launcherHost) return { JJ_OP_USERNAME: operationUsername(threadId) };
-      const file = layerPath(threadId);
-      if (!(yield* fileSystem.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
-        yield* write(
-          threadId,
-          `[operation]\nusername = ${encodeJsonString(operationUsername(threadId))}\n`,
-        );
-      }
-      return { JJ_CONFIG: [...(yield* userConfigPaths), file].join(":") };
-    });
+  const environmentFor: JjThreadLayer["Service"]["environmentFor"] = Effect.fn(
+    "JjThreadLayer.environmentFor",
+  )(function* (threadId) {
+    if (launcherHost) return { JJ_OP_USERNAME: operationUsername(threadId) };
+    const file = layerPath(threadId);
+    if (!(yield* fileSystem.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
+      yield* write(
+        threadId,
+        `[operation]\nusername = ${encodeJsonString(operationUsername(threadId))}\n`,
+      );
+    }
+    return { JJ_CONFIG: [...(yield* userConfigPaths), file].join(":") };
+  });
 
   const writeForTurn: JjThreadLayer["Service"]["writeForTurn"] = (input) =>
     launcherHost
@@ -161,12 +162,3 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(JjThreadLayer, make);
-
-/** Gives per-thread provider processes the thread's jj layer. */
-export const providerEnvironmentLayer = Layer.effect(
-  ProviderThreadEnvironment,
-  Effect.gen(function* () {
-    const threadLayer = yield* JjThreadLayer;
-    return { forThread: threadLayer.environmentFor };
-  }),
-);

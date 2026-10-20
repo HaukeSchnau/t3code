@@ -10,9 +10,12 @@ work without the desktop-only integrated browser or a server-side browser sessio
 
 - `apps/web/src/lib/artifactLink.ts` recognizes the exact HTTPS origin and document
   paths, preserving queries and fragments. Media and downloads keep existing actions.
-- Chat Markdown routes ordinary clicks to URL-backed, thread-scoped right-panel tabs.
-  Modified clicks remain normal links; the context menu offers both destinations.
-- Markdown documents use the existing chat renderer, including Mermaid and tables.
+- `ChatMarkdown`'s link renderer routes ordinary clicks to URL-backed, thread-scoped right-panel
+  tabs. Modified clicks remain normal links; the context menu offers both destinations.
+  `chat/RightPanelSurfaceContent.tsx` renders the `artifact` surface with the lazy
+  `files/ArtifactPreviewPanel.tsx`, and `reopenClosedView.ts` reopens a closed one.
+- Markdown documents use the existing chat renderer, including Mermaid and tables, through its
+  `documentUrl` prop.
   A read-scoped RPC fetches only Markdown from the publishing origin, rejects
   redirects, and limits responses to 2 MiB and 15 seconds. The environment needs
   Tailnet access. Relative links and images resolve against the document URL.

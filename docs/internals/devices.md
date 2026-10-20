@@ -36,8 +36,12 @@ bearer and DPoP clients mint over authenticated HTTP. The ticket is stripped
 before the request reaches the hub.
 
 Stream responses carry `Cache-Control: no-transform`; the compression
-middleware would otherwise buffer an MJPEG body that never ends. In browser dev,
-the Vite proxy must forward WebSocket upgrades for `/api`, not only `/ws`.
+middleware would otherwise buffer an MJPEG body that never ends. Browsers paint an
+MJPEG part only once the next part begins and the hub writes one only when the
+screen changes, so the proxy
+[re-sends the last part](../../apps/server/src/device/mjpegStillFrame.ts) after a
+short quiet period. In browser dev, the Vite proxy must forward WebSocket
+upgrades for `/api`, not only `/ws`.
 
 ## Device settings never go through the hub
 
@@ -60,7 +64,7 @@ a shim directory to the provider's PATH. The CLI installs on the environment
 server even when that server cannot run simulators. Hosts start on demand.
 
 That environment is fixed when the provider subprocess spawns, so
-[`prepareMcpSession`](../../apps/server/src/provider/Layers/ProviderService.ts)
+[`prepareMcpSession`](../../apps/server/src/orchestration-v2/ProviderSessionManager.ts)
 starts agent-device only when device support and agent access have both been
 enabled, the session has the `device` capability, and the machine can run at
 least one platform. Starting it later from `device_open` would leave the

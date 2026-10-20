@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- exercises the dependency bootstrap before Effect is available.
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -13,7 +13,7 @@ it.effect(
   "reuses native dependency checks, preserves ordinary installs, and stops on failure",
   () =>
     Effect.gen(function* () {
-      if ((yield* HostProcessPlatform) === "win32") return;
+      if ((yield* HostProcess.Platform) === "win32") return;
       const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-setup-test-"));
       try {
         NodeFS.mkdirSync(NodePath.join(root, "bin"));
@@ -46,7 +46,7 @@ it.effect(
           "devenv\n--no-tui\ntasks\nrun\nt3:dependencies\n",
         );
         assert.equal(run(false).status, 0);
-        assert.equal(NodeFS.readFileSync(log, "utf8"), "pnpm\ninstall\n--frozen-lockfile\n");
+        assert.equal(NodeFS.readFileSync(log, "utf8"), "pnpm\ninstall\n--frozen-lockfile\n--yes\n");
         const failed = run(true, "7");
         assert.equal(failed.status, 7);
       } finally {

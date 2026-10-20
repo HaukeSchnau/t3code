@@ -23,16 +23,20 @@ reachable server.
   never publish. The projection throws on those instead of emitting an invalid value, such as a
   backoff without a failure or a live shell without a snapshot.
 - `connection/supervisor.ts` (`normalizeDesiredIntent`) treats a browser `offline` report as
-  `unknown` while the connection is desired: at startup, during automatic recovery, and on an
-  explicit retry. Connection attempts and their backoff decide reachability.
-- Web `ChatView.tsx` builds `activeConnectionFreshness` and renders it above the composer through
-  `components/chat/TrainNetworkStatus.tsx` and `trainNetworkExperience.ts`. Mobile does not use
-  the projection.
+  `unknown` while the connection is desired: at startup, during automatic recovery, after a live
+  session is replaced, and on an explicit retry. Connection attempts and their backoff decide
+  reachability. Upstream now probes a live session when the network reports offline and keeps it
+  if it answers (`monitorConnectedLease`), but it still parks a desired connection in `offline`
+  once that session is gone; the normalization reconnects instead.
+- Web `ChatView.tsx` mounts `EnvironmentNetworkStatus` above the composer. That component in
+  `components/chat/TrainNetworkStatus.tsx` subscribes to the environment's connection and shell
+  itself, so shell pushes re-render the strip and not the chat, and renders the projection through
+  `TrainNetworkStatus` and `trainNetworkExperience.ts`. Mobile does not use the projection.
 
 ## Upstream touch points
 
 - `packages/client-runtime/src/connection/supervisor.ts`: the offline normalization.
-- `apps/web/src/components/ChatView.tsx`: the projection and the `TrainNetworkStatus` mount.
+- `apps/web/src/components/ChatView.tsx`: the `EnvironmentNetworkStatus` mount.
 - `packages/client-runtime/package.json`: the `./state/connection-freshness` export.
 
 ## Removal
@@ -43,4 +47,4 @@ and stops trusting a stale offline signal.
 ## Verification
 
 `connectionFreshness.test.ts`, the stale-offline tests in `supervisor.test.ts`,
-`TrainNetworkStatus.test.tsx` and `trainNetworkExperience.test.ts`.
+`TrainNetworkStatus.browser.test.tsx` and `trainNetworkExperience.test.ts`.

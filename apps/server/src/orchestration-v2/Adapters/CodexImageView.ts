@@ -25,7 +25,7 @@ export function codexImageViewToolCall(item: {
 }
 
 /** Points the item at the viewed image and attaches the server's copy of it. */
-export const withObservedImage = (
+export const withObservedImage = Effect.fn("CodexImageView.withObservedImage")(function* (
   turnItem: OrchestrationV2TurnItem,
   input: {
     readonly path: string;
@@ -34,29 +34,28 @@ export const withObservedImage = (
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
   },
-): Effect.Effect<OrchestrationV2TurnItem> =>
-  Effect.gen(function* () {
-    const path = input.path.trim();
-    if (
-      turnItem.type !== "dynamic_tool" ||
-      path.length > 4096 ||
-      /[\r\n]/.test(path) ||
-      !isWorkspaceImagePreviewPath(path)
-    ) {
-      return turnItem;
-    }
-    const observedImage = yield* snapshotObservedImage({
-      fileSystem: input.fileSystem,
-      attachmentsDir: input.attachmentsDir,
-      threadId: turnItem.threadId,
-      path,
-      cwd: input.cwd,
-      agentExecState: input.agentExecState,
-    });
-    return {
-      ...turnItem,
-      title: formatReadToolLabel(path),
-      viewedImagePath: path,
-      ...(observedImage === undefined ? {} : { observedImage }),
-    };
+): Effect.fn.Return<OrchestrationV2TurnItem> {
+  const path = input.path.trim();
+  if (
+    turnItem.type !== "dynamic_tool" ||
+    path.length > 4096 ||
+    /[\r\n]/.test(path) ||
+    !isWorkspaceImagePreviewPath(path)
+  ) {
+    return turnItem;
+  }
+  const observedImage = yield* snapshotObservedImage({
+    fileSystem: input.fileSystem,
+    attachmentsDir: input.attachmentsDir,
+    threadId: turnItem.threadId,
+    path,
+    cwd: input.cwd,
+    agentExecState: input.agentExecState,
   });
+  return {
+    ...turnItem,
+    title: formatReadToolLabel(path),
+    viewedImagePath: path,
+    ...(observedImage === undefined ? {} : { observedImage }),
+  };
+});

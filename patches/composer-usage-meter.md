@@ -26,8 +26,10 @@ keeps the visible meter and reads only upstream's provider snapshots.
 ## Implementation
 
 `apps/web/src/components/chat/ComposerUsageMeter.tsx` and its `.logic.ts` are fork-owned.
-`ChatComposer.tsx` passes `selectedProviderStatus` and the environment's `usageLimitSources` to
-`ComposerFooterPrimaryActions`, which renders the meter before the context ring.
+`ChatView.tsx` passes the environment's `usageLimitSources` to `ChatComposer.tsx`, which passes
+them with `selectedProviderStatus` to `ComposerFooterPrimaryActions`; that renders the meter before
+the context ring. The pooled fallback hands `collectLimitAccounts` from `packages/shared/src/usageLimits.ts`
+a presentation with no providers, so only the hub accounts count.
 
 ## Removal
 

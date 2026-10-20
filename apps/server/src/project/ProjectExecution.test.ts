@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as ChildProcess from "effect/process/ChildProcess";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import {
   projectExecutionArguments,

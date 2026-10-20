@@ -17,7 +17,8 @@ RPC session.
 - A subscription holds its permit from subscribe until the first value that `releaseWhen` accepts.
   The live phase holds no permit. Failure and interruption release it through the scope
   finalizer, at most once. Waiting for a permit is interruptible, and admission keeps transport
-  batches intact.
+  batches intact. `subscribeDynamicMapped` wraps the raw stream in `withSubscriptionAdmission`
+  before upstream's mapping and its `Stream.onFirst` retry reset.
 - `state/threads.ts` admits thread-detail subscriptions in the `thread-detail-catch-up` group with
   three permits. Only inputs that set `requestCompletionMarker` take a permit, because only those
   streams emit the `synchronized` item that releases it.

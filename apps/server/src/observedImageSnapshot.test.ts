@@ -16,6 +16,7 @@ import { resolveAttachmentPath } from "./attachmentStore.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import { snapshotObservedImage } from "./observedImageSnapshot.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -33,6 +34,7 @@ const testLayer = Layer.mergeAll(
   ),
   NativeAppIconResolver.layer.pipe(Layer.provide(configLayer)),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
+  Layer.mock(Orchestrator.OrchestratorV2)({}),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 const threadId = ThreadId.make("thread-observed-image");

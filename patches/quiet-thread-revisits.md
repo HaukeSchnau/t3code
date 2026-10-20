@@ -19,7 +19,8 @@ in `ThreadDetailScreen.tsx`.
   through the [connection freshness](connection-freshness-projection.md) banner.
 - Both sidebars (`Sidebar.tsx` and `LegacySidebar.tsx`) mount the shared
   `SidebarThreadDetailPrewarmer` with their final rendered thread-key order. Upstream prewarms
-  only in its legacy sidebar. The prewarmer keeps the first two thread details mounted
+  only in its legacy sidebar, through a local prewarmer that `useLegacySidebarThreads` feeds; the
+  fork drops that one for the shared prewarmer. The prewarmer keeps the first two thread details mounted
   (`SIDEBAR_THREAD_PREWARM_LIMIT` in `Sidebar.logic.ts`, three upstream). The limit applies before
   key parsing, so its cost does not grow with sidebar length.
 - Two warmups leave one of the three [thread catch-up permits](bounded-thread-reconnect.md) for a
@@ -44,6 +45,6 @@ without taking every catch-up permit.
 
 - `apps/web/src/threadSync.test.ts`
 - `apps/web/src/components/sidebar/SidebarThreadDetailPrewarmer.test.tsx`
-- `apps/web/src/components/sidebar/SidebarThreadDetailPrewarmer.lifecycle.test.tsx`
-- `apps/web/src/components/chat/TrainNetworkStatus.test.tsx`
+- `apps/web/src/components/sidebar/SidebarThreadDetailPrewarmer.lifecycle.browser.test.tsx`
+- `apps/web/src/components/chat/TrainNetworkStatus.browser.test.tsx`
 - `apps/web/src/components/chat/trainNetworkExperience.test.ts`

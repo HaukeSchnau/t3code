@@ -1,6 +1,6 @@
 import { View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 
 /** Says whether Codex retries an at-capacity model by itself, beside the composer's Resume. */
 export function CodexOverloadRetryCard({ notice }: { notice: string | null }) {

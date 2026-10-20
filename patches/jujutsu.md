@@ -13,7 +13,10 @@ handling, because the maintainer and their agents work in jj repositories.
 - jj 0.46 or newer; older versions fall back to Git in colocated repositories.
 - Checkpoints are commit ids of `@` after a snapshot, recorded under `.jj/t3/checkpoints`
   (`vcs/JjVcsDriver.ts`). Diffs run Git against jj's backing store, so output matches the Git
-  driver. Later checkpoints are kept after a rollback, so it can be undone.
+  driver. Later checkpoints are kept after a rollback, so it can be undone. Turn diffs keep every
+  changed path: upstream's Git driver drops paths a pull or rebase brought in
+  (`listAuthoredPaths`), and the jj driver returns null there because telling them apart would
+  need jj's operation log.
 - Every turn ends in its own change (`jj/JjTurnService.ts`, called from
   `CheckpointCaptureService` before the checkpoint, failed runs included). A turn that committed
   its own work leaves nothing to seal. Seals get a provisional message at once and the commit
@@ -23,7 +26,7 @@ handling, because the maintainer and their agents work in jj repositories.
   in `@` until assigned (`vcs.jj.assignPaths`).
 - Commits carry `T3-Thread` and `T3-Turn` trailers. Seals write them; providers with a process per
   thread get a per-thread `JJ_CONFIG` layer so the agent's own jj commands add them
-  (`jj/JjThreadLayer.ts`, `orchestration-v2/ProviderThreadEnvironment.ts`). On launcher hosts
+  (`jj/JjThreadLayer.ts`, provided to adapters through `ProviderThreadEnvironment`). On launcher hosts
   agent-exec owns the agent's environment and home, so those agents only get `JJ_OP_USERNAME`,
   and the seal tags their unpushed commits afterwards. Projects can turn trailers off
   (`jjCommitTrailers`) and strip them from pushes to listed remotes (`jjStripTrailersRemotes`).
@@ -56,8 +59,16 @@ handling, because the maintainer and their agents work in jj repositories.
   (`isCheckpointable`), `orchestration-v2/CheckpointService.ts`.
 - `orchestration-v2/RunExecutionService.ts` (turn start hook; failed runs enqueue a capture),
   `CheckpointCaptureService.ts` (seal before capture; failed runs keep their status),
-  `CheckpointRestoreSafety.ts`, `CheckpointRollbackService.ts`.
+  `CheckpointRestoreSafety.ts`, `CheckpointRollbackService.ts`, and `Orchestrator.ts` (a fork's
+  own workspace and its merge-back), all through `orchestration-v2/VcsTurnHooks.ts`.
+- `mcp/McpHttpServer.ts` registers the jj toolkit (`layerJjToolkit`). Its handlers declare access
+  through `McpToolAccess`: status and thread work read as the calling thread, and `t3_jj_action`
+  acts as it.
 - `vcs/VcsStatusBroadcaster.ts` (local status goes through the jj reader).
+- `auth/RpcAuthorization.ts` and `observability/RpcInstrumentation.ts` list the `vcs.jj.*` RPCs.
+  Actions and path assignment need `source-control:write`, like upstream's VCS mutations; thread
+  work needs `orchestration:read`. `server.ts` builds one `JjCli` for the jj services and the MCP
+  toolkit (`layerJj`), and the broadcaster gets its own status reader.
 - Provider adapters: complete file paths and command cwd, per-thread environment.
 - `textGeneration/commitMessageText.ts` holds helpers moved out of `GitManager`.
 - Contracts: `jj.ts`, `kind` and `jj` on the local status, `cwd` on `command_execution`, two

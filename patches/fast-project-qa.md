@@ -21,7 +21,7 @@ and fork lockfile check.
 - Server-test temporary files live below T3 Code's persistent CI cache. The worker's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `.calder/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
-  six typecheck groups, a test step for each package with a sizeable suite, one for the small
+  seven typecheck groups, a test step for each package with a sizeable suite, one for the small
   packages, one for the repository scripts, the release smoke, and the fork and deploy lockfile
   checks.
 - The server, web, mobile, desktop, client-runtime and shared suites run file by file (Calder's `each`
@@ -40,22 +40,30 @@ and fork lockfile check.
   cache, and a 40-file sample of small server files from 102 to 15. Upstream isolates every file;
   when an upstream test fails only in the shared project, add it to the config's list.
 - A test that reads repository files its imports don't show has a `// calder: always` comment line and
-  runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook and
-  `apps/mobile/src/dependency-graph.test.ts` the whole source tree. Keep the comments when upstream
-  changes those files, and add one to a test that starts reading files by path.
-- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, relay
-  and the oxlint plugin) run together when their directories or anything their tests import changed.
+  runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook,
+  `apps/mobile/src/dependency-graph.test.ts` the whole source tree, and the web and mobile
+  `reactCompilerCoverage.test.ts` compile every source file. Keep the comments when upstream changes
+  those files, and add one to a test that starts reading files by path.
+- The web `browser` project runs `*.browser.test.{ts,tsx}` in headless Chromium. Playwright's own
+  download does not run on NixOS, so `.#ci` points it at nixpkgs' Chromium through
+  `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)).
+- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, the
+  provider and source-control packages, relay and the oxlint plugin) run together when their
+  directories or anything their tests import changed. Upstream adds a package per provider and per
+  source-control host; add new ones to `integrationPackages` in `.calder/ci.ts`.
   The repository scripts' tests read manifests, lockfiles and configs all over the repository, so
   they run on every change. The release smoke and the lockfile checks depend only on what the
   install reads (manifests, lockfiles, workspace file and patches) and the scripts and configs
   they run.
 - Typecheck groups are keyed by what their tsconfigs include and everything it imports, types
   included. Each group checks its packages one at a time with Vite+'s task cache. The server checks
-  alone, since tsgo needs about 4 GB for it, and incrementally: its `tsconfig.json` sets
-  `incremental`, and Calder keeps `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 at load 35
-  to 45 a cold check took 387 s, an unchanged one 16 s and one after a one-file edit 125 s. Vite+
-  never caches it because it rewrites the build info it read. Remove `incremental` if upstream makes
-  the server incremental or composite.
+  alone and with `--checkers 1`, which only the Calder step passes: a cold tsc-rs check of the server
+  peaked at 4.7 GB with the default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
+  It also checks incrementally: its `tsconfig.json` sets `incremental`, and Calder keeps
+  `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 a cold check with one checker took about
+  110 s and an unchanged one 8 s. Vite+ never caches it because it rewrites the build info it read.
+  Remove `incremental` if upstream makes the server incremental or composite, and the checker limit
+  once Calder can budget memory per step.
 - Upstream runs the orchestrator replay fixtures as one file, `OrchestratorReplayFixtures.integration.test.ts`:
   123 replays that took 12 to 21 minutes on Calder, and a file is the smallest unit Calder and Vitest
   split. The fork moves its code to `OrchestratorReplayFixtures.testkit.ts` and runs it as six
@@ -70,6 +78,6 @@ and fork lockfile check.
 - `apps/server/src/testUtils/gitConfig.setup.ts` appends its git settings once per process instead
   of once per test file, so server tests can later share a worker without growing every git
   child's environment.
-- Cancelling a run kills each task's process group 10 seconds after TERM. TypeScript 7's native
-  `tsc` catches TERM and keeps checking until it finishes; under memory pressure a cancelled
-  typecheck ran for hours.
+- Cancelling a run kills each task's process group 10 seconds after TERM. tsc-rs catches TERM and
+  keeps checking until it finishes (a cold server check ran on for 4 minutes), and under memory
+  pressure a cancelled typecheck ran for hours.

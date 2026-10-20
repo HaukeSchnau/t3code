@@ -2,8 +2,9 @@ import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import * as DeviceService from "./DeviceService.ts";
@@ -11,11 +12,16 @@ import * as DeviceService from "./DeviceService.ts";
 it.effect("keeps hosts independent when serials collide and another host fails", () =>
   Effect.gen(function* () {
     const host = (id: string, failed = false): DeviceHost.DeviceHost["Service"] => {
-      const ready = {
+      const ready: DeviceHost.DeviceHostAgentReady = {
         nodePath: process.execPath,
         hub: { origin: `http://${id}` },
         agentDevice: { baseUrl: `http://${id}`, token: "test", entryPath: "/agent-device" },
-        run: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
+        run: (command) =>
+          Effect.succeed({
+            stdout: command === "emulator" ? "" : " V....D libx264",
+            stderr: "",
+            code: 0,
+          }),
         helpers: { serveSimAxSettings: null, serveSimCli: null },
       };
       return {
@@ -77,7 +83,7 @@ it.effect("keeps hosts independent when serials collide and another host fails",
         order.push("write finished");
         return "/host-config.json";
       }),
-    ).pipe(Effect.provideService(HttpClient.HttpClient, http));
+    ).pipe(Effect.provide(NodeCrypto.layer), Effect.provideService(HttpClient.HttpClient, http));
     expect(yield* service.agentReadinessIfSupported("b")).not.toBeNull();
     const listed = yield* service.list;
     expect(listed.devices.map((device) => device.hostId).sort()).toEqual(["a", "b"]);

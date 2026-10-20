@@ -8,10 +8,10 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpClient, HttpClientResponse, HttpRouter } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse, HttpRouter } from "effect/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as DeviceService from "./DeviceService.ts";
-import { deviceHubProxyRouteLayer } from "./DeviceHubProxy.ts";
+import * as DeviceHubProxy from "./DeviceHubProxy.ts";
 
 const disposers: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -26,9 +26,11 @@ const fixture = (
   let finalized = 0;
   const requests: string[] = [];
   const hosts: Array<string | undefined> = [];
+  const headers: Array<Readonly<Record<string, string>>> = [];
   const client = HttpClient.make((request, _url, signal) =>
     Effect.gen(function* () {
       requests.push(request.url);
+      headers.push(request.headers);
       signal.addEventListener("abort", () => {
         finalized++;
       });
@@ -37,7 +39,7 @@ const fixture = (
     }),
   );
   const { handler, dispose } = HttpRouter.toWebHandler(
-    deviceHubProxyRouteLayer.pipe(
+    DeviceHubProxy.layer.pipe(
       Layer.provideMerge(
         Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
           authenticateWebSocketUpgrade: () =>
@@ -67,7 +69,7 @@ const fixture = (
     { disableLogger: true },
   );
   disposers.push(dispose);
-  return { handler, requests, hosts, finalized: () => finalized };
+  return { handler, requests, hosts, headers, finalized: () => finalized };
 };
 
 describe("device hub proxy", () => {
@@ -148,6 +150,25 @@ describe("device hub proxy", () => {
     expect(operator.requests).toEqual([
       "http://hub.test/vendor/serve-emu/api/fold?device=emulator-5554",
     ]);
+  });
+
+  it("presents fold changes from an HTTPS client as same-origin hub requests", async () => {
+    const { handler, headers } = fixture([AuthOrchestrationOperateScope]);
+    const response = await handler(
+      new Request(
+        "https://relay.test/api/device-hub/vendor/serve-emu/api/fold?device=emulator-5554",
+        {
+          method: "POST",
+          headers: { origin: "https://relay.test", "x-forwarded-proto": "https" },
+          body: '{"posture":"opened"}',
+        },
+      ),
+    );
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(headers).toHaveLength(1);
+    expect(headers[0]?.origin).toBe("http://hub.test");
+    expect(headers[0]).not.toHaveProperty("x-forwarded-proto");
   });
 
   it("never forwards the vendor shell endpoint", async () => {

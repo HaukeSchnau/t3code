@@ -1,7 +1,7 @@
 import { ThreadId, type ServerIdleBusyThread, type ServerIdleStatus } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { PROCESS_BOUND_EFFECT_TYPES } from "../orchestration-v2/EffectOutbox.ts";
 

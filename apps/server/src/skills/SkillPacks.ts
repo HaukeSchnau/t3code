@@ -1,4 +1,4 @@
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   type OrchestrationV2AppThread,
   type ProjectId,
@@ -26,13 +26,13 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { ServerConfig } from "../config.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
-import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   allPackSkills,
@@ -129,7 +129,7 @@ export function skillPackSupportIssue(input: {
 }
 
 const loadCatalog = Effect.gen(function* () {
-  const catalogPath = (yield* HostProcessEnvironment).T3CODE_SKILL_CATALOG_PATH?.trim();
+  const catalogPath = (yield* HostProcess.Environment).T3CODE_SKILL_CATALOG_PATH?.trim();
   if (!catalogPath) return null;
   const fileSystem = yield* FileSystem.FileSystem;
   return yield* fileSystem.readFileString(catalogPath).pipe(
@@ -237,8 +237,8 @@ const make = Effect.gen(function* () {
     return yield* readProjectDefault(thread.projectId);
   });
 
-  const readState = (input: SkillPackSubscribeInput) =>
-    Effect.gen(function* () {
+  const readState = Effect.fn("SkillPacks.readState")(
+    function* (input: SkillPackSubscribeInput) {
       const projectDefaultPackIds = yield* readProjectDefault(input.projectId);
       if (input.threadId === undefined) return { projectDefaultPackIds, thread: null };
       const row = yield* readRow(input.threadId);
@@ -250,7 +250,9 @@ const make = Effect.gen(function* () {
         ? yield* inheritedPackIds(thread.value)
         : projectDefaultPackIds;
       return { projectDefaultPackIds, thread: threadSkillScope(undefined, inherited) };
-    }).pipe(Effect.mapError(failure("Could not read skill packs.")));
+    },
+    Effect.mapError(failure("Could not read skill packs.")),
+  );
 
   const subscribe: SkillPacks["Service"]["subscribe"] = (input) =>
     Stream.unwrap(
@@ -271,8 +273,10 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const setThreadPacks: SkillPacks["Service"]["setThreadPacks"] = (input) =>
-    Effect.gen(function* () {
+  const setThreadPacks: SkillPacks["Service"]["setThreadPacks"] = Effect.fn(
+    "SkillPacks.setThreadPacks",
+  )(
+    function* (input) {
       const now = DateTime.formatIso(yield* DateTime.now);
       yield* sql`
         INSERT INTO skill_pack_thread_selections (thread_id, pack_ids_json, updated_at)
@@ -282,21 +286,24 @@ const make = Effect.gen(function* () {
           updated_at = excluded.updated_at
       `;
       yield* PubSub.publish(changes, { threadId: input.threadId });
-    }).pipe(Effect.mapError(failure("Could not save the thread's skill packs.")));
+    },
+    Effect.mapError(failure("Could not save the thread's skill packs.")),
+  );
 
-  const setProjectDefault: SkillPacks["Service"]["setProjectDefault"] = (input) =>
-    Effect.gen(function* () {
-      const updated = yield* sql<{ readonly project_id: string }>`
-        UPDATE projection_projects
-        SET default_skill_pack_ids_json = ${encodePackIds(input.packIds)}
-        WHERE project_id = ${input.projectId}
-        RETURNING project_id
-      `.pipe(Effect.mapError(failure("Could not save the project's default skill packs.")));
-      if (updated.length === 0) {
-        return yield* new SkillPackError({ message: "The project no longer exists." });
-      }
-      yield* PubSub.publish(changes, { projectId: input.projectId });
-    });
+  const setProjectDefault: SkillPacks["Service"]["setProjectDefault"] = Effect.fn(
+    "SkillPacks.setProjectDefault",
+  )(function* (input) {
+    const updated = yield* sql<{ readonly project_id: string }>`
+      UPDATE projection_projects
+      SET default_skill_pack_ids_json = ${encodePackIds(input.packIds)}
+      WHERE project_id = ${input.projectId}
+      RETURNING project_id
+    `.pipe(Effect.mapError(failure("Could not save the project's default skill packs.")));
+    if (updated.length === 0) {
+      return yield* new SkillPackError({ message: "The project no longer exists." });
+    }
+    yield* PubSub.publish(changes, { projectId: input.projectId });
+  });
 
   const supportIssue = Effect.fnUntraced(function* (instanceId: ProviderInstanceId) {
     const adapter = yield* adapters.get(instanceId);
@@ -342,8 +349,8 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const prepareTurn: SkillPacks["Service"]["prepareTurn"] = (input) =>
-    Effect.gen(function* () {
+  const prepareTurn: SkillPacks["Service"]["prepareTurn"] = Effect.fn("SkillPacks.prepareTurn")(
+    function* (input) {
       const threadId = input.thread.id;
       const row = yield* readRow(threadId);
       // Without a catalog a thread that never picked packs has nothing to apply or report.
@@ -378,14 +385,17 @@ const make = Effect.gen(function* () {
           updated_at = excluded.updated_at
       `;
       yield* PubSub.publish(changes, { threadId });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not prepare skill packs for the turn.", {
-          threadId: input.thread.id,
-          cause: Cause.pretty(cause),
-        }),
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not prepare skill packs for the turn.", {
+            threadId: input.thread.id,
+            cause: Cause.pretty(cause),
+          }),
+        ),
       ),
-    );
+  );
 
   return SkillPacks.of({
     catalog: catalog === null ? null : publicSkillPackCatalog(catalog),

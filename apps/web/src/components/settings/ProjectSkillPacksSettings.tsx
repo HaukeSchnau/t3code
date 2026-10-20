@@ -20,7 +20,7 @@ interface ProjectMember {
 }
 
 /**
- * Fork: the project's default skill packs (patches/skill-packs.md). A project
+ * The project's default skill packs (patches/skill-packs.md). A project
  * group shares one default, so an edit fans out to every member.
  */
 export function ProjectSkillPacksSettings(props: {

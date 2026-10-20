@@ -5,7 +5,8 @@ import * as NodePath from "node:path";
 
 function run(command: string, args: string[]) {
   const result = NodeChildProcess.spawnSync(command, args, {
-    stdio: "inherit",
+    // Setup has no one answering prompts. A closed stdin makes a prompt fail instead of hanging.
+    stdio: ["ignore", "inherit", "inherit"],
     // pnpm uses a .cmd shim on Windows; its fixed install command needs a shell.
     // oxlint-disable-next-line t3code/no-global-process-runtime -- runs before workspace dependencies are installed.
     shell: process.platform === "win32" && command === "pnpm",
@@ -21,7 +22,7 @@ if (
 ) {
   run("devenv", ["--no-tui", "tasks", "run", "t3:dependencies"]);
 } else {
-  run("pnpm", ["install", "--frozen-lockfile"]);
+  run("pnpm", ["install", "--frozen-lockfile", "--yes"]);
 }
 
 const projectRoot = process.env.T3CODE_PROJECT_ROOT;
@@ -30,12 +31,19 @@ if (projectRoot && NodeFS.existsSync(projectRoot)) {
   const workspaceRoot = NodeFS.realpathSync(process.cwd());
   // Isolated workspaces use their own project root and have no source checkout mount.
   if (sourceRoot !== workspaceRoot) {
-    for (const relative of [".env", "infra/relay/.env"]) {
+    for (const relative of [".env", NodePath.join("infra", "relay", ".env")]) {
       const source = NodePath.join(sourceRoot, relative);
-      const target = NodePath.join(workspaceRoot, relative);
-      if (!NodeFS.existsSync(source) || NodeFS.lstatSync(target, { throwIfNoEntry: false })) {
+      const sourceStat = NodeFS.lstatSync(source, { throwIfNoEntry: false });
+      if (!sourceStat) continue;
+      if (!sourceStat.isFile()) {
+        process.stderr.write(`Skipping ${relative}: ${source} is not a regular file.\n`);
         continue;
       }
+      // Only a symlink is ever replaced, so a real env file in the workspace is never deleted.
+      const target = NodePath.join(workspaceRoot, relative);
+      const existing = NodeFS.lstatSync(target, { throwIfNoEntry: false });
+      if (existing && !existing.isSymbolicLink()) continue;
+      if (existing) NodeFS.rmSync(target);
       NodeFS.symlinkSync(source, target, "file");
     }
   }

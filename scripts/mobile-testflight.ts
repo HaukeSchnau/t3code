@@ -21,15 +21,10 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Command, Flag } from "effect/unstable/cli";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-// App Store Connect tokens are ES256 JWTs; WebCrypto would need a PKCS#8 import dance for the same result.
+import { Command, Flag } from "effect/cli";
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - App Store Connect tokens are ES256 JWTs, which effect/Crypto cannot sign.
 import * as NodeCrypto from "node:crypto";
 
 import { requireAccountlessExpoConfig } from "./lib/accountless-expo-config.ts";

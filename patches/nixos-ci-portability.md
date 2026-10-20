@@ -7,16 +7,15 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 ## What the fork changes
 
 - `flake.nix` (`devShells.ci`): `LC_ALL=C.UTF-8`, because the workers inherit the host's German locale and
-  tests match English Git messages. It also adds `jujutsu` for the jj workspace tests.
-- `apps/server/src/provider/acp/AcpSessionRuntime.ts`: the cgroup wrapper checks that the target command
-  resolves before `exec`. bash as `/bin/sh` exits 127 from a failed `exec` without running the EXIT trap,
-  so a missing target reported 127 instead of the wrapper's 125.
+  tests match English Git messages. It also adds `jujutsu` for the jj workspace tests, and on Linux points
+  `T3CODE_BROWSER_TEST_CHROMIUM` at nixpkgs' Chromium for the web browser tests, because the Chromium
+  Playwright downloads does not run on NixOS.
 - `apps/desktop/src/wsl/DesktopWslEnvironment.test.ts`: the busy-runtime holder renames a shell instead of
   `cat`. A multi-call coreutils picks its program from argv[0].
-- `apps/server/src/provider/acp/AcpClientTerminals.test.ts`: the Devin shell test passes PATH in the session
+- `packages/provider-acp/src/server/clientTerminals.test.ts`: the Devin shell test passes PATH in the session
   environment, which replaces the inherited one.
-- `apps/server/src/provider/OpenCodeServerLedger.test.ts`: Linux runs the macOS `ps` path only where
-  `/bin/ps` exists.
+- `packages/provider-opencode/src/server/OpenCodeServerLedger.test.ts`: Linux runs the macOS `ps` path only
+  where `/bin/ps` exists.
 - `apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts`: the registry fixture also lists
   `linux-aarch64`.
 - `apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts`: the fake provider binds a turn's
@@ -27,7 +26,7 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   private bus socket lives under `/tmp` instead of TMPDIR, and a daemon that fails to start reports its
   stderr. dbus-daemon refuses socket paths over 99 bytes, and a trusted Calder slot's TMPDIR, nested once more
   by `nix develop`, made them 100 and 101 bytes long.
-- `apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts`: the replay page retention check
+- `apps/server/src/persistence/OrchestrationEventStore.test.ts`: the replay page retention check
   yields before counting live pages. One synchronous fiber run usually spans a page boundary, so the frames
   that consumed the previous page could still hold it when the check ran.
 

@@ -18,12 +18,15 @@ showed a fatal 502 screen before the durable outbox and cached shell and thread 
   401, and 403 results clear the proof; 400, 404, and 500 never use the fallback.
 - Privileged authenticated-only root components stay disabled in degraded mode. Server authorization and command
   receipts remain the authority for reconnect and outbox delivery.
+- Upstream's explicit pairing link (`explicitPairingRequested` in `environments/primary/auth.ts`) is checked
+  before the cached gates, so a `/pair` link still replaces the browser's grant.
 
 ## Cached primary identity
 
 Browser cache reads for the shell, server configuration, thread history, and VCS refs have a two-second
-deadline. If IndexedDB leaves a read pending, cancellation aborts that read-only transaction and the normal
-cache-error path loads from the server. The credential-bearing connection catalog is not subject to this
+deadline (`readDatabaseValueOnConnection` in `apps/web/src/connection/storage.ts`, inside upstream's
+closed-connection retry). If IndexedDB leaves a read pending, cancellation aborts that read-only transaction
+and the normal cache-error path loads from the server. The credential-bearing connection catalog is not subject to this
 cache deadline. A local cache stall must not make a healthy server appear to have no projects.
 
 The web connection platform persists the schema-decoded, non-secret primary environment descriptor under the

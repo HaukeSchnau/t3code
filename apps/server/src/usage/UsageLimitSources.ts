@@ -1,19 +1,3 @@
-/**
- * UsageLimitSources — quota from places this environment cannot run turns
- * on, today a CLIProxyAPI hub pooling several subscription accounts.
- *
- * Each configured `settings.usageLimitSources` entry is read on
- * `UsageLimitsRefresh`'s schedule and on every settings change, then
- * published as one snapshot per source over `subscribeServerConfig`. A source
- * that fails keeps its row with `error` set so the user can see it is
- * configured but unreachable. An account whose own read fails keeps its last
- * good reading, as a failed provider probe does, because the providers
- * rate-limit their quota endpoints; a throttled account is not read again
- * before the time the provider named. Nothing is persisted: like provider status,
- * this is live state that re-derives on boot.
- *
- * @module usage/UsageLimitSources
- */
 import {
   UsageLimitSourceError,
   type UsageLimitSourceConsumeResetCreditInput,
@@ -37,7 +21,7 @@ import {
   isUsageLimitsThrottled,
   resolveUsageLimitsAfterProbe,
   USAGE_LIMITS_MIN_READ_GAP_MS,
-} from "../provider/providerUsageLimits.ts";
+} from "@t3tools/provider-core/server/usageLimits";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
@@ -45,7 +29,6 @@ export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
   {
     readonly current: Effect.Effect<ReadonlyArray<UsageLimitSourceSnapshot>>;
-    /** The current set followed by every change, with repeats dropped. */
     readonly streamChanges: Stream.Stream<ReadonlyArray<UsageLimitSourceSnapshot>>;
     /**
      * Re-read every source, except one read in the last 30 seconds and
@@ -60,10 +43,11 @@ export class UsageLimitSources extends Context.Service<
 
 function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   if (config.label) return config.label;
+  const fallback = id.trim() || "Usage limit source";
   try {
-    return new URL(config.url).host;
+    return new URL(config.url).host || fallback;
   } catch {
-    return id;
+    return fallback;
   }
 }
 
@@ -89,6 +73,9 @@ export const make = Effect.gen(function* () {
     if (config.managementKey.length === 0) {
       return { ...base, accounts: [], error: "No management key configured." };
     }
+    // A failed account read keeps its last good reading, because the providers rate-limit
+    // their quota endpoints (patches/hub-account-last-reading.md). A throttled account is
+    // not read again before the time the provider named (patches/usage-limits-refresh.md).
     const published = (yield* Ref.get(stateRef)).find((source) => source.id === id)?.accounts;
     const nowMs = DateTime.toEpochMillis(now);
     const accounts = yield* api
@@ -120,21 +107,22 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const publish = (next: ReadonlyArray<UsageLimitSourceSnapshot>) =>
-    Effect.gen(function* () {
-      const changed = yield* Ref.modify(stateRef, (previous) =>
-        Equal.equals(previous, next) ? [false, previous] : [true, next],
-      );
-      if (changed) yield* PubSub.publish(changes, next);
-    });
+  const publish = Effect.fn("UsageLimitSources.publish")(function* (
+    next: ReadonlyArray<UsageLimitSourceSnapshot>,
+  ) {
+    const changed = yield* Ref.modify(stateRef, (previous) =>
+      Equal.equals(previous, next) ? [false, previous] : [true, next],
+    );
+    if (changed) yield* PubSub.publish(changes, next);
+  });
 
   // One refresh at a time: a slow hub read started before a settings change
   // must not publish after the change's own refresh and resurrect a removed
   // source. Callers queue behind the in-flight run and see current settings,
   // and a caller that queued behind a read of a source reuses that read.
   const refreshLock = yield* Semaphore.make(1);
-  const refreshSources = (force: boolean) =>
-    Effect.gen(function* () {
+  const refreshSources = Effect.fn("UsageLimitSources.refreshSources")(
+    function* (force: boolean) {
       const settings = yield* settingsService.getSettings.pipe(
         Effect.orElseSucceed((): ServerSettings | null => null),
       );
@@ -154,28 +142,30 @@ export const make = Effect.gen(function* () {
         { concurrency: 4 },
       );
       yield* publish(snapshots);
-    }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
+    },
+    refreshLock.withPermits(1),
+    Effect.ignoreCause({ log: true }),
+  );
 
   // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
-  const consumeResetCredit = (input: UsageLimitSourceConsumeResetCreditInput) =>
-    Effect.gen(function* () {
-      const settings = yield* settingsService.getSettings.pipe(
-        Effect.mapError(
-          () => new UsageLimitSourceError({ detail: "Could not read hub settings." }),
-        ),
-      );
-      const config = settings.usageLimitSources[input.sourceId];
-      if (!config?.enabled || !config.managementKey) {
-        return yield* new UsageLimitSourceError({
-          detail: "The usage limit source is missing or disabled.",
-        });
-      }
-      const result = yield* api.consume(config, input.accountId, input.creditId);
-      const snapshot = yield* readSource(input.sourceId, config, input.accountId);
-      const previous = yield* Ref.get(stateRef);
-      yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
-      return result;
-    }).pipe(refreshLock.withPermits(1));
+  const consumeResetCredit = Effect.fn("UsageLimitSources.consumeResetCredit")(function* (
+    input: UsageLimitSourceConsumeResetCreditInput,
+  ) {
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.mapError(() => new UsageLimitSourceError({ detail: "Could not read hub settings." })),
+    );
+    const config = settings.usageLimitSources[input.sourceId];
+    if (!config?.enabled || !config.managementKey) {
+      return yield* new UsageLimitSourceError({
+        detail: "The usage limit source is missing or disabled.",
+      });
+    }
+    const result = yield* api.consume(config, input.accountId, input.creditId);
+    const snapshot = yield* readSource(input.sourceId, config, input.accountId);
+    const previous = yield* Ref.get(stateRef);
+    yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
+    return result;
+  }, refreshLock.withPermits(1));
 
   // Settings edits re-read straight away so a new hub shows up without
   // waiting for the next scheduled read, and a removed one leaves the list.

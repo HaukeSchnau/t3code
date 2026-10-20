@@ -13,17 +13,18 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRefresh from "./ThreadTitleRefresh.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 
 const projectId = ProjectId.make("project:title-refresh");
 const modelSelection = {
@@ -37,7 +38,7 @@ const adapter = {
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("provider execution is disabled in title refresh tests"),
-} as ProviderAdapterV2Shape;
+} as ProviderAdapter.ProviderAdapterV2["Service"];
 
 function makeHarness(
   options: {
@@ -45,13 +46,22 @@ function makeHarness(
     readonly refreshGeneratedThreadTitles?: boolean;
   } = {},
 ) {
-  const database = SqlitePersistenceMemory;
-  const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
+  const database = SqlitePersistence.layerMemory;
+  const orchestrator = layerWithRegistry(
     { name: "thread-title-refresh" },
-    ProviderAdapterRegistry.makeLayer([adapter]),
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
     { databaseLayer: database, runEffectWorker: false },
   );
-  const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
+  const settings = ServerSettings.layerTest(
+    options.refreshGeneratedThreadTitles === undefined
+      ? {}
+      : { refreshGeneratedThreadTitles: options.refreshGeneratedThreadTitles },
+  );
+  const threadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(orchestrator),
+    Layer.provide(settings),
+    Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(database))),
+  );
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Refined title" })),
   );
@@ -80,11 +90,7 @@ function makeHarness(
     threadManagement,
     projects,
     Layer.mock(TextGeneration.TextGeneration)({ generateThreadTitle }),
-    ServerSettings.layerTest(
-      options.refreshGeneratedThreadTitles === undefined
-        ? {}
-        : { refreshGeneratedThreadTitles: options.refreshGeneratedThreadTitles },
-    ),
+    settings,
   );
   return {
     layer: Layer.mergeAll(
@@ -229,8 +235,9 @@ describe("ThreadTitleRefresh", () => {
     }),
   );
 
-  for (const skipped of ["first turn", "manual title", "setting off"] as const) {
-    it.effect(`leaves the title alone: ${skipped}`, () =>
+  it.effect.each(["first turn", "manual title", "setting off"] as const)(
+    "leaves the title alone: %s",
+    (skipped) =>
       Effect.gen(function* () {
         const harness = makeHarness({ refreshGeneratedThreadTitles: skipped !== "setting off" });
         yield* Effect.gen(function* () {
@@ -251,8 +258,7 @@ describe("ThreadTitleRefresh", () => {
           );
         }).pipe(Effect.provide(harness.layer));
       }),
-    );
-  }
+  );
 
   it.effect("a rename during an in-flight refresh wins", () =>
     Effect.gen(function* () {

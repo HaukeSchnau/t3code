@@ -23,7 +23,8 @@ update state through different APIs.
 - Keep the serialized widget render function self-contained; Expo serializes it into the extension
   bundle and cannot resolve module-local rendering helpers.
 - Enable the `remote-notification` background mode so ActivityKit and notification updates can be
-  processed while the app is suspended.
+  processed while the app is suspended. `expo-notifications`' `enableBackgroundRemoteNotifications`
+  appends it to upstream's `UIBackgroundModes: ["audio"]`, so the signed Info.plist lists both.
 - Keep the APNs entitlement, the embedded `apnsEnvironment` sent with device registration, and the
   actual signing mode in agreement. Local Xcode builds use `T3CODE_APNS_ENVIRONMENT=sandbox`;
   distribution builds default to production.
@@ -32,8 +33,9 @@ update state through different APIs.
   `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from the app config when it creates the target,
   and every prebuild runs with `--clean`, so the fork needs no plugin for this. A prebuild that
   reuses an existing `ios/` directory keeps the target's old versions.
-- The widget takes upstream's stale handling (`"isStale" in environment`) inside the fork's
-  `createWidget` and `containerBackground` layout.
+- Upstream's stale handling reads `environment.isStale`, which only Live Activity environments
+  carry, so the widget guards it with `"isStale" in environment`. The fork's `createWidget` and
+  `containerBackground` branch sits beside upstream's `linkModifiers` Live Activity layout.
 - Local Live Activity starts in `remoteRegistration.ts` pass upstream's `liveActivityStaleDate()`
   (ten minutes). It must match `STALE_AFTER_SECONDS` in `ApnsProvider.ts`, so local and pushed
   cards go stale at the same time.

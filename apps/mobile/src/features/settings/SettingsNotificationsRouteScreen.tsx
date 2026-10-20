@@ -1,10 +1,11 @@
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
+import * as Dialog from "../../components/ui/Dialog";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Notifications from "expo-notifications";
 import * as Effect from "effect/Effect";
-import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Alert, AppState, Linking, Platform } from "react-native";
+import { AsyncResult } from "effect/reactivity";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { AppState, Linking, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
@@ -38,10 +39,6 @@ import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "updating";
 
-// Reflects whether a paired environment actually accepted this device's registration.
-// The notification and Live Activity switches are gated on this so they can
-// never read as enabled when the device cannot receive anything (e.g. the
-// registration request timed out).
 function useDeviceRegistered(): boolean {
   const status = useSyncExternalStore(
     subscribeAgentAwarenessRegistrationStatus,
@@ -75,7 +72,7 @@ export function SettingsNotificationsRouteScreen() {
   ).length;
   const hasPairedEnvironment = environmentCount > 0;
 
-  const refreshNotifications = useCallback(async () => {
+  const refreshNotifications = async () => {
     if (Platform.OS !== "ios" && Platform.OS !== "android") {
       setNotificationStatus("unsupported");
       return;
@@ -87,7 +84,7 @@ export function SettingsNotificationsRouteScreen() {
       return;
     }
     setNotificationStatus(result.value.granted ? "enabled" : "disabled");
-  }, []);
+  };
 
   useEffect(() => {
     void refreshNotifications();
@@ -112,9 +109,9 @@ export function SettingsNotificationsRouteScreen() {
     );
   }, [preferencesResult]);
 
-  const requestNotifications = useCallback(async () => {
+  const requestNotifications = async () => {
     if (!hasPairedEnvironment) {
-      Alert.alert(
+      Dialog.alert(
         "Pair an environment first",
         "Notifications are delivered by a paired T3 Code server.",
       );
@@ -132,7 +129,7 @@ export function SettingsNotificationsRouteScreen() {
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
-        Alert.alert(
+        Dialog.alert(
           "Notifications unavailable",
           error instanceof Error ? error.message : "Could not request notification permission.",
         );
@@ -141,12 +138,10 @@ export function SettingsNotificationsRouteScreen() {
     }
     if (result.value.type === "granted") {
       setNotificationStatus("enabled");
-      // Permission alone is not enough: the switch stays off until the paired server
-      // registration succeeds, so tell the user the truth about which happened.
       if (getAgentAwarenessRegistrationStatus() === "registered") {
-        Alert.alert("Notifications enabled", "Agent notifications are enabled for this device.");
+        Dialog.alert("Notifications enabled", "Agent notifications are enabled for this device.");
       } else {
-        Alert.alert(
+        Dialog.alert(
           "Couldn't finish enabling notifications",
           "Notification access was granted, but the paired server could not accept this device. Check its APNs provider configuration.",
         );
@@ -155,7 +150,7 @@ export function SettingsNotificationsRouteScreen() {
     }
     if (result.value.type === "unsupported") {
       setNotificationStatus("unsupported");
-      Alert.alert(
+      Dialog.alert(
         "Notifications unavailable",
         "Agent notifications are unavailable on this platform.",
       );
@@ -163,10 +158,10 @@ export function SettingsNotificationsRouteScreen() {
     }
     setNotificationStatus("disabled");
     if (result.value.canAskAgain) {
-      Alert.alert("Notifications disabled", "Notifications were not enabled.");
+      Dialog.alert("Notifications disabled", "Notifications were not enabled.");
       return;
     }
-    Alert.alert(
+    Dialog.alert(
       "Notifications disabled",
       "Notifications were denied for this app. Open Settings to enable them.",
       [
@@ -174,79 +169,69 @@ export function SettingsNotificationsRouteScreen() {
         { text: "Open Settings", onPress: () => void Linking.openSettings() },
       ],
     );
-  }, [hasPairedEnvironment]);
+  };
 
-  const updateLiveActivities = useCallback(
-    async (enabled: boolean) => {
-      if (enabled && !hasPairedEnvironment) {
-        Alert.alert(
-          "Pair an environment first",
-          "Live Activity updates are delivered by a paired T3 Code server.",
-        );
-        return;
-      }
-      setLiveActivityStatus("updating");
-      const updateResult = await settleAsyncResult(() =>
-        runtime.runPromiseExit(
-          setLiveActivityUpdatesEnabled({
-            enabled,
-            previousEnabled: liveActivitiesPreferenceEnabled,
-          }),
-        ),
+  const updateLiveActivities = async (enabled: boolean) => {
+    if (enabled && !hasPairedEnvironment) {
+      Dialog.alert(
+        "Pair an environment first",
+        "Live Activity updates are delivered by a paired T3 Code server.",
       );
-      if (updateResult._tag === "Failure") {
-        setLiveActivityStatus(liveActivitiesPreferenceEnabled ? "enabled" : "disabled");
-        if (!isAtomCommandInterrupted(updateResult)) {
-          const error = squashAtomCommandFailure(updateResult);
-          Alert.alert(
-            "Live Activities unavailable",
-            error instanceof Error ? error.message : "Could not enable Live Activity updates.",
-          );
-        }
-        return;
-      }
-
-      savePreferences({ liveActivitiesEnabled: enabled });
-      setLiveActivityStatus(enabled ? "enabled" : "disabled");
-      if (enabled && getAgentAwarenessRegistrationStatus() !== "registered") {
-        Alert.alert(
-          "Couldn't finish enabling Live Activities",
-          "The paired server could not accept this device. Check its APNs provider configuration.",
+      return;
+    }
+    setLiveActivityStatus("updating");
+    const updateResult = await settleAsyncResult(() =>
+      runtime.runPromiseExit(
+        setLiveActivityUpdatesEnabled({
+          enabled,
+          previousEnabled: liveActivitiesPreferenceEnabled,
+        }),
+      ),
+    );
+    if (updateResult._tag === "Failure") {
+      setLiveActivityStatus(liveActivitiesPreferenceEnabled ? "enabled" : "disabled");
+      if (!isAtomCommandInterrupted(updateResult)) {
+        const error = squashAtomCommandFailure(updateResult);
+        Dialog.alert(
+          "Live Activities unavailable",
+          error instanceof Error ? error.message : "Could not enable Live Activity updates.",
         );
       }
-    },
-    [hasPairedEnvironment, liveActivitiesPreferenceEnabled, savePreferences],
-  );
+      return;
+    }
 
-  const handleDeviceNotificationsChange = useCallback(
-    (enabled: boolean) => {
-      if (enabled) {
-        void requestNotifications();
-        return;
-      }
-
-      Alert.alert(
-        "Disable notifications",
-        "Notification permission is controlled by the operating system. Open Settings to disable notifications for T3 Code.",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Open Settings", onPress: () => void Linking.openSettings() },
-        ],
+    savePreferences({ liveActivitiesEnabled: enabled });
+    setLiveActivityStatus(enabled ? "enabled" : "disabled");
+    if (enabled && getAgentAwarenessRegistrationStatus() !== "registered") {
+      Dialog.alert(
+        "Couldn't finish enabling Live Activities",
+        "The paired server could not accept this device. Check its APNs provider configuration.",
       );
-    },
-    [requestNotifications],
-  );
+    }
+  };
 
-  const handleLiveActivitiesChange = useCallback(
-    (enabled: boolean) => {
-      if (liveActivityWriteInFlight.current) return;
-      liveActivityWriteInFlight.current = true;
-      void updateLiveActivities(enabled).finally(() => {
-        liveActivityWriteInFlight.current = false;
-      });
-    },
-    [updateLiveActivities],
-  );
+  const handleDeviceNotificationsChange = (enabled: boolean) => {
+    if (enabled) {
+      void requestNotifications();
+      return;
+    }
+
+    Dialog.alert(
+      "Disable notifications",
+      "Notification permission is controlled by the operating system. Open Settings to disable notifications for T3 Code.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Open Settings", onPress: () => void Linking.openSettings() },
+      ],
+    );
+  };
+
+  const handleLiveActivitiesChange = async (enabled: boolean) => {
+    if (liveActivityWriteInFlight.current) return;
+    liveActivityWriteInFlight.current = true;
+    await updateLiveActivities(enabled);
+    liveActivityWriteInFlight.current = false;
+  };
 
   return (
     <SettingsScreen title="Notifications">
@@ -271,9 +256,6 @@ export function SettingsNotificationsRouteScreen() {
               notificationStatus === "unsupported"
             }
             subtitle={agentAwarenessSubtitle}
-            // Only reads as on when this device is actually registered with the
-            // paired server; otherwise notifications cannot be delivered regardless of
-            // the local iOS permission.
             value={
               agentAwarenessPushAvailable && notificationStatus === "enabled" && deviceRegistered
             }
@@ -296,14 +278,12 @@ export function SettingsNotificationsRouteScreen() {
                 : "Live Activity Updates"
             }
             subtitle={agentAwarenessSubtitle}
-            // Same gate: a saved preference is meaningless until the device
-            // registration the paired server needs to push updates has succeeded.
             value={
               agentAwarenessPushAvailable &&
               (liveActivityStatus === "enabled" || liveActivityStatus === "updating") &&
               deviceRegistered
             }
-            onValueChange={handleLiveActivitiesChange}
+            onValueChange={(enabled) => void handleLiveActivitiesChange(enabled)}
           />
           {supportsAndroidLiveUpdateSettings() ? (
             <SettingsRow
@@ -311,7 +291,7 @@ export function SettingsNotificationsRouteScreen() {
               label="Live Update Settings"
               onPress={() => {
                 void openAndroidLiveUpdateSettings().catch(() => {
-                  Alert.alert(
+                  Dialog.alert(
                     "Couldn't open Settings",
                     "Open Android Settings, select T3 Code, then enable Live Updates in Notifications.",
                   );

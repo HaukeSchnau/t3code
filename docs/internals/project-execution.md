@@ -13,9 +13,10 @@ unregistered cwd never touches the launcher. A registered cwd whose launcher is 
 instead of falling back to host execution.
 
 Every process entry point resolves execution before spawning: `ProviderProcessSpawner` for
-provider subprocesses and text generation, `ProcessRunner`, and `TerminalManager`. The Claude SDK
-spawns through `ProviderProcessSpawner.nativeProviderSpawn`. On hosts with provider scopes it
-starts the launcher inside the scope, as the Effect spawner does.
+provider subprocesses and text generation, `ProcessRunner`, and `TerminalManager`. Codex and Claude
+sessions build their launcher command before the agent scope (`process/agentScope.ts`) wraps it,
+because `systemd-run` inside the project environment cannot reach the user manager. The Codex
+command then has no cwd, so `ProviderProcessSpawner` leaves it alone.
 
 The server stays on the host. Provider traffic continues over stdio, so the v2 adapters keep the
 host cwd for the subprocess but show the agent its visible cwd (`workspace.visibleRoot`) in thread

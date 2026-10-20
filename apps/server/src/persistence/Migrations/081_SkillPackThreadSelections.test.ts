@@ -1,11 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(NodeSqliteClient.layerMemory());
+const layer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 const now = "2026-09-20T10:00:00.000Z";
 
 layer("081_SkillPackThreadSelections", (it) => {

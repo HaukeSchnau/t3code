@@ -23,19 +23,22 @@ one ordinary user message when sent.
 
 - `chat/inlineReplies.ts` owns the external draft store and prompt formatting. Per-block
   subscriptions keep editor keystrokes from replacing Markdown renderers or disturbing other blocks.
-- Inline replies are persisted as part of `composerDraftStore`'s per-thread draft. Creating a routed
-  editor restores that slice, and every inline edit writes it back through the composer's existing
-  debounced local-storage path.
+- Inline replies are persisted as part of `composerDraftStore`'s per-thread draft. `ChatView` keeps
+  one store per draft target in state, created from that slice, and every inline edit writes it back
+  through the composer's existing debounced local-storage path.
 - `MessagesTimeline.tsx` renders `AssistantInlineReplies` in place of `ChatMarkdown` when the
   store exists. Forward every prop upstream adds to the `ChatMarkdown` call beside it, such as
   `onRunShellCommand`.
-- `ChatMarkdown.renderBlock` is the narrow upstream seam. Preserve its default output when no
+- `ChatMarkdown.renderBlock` is the narrow upstream seam: the `p` and `li` renderers pass each block
+  and its source offset to it through the renderer context. Preserve their default output when no
   decorator is supplied; do not fork or replace the Markdown renderer.
+- Reply editors, indicators and the gutter button carry `data-thread-find-ignore`, so their text
+  stays out of upstream's in-thread find, whose match counts come from the server.
 - The transparent hit target for each block affordance is always mounted in the adjacent gutter; its
   icon becomes visible when either the block or that target is hovered. The gutter lies outside
-  `chat-content-lane`, so `MessagesTimeline`'s row frame clips horizontal overflow, not the lane.
-  Orchestration v2 moved that clip onto the lane, which hid every reply arrow. Text selection follows the
-  document `selectionchange` event. Whole-block browser selections may end at the next block
+  `chat-content-lane`, so `MessagesTimeline`'s row frame (`renderItem`) clips horizontal overflow,
+  not the lane. Upstream keeps moving that clip onto the lane, which hides every reply arrow. Text
+  selection follows the document `selectionchange` event. Whole-block browser selections may end at the next block
   boundary and must be normalized back to the source block.
 - The feature ships on the web client and therefore the Electron desktop client. The React Native
   mobile timeline remains unchanged until it has a native text-selection interaction.

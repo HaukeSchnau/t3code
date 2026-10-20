@@ -7,7 +7,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -92,7 +92,7 @@ const makeSweep = Effect.gen(function* () {
 
 // The shared scheduler derives due retries from persisted run history, so a
 // restart resumes the sequence without restoring timers.
-export const workerLive = Layer.effectDiscard(
+export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const sweep = yield* makeSweep;
     const scheduler = yield* Scheduler.Scheduler;

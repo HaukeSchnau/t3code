@@ -73,6 +73,27 @@ describe("runWatchCommand", () => {
     }),
   );
 
+  it.live("spawns the shell through the launch wrapper", () =>
+    Effect.gen(function* () {
+      const batches = yield* Ref.make<ReadonlyArray<WatchLines>>([]);
+      const outcome = yield* runWatchCommand(
+        {
+          command: "echo inner",
+          cwd: process.cwd(),
+          platform: "linux",
+          launch: (command, args) =>
+            Effect.succeed({
+              command: "/bin/sh",
+              args: ["-c", 'echo wrapped; exec "$@"', "wrapper", command, ...args],
+            }),
+        },
+        (lines) => Ref.update(batches, (all) => [...all, lines]).pipe(Effect.as(true)),
+      ).pipe(Effect.provide(NodeServices.layer));
+      assert.deepEqual(outcome, { type: "exited", exitCode: 0 });
+      assert.deepEqual((yield* Ref.get(batches)).flat(), ["wrapped", "inner"]);
+    }),
+  );
+
   it.live("reports a missing working directory without the command text", () =>
     Effect.gen(function* () {
       const outcome = yield* runWatchCommand(

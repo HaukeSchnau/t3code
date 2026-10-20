@@ -11,9 +11,13 @@ thread and model-picker navigation. The desktop client keeps the native app shor
 - Browsers on macOS use the same keys with `ctrl`.
 - Browsers on Windows and Linux use the same keys with `alt`.
 
-The web keybinding context exposes `desktop`, `browser`, and `mac`. Startup migration replaces exact
-copies of the former client-agnostic defaults in `keybindings.json`; user-defined rules remain
-unchanged.
+`clientSpecificKeybindings` in `packages/shared/src/keybindings.ts` expands each default into those
+three rules. The web keybinding context (`apps/web/src/keybindings.ts`) exposes `desktop`,
+`browser`, and `mac` next to upstream's `isDesktop` and `isWeb`; `ChatView`'s `getShortcutContext`
+sets them for `useChatShortcuts`. Startup migration replaces exact copies of the former
+client-agnostic defaults in `keybindings.json`; user-defined rules remain unchanged. Upstream now
+scopes `mod+1` through `mod+9` to `isDesktop`, but gives browsers no alternative and leaves
+`mod+shift+[` / `mod+shift+]` unscoped.
 
 Upstream's `navigation.back` and `navigation.forward` (`mod+[` / `mod+]`) keep upstream's defaults in
 both clients when they arrive with a sync. They call `window.history.back()` and `forward()`, and

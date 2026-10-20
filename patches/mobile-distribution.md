@@ -32,6 +32,9 @@ fork-only behavior such as accountless connections and native agent awareness.
 ## Maintenance
 
 Keep the update URL fork-owned during upstream merges; upstream's `u.expo.dev` URL must not return.
+Keep upstream's `version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.0.0",` line in `app.config.ts`
+verbatim: upstream's `fingerprint.config.js` reads the major version from it with a regex. The
+fork's `runtimeVersion` pin sits right below it.
 The static host and the qemu-wrapped Hermes compiler exist because srv-2 is aarch64 and
 `hermes-compiler` ships only an x86-64 Linux binary. Remove that workaround when upstream ships
 linux-arm64 builds. This patch could shrink to configuration if the fork adopted EAS Update with

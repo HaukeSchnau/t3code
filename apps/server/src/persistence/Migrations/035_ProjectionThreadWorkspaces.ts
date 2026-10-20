@@ -3,7 +3,7 @@
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 interface LegacyThreadRow {
   readonly thread_id: string;

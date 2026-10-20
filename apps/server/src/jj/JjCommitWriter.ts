@@ -15,7 +15,7 @@ import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { limitContext, sanitizeCommitMessage } from "../textGeneration/commitMessageText.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -79,6 +79,7 @@ const make = Effect.gen(function* () {
         : ServerSettings.resolveSourceControlWriterModelSelection(
             resolved,
             yield* providers.getProviders,
+            projectId,
           );
     return { modelSelection, style: resolved.sourceControlWritingStyle };
   });
@@ -164,8 +165,10 @@ const make = Effect.gen(function* () {
       }),
     });
 
-  const commitMessage: JjCommitWriter["Service"]["commitMessage"] = (input) =>
-    Effect.gen(function* () {
+  const commitMessage: JjCommitWriter["Service"]["commitMessage"] = Effect.fn(
+    "JjCommitWriter.commitMessage",
+  )(
+    function* (input) {
       const context = yield* diffContext(input.root, ["-r", input.revision]);
       if (context.summary.length === 0) return null;
       const settings = yield* writerSettings(input);
@@ -180,14 +183,16 @@ const make = Effect.gen(function* () {
       });
       const { subject, body } = sanitizeCommitMessage(generated);
       return { subject, body };
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("jj commit message generation failed", { cause }).pipe(Effect.as(null)),
-      ),
-    );
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("jj commit message generation failed", { cause }).pipe(Effect.as(null)),
+    ),
+  );
 
-  const pullRequest: JjCommitWriter["Service"]["pullRequest"] = (input) =>
-    Effect.gen(function* () {
+  const pullRequest: JjCommitWriter["Service"]["pullRequest"] = Effect.fn(
+    "JjCommitWriter.pullRequest",
+  )(
+    function* (input) {
       const commits = yield* jj.read({
         operation: "JjCommitWriter.prCommits",
         root: input.root,
@@ -220,13 +225,11 @@ const make = Effect.gen(function* () {
         modelSelection: settings.modelSelection,
       });
       return { title: generated.title, body: generated.body };
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("jj pull request text generation failed", { cause }).pipe(
-          Effect.as(null),
-        ),
-      ),
-    );
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("jj pull request text generation failed", { cause }).pipe(Effect.as(null)),
+    ),
+  );
 
   return JjCommitWriter.of({ commitMessage, pullRequest });
 });

@@ -1,6 +1,6 @@
-# ACP Registry
+# ACP providers
 
-T3 Code can run coding agents from the official
+T3 Code can run installed ACP commands or coding agents from the official
 [ACP Registry](https://agentclientprotocol.com/get-started/registry). Registry agents bring their
 own models, tools, and sign-in, while T3 Code provides projects, threads, checkpoints, and task
 delegation.
@@ -13,6 +13,10 @@ configuration, compaction, and agent-terminal updates when the agent supports th
 negotiates ACP v1 for Registry agents that have not migrated yet, so agents such as Pi continue to
 work through the same generic integration.
 
+Claude Agent uses the ACP v2 preview by default for Registry and local `claude-agent-acp`
+commands. If you encounter preview issues, set `CLAUDE_AGENT_ACP_EXPERIMENTAL_V2=0` in the
+provider instance's environment overrides to use ACP v1.
+
 ## Add an agent
 
 1. Open **Settings → Providers**.
@@ -22,6 +26,17 @@ work through the same generic integration.
 
 Search only shows agents that can run on the connected server. Registry agents are third-party
 code; review an agent's source and license before adding it.
+
+## Add a local command
+
+In **Settings → Providers → Add provider**, select **Local ACP command**. Enter the executable
+name or path on the selected environment, add one literal argument per row, and choose a display
+name. For DeepSeek Harness, use `dsh` with arguments `--profile` and `acp`.
+
+Local commands require no registry entry or download. Environment overrides apply to the command;
+credentials and skills remain managed by the installed agent or its wrapper. Models and reasoning
+options come from ACP, including model IDs that contain JSON. T3 Code launches the executable directly
+without expanding shell expressions.
 
 ## Where agents run
 

@@ -1,5 +1,5 @@
 import {
-  AuthAdministrativeScopes,
+  AuthOrchestrationReadScope,
   EnvironmentHttpApi,
   type ServerIdleStatus,
 } from "@t3tools/contracts";
@@ -9,13 +9,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
-import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import { Command, Flag, GlobalFlag } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { layerConfigAttached as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { getServerIdleStatus } from "../status/IdleStatus.ts";
 import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -59,7 +59,7 @@ const withStatusCliSessionToken = <A, E, R>(
 ) =>
   Effect.acquireUseRelease(
     environmentAuth.issueSession({
-      scopes: AuthAdministrativeScopes,
+      scopes: [AuthOrchestrationReadScope],
       label: "t3 status cli",
     }),
     (issued) => run(issued.token),
@@ -108,58 +108,59 @@ function failureMessage(failure: unknown): string {
   return "probe failed";
 }
 
-const queryOfflineIdleStatus = (flags: CliAuthLocationFlags) =>
-  Effect.gen(function* () {
+const queryOfflineIdleStatus = Effect.fn("status.queryOfflineIdleStatus")(
+  function* (flags: CliAuthLocationFlags) {
     const logLevel = yield* GlobalFlag.LogLevel;
     const config = yield* resolveCliAuthConfig(flags, logLevel);
     return yield* getServerIdleStatus().pipe(
       Effect.provide(
-        SqlitePersistenceLayerLive.pipe(
+        SqlitePersistence.layerConfigAttached.pipe(
           Layer.provide(ServerConfig.layer(config)),
           Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
         ),
       ),
+    );
+  },
+  Effect.mapError(
+    (cause) =>
+      new StatusOfflineUnavailableError({
+        reason: failureMessage(cause),
+      }),
+  ),
+);
+
+const queryLiveIdleStatus = Effect.fn("status.queryLiveIdleStatus")(function* (
+  flags: CliAuthLocationFlags,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isNone(runtimeState)) {
+    return yield* new StatusLiveServerUnavailableError({
+      reason: "no persisted running-server state",
+    });
+  }
+
+  return yield* Effect.gen(function* () {
+    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    return yield* withStatusCliSessionToken(environmentAuth, (token) =>
+      Effect.gen(function* () {
+        const client = yield* makeLiveServerClient(runtimeState.value.origin);
+        return yield* client.server.idleStatus({
+          headers: { authorization: `Bearer ${token}` },
+        });
+      }),
     );
   }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new StatusOfflineUnavailableError({
-          reason: failureMessage(cause),
-        }),
+    Effect.provide(
+      EnvironmentAuth.layerRuntime.pipe(
+        Layer.provideMerge(FetchHttpClient.layer),
+        Layer.provide(ServerConfig.layer(config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
+      ),
     ),
   );
-
-const queryLiveIdleStatus = (flags: CliAuthLocationFlags) =>
-  Effect.gen(function* () {
-    const logLevel = yield* GlobalFlag.LogLevel;
-    const config = yield* resolveCliAuthConfig(flags, logLevel);
-    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-    if (Option.isNone(runtimeState)) {
-      return yield* new StatusLiveServerUnavailableError({
-        reason: "no persisted running-server state",
-      });
-    }
-
-    return yield* Effect.gen(function* () {
-      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-      return yield* withStatusCliSessionToken(environmentAuth, (token) =>
-        Effect.gen(function* () {
-          const client = yield* makeLiveServerClient(runtimeState.value.origin);
-          return yield* client.server.idleStatus({
-            headers: { authorization: `Bearer ${token}` },
-          });
-        }),
-      );
-    }).pipe(
-      Effect.provide(
-        EnvironmentAuth.runtimeLayer.pipe(
-          Layer.provideMerge(FetchHttpClient.layer),
-          Layer.provide(ServerConfig.layer(config)),
-          Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
-        ),
-      ),
-    );
-  });
+});
 
 const idleStatusCommand = Command.make("idle", {
   ...authLocationFlags,

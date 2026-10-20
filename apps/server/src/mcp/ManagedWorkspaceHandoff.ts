@@ -23,7 +23,7 @@ import * as Effect from "effect/Effect";
 import type * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import type * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
-import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import type { McpThreadInvocationScope } from "./McpInvocationContext.ts";
 
 const failure = (code: WorktreeMcpFailure["code"], message: string) =>
   new WorktreeMcpFailure({ code, message });
@@ -35,7 +35,7 @@ const detail = (cause: Cause.Cause<unknown>) => {
 
 export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handoff")(function* (
   input: {
-    readonly scope: McpInvocationScope;
+    readonly scope: McpThreadInvocationScope;
     readonly handoff: WorktreeMcpHandoffInput;
     readonly project: {
       readonly id: ProjectId;
@@ -55,20 +55,15 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
     readonly setupScripts: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   },
 ) {
-  const { scope, handoff, project } = input;
-  if (handoff.path !== undefined) {
-    return yield* failure(
-      "invalid_request",
-      "This project's workspaces are created in the server-managed workspace directory; omit path.",
-    );
-  }
+  const { handoff, project } = input;
+  const { threadId } = input.scope.thread;
   return yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const created = yield* restore(
         services.workspaces.create({
           projectId: project.id,
           projectRoot: project.workspaceRoot,
-          threadId: scope.threadId,
+          threadId,
           // The requested branch name is the workspace's name.
           title: handoff.branch,
           baseRef: handoff.baseRef,
@@ -85,25 +80,25 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
       // removes the new workspace; an interrupt may have committed, so it keeps it.
       yield* Effect.gen(function* () {
         const recheck = yield* services.threads
-          .getThreadRecords(scope.threadId, [])
+          .getThreadRecords(threadId, [])
           .pipe(Effect.mapError(() => failure("thread_not_found", "The thread was not found.")));
         if (recheck.thread.worktreePath !== null) {
           return yield* failure(
             "already_in_worktree",
-            `Thread '${scope.threadId}' is already attached to '${recheck.thread.worktreePath}'.`,
+            `Thread '${threadId}' is already attached to '${recheck.thread.worktreePath}'.`,
           );
         }
         if (recheck.thread.archivedAt !== null) {
           return yield* failure(
             "invalid_request",
-            `Thread '${scope.threadId}' was archived while the workspace was being created.`,
+            `Thread '${threadId}' was archived while the workspace was being created.`,
           );
         }
         yield* services.threads
           .dispatch({
             type: "thread.metadata.update",
             commandId: input.ids.commandId,
-            threadId: scope.threadId,
+            threadId,
             branch: null,
             worktreePath,
             expectedWorktreePath: null,
@@ -135,7 +130,7 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
               .sendToThread({
                 projectId: project.id,
                 commandId: input.ids.continuationCommandId,
-                threadId: scope.threadId,
+                threadId,
                 messageId: input.ids.continuationMessageId,
                 text: handoff.continuationPrompt,
                 attachments: [],
@@ -161,7 +156,7 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
           ? { status: "skipped" }
           : yield* services.setupScripts
               .runForThread({
-                threadId: scope.threadId,
+                threadId,
                 projectId: project.id,
                 projectCwd: project.workspaceRoot,
                 worktreePath,
