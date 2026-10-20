@@ -47,9 +47,13 @@ export function cursorKeychainAccessEnvironments<
     : environments.filter((environment) => environment.needsCursorKeychainAccess);
 }
 
-const limitsRefreshAfter = new Map<EnvironmentId, number>();
 const limitsRefreshes = new Map<EnvironmentId, Promise<unknown>>();
 
+/**
+ * One limits check per environment at a time. A manual check waits for the
+ * running one and an automatic check skips it; `afterPending` runs a new check
+ * once it settles. The server spaces the reads themselves.
+ */
 export async function refreshUsageLimits<A>(
   environmentId: EnvironmentId,
   refresh: () => Promise<A>,
@@ -66,19 +70,11 @@ export async function refreshUsageLimits<A>(
       }
       return refreshUsageLimits(environmentId, refresh, false, true);
     }
-    // Manual refresh waits for the current check; automatic refresh does not repeat it.
     return automatic ? undefined : ((await pending) as A);
   }
-  const refreshAfter = limitsRefreshAfter.get(environmentId) ?? 0;
-  // @effect-diagnostics-next-line globalDate:off
-  if (automatic && Date.now() < refreshAfter) return;
   const current = Promise.resolve()
     .then(refresh)
-    .finally(() => {
-      limitsRefreshes.delete(environmentId);
-      // @effect-diagnostics-next-line globalDate:off
-      limitsRefreshAfter.set(environmentId, Date.now() + 5 * 60_000);
-    });
+    .finally(() => limitsRefreshes.delete(environmentId));
   limitsRefreshes.set(environmentId, current);
   return await current;
 }

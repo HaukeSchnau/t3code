@@ -49,6 +49,7 @@ import {
   withCodexAppServerClient,
 } from "../Layers/CodexProvider.ts";
 import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
+import { readCodexUsageLimits } from "../Layers/codexUsageLimits.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
@@ -237,6 +238,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
+      // The home whose `auth.json` app-server signs in with.
+      const usageHomePath =
+        homeLayout.effectiveHomePath ??
+        (processEnv.CODEX_HOME?.trim()
+          ? pathService.resolve(expandHomePath(processEnv.CODEX_HOME.trim()))
+          : homeLayout.sharedHomePath);
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CodexSettings>>({
         resolveMaintenance,
@@ -260,6 +267,18 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             ),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
+          ),
+        // The direct read has no credit details; keep the ones the probe reported.
+        readUsageLimits: (current) =>
+          readCodexUsageLimits(usageHomePath).pipe(
+            Effect.map((limits) =>
+              current.usageLimits?.resetCredits
+                ? { ...limits, resetCredits: current.usageLimits.resetCredits }
+                : limits,
+            ),
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, pathService),
           ),
       }).pipe(
         Effect.mapError(

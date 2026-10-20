@@ -1,6 +1,19 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
+import { HttpClient, HttpClientResponse, UrlParams } from "effect/unstable/http";
 import { describe, expect, it } from "vite-plus/test";
 
-import { claudeRateLimitEventToUpdate, claudeUsageResponseToLimits } from "./claudeUsageLimits.ts";
+import {
+  claudeRateLimitEventToUpdate,
+  claudeUsageResponseToLimits,
+  makeClaudeScopedLimitNames,
+  readClaudeUsageLimits,
+} from "./claudeUsageLimits.ts";
 
 const checkedAt = "2026-07-18T10:00:00.000Z";
 const noNames = { overageIncluded: undefined } as const;
@@ -177,4 +190,59 @@ describe("claudeRateLimitEventToUpdate", () => {
       claudeRateLimitEventToUpdate({ status: "rejected", rateLimitType: "five_hour" }, noNames),
     ).toBeUndefined();
   });
+});
+
+effectIt.layer(NodeServices.layer)("readClaudeUsageLimits", (it) => {
+  it.effect("reads windows and banked resets with the CLI's one request", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const configDir = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(
+        path.join(configDir, ".credentials.json"),
+        '{"claudeAiOauth":{"accessToken":"oauth-token"}}',
+      );
+      const client = HttpClient.make((request) => {
+        expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
+        expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1&skip_spend=1");
+        expect(request.headers.authorization).toBe("Bearer oauth-token");
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              five_hour: { utilization: 30, resets_at: "2099-01-01T05:00:00Z" },
+              limits: [
+                {
+                  kind: "weekly_scoped",
+                  percent: 12,
+                  resets_at: null,
+                  scope: { model: { display_name: "Fable" } },
+                },
+              ],
+              cedar_ember: {
+                eligible: true,
+                next_grant_id: "grant_a",
+                grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
+              },
+            }),
+          ),
+        );
+      });
+      const scopedLimitNames = yield* makeClaudeScopedLimitNames;
+      const limits = yield* readClaudeUsageLimits({
+        configDir,
+        version: "2.1.0",
+        scopedLimitNames,
+      }).pipe(
+        Effect.provideService(HostProcessPlatform, "linux"),
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+      expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+        ["five_hour", 30],
+        ["seven_day_fable", 12],
+      ]);
+      expect(limits.resetCredits).toEqual({ availableCount: 1, nextCreditId: "grant_a" });
+      expect((yield* Ref.get(scopedLimitNames)).overageIncluded).toBe("Fable");
+    }),
+  );
 });

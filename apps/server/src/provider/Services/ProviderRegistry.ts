@@ -49,6 +49,15 @@ export interface ProviderRegistryShape {
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**
+   * Re-read every instance's subscription limits without status probes.
+   * With `probeFallback`, an instance that reports limits only from its
+   * probe runs it instead.
+   */
+  readonly refreshUsageLimits: (options: {
+    readonly probeFallback: boolean;
+  }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  /**
    * Fill the skills and slash commands snapshot for one cwd. A cwd that
    * already has a snapshot is left alone unless `fresh` is set. A fresh scan
    * also refreshes the instance's machine snapshot and drops other

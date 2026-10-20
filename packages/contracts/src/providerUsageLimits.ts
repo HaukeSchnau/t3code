@@ -66,6 +66,11 @@ export const ServerProviderUsageLimits = Schema.Struct({
       message: Schema.optional(TrimmedNonEmptyString),
     }),
   ),
+  /**
+   * The provider throttled the last read. The windows are the last good
+   * reading, from `checkedAt`; the server reads again after this time.
+   */
+  rateLimitedUntil: Schema.optional(IsoDateTime),
 });
 export type ServerProviderUsageLimits = typeof ServerProviderUsageLimits.Type;
 

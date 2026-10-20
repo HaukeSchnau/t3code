@@ -16,7 +16,7 @@ export function useSubscriptionUsage(enabled = true) {
     () =>
       createWidgetRefresher(
         (environmentId: Parameters<typeof refreshProviders>[0]["environmentId"]) =>
-          refreshProviders({ environmentId, input: {} }),
+          refreshProviders({ environmentId, input: { usageLimitsOnly: true } }),
       ),
     [refreshProviders],
   );

@@ -23,4 +23,11 @@ export interface ServerProviderShape {
   readonly applyUsageLimits: (
     update: ProviderUsageLimitsUpdate & { readonly checkedAt: string },
   ) => Effect.Effect<void>;
+  /**
+   * Re-read subscription limits without the status probe. `"current"`: the
+   * published limits are as fresh as the provider allows, or the account has
+   * none. `"needsProbe"`: only the status probe reports this provider's
+   * limits, or the direct read could not run this time.
+   */
+  readonly refreshUsageLimits: Effect.Effect<"current" | "needsProbe">;
 }

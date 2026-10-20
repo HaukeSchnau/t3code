@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
@@ -20,6 +21,7 @@ import { TestClock } from "effect/testing";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeManagedServerProvider } from "./makeManagedServerProvider.ts";
+import { UsageLimitsReadError } from "./providerUsageLimits.ts";
 
 const emptyCapabilities = createModelCapabilities({ optionDescriptors: [] });
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -654,6 +656,91 @@ describe("makeManagedServerProvider", () => {
         const refreshed = yield* provider.refresh;
         assert.strictEqual(refreshed.message, refreshedSnapshotSecond.message);
         assert.deepStrictEqual(refreshed.usageLimits?.windows, [liveWindow]);
+      }),
+    ).pipe(Effect.provide(AlwaysRunTestLayer)),
+  );
+
+  it.effect("reads quota directly, spaced and backed off, and publishes only changed numbers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse("2026-04-10T00:01:00.000Z"));
+        const reads = yield* Ref.make<
+          ReadonlyArray<Effect.Effect<ServerProviderUsageLimits, UsageLimitsReadError>>
+        >([]);
+        const window = (usedPercent: number) =>
+          ({ id: "primary", kind: "session", label: "Session", usedPercent }) as const;
+        const reading = (usedPercent: number) =>
+          DateTime.now.pipe(
+            Effect.map((now) => ({
+              checkedAt: DateTime.formatIso(now),
+              windows: [window(usedPercent)],
+            })),
+          );
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: () => false,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Effect.succeed({
+            ...refreshedSnapshot,
+            usageLimits: { checkedAt: refreshedSnapshot.checkedAt, windows: [window(10)] },
+          }),
+          refreshInterval: "1 hour",
+          readUsageLimits: () =>
+            Ref.modify(reads, ([next, ...rest]) => [next!, rest]).pipe(Effect.flatten),
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        const publishes = yield* Ref.make(0);
+        yield* provider.streamChanges.pipe(
+          Stream.runForEach(() => Ref.update(publishes, (n) => n + 1)),
+          Effect.forkScoped,
+        );
+        yield* Effect.yieldNow;
+        const usedPercent = provider.getSnapshot.pipe(
+          Effect.map((snapshot) => snapshot.usageLimits?.windows[0]?.usedPercent),
+        );
+
+        yield* Ref.set(reads, [reading(30), reading(30)]);
+        assert.strictEqual(yield* provider.refreshUsageLimits, "current");
+        assert.strictEqual(yield* usedPercent, 30);
+        // Within 30 seconds the reading is reused.
+        assert.strictEqual(yield* provider.refreshUsageLimits, "current");
+        assert.strictEqual((yield* Ref.get(reads)).length, 1);
+
+        // The same numbers again move nothing on the wire.
+        yield* TestClock.adjust("31 seconds");
+        yield* provider.refreshUsageLimits;
+        assert.strictEqual(yield* Ref.get(publishes), 1);
+
+        yield* TestClock.adjust("31 seconds");
+        yield* Ref.set(reads, [
+          Effect.fail(
+            new UsageLimitsReadError({
+              detail: "Codex is rate-limiting usage reads.",
+              retryAt: "2026-04-10T00:12:00.000Z",
+            }),
+          ),
+        ]);
+        yield* provider.refreshUsageLimits;
+        const throttled = (yield* provider.getSnapshot).usageLimits;
+        assert.strictEqual(throttled?.rateLimitedUntil, "2026-04-10T00:12:00.000Z");
+        assert.strictEqual(throttled?.windows[0]?.usedPercent, 30);
+
+        // No read before the provider's retry time.
+        yield* TestClock.adjust("5 minutes");
+        yield* provider.refreshUsageLimits;
+        yield* TestClock.adjust("6 minutes");
+        yield* Ref.set(reads, [reading(45)]);
+        yield* provider.refreshUsageLimits;
+        const recovered = (yield* provider.getSnapshot).usageLimits;
+        assert.strictEqual(recovered?.windows[0]?.usedPercent, 45);
+        assert.strictEqual(recovered?.rateLimitedUntil, undefined);
+
+        // A reader that cannot run hands the caller back to the status probe.
+        yield* TestClock.adjust("31 seconds");
+        yield* Ref.set(reads, [Effect.fail(new UsageLimitsReadError({ detail: "Signed out." }))]);
+        assert.strictEqual(yield* provider.refreshUsageLimits, "needsProbe");
       }),
     ).pipe(Effect.provide(AlwaysRunTestLayer)),
   );

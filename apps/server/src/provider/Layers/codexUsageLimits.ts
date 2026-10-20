@@ -13,10 +13,20 @@ import type {
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { HttpClientRequest } from "effect/unstable/http";
 import type * as CodexErrors from "effect-codex-app-server/errors";
 
-import { clampPercent, makeUsageLimits } from "../providerUsageLimits.ts";
+import {
+  clampPercent,
+  fetchUsageLimitsBody,
+  makeUsageLimits,
+  UsageLimitsReadError,
+} from "../providerUsageLimits.ts";
 
 interface CodexRateLimitWindow {
   readonly usedPercent: number;
@@ -133,6 +143,107 @@ export function codexRateLimitsToLimits(input: {
     ...(resetCredits ? { resetCredits } : {}),
   };
 }
+
+/** ChatGPT's Codex backend, which `account/rateLimits/read` reads quota from. */
+export const CODEX_USAGE_BASE = "https://chatgpt.com/backend-api/wham";
+
+/** Headers for the Codex backend, beside the bearer token. */
+export function codexBackendHeaders(chatgptAccountId: string | null | undefined) {
+  return {
+    "Content-Type": "application/json",
+    "OpenAI-Beta": "codex-1",
+    Originator: "Codex Desktop",
+    ...(chatgptAccountId ? { "Chatgpt-Account-Id": chatgptAccountId } : {}),
+  };
+}
+
+const CodexUsageWindow = Schema.Struct({
+  used_percent: Schema.Number,
+  reset_at: Schema.optional(Schema.NullOr(Schema.Number)),
+  limit_window_seconds: Schema.optional(Schema.Number),
+});
+
+/** The body of `wham/usage`, read directly or through a hub. */
+export const CodexUsage = Schema.Struct({
+  plan_type: Schema.optional(Schema.String),
+  rate_limit: Schema.NullOr(
+    Schema.Struct({
+      primary_window: Schema.optional(Schema.NullOr(CodexUsageWindow)),
+      secondary_window: Schema.optional(Schema.NullOr(CodexUsageWindow)),
+    }),
+  ),
+});
+
+/** The endpoint's `rate_limit` is the main allowance `rateLimitsByLimitId.codex` reports. */
+export function codexUsageToLimits(
+  usage: typeof CodexUsage.Type,
+  checkedAt: string,
+): ServerProviderUsageLimits {
+  const toWindow = (window: typeof CodexUsageWindow.Type | null | undefined) =>
+    window
+      ? {
+          usedPercent: window.used_percent,
+          resetsAt: window.reset_at ?? null,
+          ...(window.limit_window_seconds === undefined
+            ? {}
+            : { windowDurationMins: window.limit_window_seconds / 60 }),
+        }
+      : null;
+  return codexRateLimitsToLimits({
+    checkedAt,
+    snapshot: {
+      planType: usage.plan_type ?? null,
+      primary: toWindow(usage.rate_limit?.primary_window),
+      secondary: toWindow(usage.rate_limit?.secondary_window),
+    },
+  });
+}
+
+const decodeCodexUsage = Schema.decodeEffect(Schema.fromJsonString(CodexUsage));
+const decodeCodexAuthFile = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      tokens: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            access_token: Schema.String,
+            account_id: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
+      ),
+    }),
+  ),
+);
+
+/**
+ * Reads the main allowance of the ChatGPT login in `homePath` from the
+ * endpoint `account/rateLimits/read` uses, without starting Codex. Reset
+ * credits are left to the status probe.
+ */
+export const readCodexUsageLimits = Effect.fn("readCodexUsageLimits")(function* (homePath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const auth = yield* fs.readFileString(path.join(homePath, "auth.json")).pipe(
+    Effect.flatMap(decodeCodexAuthFile),
+    Effect.mapError(
+      () => new UsageLimitsReadError({ detail: "No Codex login file to read usage from." }),
+    ),
+  );
+  if (!auth.tokens) {
+    return yield* new UsageLimitsReadError({ detail: "Codex is not signed in with ChatGPT." });
+  }
+  const usage = yield* fetchUsageLimitsBody({
+    provider: "Codex",
+    request: HttpClientRequest.get(`${CODEX_USAGE_BASE}/usage`).pipe(
+      HttpClientRequest.setHeaders({
+        Authorization: `Bearer ${auth.tokens.access_token}`,
+        ...codexBackendHeaders(auth.tokens.account_id),
+      }),
+    ),
+    decode: decodeCodexUsage,
+  });
+  return codexUsageToLimits(usage, DateTime.formatIso(yield* DateTime.now));
+});
 
 export function codexRateLimitsToUpdate(
   snapshot: CodexRateLimitSnapshot,

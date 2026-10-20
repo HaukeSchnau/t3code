@@ -1262,6 +1262,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 refresh: Ref.get(nextProvider),
                 streamChanges: Stream.empty,
                 applyUsageLimits: () => Effect.void,
+                refreshUsageLimits: Effect.succeed("current" as const),
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1629,6 +1630,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               ),
               streamChanges: Stream.empty,
               applyUsageLimits: () => Effect.void,
+              refreshUsageLimits: Effect.succeed("current" as const),
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1728,6 +1730,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               refresh: Effect.succeed(provider),
               streamChanges: Stream.empty,
               applyUsageLimits: () => Effect.void,
+              refreshUsageLimits: Effect.succeed("current" as const),
             },
             snapshotForCwd,
             invalidateCaches: Ref.update(cacheInvalidations, (count) => count + 1),
@@ -1972,6 +1975,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 ),
                 streamChanges: Stream.empty,
                 applyUsageLimits: () => Effect.void,
+                refreshUsageLimits: Effect.succeed("current" as const),
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1999,6 +2003,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 ),
                 streamChanges: Stream.empty,
                 applyUsageLimits: () => Effect.void,
+                refreshUsageLimits: Effect.succeed("current" as const),
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2188,6 +2193,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               refresh: Effect.succeed(refreshedProvider),
               streamChanges: Stream.fromPubSub(changes),
               applyUsageLimits: () => Effect.void,
+              refreshUsageLimits: Effect.succeed("current" as const),
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2316,6 +2322,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 refresh: Effect.succeed(authoritativeProvider),
                 streamChanges: Stream.fromPubSub(changes),
                 applyUsageLimits: () => Effect.void,
+                refreshUsageLimits: Effect.succeed("current" as const),
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2419,6 +2426,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               refresh: Effect.die(new Error("simulated refresh failure")),
               streamChanges: Stream.empty,
               applyUsageLimits: () => Effect.void,
+              refreshUsageLimits: Effect.succeed("current" as const),
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2520,6 +2528,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               refresh: Effect.succeed(provider),
               streamChanges: Stream.empty,
               applyUsageLimits: () => Effect.void,
+              refreshUsageLimits: Effect.succeed("current" as const),
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -3146,6 +3155,32 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const bedrock = yield* check({ apiProvider: "bedrock" });
           assert.deepStrictEqual(subscription.usageLimits?.resetCredits, { availableCount: 2 });
           assert.strictEqual(bedrock.usageLimits?.resetCredits, undefined);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("dates a cached probe's usage by when the probe read it", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(defaultClaudeSettings, () =>
+            Effect.succeed({
+              email: undefined,
+              subscriptionType: "max",
+              tokenSource: undefined,
+              apiProvider: undefined,
+              slashCommands: [],
+              usage: { rate_limits_available: true, rate_limits: {} },
+              usageCheckedAt: "2026-04-10T00:00:00.000Z",
+            }),
+          );
+          assert.strictEqual(status.usageLimits?.checkedAt, "2026-04-10T00:00:00.000Z");
+          assert.notStrictEqual(status.checkedAt, "2026-04-10T00:00:00.000Z");
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {

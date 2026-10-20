@@ -1,3 +1,9 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -8,6 +14,7 @@ import {
   codexResetCreditsToContract,
   codexUsageLimitMessage,
   mergeCodexRateLimits,
+  readCodexUsageLimits,
 } from "./codexUsageLimits.ts";
 
 const checkedAt = "2026-07-18T10:00:00.000Z";
@@ -313,4 +320,73 @@ describe("codexUsageLimitResetAt", () => {
       codexUsageLimitResetAt({ primary: { usedPercent: 50, resetsAt: 2000000000 } }),
     ).toBeNull();
   });
+});
+
+effectIt.layer(NodeServices.layer)("readCodexUsageLimits", (it) => {
+  const home = (authJson: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(directory, "auth.json"), authJson);
+      return directory;
+    });
+  const chatGptLogin = '{"tokens":{"access_token":"chatgpt-token","account_id":"acct-1"}}';
+
+  it.effect("reads the main allowance with the login in the Codex home", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make((request) => {
+        expect(request.url).toBe("https://chatgpt.com/backend-api/wham/usage");
+        expect(request.headers.authorization).toBe("Bearer chatgpt-token");
+        expect(request.headers["chatgpt-account-id"]).toBe("acct-1");
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              plan_type: "pro",
+              rate_limit: {
+                primary_window: {
+                  used_percent: 12,
+                  reset_at: 1_784_000_000,
+                  limit_window_seconds: 18_000,
+                },
+                secondary_window: { used_percent: 47, limit_window_seconds: 604_800 },
+              },
+            }),
+          ),
+        );
+      });
+      const limits = yield* readCodexUsageLimits(yield* home(chatGptLogin)).pipe(
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+      expect(limits.windows.map((window) => [window.id, window.kind, window.usedPercent])).toEqual([
+        ["primary", "session", 12],
+        ["secondary", "weekly", 47],
+      ]);
+    }),
+  );
+
+  it.effect("reports when to read again after a 429, and never sends without a ChatGPT login", () =>
+    Effect.gen(function* () {
+      const throttled = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response("{}", { status: 429, headers: { "retry-after": "120" } }),
+          ),
+        ),
+      );
+      const limited = yield* readCodexUsageLimits(yield* home(chatGptLogin)).pipe(
+        Effect.provideService(HttpClient.HttpClient, throttled),
+        Effect.flip,
+      );
+      expect(limited.retryAt).toBe("1970-01-01T00:02:00.000Z");
+      const refuse = HttpClient.make(() => Effect.die("must not send a request"));
+      const apiKey = yield* readCodexUsageLimits(yield* home('{"OPENAI_API_KEY":"sk-test"}')).pipe(
+        Effect.provideService(HttpClient.HttpClient, refuse),
+        Effect.flip,
+      );
+      expect(apiKey.retryAt).toBeUndefined();
+    }),
+  );
 });

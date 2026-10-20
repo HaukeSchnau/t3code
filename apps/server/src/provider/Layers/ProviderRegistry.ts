@@ -30,6 +30,7 @@ import {
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -42,6 +43,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ModelManifest from "../ModelManifest.ts";
 import { applyProviderCompatibility } from "../providerCompatibility.ts";
+import { USAGE_LIMITS_MIN_READ_GAP_MS } from "../providerUsageLimits.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
@@ -323,6 +325,7 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
   driverKind: instance.driverKind,
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
+  refreshUsageLimits: instance.snapshot.refreshUsageLimits,
   streamChanges: instance.snapshot.streamChanges,
 });
 
@@ -637,6 +640,34 @@ export const ProviderRegistryLive = Layer.effect(
         return yield* Ref.get(providersRef);
       }
       return yield* refreshOneSource(providerSource);
+    });
+
+    const refreshUsageLimits = Effect.fn("refreshUsageLimits")(function* (options: {
+      readonly probeFallback: boolean;
+    }) {
+      const sources = yield* getLiveSources;
+      // Spaced like the direct reads, so clients opening Limits together probe once.
+      const probeUnlessFresh = (source: ProviderSnapshotSource) =>
+        Effect.gen(function* () {
+          const snapshot = yield* source.getSnapshot;
+          const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+          if (nowMs - Date.parse(snapshot.checkedAt) >= USAGE_LIMITS_MIN_READ_GAP_MS) {
+            yield* refreshOneSource(source);
+          }
+        });
+      yield* Effect.forEach(
+        sources,
+        (source) =>
+          source.refreshUsageLimits.pipe(
+            Effect.flatMap((outcome) =>
+              outcome === "needsProbe" && options.probeFallback
+                ? probeUnlessFresh(source)
+                : Effect.void,
+            ),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+      return yield* Ref.get(providersRef);
     });
 
     const refreshInstance = Effect.fn("refreshInstance")(function* (
@@ -985,6 +1016,8 @@ export const ProviderRegistryLive = Layer.effect(
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshUsageLimits: (options) =>
+        refreshUsageLimits(options).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshWorkspaceSnapshot: (input) =>
         refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,

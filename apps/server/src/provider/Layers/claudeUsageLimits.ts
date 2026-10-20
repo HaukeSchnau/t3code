@@ -20,12 +20,22 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import { HttpClientRequest } from "effect/unstable/http";
 
 import {
   clampPercent,
+  fetchUsageLimitsBody,
   makeUnavailableUsageLimits,
   makeUsageLimits,
+  UsageLimitsReadError,
 } from "../providerUsageLimits.ts";
+import {
+  CLAUDE_USAGE_URL,
+  claudeResetCreditsToContract,
+  readClaudeAccessToken,
+  withClaudeHeaders,
+} from "./claudeResetCredits.ts";
 
 const SESSION_MINS = 5 * 60;
 const WEEK_MINS = 7 * 24 * 60;
@@ -197,3 +207,98 @@ export const recordClaudeUsageResponse = (
   const { limits, names } = claudeUsageResponseToLimits(input);
   return Ref.set(namesRef, names).pipe(Effect.as(limits));
 };
+
+const ClaudeOauthWindow = Schema.Struct({
+  utilization: Schema.Number,
+  resets_at: Schema.NullOr(Schema.String),
+});
+
+/** The body of `/api/oauth/usage`, the endpoint behind `get_usage`, read directly or through a hub. */
+export const ClaudeOauthUsage = Schema.Struct({
+  five_hour: Schema.optional(Schema.NullOr(ClaudeOauthWindow)),
+  seven_day: Schema.optional(Schema.NullOr(ClaudeOauthWindow)),
+  limits: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        kind: Schema.String,
+        percent: Schema.optional(Schema.NullOr(Schema.Number)),
+        resets_at: Schema.optional(Schema.NullOr(Schema.String)),
+        scope: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              model: Schema.optional(Schema.NullOr(Schema.Struct({ display_name: Schema.String }))),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
+/** The endpoint lists model-scoped weeklies under `limits`, where `get_usage` says `model_scoped`. */
+export function claudeOauthUsageToLimits(
+  usage: typeof ClaudeOauthUsage.Type,
+  checkedAt: string,
+): ReturnType<typeof claudeUsageResponseToLimits> {
+  const model_scoped = (usage.limits ?? []).flatMap((limit) =>
+    limit.kind === "weekly_scoped" && limit.scope?.model && typeof limit.percent === "number"
+      ? [
+          {
+            display_name: limit.scope.model.display_name,
+            utilization: limit.percent,
+            resets_at: limit.resets_at ?? null,
+          },
+        ]
+      : [],
+  );
+  return claudeUsageResponseToLimits({
+    checkedAt,
+    response: {
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: usage.five_hour ?? null,
+        seven_day: usage.seven_day ?? null,
+        model_scoped,
+      },
+    },
+  });
+}
+
+const decodeClaudeOauthUsage = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      ...ClaudeOauthUsage.fields,
+      cedar_ember: Schema.optional(Schema.NullOr(Schema.Unknown)),
+    }),
+  ),
+);
+
+/**
+ * Reads the windows and banked resets of the login in `configDir` with the
+ * one request the CLI makes for them, without starting Claude. Only
+ * file-based logins can be read; macOS keeps Claude's in the keychain.
+ */
+export const readClaudeUsageLimits = Effect.fn("readClaudeUsageLimits")(function* (input: {
+  readonly configDir: string;
+  readonly version: string;
+  readonly scopedLimitNames: Ref.Ref<ClaudeScopedLimitNames>;
+}) {
+  const token = yield* readClaudeAccessToken(input.configDir).pipe(
+    Effect.orElseSucceed(() => undefined),
+  );
+  if (!token) {
+    return yield* new UsageLimitsReadError({ detail: "No Claude login file to read usage from." });
+  }
+  const usage = yield* fetchUsageLimitsBody({
+    provider: "Claude",
+    request: HttpClientRequest.get(CLAUDE_USAGE_URL, {
+      urlParams: { cedar_ember: "1", skip_spend: "1" },
+    }).pipe(withClaudeHeaders(token, input.version)),
+    decode: decodeClaudeOauthUsage,
+  });
+  const now = yield* DateTime.now;
+  const { limits, names } = claudeOauthUsageToLimits(usage, DateTime.formatIso(now));
+  yield* Ref.set(input.scopedLimitNames, names);
+  const resetCredits = claudeResetCreditsToContract(usage.cedar_ember, DateTime.toEpochMillis(now));
+  return resetCredits ? { ...limits, resetCredits } : limits;
+});

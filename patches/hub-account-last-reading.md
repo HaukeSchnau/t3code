@@ -14,6 +14,8 @@ drops accounts it cannot draw without a notice.
   `resolveUsageLimitsAfterProbe`, the rule native provider probes already follow.
 - An account the hub has never read successfully adds a notice to the hub's row with a count of
   such accounts. The notice does not name them, because the pooled views never print an email.
+  A throttled account is counted in the rate-limit notice instead (see
+  [Usage limits refresh](usage-limits-refresh.md)).
 
 ## Removal
 

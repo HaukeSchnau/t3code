@@ -808,6 +808,7 @@ describe("Cursor limit presentation", () => {
 
 describe("collectLimitNotices", () => {
   const checkedAt = "2026-09-03T11:00:00.000Z";
+  const now = Date.parse(checkedAt);
   const claude = ProviderDriverKind.make("claudeAgent");
   const laptop = { entry: { target: { label: "Laptop" } } };
   const hub = {
@@ -846,7 +847,7 @@ describe("collectLimitNotices", () => {
         },
       ],
     ]);
-    expect(collectLimitNotices(one)).toEqual([
+    expect(collectLimitNotices(one, now)).toEqual([
       "Claude Max: Could not read limits.",
       "codex: No limits reported.",
       "hub: No accounts reported.",
@@ -857,7 +858,7 @@ describe("collectLimitNotices", () => {
       entry: { target: { label: "Desktop" } },
       serverConfig: { providers: [], usageLimitSources: [] },
     });
-    expect(collectLimitNotices(one)[0]).toBe("Laptop · Claude Max: Could not read limits.");
+    expect(collectLimitNotices(one, now)[0]).toBe("Laptop · Claude Max: Could not read limits.");
   });
 
   it("counts hub accounts it could not read without printing their emails", () => {
@@ -895,8 +896,58 @@ describe("collectLimitNotices", () => {
           },
         ],
       ]),
+      now,
     );
     expect(notices).toEqual(["hub: Could not read 1 account.", "pool: Could not read 2 accounts."]);
+  });
+
+  it("says when throttled reads resume, counting hub accounts without naming them", () => {
+    const rateLimitedUntil = "2026-09-03T11:04:30.000Z";
+    const throttled = provider({
+      instanceId: ProviderInstanceId.make("claude"),
+      driver: claude,
+      displayName: "Claude",
+      usageLimits: { checkedAt, windows: [window], rateLimitedUntil },
+    });
+    const account = (id: string, usageLimits: ServerProviderUsageLimits) => ({
+      id,
+      driver: claude,
+      email: `${id}@example.com`,
+      usageLimits,
+    });
+    const presentations = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [throttled],
+            usageLimitSources: [
+              {
+                ...hub,
+                accounts: [
+                  account("kept", { checkedAt, windows: [window], rateLimitedUntil }),
+                  account("never-read", {
+                    checkedAt,
+                    windows: [],
+                    unavailable: { reason: "probeFailed" },
+                    rateLimitedUntil: "2026-09-03T11:09:00.000Z",
+                  }),
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    expect(collectLimitNotices(presentations, now)).toEqual([
+      "Claude: Usage reads are rate-limited. Next read in 5m.",
+      "hub: Reads of 2 accounts are rate-limited. Next read in 5m.",
+    ]);
+    // Once the retry time passes, the notice goes.
+    expect(collectLimitNotices(presentations, Date.parse("2026-09-03T11:10:00.000Z"))).toEqual([
+      "hub: Could not read 1 account.",
+    ]);
   });
 });
 
@@ -1200,7 +1251,7 @@ describe("external usage settings", () => {
       },
     ]);
     expect(collectLimitAccounts(presentations)).toEqual([]);
-    expect(collectLimitNotices(presentations)).toEqual([]);
+    expect(collectLimitNotices(presentations, Date.parse("2026-09-03T11:00:00.000Z"))).toEqual([]);
   });
   it("omits disabled, uninstalled and signed-out providers", () => {
     const managed = provider({
