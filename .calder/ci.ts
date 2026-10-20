@@ -1,14 +1,25 @@
 import { Files, Flake, Nix, Setup, Step, Task, cmd } from "@calder-ci/core";
-import { Pnpm, Project, Vitest } from "@calder-ci/std";
+import { Project, Vitest } from "@calder-ci/std";
 import { flake } from "./flake.ts";
 
 const shell = flake.devShells.ci;
 
 /**
  * The committed lockfile as is, like the Nix release build; rechecking every locked version against
- * the registry stalled cold installs.
+ * the registry stalled cold installs. `scripts/ci-pnpm-install.ts` forces the install when the patch
+ * set changed, since pnpm can leave a newly patched package unpatched in a kept node_modules.
  */
-const install = Pnpm.install({ shell, args: ["--trust-lockfile"] });
+const install = Setup.make("install", {
+  shell,
+  inputs: Files.union(
+    Files.glob("**/package.json", "pnpm-lock.yaml"),
+    Files.optional(Files.glob("pnpm-workspace.yaml", ".npmrc", "patches/**/*.patch")),
+    Files.of("scripts/ci-pnpm-install.ts"),
+  ),
+  run: cmd`node scripts/ci-pnpm-install.ts`,
+  keep: ["node_modules", ".pnpm-store", "*.tsbuildinfo"],
+  path: ["node_modules/.bin"],
+});
 
 /** The filtered pnpm stores the release builds from; a stale hash fails here first. */
 const deps = ["web", "server", "runtime"].map((part) =>
@@ -57,30 +68,33 @@ const testServer = Vitest.files({
 }).pipe(Step.timeout("45 minutes"));
 
 /**
- * The web browser project runs in headless Chromium. Playwright's downloaded build does not run on
- * NixOS, so the suite runs inside a shell with nixpkgs' Chromium and points the config at it. An
- * inherited `NODE_ENV=production` would make Vite serve React's production build, which has no `act`.
+ * The web suite's unit and browser projects run as separate steps. Together, three unit workers and
+ * three Chromium sessions peaked at 4.8 GB on srv-2, over a Calder worker's 4.5 GB, and in run 281
+ * a shard thrashed against that limit until it timed out. Run apart on one shard's files, they
+ * peaked at 3.6 and 2.9 GB.
  */
-const withNixChromium = [
-  "nix",
-  "shell",
-  "nixpkgs#chromium",
-  "--command",
-  "sh",
-  "-c",
-  'unset NODE_ENV; export T3CODE_BROWSER_TEST_CHROMIUM="$(command -v chromium)"; exec "$@"',
-  "sh",
-];
+const web = { ...suite, dir: "apps/web", inputs: Files.imports("apps/web/vitest.config.ts") };
 
+// `tests` can't leave out the browser files, so this step gets them too and runs none of their
+// tests.
 const testWeb = Vitest.files({
-  ...suite,
+  ...web,
   name: "test-web",
-  dir: "apps/web",
-  vitest: [...withNixChromium, ...suite.vitest],
   tests: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-  inputs: Files.imports("apps/web/vitest.config.ts"),
   shards: 2,
-  args: ["--passWithNoTests", "--project", "unit*", "--project", "browser", ...workers],
+  args: ["--passWithNoTests", "--project", "unit*", ...workers],
+}).pipe(Step.timeout("20 minutes"));
+
+/**
+ * The CI shell points the config at nixpkgs' headless Chromium. Most of a file's time goes to
+ * setting up its browser session: a shard of 73 files took 20 minutes in run 281.
+ */
+const testWebBrowser = Vitest.files({
+  ...web,
+  name: "test-web-browser",
+  tests: ["src/**/*.browser.test.ts", "src/**/*.browser.test.tsx"],
+  shards: 3,
+  args: ["--passWithNoTests", "--project", "browser", ...workers],
 }).pipe(Step.timeout("30 minutes"));
 
 const testMobile = Vitest.files({
@@ -108,7 +122,8 @@ const testClientRuntime = Vitest.files({
   dir: "packages/client-runtime",
   tests: ["src/**/*.test.ts"],
   inputs: Files.imports(["packages/client-runtime/vite.config.ts", longTempDir]),
-  args: workers,
+  // Upstream's own config keeps Vitest's 5 s default; the root config gives loaded workers 60 s.
+  args: [...workers, "--testTimeout", "60000"],
 }).pipe(Step.timeout("20 minutes"));
 
 const testShared = Vitest.files({
@@ -145,27 +160,33 @@ const integrationPackages = [
 ];
 
 /** Packages with small suites run whole when they or anything their tests import changed. */
-const smallSuites = [
+const packageSuites = (name: string, dirs: ReadonlyArray<string>) =>
+  Task.make(name, {
+    shell,
+    setup: install,
+    inputs: Files.union(
+      Files.of("vitest.config.ts", ...dirs),
+      Files.imports([...dirs.map((dir) => `${dir}/**/*.test.ts`), longTempDir], { aliases }),
+    ),
+    run: cmd`vp run --cache --parallel --concurrency-limit 1 ${filters(dirs)} test ${workers}`,
+  }).pipe(Step.timeout("20 minutes"));
+
+const testPackages = packageSuites("test-packages", [
   "packages/contracts",
   "packages/effect-acp",
   "packages/effect-codex-app-server",
   "packages/ssh",
   "packages/tailscale",
-  // The source-control test kit has no tests of its own.
-  ...integrationPackages.filter((dir) => dir !== "packages/source-control-testing"),
   "infra/relay",
   "oxlint-plugin-t3code",
-];
+]);
 
-const testPackages = Task.make("test-packages", {
-  shell,
-  setup: install,
-  inputs: Files.union(
-    Files.of("vitest.config.ts", ...smallSuites),
-    Files.imports([...smallSuites.map((dir) => `${dir}/**/*.test.ts`), longTempDir], { aliases }),
-  ),
-  run: cmd`vp run --cache --parallel --concurrency-limit 1 ${filters(smallSuites)} test ${workers}`,
-}).pipe(Step.timeout("20 minutes"));
+// The provider and source-control packages took the package step past 20 minutes on their own.
+const testIntegrations = packageSuites(
+  "test-integrations",
+  // The source-control test kit has no tests of its own.
+  integrationPackages.filter((dir) => dir !== "packages/source-control-testing"),
+);
 
 /** The repository scripts' tests read manifests, lockfiles and configs all over the repository. */
 const testScripts = Task.make("test-scripts", {
@@ -366,11 +387,13 @@ export default Project.standard({
     ...typechecks,
     testServer,
     testWeb,
+    testWebBrowser,
     testMobile,
     testDesktop,
     testClientRuntime,
     testShared,
     testPackages,
+    testIntegrations,
     testScripts,
     releaseSmoke,
     forkLockfile,

@@ -2,10 +2,19 @@ import { createHighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import typescript from "@shikijs/langs/typescript";
 import dark from "@shikijs/themes/github-dark-default";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createIncrementalSnippet } from "./incrementalSnippet";
 import { highlightCodeSnippet } from "./shikiReviewHighlighter";
+
+// Shiki cuts a line short after 500 ms by Date.now(), which a cold regex engine can take on a
+// loaded CI worker. A frozen clock keeps the tokens deterministic.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const highlighter = await createHighlighterCore({
   langs: [typescript],

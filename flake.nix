@@ -53,7 +53,7 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-sHg5bt/VmX3LKNacabbTctxltQVbd7eSA24HK32h4ck=";
+            web = "sha256-x0sDTGPwTxgLRPvEM/nDFObYs2asuKFJtYS7Re2ooPs=";
             server = "sha256-LtnEQelfyQnm/Q6ybxUgXZEAoDLA1HL6AQQAAcxTTOQ=";
             runtime = "sha256-LtnEQelfyQnm/Q6ybxUgXZEAoDLA1HL6AQQAAcxTTOQ=";
           },

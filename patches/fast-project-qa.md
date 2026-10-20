@@ -18,6 +18,13 @@ and fork lockfile check.
   builds. Dependency changes retain normal pnpm policy checks when resolving the lockfile; CI does
   not recheck every locked version against live registry metadata. That pnpm 11.10 verification
   exhausted the 15-minute setup budget in run 387 before any QA command ran.
+- `scripts/ci-pnpm-install.ts` runs that install. pnpm 11.10 installs a package that just gained a
+  patch without applying it when the slot's kept node_modules already holds the unpatched copy, so
+  the script deletes the node_modules folders whenever the lockfile's `patchedDependencies` differ
+  from the set recorded in `node_modules/.t3-patch-set`; the kept store makes the reinstall
+  quick. `--force` also repairs the patch but installs every platform's optional packages, whose
+  missing notices then fail the mobile license manifest. Drop the script once pnpm applies patches
+  on incremental installs.
 - Server-test temporary files live below T3 Code's persistent CI cache. The worker's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `.calder/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
@@ -46,11 +53,14 @@ and fork lockfile check.
   those files, and add one to a test that starts reading files by path.
 - The web `browser` project runs `*.browser.test.{ts,tsx}` in headless Chromium. Playwright's own
   download does not run on NixOS, so `.#ci` points it at nixpkgs' Chromium through
-  `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)).
-- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, the
-  provider and source-control packages, relay and the oxlint plugin) run together when their
-  directories or anything their tests import changed. Upstream adds a package per provider and per
-  source-control host; add new ones to `integrationPackages` in `.calder/ci.ts`.
+  `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)). It runs as
+  its own step, `test-web-browser`: beside the unit projects, one job outgrew a Calder worker's
+  4.5 GB.
+- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, relay
+  and the oxlint plugin) run together when their directories or anything their tests import
+  changed. The provider and source-control packages run the same way in `test-integrations`, a
+  step of their own because together they ran past 20 minutes. Upstream adds a package per
+  provider and per source-control host; add new ones to `integrationPackages` in `.calder/ci.ts`.
   The repository scripts' tests read manifests, lockfiles and configs all over the repository, so
   they run on every change. The release smoke and the lockfile checks depend only on what the
   install reads (manifests, lockfiles, workspace file and patches) and the scripts and configs

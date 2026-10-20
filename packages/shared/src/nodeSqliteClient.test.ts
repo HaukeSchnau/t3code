@@ -143,6 +143,11 @@ const largeText = "x".repeat(64 * 1024 + 1);
 it.effect("keeps large text and blob parameters off cached statements", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // nixpkgs' Node 24.15, which the fork's CI runs, binds an ArrayBuffer as NULL; later releases
+    // bind it (patches/nixos-ci-portability.md).
+    const [[arrayBufferProbe] = []] = yield* sql`SELECT length(${new ArrayBuffer(1)}) AS probe`
+      .values;
+    const bindsArrayBuffer = arrayBufferProbe === 1;
     const statements: Array<NodeSqlite.StatementSync> = [];
     const all = NodeSqlite.StatementSync.prototype.all;
     yield* Effect.acquireRelease(
@@ -170,7 +175,10 @@ it.effect("keeps large text and blob parameters off cached statements", () =>
     ];
     const cached = new Set<NodeSqlite.StatementSync>();
     const large = new Set<NodeSqlite.StatementSync>();
-    const largeBlobs = [new Uint8Array(64 * 1024 + 1), new ArrayBuffer(64 * 1024 + 1)];
+    const largeBlobs = [
+      new Uint8Array(64 * 1024 + 1),
+      ...(bindsArrayBuffer ? [new ArrayBuffer(64 * 1024 + 1)] : []),
+    ];
     for (const value of [small, largeText, ...largeBlobs, small]) {
       const expected = typeof value === "string" ? value.length : value.byteLength;
       for (const query of queries) {
@@ -183,7 +191,7 @@ it.effect("keeps large text and blob parameters off cached statements", () =>
     }
 
     assert.equal(cached.size, queries.length);
-    assert.equal(large.size, queries.length * 6);
+    assert.equal(large.size, queries.length * 2 * (1 + largeBlobs.length));
     assert.isTrue(cached.isDisjointFrom(large));
   }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
 );

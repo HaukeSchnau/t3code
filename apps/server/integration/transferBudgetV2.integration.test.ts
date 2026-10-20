@@ -299,8 +299,14 @@ it.live(
             const events = turnEvents(provider, TRANSFER_HISTORY_TURN_COUNT, true);
             const stored = yield* sink.write({ events });
             const last = stored.at(-1)!;
+            // The shell stream skips a thread shell equal to the one it last sent. When the turn
+            // reaches it in two batches, the first already reads the final shell, so the shell
+            // streams stop short of `last.sequence`.
             const terminal = (item: StreamItem) =>
-              "sequence" in item && item.sequence >= last.sequence;
+              ("sequence" in item && item.sequence >= last.sequence) ||
+              (item.kind === "thread.updated" &&
+                item.thread.latestRunId === `run-${TRANSFER_HISTORY_TURN_COUNT}` &&
+                item.thread.status === "completed");
             for (const queue of [tq, sq, ttq, ssq]) yield* collectUntil(queue, terminal);
             const measuredTurnWebSocket = difference(thread.recorder.totals(), threadBefore);
             const measuredTurnShellWebSocket = difference(shell.recorder.totals(), shellBefore);

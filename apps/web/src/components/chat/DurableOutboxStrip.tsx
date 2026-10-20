@@ -92,9 +92,8 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
       setActionError(
         cause instanceof Error ? cause.message : "The saved message could not change.",
       );
-    } finally {
-      setBusyId(null);
     }
+    setBusyId(null);
   };
 
   return (

@@ -31,4 +31,5 @@ describe("React Compiler coverage", () => {
     const bailouts = result.errors.map((error) => error.codeframe ?? error.message);
     expect(bailouts).toEqual([]);
   });
-}, 120_000);
+  // ChatView alone compiles in over 20 s on an idle srv-2; loaded Calder workers took past 120 s.
+}, 300_000);

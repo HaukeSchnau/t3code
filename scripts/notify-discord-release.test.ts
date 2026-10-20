@@ -467,7 +467,10 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
         Array.from({ length: 50 }, () => notes).join("\n\n") +
         '\n* Literal $(touch "$RUNNER_TEMP/executed") and `touch "$RUNNER_TEMP/executed"`';
       const read = workflowRun(workflow, "Read published release notes");
+      // Without PATH, bash is not found where /bin/bash is missing, and an injected `touch` could
+      // not run.
       const shellEnv = {
+        PATH: process.env.PATH,
         RUNNER_TEMP: temp,
         RELEASE_TAG: nightlyAnnouncement.tag,
         RELEASE_CHANNEL: "nightly",
@@ -503,7 +506,13 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
         ChildProcess.make(
           "bash",
           ["-e", "-c", `node() { printf '%s\\0' "$@" > "$RUNNER_TEMP/args"; }\n${announce}`],
-          { env: { RUNNER_TEMP: temp, DISCORD_MENTION_ROLE_ID: latestAnnouncement.roleId } },
+          {
+            env: {
+              PATH: process.env.PATH,
+              RUNNER_TEMP: temp,
+              DISCORD_MENTION_ROLE_ID: latestAnnouncement.roleId,
+            },
+          },
         ),
       );
       assert.equal(announceStatus, 0);

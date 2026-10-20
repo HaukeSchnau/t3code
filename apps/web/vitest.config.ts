@@ -26,6 +26,9 @@ const vmIncompatible = vmIncompatibleTestFiles(isolated, [
 // and websocket subscription lifecycles. Under the full monorepo test
 // run, those async tests can exceed Vitest's default 5s budget.
 const timeouts = { hookTimeout: 15_000, testTimeout: 15_000 };
+// Heavy diff and pull request views used a whole 15 s budget waiting on clicks on loaded Calder
+// workers, and Playwright's click waits share that budget.
+const browserTimeouts = { hookTimeout: 30_000, testTimeout: 30_000 };
 
 // Vitest's fixed browser API port (63315) collides when two checkouts run browser tests at once.
 // Hash the checkout path like scripts/dev-runner.ts does, into 61000-64999 (above Linux's
@@ -82,7 +85,7 @@ export default defineConfig(async (configEnv) => {
           test: {
             name: "browser",
             include: browserInclude,
-            ...timeouts,
+            ...browserTimeouts,
             api: { port: browserTestApiPort, strictPort: false },
             browser: {
               enabled: true,

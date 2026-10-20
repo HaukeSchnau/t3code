@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { NativeReviewDiffRow } from "./nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "./nativeReviewDiffTypes";
@@ -36,6 +36,15 @@ vi.mock("react-native-shiki-engine", async () => {
 afterEach(() => {
   tokenization.calls = [];
   tokenization.afterCall = undefined;
+});
+
+// Shiki cuts a line short after 500 ms by Date.now(), which a cold regex engine can take on a
+// loaded CI worker. A frozen clock keeps the tokens deterministic.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 const TYPESCRIPT_FILE: NativeReviewDiffFile = {

@@ -85,6 +85,9 @@ same for every provider with access to the `t3-code` MCP server.
   `toolkitRegistration(WatchToolkit, WatchHandlers.layer)` (`layerWatchToolkit`) and merges it into
   the MCP layer.
 - `apps/server/src/server.ts`: provides `AgentWatches.layer` to the runtime.
+- `apps/server/scripts/migrate-dev-db.ts`: clears `agent_watches`. Startup respawns command watches
+  and wakes their threads, so a dev database copied from real data must not carry the developer's
+  watches. The table has no `thread_id` column, so the script's thread pruning misses it.
 
 ## Removal
 

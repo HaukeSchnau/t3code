@@ -30,6 +30,11 @@ describe("isTransportConnectionErrorMessage", () => {
     ).toBe(true);
     expect(
       isTransportConnectionErrorMessage(
+        "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
+      ),
+    ).toBe(true);
+    expect(
+      isTransportConnectionErrorMessage(
         "Test environment could not establish a WebSocket connection.",
       ),
     ).toBe(true);

@@ -39,8 +39,9 @@ merge conflicts easier to reason about.
   onward therefore runs under a different id (upstream 054, 055 and 056 run as 77, 78 and 79;
   upstream 057 to 066 run as 82 to 91), and some source filenames share a numeric prefix with a
   fork migration. Keep upstream's filenames and point the fork's registry ids at them, so a sync
-  never sees a rename as a delete. Upstream migration tests hardcode upstream ids; rewrite them to
-  the fork ids.
+  never sees a rename as a delete. Upstream migration tests and
+  `apps/server/scripts/migrate-dev-db.test.ts` hardcode upstream ids; rewrite them to the fork ids.
+  `migrate-dev-db.ts` itself reads the registry, so its slot collision check uses fork ids.
 - `ORCHESTRATION_V2_MIGRATION_ID` in `Migrations.ts` holds the fork id of upstream's
   `OrchestrationV2` migration (78). `runMigrations` uses it where upstream uses
   `FIRST_V2_MIGRATION_ID` (55): it decides when to call `reconcileV2PreviewMigration` and

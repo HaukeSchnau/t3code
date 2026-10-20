@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ReviewRenderableLineRow } from "./reviewModel";
 import {
@@ -6,6 +6,15 @@ import {
   highlightReviewSelectedLines,
   highlightSourceFile,
 } from "./shikiReviewHighlighter";
+
+// Shiki cuts a line short after 500 ms by Date.now(), which a cold regex engine can take on a
+// loaded CI worker. A frozen clock keeps the tokens deterministic.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("highlightSourceFile", () => {
   it("preserves one highlighted token row per source line without trailing newlines", async () => {
