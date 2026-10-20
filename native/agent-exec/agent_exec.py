@@ -609,9 +609,11 @@ def launch(record, cwd, command, *, project=None):
     else:
         bind(args, bin_dir / "agent-device", device)
     if workspace:
-        # Provider binaries remain available without inheriting the host's PATH.
+        # These commands run inside the environment without the host's PATH.
+        # residential-egress is no bridge capability: on the host, the command
+        # it wraps would run there too.
         # Relink on every launch because garbage collection deletes older store paths.
-        for name in ["codex", "claude", "jj-pull", "jj-push"]:
+        for name in ["codex", "claude", "jj-pull", "jj-push", "residential-egress"]:
             binary = shutil.which(name)
             if binary:
                 write_symlink(bin_dir / name, Path(binary).resolve())
