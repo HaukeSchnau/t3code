@@ -13,9 +13,9 @@ offering Save to Camera Roll in the menu. Upstream leaves those actions on.
 `textView(_:menuConfigurationFor:defaultMenu:)`. Both return `nil` for a `ComposerTextAttachment`
 and keep the default for every other text item.
 
-The other native surfaces are upstream's: Markdown text, review diff, terminal and the rest of the
-composer. The inline-code link change in the Markdown module belongs to
-[inline-code links](inline-code-links.md).
+The other native surfaces are upstream's: Markdown text (`react-native-enriched-markdown`), review
+diff, terminal and the rest of the composer. The inline-code link recognition passed to the Markdown
+renderer belongs to [inline-code links](inline-code-links.md).
 
 ## Removal
 

@@ -36,13 +36,20 @@ merge conflicts easier to reason about.
 - Preserve the fork's applied migration ids and names. The registry in
   `apps/server/src/persistence/Migrations.ts` is authoritative. Append each new upstream migration at
   the next free fork id instead of adopting upstream's numbering. Every upstream migration from 033
-  onward therefore runs under a different id (upstream 054, 055 and 056 run as 77, 78 and 79), and
-  some source filenames share a numeric prefix with a fork migration.
+  onward therefore runs under a different id (upstream 054, 055 and 056 run as 77, 78 and 79;
+  upstream 057 to 066 run as 82 to 91), and some source filenames share a numeric prefix with a
+  fork migration. Keep upstream's filenames and point the fork's registry ids at them, so a sync
+  never sees a rename as a delete. Upstream migration tests and
+  `apps/server/scripts/migrate-dev-db.test.ts` hardcode upstream ids; rewrite them to the fork ids.
+  `migrate-dev-db.ts` itself reads the registry, so its slot collision check uses fork ids.
 - `ORCHESTRATION_V2_MIGRATION_ID` in `Migrations.ts` holds the fork id of upstream's
-  `OrchestrationV2` migration (78). `runMigrations` uses it to decide when to call upstream's
-  `reconcileV2PreviewMigration`, where upstream compares against a literal 55. That reconcile only
-  rewrites ledgers that recorded `OrchestrationV2` at 53 or 54, which upstream preview builds did,
-  so it does nothing on fork databases. Move the constant with the migration if its id changes.
+  `OrchestrationV2` migration (78). `runMigrations` uses it where upstream uses
+  `FIRST_V2_MIGRATION_ID` (55): it decides when to call `reconcileV2PreviewMigration` and
+  `assertV2MigrationsCanRun`. The assert fails startup when the migrator would skip a V2 migration,
+  that is, when an id from 78 up to the highest recorded one carries another name. The reconcile
+  only rewrites ledgers that recorded `OrchestrationV2` at 53 or 54, which upstream preview builds
+  did, so it does nothing on fork databases. Move the constant with the migration if its id
+  changes.
 - Upstream's `docs/internals/legacy-orchestration-migration.md` warns that the migrator compares
   ids only, so a fork migration at an id upstream later assigns masks upstream's migration forever.
   The fork's mapping avoids that by owning the whole id sequence. Fork databases only run fork
@@ -55,7 +62,11 @@ merge conflicts easier to reason about.
   root `vitest.config.ts` serves packages without their own, and their test scripts run
   `vp test run --config ../../vitest.config.ts --dir .`. Upstream's scripts point at
   `../../vite.config.ts`, so rewrite each new or changed upstream test script to the fork's form.
-  Tests import from `vite-plus/test`. The fork has no direct `vitest` dependency or catalog entry.
+  When upstream gives a package test config in its `vite.config.ts`, move it to that package's
+  `vitest.config.ts`. Tests import from `vite-plus/test`. The fork has no direct `vitest`
+  dependency or catalog entry.
+- Package `typecheck` scripts stay upstream's `tsc-rs --noEmit`. A limit only Calder needs, such as
+  the server's checker count, goes in `.calder/ci.ts` (see [Fast project QA](fast-project-qa.md)).
 - Push completed fork work to a feature bookmark with `jj-push <bookmark>` and open a pull request
   targeting `main`, including upstream sync merges. Do not push directly to `main`.
 - Use Jujutsu for VCS operations unless explicitly instructed otherwise.

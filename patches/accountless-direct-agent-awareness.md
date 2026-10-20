@@ -85,8 +85,10 @@ Prefer upstream direct-pairing and direct-push implementations if they become av
 
 The server deltas live in upstream-owned files: the RPC definitions in
 `packages/contracts/src/rpc.ts`, their handlers in `ws.ts`, their scopes in
-`auth/RpcAuthorization.ts`, and the publisher layer in `server.ts`. Leave
-`relay/AgentAwarenessRelay.ts` as upstream ships it.
+`auth/RpcAuthorization.ts`, their trace aggregate in `observability/RpcInstrumentation.ts`, and
+the publisher layers in `server.ts`. Leave `relay/AgentAwarenessRelay.ts` as upstream ships it; the
+local publisher reuses its event filter and `projectThreadAwarenessV2`, so relay fixes such as
+removing settled threads from the Live Activity apply to both.
 
 Take upstream's web cloud files as they are during syncs. The web deltas left here are the `/pair`
 link in `ConnectionsSettings.tsx` and the lazy `ConnectOnboardingDialog` in `routes/__root.tsx`.
@@ -101,7 +103,8 @@ The other mobile deltas live in upstream-owned files, so check each one survives
   register over the environment RPC instead of the relay. `remoteRegistration.ts` also keeps the
   relay token hooks as no-ops.
 - `features/agent-awareness/liveActivityPreferences.ts`: toggling Live Activities updates the
-  registration without linking environments to T3 Connect.
+  registration without linking environments to T3 Connect. The file stays the fork's whole:
+  upstream's `canConfigureEnvironment` gate (#9786) only guards the T3 Connect link it replaces.
 - `features/settings/SettingsNotificationsRouteScreen.tsx`: the direct APNs path.
 - `features/settings/SettingsRouteScreen.tsx`: the Notifications row in local Settings.
 - `connection/migration.ts`: drops legacy relay-managed connections.

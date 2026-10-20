@@ -10,7 +10,8 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -25,10 +26,11 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { ChildProcessSpawner } from "effect/process";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { executionLauncherForCwd, projectExecutionArguments } from "../project/ProjectExecution.ts";
 import { queuedRunsInDeliveryOrder } from "../orchestration-v2/QueuedRunOrder.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -37,6 +39,7 @@ import {
   makeWatchFloodGate,
   makeWatchShutdownGuard,
   runWatchCommand,
+  type WatchLaunch,
   type WatchCommandOutcome,
   type WatchLines,
 } from "./WatchRuntime.ts";
@@ -350,7 +353,9 @@ export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const path = yield* Path.Path;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
+  const agentScope = yield* AgentScope;
   const scope = yield* Effect.scope;
   const fibers = yield* FiberMap.make<WatchId>();
   const runFork = yield* FiberMap.runtime(fibers)<never>();
@@ -388,35 +393,37 @@ export const make = Effect.gen(function* () {
     );
 
   /** Delivers unless the watching thread is gone. Stable ids make repeats a no-op. */
-  const deliver = (watch: Watch, delivery: WatchDelivery) =>
-    Effect.gen(function* () {
-      if (!(yield* watcherIsLive(watch))) return false;
-      const id = `${watch.watch_id}:${delivery.key}`;
-      yield* threads
-        .dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make(`${id}:command`),
-          threadId: watch.watcher_thread_id,
-          messageId: MessageId.make(id),
-          text: delivery.text,
-          attachments: [],
-          notification: delivery.notification,
-          // The orchestrator accepts notifications only as queued dispatches.
-          // This starts an idle thread and waits behind an active turn.
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
-        })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Could not deliver a watch notification", {
-              watchId: watch.watch_id,
-              cause,
-            }),
-          ),
-        );
-      return true;
-    });
+  const deliver = Effect.fn("AgentWatches.deliver")(function* (
+    watch: Watch,
+    delivery: WatchDelivery,
+  ) {
+    if (!(yield* watcherIsLive(watch))) return false;
+    const id = `${watch.watch_id}:${delivery.key}`;
+    yield* threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${id}:command`),
+        threadId: watch.watcher_thread_id,
+        messageId: MessageId.make(id),
+        text: delivery.text,
+        attachments: [],
+        notification: delivery.notification,
+        // The orchestrator accepts notifications only as queued dispatches.
+        // This starts an idle thread and waits behind an active turn.
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not deliver a watch notification", {
+            watchId: watch.watch_id,
+            cause,
+          }),
+        ),
+      );
+    return true;
+  });
 
   const closeRow = (watchId: WatchId, reason: "cancelled" | "deadline" | "watcher_closed") =>
     nowIso.pipe(
@@ -442,8 +449,8 @@ export const make = Effect.gen(function* () {
     );
 
   // Uninterruptible so cancellation and shutdown never leave a half-closed row.
-  const finish = (watch: Watch, decision: Decision) =>
-    Effect.gen(function* () {
+  const finish = Effect.fn("AgentWatches.finish")(
+    function* (watch: Watch, decision: Decision) {
       if (!("delivery" in decision)) {
         yield* closeRow(watch.watch_id, decision.reason);
         return;
@@ -460,34 +467,39 @@ export const make = Effect.gen(function* () {
         RETURNING watch_id
       `.pipe(Effect.mapError(unavailable("close the watch")));
       if (claimed.length > 0) yield* deliverFinal(watch, decision.delivery);
-    }).pipe(
-      Effect.catchCause(
-        logUnlessInterrupted("Could not close a watch", { watchId: watch.watch_id }),
+    },
+    (effect, watch) =>
+      effect.pipe(
+        Effect.catchCause(
+          logUnlessInterrupted("Could not close a watch", { watchId: watch.watch_id }),
+        ),
+        Effect.uninterruptible,
       ),
-      Effect.uninterruptible,
-    );
+  );
 
-  const evaluateTarget = (watch: Watch, source: Extract<WatchSource, { type: "thread" }>) =>
-    Effect.gen(function* () {
-      const target = yield* readThread(source.threadId);
-      if (target === null || target.deletedAt !== null) {
-        return Option.some(threadFired(watch, source.threadId, target?.title ?? "", null));
-      }
-      const { runs } = yield* threads
-        .getThreadRecords(
-          source.threadId,
-          ["runs"],
-          source.runId === null ? undefined : { runIds: [source.runId] },
-        )
-        .pipe(Effect.mapError(unavailable("read the watched thread")));
-      const run =
-        source.runId === null
-          ? runs.toSorted((left, right) => left.ordinal - right.ordinal)[0]
-          : runs.find((candidate) => candidate.id === source.runId);
-      return run !== undefined && ThreadManagementService.isTerminalRunStatus(run.status)
-        ? Option.some(threadFired(watch, source.threadId, target.title, run))
-        : Option.none<Decision>();
-    });
+  const evaluateTarget = Effect.fn("AgentWatches.evaluateTarget")(function* (
+    watch: Watch,
+    source: Extract<WatchSource, { type: "thread" }>,
+  ) {
+    const target = yield* readThread(source.threadId);
+    if (target === null || target.deletedAt !== null) {
+      return Option.some(threadFired(watch, source.threadId, target?.title ?? "", null));
+    }
+    const { runs } = yield* threads
+      .getThreadRecords(
+        source.threadId,
+        ["runs"],
+        source.runId === null ? undefined : { runIds: [source.runId] },
+      )
+      .pipe(Effect.mapError(unavailable("read the watched thread")));
+    const run =
+      source.runId === null
+        ? runs.toSorted((left, right) => left.ordinal - right.ordinal)[0]
+        : runs.find((candidate) => candidate.id === source.runId);
+    return run !== undefined && ThreadManagementService.isTerminalRunStatus(run.status)
+      ? Option.some(threadFired(watch, source.threadId, target.title, run))
+      : Option.none<Decision>();
+  });
 
   const deadlineAt = (watch: Watch) =>
     watch.deadline_at === null ? Option.none() : DateTime.make(watch.deadline_at);
@@ -504,11 +516,8 @@ export const make = Effect.gen(function* () {
         ),
     });
 
-  const followTarget = (
-    watch: Watch,
-    source: Extract<WatchSource, { type: "thread" }>,
-  ): Effect.Effect<Decision> =>
-    Effect.gen(function* () {
+  const followTarget = Effect.fn("AgentWatches.followTarget")(
+    function* (watch: Watch, source: Extract<WatchSource, { type: "thread" }>) {
       // Read the cursor before the state so no run update falls between them.
       const afterSequence = yield* threads
         .getThreadEventSequence(source.threadId)
@@ -531,58 +540,73 @@ export const make = Effect.gen(function* () {
             operation: "follow the watched thread",
             cause: "The thread event stream ended.",
           });
-    }).pipe(
-      Effect.tapError((error) =>
-        Effect.logWarning("Watch lost its thread subscription", {
-          watchId: watch.watch_id,
-          error,
-        }),
+    },
+    (effect, watch) =>
+      effect.pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("Watch lost its thread subscription", {
+            watchId: watch.watch_id,
+            error,
+          }),
+        ),
+        Effect.retry(Schedule.spaced("5 seconds")),
+        Effect.orDie,
       ),
-      Effect.retry(Schedule.spaced("5 seconds")),
-      Effect.orDie,
-    );
+  );
 
-  const followCommand = (
+  const followCommand = Effect.fn("AgentWatches.followCommand")(function* (
     watch: Watch,
     source: Extract<WatchSource, { type: "command" }>,
-  ): Effect.Effect<Decision> =>
-    Effect.gen(function* () {
-      // Each spawn gets a new generation so its wake-ups never reuse an earlier id.
-      const [row] = yield* sql<{ readonly generation: number }>`
-        UPDATE agent_watches SET generation = generation + 1
-        WHERE watch_id = ${watch.watch_id}
-        RETURNING generation
-      `.pipe(Effect.orDie);
-      const generation = row?.generation ?? 0;
-      const pace = makeWatchFloodGate();
-      const changed = makeWatchChangeGate();
-      let sequence = 0;
-      let stop: Decision | undefined;
-      const onBatch = (lines: WatchLines) =>
-        Effect.gen(function* () {
-          const pacing = pace(yield* Clock.currentTimeMillis);
-          if (pacing === "drop") return true;
-          if (pacing === "overloaded") {
-            stop = commandClosed(watch, generation, { type: "overloaded" });
-            return false;
-          }
-          if (!changed(lines)) return true;
-          sequence += 1;
-          if (yield* deliver(watch, commandOutput(watch, generation, sequence, lines))) {
-            return true;
-          }
-          stop = { reason: "watcher_closed" };
-          return false;
-        });
-      const outcome = yield* runWatchCommand(
-        { command: source.command, cwd: source.cwd, platform },
-        onBatch,
-      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-      return stop ?? commandClosed(watch, generation, outcome);
+  ) {
+    // Each spawn gets a new generation so its wake-ups never reuse an earlier id.
+    const [row] = yield* sql<{ readonly generation: number }>`
+      UPDATE agent_watches SET generation = generation + 1
+      WHERE watch_id = ${watch.watch_id}
+      RETURNING generation
+    `.pipe(Effect.orDie);
+    const generation = row?.generation ?? 0;
+    const pace = makeWatchFloodGate();
+    const changed = makeWatchChangeGate();
+    let sequence = 0;
+    let stop: Decision | undefined;
+    // Runs once per output batch, so a span each would flood traces.
+    const onBatch = Effect.fnUntraced(function* (lines: WatchLines) {
+      const pacing = pace(yield* Clock.currentTimeMillis);
+      if (pacing === "drop") return true;
+      if (pacing === "overloaded") {
+        stop = commandClosed(watch, generation, { type: "overloaded" });
+        return false;
+      }
+      if (!changed(lines)) return true;
+      sequence += 1;
+      if (yield* deliver(watch, commandOutput(watch, generation, sequence, lines))) {
+        return true;
+      }
+      stop = { reason: "watcher_closed" };
+      return false;
     });
+    // The project launcher runs inside the agent scope, like a terminal's. No thread id: the
+    // scope must not replace the one AgentScope tracks for the thread's provider session.
+    const launch: WatchLaunch = (command, args) =>
+      executionLauncherForCwd(source.cwd, environment).pipe(
+        Effect.flatMap((launcher) =>
+          agentScope.wrap({
+            command: launcher ?? command,
+            args: launcher ? projectExecutionArguments(source.cwd, command, args) : args,
+            name: "watch",
+            env: environment,
+          }),
+        ),
+      );
+    const outcome = yield* runWatchCommand(
+      { command: source.command, cwd: source.cwd, platform, launch },
+      onBatch,
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+    return stop ?? commandClosed(watch, generation, outcome);
+  });
 
-  const runWatch = (watch: Watch) =>
-    Effect.gen(function* () {
+  const runWatch = Effect.fn("AgentWatches.runWatch")(
+    function* (watch: Watch) {
       const source = watch.source_json;
       const decision = yield* Effect.raceAllFirst([
         waitForDeadline(watch),
@@ -594,119 +618,118 @@ export const make = Effect.gen(function* () {
       yield* source.type === "command" && "delivery" in decision
         ? shutdown.unlessStopping(close)
         : close;
-    }).pipe(
-      Effect.catchCause(logUnlessInterrupted("A watch stopped", { watchId: watch.watch_id })),
-    );
+    },
+    (effect, watch) =>
+      effect.pipe(
+        Effect.catchCause(logUnlessInterrupted("A watch stopped", { watchId: watch.watch_id })),
+      ),
+  );
 
-  const decideNow = (watch: Watch) =>
-    Effect.gen(function* () {
-      if (!(yield* watcherIsLive(watch))) {
-        return Option.some<Decision>({ reason: "watcher_closed" });
-      }
-      const now = yield* Clock.currentTimeMillis;
-      if (Option.exists(deadlineAt(watch), (deadline) => DateTime.toEpochMillis(deadline) <= now)) {
-        return Option.some<Decision>({ reason: "deadline" });
-      }
-      return watch.source_json.type === "thread"
-        ? yield* evaluateTarget(watch, watch.source_json).pipe(
-            Effect.orElseSucceed(() => Option.none<Decision>()),
-          )
-        : Option.none<Decision>();
-    });
+  const decideNow = Effect.fn("AgentWatches.decideNow")(function* (watch: Watch) {
+    if (!(yield* watcherIsLive(watch))) {
+      return Option.some<Decision>({ reason: "watcher_closed" });
+    }
+    const now = yield* Clock.currentTimeMillis;
+    if (Option.exists(deadlineAt(watch), (deadline) => DateTime.toEpochMillis(deadline) <= now)) {
+      return Option.some<Decision>({ reason: "deadline" });
+    }
+    return watch.source_json.type === "thread"
+      ? yield* evaluateTarget(watch, watch.source_json).pipe(
+          Effect.orElseSucceed(() => Option.none<Decision>()),
+        )
+      : Option.none<Decision>();
+  });
 
   /** Settles what is already decided, then follows the rest in the background. */
-  const attach = (watch: Watch) =>
-    Effect.gen(function* () {
-      if (watch.state === "closing") {
-        if (watch.final_json !== null) {
-          yield* deliverFinal(watch, watch.final_json).pipe(Effect.uninterruptible);
-        }
-        return;
+  const attach = Effect.fn("AgentWatches.attach")(function* (watch: Watch) {
+    if (watch.state === "closing") {
+      if (watch.final_json !== null) {
+        yield* deliverFinal(watch, watch.final_json).pipe(Effect.uninterruptible);
       }
-      if (watch.state === "closed") return;
-      const decided = yield* decideNow(watch);
-      if (Option.isSome(decided)) {
-        yield* finish(watch, decided.value);
-        return;
-      }
-      yield* Effect.sync(() => runFork(watch.watch_id, runWatch(watch), { onlyIfMissing: true }));
-    });
+      return;
+    }
+    if (watch.state === "closed") return;
+    const decided = yield* decideNow(watch);
+    if (Option.isSome(decided)) {
+      yield* finish(watch, decided.value);
+      return;
+    }
+    yield* Effect.sync(() => runFork(watch.watch_id, runWatch(watch), { onlyIfMissing: true }));
+  });
 
-  const resolveThreadSource = (
+  const resolveThreadSource = Effect.fn("AgentWatches.resolveThreadSource")(function* (
     watcher: OrchestrationV2ThreadShell,
     input: Extract<WatchSourceInput, { type: "thread" }>,
-  ) =>
-    Effect.gen(function* () {
-      if (input.threadId === watcher.id) {
-        return yield* new AgentWatchInputError({ detail: "A thread cannot watch itself." });
+  ) {
+    if (input.threadId === watcher.id) {
+      return yield* new AgentWatchInputError({ detail: "A thread cannot watch itself." });
+    }
+    const target = yield* readThread(input.threadId);
+    if (target === null || target.deletedAt !== null) {
+      return yield* new AgentWatchNotFoundError({ resource: "thread", id: input.threadId });
+    }
+    const records = yield* threads
+      .getThreadRecords(
+        input.threadId,
+        ["runs"],
+        input.runId === undefined ? undefined : { runIds: [input.runId] },
+      )
+      .pipe(Effect.mapError(unavailable("read the watched thread")));
+    if (input.runId !== undefined) {
+      if (!records.runs.some((run) => run.id === input.runId)) {
+        return yield* new AgentWatchNotFoundError({ resource: "run", id: input.runId });
       }
-      const target = yield* readThread(input.threadId);
-      if (target === null || target.deletedAt !== null) {
-        return yield* new AgentWatchNotFoundError({ resource: "thread", id: input.threadId });
-      }
-      const records = yield* threads
-        .getThreadRecords(
-          input.threadId,
-          ["runs"],
-          input.runId === undefined ? undefined : { runIds: [input.runId] },
-        )
-        .pipe(Effect.mapError(unavailable("read the watched thread")));
-      if (input.runId !== undefined) {
-        if (!records.runs.some((run) => run.id === input.runId)) {
-          return yield* new AgentWatchNotFoundError({ resource: "run", id: input.runId });
-        }
-        return { type: "thread", threadId: input.threadId, runId: input.runId } as const;
-      }
-      const queued = records.runs.filter((run) => run.status === "queued");
-      const next =
-        ThreadManagementService.latestActiveRun(records) ??
-        (queued.length === 0
-          ? undefined
-          : queuedRunsInDeliveryOrder({
-              runs: records.runs,
-              messages: (yield* threads
-                .getThreadRecords(input.threadId, ["messages"], {
-                  messageIds: queued.map((run) => run.userMessageId),
-                })
-                .pipe(Effect.mapError(unavailable("read the watched thread")))).messages,
-            })[0]) ??
-        // An idle thread that already ran fires at once, which covers a run
-        // that finished before the watch arrived.
-        ThreadManagementService.latestRun(records);
-      return { type: "thread", threadId: input.threadId, runId: next?.id ?? null } as const;
-    });
+      return { type: "thread", threadId: input.threadId, runId: input.runId } as const;
+    }
+    const queued = records.runs.filter((run) => run.status === "queued");
+    const next =
+      ThreadManagementService.latestActiveRun(records) ??
+      (queued.length === 0
+        ? undefined
+        : queuedRunsInDeliveryOrder({
+            runs: records.runs,
+            messages: (yield* threads
+              .getThreadRecords(input.threadId, ["messages"], {
+                messageIds: queued.map((run) => run.userMessageId),
+              })
+              .pipe(Effect.mapError(unavailable("read the watched thread")))).messages,
+          })[0]) ??
+      // An idle thread that already ran fires at once, which covers a run
+      // that finished before the watch arrived.
+      ThreadManagementService.latestRun(records);
+    return { type: "thread", threadId: input.threadId, runId: next?.id ?? null } as const;
+  });
 
-  const resolveCommandSource = (
+  const resolveCommandSource = Effect.fn("AgentWatches.resolveCommandSource")(function* (
     watcher: OrchestrationV2ThreadShell,
     input: Extract<WatchSourceInput, { type: "command" }>,
-  ) =>
-    Effect.gen(function* () {
-      if (watcher.runtimeMode !== "full-access") {
-        return yield* new AgentWatchDeniedError({
-          detail: "Command watches run without approval, so they need a full-access thread.",
-        });
-      }
-      const root =
-        watcher.worktreePath ??
-        Option.getOrNull(
-          Option.map(
-            yield* projects
-              .get(watcher.projectId)
-              .pipe(Effect.mapError(unavailable("read the project"))),
-            (project) => project.workspaceRoot,
-          ),
-        );
-      if (root === null) {
-        return yield* new AgentWatchInputError({
-          detail: "This thread has no workspace to run the command in.",
-        });
-      }
-      return {
-        type: "command",
-        command: input.command,
-        cwd: input.cwd === undefined ? root : path.resolve(root, input.cwd),
-      } as const;
-    });
+  ) {
+    if (watcher.runtimeMode !== "full-access") {
+      return yield* new AgentWatchDeniedError({
+        detail: "Command watches run without approval, so they need a full-access thread.",
+      });
+    }
+    const root =
+      watcher.worktreePath ??
+      Option.getOrNull(
+        Option.map(
+          yield* projects
+            .get(watcher.projectId)
+            .pipe(Effect.mapError(unavailable("read the project"))),
+          (project) => project.workspaceRoot,
+        ),
+      );
+    if (root === null) {
+      return yield* new AgentWatchInputError({
+        detail: "This thread has no workspace to run the command in.",
+      });
+    }
+    return {
+      type: "command",
+      command: input.command,
+      cwd: input.cwd === undefined ? root : path.resolve(root, input.cwd),
+    } as const;
+  });
 
   const parseDeadline = (input: string, now: DateTime.Utc) => {
     const value = input.trim();
@@ -755,7 +778,7 @@ export const make = Effect.gen(function* () {
         Effect.mapError(unavailable("store the watch")),
       );
       const watch: Watch = {
-        watch_id: WatchId.make(`watch:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`),
+        watch_id: WatchId.make(`watch:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`),
         watcher_thread_id: watcher.id,
         label: input.label?.trim() || null,
         source_json: source,
@@ -778,14 +801,14 @@ export const make = Effect.gen(function* () {
     const rows = yield* (
       input.includeClosed
         ? sql`
-            SELECT * FROM agent_watches WHERE watcher_thread_id = ${input.watcherThreadId}
-            ORDER BY created_at DESC, watch_id LIMIT ${LIST_LIMIT}
-          `
+          SELECT * FROM agent_watches WHERE watcher_thread_id = ${input.watcherThreadId}
+          ORDER BY created_at DESC, watch_id LIMIT ${LIST_LIMIT}
+        `
         : sql`
-            SELECT * FROM agent_watches
-            WHERE watcher_thread_id = ${input.watcherThreadId} AND state = 'open'
-            ORDER BY created_at DESC, watch_id LIMIT ${LIST_LIMIT}
-          `
+          SELECT * FROM agent_watches
+          WHERE watcher_thread_id = ${input.watcherThreadId} AND state = 'open'
+          ORDER BY created_at DESC, watch_id LIMIT ${LIST_LIMIT}
+        `
     ).pipe(Effect.mapError(unavailable("list watches")));
     return (yield* decodeRows(rows)).map(toView);
   });

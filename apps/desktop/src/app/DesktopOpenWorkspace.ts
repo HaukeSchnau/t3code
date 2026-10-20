@@ -94,7 +94,7 @@ export const layerAppActivationDelivery = Layer.effectDiscard(
     if (!isActivationPlatform(platform)) return;
 
     const open = (workspaceRoot: string) =>
-      crypto.randomUUIDv4.pipe(
+      crypto.randomUUIDv4().pipe(
         Effect.flatMap((requestId) =>
           activation.request({
             version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,

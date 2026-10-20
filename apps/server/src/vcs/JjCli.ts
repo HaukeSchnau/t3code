@@ -192,47 +192,46 @@ const make = Effect.gen(function* () {
    * rebases the copy beside `@`, so its tree is the up-to-date one: `@` takes
    * it and the copy goes. A copy left on other parents is squashed instead.
    */
-  const updateStale = (input: JjRunInput) =>
-    Effect.gen(function* () {
-      const [changeId] = (yield* raw({
+  const updateStale = Effect.fn("JjCli.updateStale")(function* (input: JjRunInput) {
+    const [changeId] = (yield* raw({
+      ...input,
+      operation: `${input.operation}.updateStale.read`,
+      args: ["--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", "change_id"],
+    })).stdout.split("\n");
+    const versions = changeId ? `change_id(${changeId.trim()})` : null;
+    const before = new Set(versions === null ? [] : yield* commitsOf(input, versions));
+    yield* raw({
+      ...input,
+      operation: `${input.operation}.updateStale`,
+      args: ["workspace", "update-stale"],
+    });
+    if (versions === null) return;
+    const parentsOf = (revision: string) =>
+      raw({
         ...input,
         operation: `${input.operation}.updateStale.read`,
-        args: ["--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", "change_id"],
-      })).stdout.split("\n");
-      const versions = changeId ? `change_id(${changeId.trim()})` : null;
-      const before = new Set(versions === null ? [] : yield* commitsOf(input, versions));
-      yield* raw({
-        ...input,
-        operation: `${input.operation}.updateStale`,
-        args: ["workspace", "update-stale"],
-      });
-      if (versions === null) return;
-      const parentsOf = (revision: string) =>
-        raw({
-          ...input,
-          operation: `${input.operation}.updateStale.read`,
-          args: [
-            "--ignore-working-copy",
-            "log",
-            "--no-graph",
-            "-r",
-            revision,
-            "-T",
-            'parents.map(|c| c.commit_id()).join(",")',
-          ],
-        }).pipe(Effect.map((result) => result.stdout.trim()));
-      for (const commit of yield* commitsOf(input, `${versions} ~ @`)) {
-        if (before.has(commit)) continue;
-        const recover = (args: ReadonlyArray<string>) =>
-          raw({ ...input, operation: `${input.operation}.updateStale.recover`, args });
-        if ((yield* parentsOf(commit)) === (yield* parentsOf("@"))) {
-          yield* recover(["restore", "--from", commit, "--into", "@"]);
-          yield* recover(["abandon", commit]);
-        } else {
-          yield* recover(["squash", "--from", commit, "--into", "@", "--use-destination-message"]);
-        }
+        args: [
+          "--ignore-working-copy",
+          "log",
+          "--no-graph",
+          "-r",
+          revision,
+          "-T",
+          'parents.map(|c| c.commit_id()).join(",")',
+        ],
+      }).pipe(Effect.map((result) => result.stdout.trim()));
+    for (const commit of yield* commitsOf(input, `${versions} ~ @`)) {
+      if (before.has(commit)) continue;
+      const recover = (args: ReadonlyArray<string>) =>
+        raw({ ...input, operation: `${input.operation}.updateStale.recover`, args });
+      if ((yield* parentsOf(commit)) === (yield* parentsOf("@"))) {
+        yield* recover(["restore", "--from", commit, "--into", "@"]);
+        yield* recover(["abandon", commit]);
+      } else {
+        yield* recover(["squash", "--from", commit, "--into", "@", "--use-destination-message"]);
       }
-    });
+    }
+  });
 
   const run: JjCli["Service"]["run"] = Effect.fn("JjCli.run")(function* (input) {
     let updatedStale = false;
@@ -261,17 +260,18 @@ const make = Effect.gen(function* () {
         while: (error) => error._tag === "RetryableJjError",
         schedule: Schedule.exponential(Duration.millis(100)),
       }),
-      Effect.catchTag("RetryableJjError", () =>
-        Effect.fail(
-          new VcsProcessExitError({
-            operation: input.operation,
-            command: "jj",
-            cwd: input.root,
-            exitCode: 1,
-            detail: "Another jj command kept the working copy busy.",
-          }),
-        ),
-      ),
+      Effect.catchTags({
+        RetryableJjError: () =>
+          Effect.fail(
+            new VcsProcessExitError({
+              operation: input.operation,
+              command: "jj",
+              cwd: input.root,
+              exitCode: 1,
+              detail: "Another jj command kept the working copy busy.",
+            }),
+          ),
+      }),
     );
   });
 
@@ -334,19 +334,18 @@ const make = Effect.gen(function* () {
   });
 
   const locks = yield* Ref.make(new Map<string, Semaphore.Semaphore>());
-  const lockFor = (root: string) =>
-    Effect.gen(function* () {
-      const existing = (yield* Ref.get(locks)).get(root);
-      if (existing !== undefined) return existing;
-      const created = yield* Semaphore.make(1);
-      return yield* Ref.modify(locks, (current) => {
-        const concurrent = current.get(root);
-        if (concurrent !== undefined) return [concurrent, current];
-        const next = new Map(current);
-        next.set(root, created);
-        return [created, next];
-      });
+  const lockFor = Effect.fn("JjCli.lockFor")(function* (root: string) {
+    const existing = (yield* Ref.get(locks)).get(root);
+    if (existing !== undefined) return existing;
+    const created = yield* Semaphore.make(1);
+    return yield* Ref.modify(locks, (current) => {
+      const concurrent = current.get(root);
+      if (concurrent !== undefined) return [concurrent, current];
+      const next = new Map(current);
+      next.set(root, created);
+      return [created, next];
     });
+  });
   const withWorkingCopyLock: JjCli["Service"]["withWorkingCopyLock"] = (root, effect) =>
     Effect.flatMap(lockFor(root), (semaphore) => semaphore.withPermits(1)(effect));
 

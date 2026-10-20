@@ -1,8 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
 const at = "2026-10-01T00:00:00.000Z";
@@ -101,7 +101,7 @@ it.effect("blocks restart on work that dies with the server process", () =>
       "running:projected-latest-turn-running",
       "session:projected-active-turn",
     ]);
-  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
 it.effect("counts durable work without blocking restart", () =>
@@ -121,5 +121,5 @@ it.effect("counts durable work without blocking restart", () =>
     assert.equal(status.busyThreadCount, 0);
     assert.equal(status.queuedMessageCount, 1);
     assert.equal(status.pendingUserInputCount, 1);
-  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

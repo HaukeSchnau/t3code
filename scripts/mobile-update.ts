@@ -10,7 +10,7 @@
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -22,9 +22,9 @@ import * as Path from "effect/Path";
 import type { BadArgument, PlatformError } from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-// Expo Updates keys assets by MD5, which WebCrypto lacks.
+import { Command, Flag } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Expo Updates keys assets by MD5, which effect/Crypto lacks.
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 
@@ -201,8 +201,8 @@ const expo = Effect.fn("mobileUpdate.expo")(function* (
 }, Effect.scoped);
 
 /**
- * TODO: Remove once hermes-compiler ships a linux-arm64 hermesc. Until then the
- * fork's aarch64 CI hosts run its static x86-64 binary under qemu-user.
+ * hermes-compiler ships no linux-arm64 hermesc, so the fork's aarch64 CI hosts run its static
+ * x86-64 binary under qemu-user. Remove this once a linux-arm64 hermesc ships.
  */
 const hermesOverride = Effect.fn("mobileUpdate.hermesOverride")(function* (
   scratch: string,
@@ -211,7 +211,7 @@ const hermesOverride = Effect.fn("mobileUpdate.hermesOverride")(function* (
   BadArgument | PlatformError,
   FileSystem.FileSystem | Path.Path
 > {
-  if ((yield* HostProcessPlatform) !== "linux" || (yield* HostProcessArchitecture) !== "arm64")
+  if ((yield* HostProcess.Platform) !== "linux" || (yield* HostProcess.Architecture) !== "arm64")
     return {};
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

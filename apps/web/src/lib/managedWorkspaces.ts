@@ -1,5 +1,5 @@
 /**
- * Fork: server-managed workspaces in the composer (patches/workspaces.md).
+ * Server-managed workspaces in the composer (patches/workspaces.md).
  * Servers that advertise them create jj workspaces, guarded directory copies
  * or isolated runtimes, so a new workspace needs neither Git nor a base branch.
  */

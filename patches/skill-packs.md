@@ -30,7 +30,9 @@ How it works is in [docs/internals/skill-packs.md](../docs/internals/skill-packs
 - `apps/server/src/orchestration-v2/ProviderTurnStartService.ts`: `prepareTurn` before the session
   opens.
 - `CodexAdapterV2.ts` (extra root after `initialize`, per-thread `skills.config`),
-  `ClaudeAdapterV2.ts` (`plugins`), `OpenCodeAdapterV2.ts` (spawn environment).
+  `ClaudeAdapterV2.ts` (`plugins`), and the OpenCode server environment through
+  `ProviderThreadEnvironment.forOpenCodeServer` (`packages/provider-core/src/server/threadEnvironment.ts`,
+  implemented in `apps/server/src/provider/ProviderThreadEnvironment.ts`).
 - `apps/server/src/persistence/Migrations.ts` and the two migration manifest tests.
 - `packages/client-runtime/src/operations/commands.ts` (draft packs before `launchThread`) and
   `rpc/client.ts` (subscription tag).

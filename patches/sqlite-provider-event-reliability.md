@@ -1,14 +1,34 @@
 # SQLite provider event reliability
 
-Concurrent access to the WAL database must not fail a provider turn during a read-to-write
-transaction upgrade. Writable connections begin transactions with `BEGIN IMMEDIATE`, so
-the configured busy timeout applies before the transaction reads. Read-only connections
-retain deferred transactions and can read while a writer owns the database.
+## Requirement
 
-If provider event ingestion still fails, stop the current provider turn before recording
-the failed run. Check ownership first so a stale subscription cannot stop a newer turn.
-Normal stream cancellation during startup must not interrupt another turn.
+If T3 cannot record a provider turn's events, it stops that turn before it records the run as
+failed. Otherwise the provider keeps working without visible output, and a retry finds the old turn
+still active. This follows the October 10 incident where SQLite rejected event writes and Claude
+continued in the background.
 
-These requirements follow the October 10 incident where SQLite rejected event writes,
-Claude continued working without visible output, and retries found its old turn active.
-Remove this patch when upstream provides both transaction and provider cleanup guarantees.
+The stop must only reach the turn this run owns. A stale subscription, a run whose attempt was
+replaced, or a provider turn that never reported its id must not interrupt another turn, and server
+shutdown leaves the run to restart recovery as before.
+
+## Why upstream does not meet it
+
+Upstream writes writer transactions with `BEGIN IMMEDIATE` in the shared SQLite client, so a
+read-to-write upgrade no longer fails under concurrent access (#15488). When ingestion still fails,
+upstream fails the run and retries that write until it lands, but never stops the provider.
+
+## Implementation
+
+`apps/server/src/orchestration-v2/RunExecutionService.ts`: the ingestion-failure handler (the
+`Effect.catchCauseIf` for causes other than interruption) runs `stopProviderTurnAfterIngestionFailure`
+before `writeFinalRunEvents`. It interrupts the root provider turn with
+`requestRuntimeRestart: true` only when the turn's id is known, the provider thread's owner was not
+lost, and `shouldFinalizeRun` confirms the run's attempt is still current. A failed stop is logged
+and the run is still failed.
+
+`RunExecutionService.test.ts` covers the stop, a run that lost ownership, and the upstream recovery
+tests with the stop in their recorded order.
+
+## Removal
+
+Drop this patch when upstream stops a provider turn whose events it cannot record.

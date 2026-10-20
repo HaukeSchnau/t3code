@@ -1,7 +1,7 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
-import { HostProcessStdoutIsTerminal } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -9,7 +9,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import {
   buildPairingUrl,
   formatHeadlessServeOutput,
@@ -91,8 +91,8 @@ it("formats headless serve output with the connection string, token, pairing url
 
 const headlessServeLayer = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(SqlitePersistenceMemory),
-  Layer.provide(ServerEnvironment.identityLayer),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-startup-access-" })),
   Layer.provideMerge(NodeHttpServer.layerTest),
 );
@@ -100,7 +100,7 @@ const headlessServeLayer = EnvironmentAuth.layer.pipe(
 const headlessServe = (stdoutIsTerminal: boolean) =>
   Effect.gen(function* () {
     const output = yield* headlessServeOutput().pipe(
-      Effect.provideService(HostProcessStdoutIsTerminal, stdoutIsTerminal),
+      Effect.provideService(HostProcess.StdoutIsTerminal, stdoutIsTerminal),
     );
     const pairingLinks = yield* (yield* EnvironmentAuth.EnvironmentAuth).listPairingLinks({
       excludeSubjects: [],

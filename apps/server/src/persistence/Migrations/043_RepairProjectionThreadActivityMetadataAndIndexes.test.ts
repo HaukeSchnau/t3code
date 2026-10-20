@@ -1,12 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const repairedWipLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const repairedWipLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 repairedWipLayer("043_RepairProjectionThreadActivityMetadataAndIndexes WIP repair", (it) => {
   it.effect("repairs a database that recorded the earlier revision-only migration 42", () =>
@@ -104,7 +104,9 @@ repairedWipLayer("043_RepairProjectionThreadActivityMetadataAndIndexes WIP repai
   );
 });
 
-const currentProductionLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const currentProductionLayer = it.layer(
+  Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })),
+);
 
 currentProductionLayer(
   "043_RepairProjectionThreadActivityMetadataAndIndexes current schema",

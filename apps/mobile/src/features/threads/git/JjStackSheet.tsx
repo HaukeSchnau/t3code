@@ -6,9 +6,9 @@ import { Screen, ScreenStack, ScreenStackHeaderConfig } from "react-native-scree
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
 
-import { AndroidSheetHeader } from "../../../components/AndroidScreenHeader";
-import { AppText as Text, AppTextInput as TextInput } from "../../../components/AppText";
-import { MaterialScreenContent } from "../../../components/MaterialScreenContent";
+import { AndroidSheetHeader } from "../../../components/ui/AndroidScreenHeader";
+import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
+import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { cn } from "../../../lib/cn";
 import {
   NativeStackScreenOptions,
@@ -80,11 +80,8 @@ export function JjStackSheet(props: JjStackSheetProps) {
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const handlePullRefresh = async () => {
     setIsPullRefreshing(true);
-    try {
-      await jjActions.refresh();
-    } finally {
-      setIsPullRefreshing(false);
-    }
+    await jjActions.refresh();
+    setIsPullRefreshing(false);
   };
 
   const content = (
@@ -204,7 +201,7 @@ export function JjStackSheet(props: JjStackSheetProps) {
         hideBottomBorder
         onBack={() => navigation.goBack()}
       />
-      <MaterialScreenContent>{content}</MaterialScreenContent>
+      <ScreenContent>{content}</ScreenContent>
     </View>
   );
 }

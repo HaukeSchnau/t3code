@@ -1,7 +1,6 @@
 import { sign as signApplication, type SignOptions } from "@electron/osx-sign";
 
 /**
- * Sign files with matching options together instead of spawning codesign for each file.
  * When the build sets T3CODE_MACOS_DESIGNATED_REQUIREMENT, the main bundle gets that
  * requirement. Helpers keep their defaults, since the requirement names the app's identifier.
  */

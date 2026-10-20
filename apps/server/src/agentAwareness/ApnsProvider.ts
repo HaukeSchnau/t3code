@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- APNs needs an ES256 JWT and HTTP/2, which Effect does not provide.
 import * as NodeCrypto from "node:crypto";
 import * as NodeHttp2 from "node:http2";
 

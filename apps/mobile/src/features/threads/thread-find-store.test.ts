@@ -3,11 +3,10 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
+  clearThreadFindHit,
   clearThreadFindHitFor,
   openThreadFindAtHit,
   threadFindHitAtom,
-  threadFindPreferencesAtom,
-  updateThreadFindPreferences,
 } from "./thread-find-store";
 
 const match = {
@@ -21,25 +20,21 @@ const match = {
 };
 
 describe("thread search hits", () => {
-  beforeEach(() => {
-    updateThreadFindPreferences({ query: "", caseSensitive: true, wholeWord: true, regex: true });
-  });
+  beforeEach(() => clearThreadFindHit());
 
-  it("matches the way thread search does, which ignores case", () => {
+  it("opens find on the matched message with the trimmed query", () => {
     openThreadFindAtHit(match, "  Deploy API ");
-    expect(appAtomRegistry.get(threadFindPreferencesAtom)).toEqual({
-      query: "deploy api",
-      caseSensitive: false,
-      wholeWord: false,
-      regex: false,
-      scope: "all",
+    expect(appAtomRegistry.get(threadFindHitAtom)).toEqual({
+      environmentId: match.environmentId,
+      threadId: match.threadId,
+      messageId: match.messageId,
+      query: "Deploy API",
     });
-    expect(appAtomRegistry.get(threadFindHitAtom)?.query).toBe("deploy api");
   });
 
-  it("drops the hit once the reader edits find", () => {
-    openThreadFindAtHit(match, "deploy");
-    updateThreadFindPreferences({ wholeWord: true });
+  it("ignores hits from servers that do not name the message", () => {
+    const { messageId: _, ...withoutMessage } = match;
+    openThreadFindAtHit(withoutMessage, "deploy");
     expect(appAtomRegistry.get(threadFindHitAtom)).toBeNull();
   });
 

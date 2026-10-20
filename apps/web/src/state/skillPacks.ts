@@ -4,7 +4,7 @@ import { create } from "zustand";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
-/** Fork: skill packs (patches/skill-packs.md). */
+/** Skill packs (patches/skill-packs.md). */
 export const skillPackEnvironment = createSkillPackEnvironmentAtoms(connectionAtomRuntime);
 
 const draftKey = (environmentId: EnvironmentId, threadId: ThreadId) =>

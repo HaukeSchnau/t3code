@@ -3,7 +3,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import type * as PlatformError from "effect/PlatformError";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const BATCH_WINDOW = Duration.millis(200);
 const MAX_BATCH_CHARS = 3_000;
@@ -107,7 +108,23 @@ function osDetail(cause: Cause.Cause<unknown>, fallback: string): string {
   return error instanceof Error && error.cause instanceof Error ? error.cause.message : fallback;
 }
 
-function shellCommand(command: string, cwd: string, platform: NodeJS.Platform) {
+/** Turns the shell invocation into the command to spawn, e.g. inside a launcher and an agent scope. */
+export type WatchLaunch = (
+  command: string,
+  args: ReadonlyArray<string>,
+) => Effect.Effect<
+  { readonly command: string; readonly args: ReadonlyArray<string> },
+  PlatformError.PlatformError
+>;
+
+const directLaunch: WatchLaunch = (command, args) => Effect.succeed({ command, args });
+
+function shellCommand(
+  command: string,
+  cwd: string,
+  platform: NodeJS.Platform,
+  launch: WatchLaunch,
+) {
   const options = {
     cwd,
     stdin: "ignore",
@@ -116,10 +133,13 @@ function shellCommand(command: string, cwd: string, platform: NodeJS.Platform) {
     killSignal: "SIGTERM",
     forceKillAfter: Duration.seconds(2),
   } as const;
+  if (platform === "win32") {
+    return Effect.succeed(ChildProcess.make(command, [], { ...options, shell: true }));
+  }
   // An explicit sh keeps the whole command inside the project launcher prefix.
-  return platform === "win32"
-    ? ChildProcess.make(command, [], { ...options, shell: true })
-    : ChildProcess.make("/bin/sh", ["-c", command], options);
+  return launch("/bin/sh", ["-c", command]).pipe(
+    Effect.map((launched) => ChildProcess.make(launched.command, [...launched.args], options)),
+  );
 }
 
 /**
@@ -127,14 +147,21 @@ function shellCommand(command: string, cwd: string, platform: NodeJS.Platform) {
  * lines to `onBatch`. Returning false from `onBatch` stops the command.
  */
 export const runWatchCommand = <R>(
-  input: { readonly command: string; readonly cwd: string; readonly platform: NodeJS.Platform },
+  input: {
+    readonly command: string;
+    readonly cwd: string;
+    readonly platform: NodeJS.Platform;
+    readonly launch?: WatchLaunch | undefined;
+  },
   onBatch: (lines: WatchLines) => Effect.Effect<boolean, never, R>,
 ): Effect.Effect<WatchCommandOutcome, never, ChildProcessSpawner.ChildProcessSpawner | R> =>
   Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const spawned = yield* Effect.exit(
-        spawner.spawn(shellCommand(input.command, input.cwd, input.platform)),
+        shellCommand(input.command, input.cwd, input.platform, input.launch ?? directLaunch).pipe(
+          Effect.flatMap(spawner.spawn),
+        ),
       );
       if (Exit.isFailure(spawned)) {
         return {

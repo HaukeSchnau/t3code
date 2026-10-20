@@ -25,13 +25,13 @@ import {
   type ThreadId,
   type VcsRemoveWorktreeInput,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -153,8 +153,8 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const context = yield* Effect.context<ProcessRunner.ProcessRunner>();
   const isolated = isolatedWorkspacesAvailable(
-    yield* HostProcessPlatform,
-    yield* HostProcessEnvironment,
+    yield* HostProcess.Platform,
+    yield* HostProcess.Environment,
   );
   const workspacesRoot = NodePath.join(config.baseDir, "workspaces");
 
@@ -166,50 +166,51 @@ const make = Effect.gen(function* () {
       isolated ? "isolated" : (findRepositoryMarker(projectRoot)?.kind ?? "directory"),
     );
 
-  const resolveLaunchStrategy: ManagedWorkspaces["Service"]["resolveLaunchStrategy"] = (input) =>
-    Effect.gen(function* () {
-      const strategy: LaunchWorkspaceStrategy = input.strategy;
-      if (strategy.type !== "worktree" && strategy.type !== "workspace") return input.strategy;
-      const backend = yield* backendFor(input.projectRoot);
-      if (backend !== "git") {
-        return {
-          type: "workspace" as const,
-          baseRef: strategy.baseRef,
-          ...(strategy.startFromOrigin === undefined
-            ? {}
-            : { startFromOrigin: strategy.startFromOrigin }),
-          ...(strategy.type === "workspace" && strategy.profile !== undefined
-            ? { profile: strategy.profile }
-            : {}),
-        } satisfies ManagedWorkspaceStrategy;
-      }
-      if (strategy.type === "worktree") return input.strategy;
-      const baseRef =
-        strategy.baseRef ??
-        (yield* git.localStatus({ cwd: input.projectRoot }).pipe(
-          Effect.map((status) => status.refName ?? undefined),
-          Effect.mapError((cause) =>
-            fail(
-              "ManagedWorkspaces.resolveLaunchStrategy",
-              "Could not read the current branch.",
-              cause,
-            ),
-          ),
-        ));
-      if (baseRef === undefined) {
-        return yield* fail(
-          "ManagedWorkspaces.resolveLaunchStrategy",
-          "Select a base branch for the new worktree.",
-        );
-      }
+  const resolveLaunchStrategy: ManagedWorkspaces["Service"]["resolveLaunchStrategy"] = Effect.fn(
+    "ManagedWorkspaces.resolveLaunchStrategy",
+  )(function* (input) {
+    const strategy: LaunchWorkspaceStrategy = input.strategy;
+    if (strategy.type !== "worktree" && strategy.type !== "workspace") return input.strategy;
+    const backend = yield* backendFor(input.projectRoot);
+    if (backend !== "git") {
       return {
-        type: "worktree" as const,
-        baseRef,
+        type: "workspace" as const,
+        baseRef: strategy.baseRef,
         ...(strategy.startFromOrigin === undefined
           ? {}
           : { startFromOrigin: strategy.startFromOrigin }),
-      };
-    });
+        ...(strategy.type === "workspace" && strategy.profile !== undefined
+          ? { profile: strategy.profile }
+          : {}),
+      } satisfies ManagedWorkspaceStrategy;
+    }
+    if (strategy.type === "worktree") return input.strategy;
+    const baseRef =
+      strategy.baseRef ??
+      (yield* git.localStatus({ cwd: input.projectRoot }).pipe(
+        Effect.map((status) => status.refName ?? undefined),
+        Effect.mapError((cause) =>
+          fail(
+            "ManagedWorkspaces.resolveLaunchStrategy",
+            "Could not read the current branch.",
+            cause,
+          ),
+        ),
+      ));
+    if (baseRef === undefined) {
+      return yield* fail(
+        "ManagedWorkspaces.resolveLaunchStrategy",
+        "Select a base branch for the new worktree.",
+      );
+    }
+    return {
+      type: "worktree" as const,
+      baseRef,
+      ...(strategy.startFromOrigin === undefined
+        ? {}
+        : { startFromOrigin: strategy.startFromOrigin }),
+    };
+  });
 
   /** Every non-deleted thread shell, active and archived. */
   const allThreads = Effect.suspend(() =>
@@ -351,22 +352,22 @@ const make = Effect.gen(function* () {
     return yield* findIsolatedWorkspace(resolved).pipe(Effect.provide(context));
   });
 
-  const deleteManaged = (root: string, projectRoot: string) =>
-    Effect.gen(function* () {
-      const isolatedRoot = yield* findIsolatedWorkspace(root);
-      if (isolatedRoot !== null) return yield* deleteIsolatedWorkspace(isolatedRoot);
-      if (!NodeFS.existsSync(root)) return;
-      if (NodeFS.statSync(NodePath.join(root, ".jj"), { throwIfNoEntry: false })?.isDirectory()) {
-        return yield* deleteJjWorkspace(root);
-      }
-      // Workspaces from older versions include detached Git worktrees.
-      if (NodeFS.statSync(NodePath.join(root, ".git"), { throwIfNoEntry: false })?.isFile()) {
-        yield* git
-          .removeWorktree({ cwd: projectRoot, path: root, force: true })
-          .pipe(Effect.ignore);
-      }
-      yield* removeWorkspaceDirectory(root);
-    }).pipe(Effect.provide(context));
+  const deleteManaged = Effect.fn("ManagedWorkspaces.deleteManaged")(function* (
+    root: string,
+    projectRoot: string,
+  ) {
+    const isolatedRoot = yield* findIsolatedWorkspace(root);
+    if (isolatedRoot !== null) return yield* deleteIsolatedWorkspace(isolatedRoot);
+    if (!NodeFS.existsSync(root)) return;
+    if (NodeFS.statSync(NodePath.join(root, ".jj"), { throwIfNoEntry: false })?.isDirectory()) {
+      return yield* deleteJjWorkspace(root);
+    }
+    // Workspaces from older versions include detached Git worktrees.
+    if (NodeFS.statSync(NodePath.join(root, ".git"), { throwIfNoEntry: false })?.isFile()) {
+      yield* git.removeWorktree({ cwd: projectRoot, path: root, force: true }).pipe(Effect.ignore);
+    }
+    yield* removeWorkspaceDirectory(root);
+  }, Effect.provide(context));
 
   const discard: ManagedWorkspaces["Service"]["discard"] = Effect.fn("ManagedWorkspaces.discard")(
     function* (path) {

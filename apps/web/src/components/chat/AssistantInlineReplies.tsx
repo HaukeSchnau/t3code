@@ -2,7 +2,6 @@ import { type MessageId } from "@t3tools/contracts";
 import { CornerDownLeftIcon, XIcon } from "lucide-react";
 import {
   cloneElement,
-  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -120,6 +119,7 @@ function InlineReplyEditor({
     if (!textarea) return;
     textarea.style.height = "0px";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The height follows the text, which the effect measures through the DOM.
   }, [reply.text]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -129,7 +129,11 @@ function InlineReplyEditor({
   };
 
   return (
-    <div data-inline-reply-ui className="group/inline-editor relative mt-1.5 ml-2">
+    <div
+      data-inline-reply-ui
+      data-thread-find-ignore
+      className="group/inline-editor relative mt-1.5 ml-2"
+    >
       <div className="relative rounded-md border border-border/65 focus-within:border-foreground/25">
         <span className="absolute -top-2 left-2.5 max-w-[calc(100%-2.75rem)] truncate bg-background px-1 text-3xs leading-4 text-muted-foreground">
           {reply.anchorKind === "paragraph" ? "Whole paragraph" : `“${reply.quote}”`}
@@ -171,13 +175,11 @@ function InlineReplyBlock({
   store: InlineReplyDraftStore;
   onParagraphReply: (blockId: string) => void;
 }) {
+  const getReplies = () => store.getForBlock(messageId, block.id);
   const replies = useSyncExternalStore(
-    useCallback(
-      (listener) => store.subscribeToBlock(messageId, block.id, listener),
-      [block.id, messageId, store],
-    ),
-    useCallback(() => store.getForBlock(messageId, block.id), [block.id, messageId, store]),
-    useCallback(() => store.getForBlock(messageId, block.id), [block.id, messageId, store]),
+    (listener) => store.subscribeToBlock(messageId, block.id, listener),
+    getReplies,
+    getReplies,
   );
   const hasParagraphReply = replies.some((reply) => reply.anchorKind === "paragraph");
   const htmlElement = element as ReactElement<React.HTMLAttributes<HTMLElement>>;
@@ -198,6 +200,7 @@ function InlineReplyBlock({
       <span
         key="reply-indicator"
         data-inline-reply-ui
+        data-thread-find-ignore
         aria-hidden="true"
         className="absolute top-[0.65rem] -left-3 size-1 rounded-full bg-primary/60"
       />
@@ -206,6 +209,7 @@ function InlineReplyBlock({
       key="reply-action"
       type="button"
       data-inline-reply-ui
+      data-thread-find-ignore
       data-inline-reply-hover-affordance
       aria-label="Reply to this paragraph"
       className="absolute top-0 left-full z-10 flex h-6 w-7 items-center pl-1 opacity-0 group-hover/inline-reply-block:opacity-100 hover:opacity-100 focus-visible:opacity-100 max-sm:hidden"
@@ -239,10 +243,11 @@ export function AssistantInlineReplies({
 }: AssistantInlineRepliesProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [selectionAction, setSelectionAction] = useState<SelectionAction | null>(null);
+  const getReplies = () => store.getForMessage(messageId);
   const replies = useSyncExternalStore(
-    useCallback((listener) => store.subscribeToMessage(messageId, listener), [messageId, store]),
-    useCallback(() => store.getForMessage(messageId), [messageId, store]),
-    useCallback(() => store.getForMessage(messageId), [messageId, store]),
+    (listener) => store.subscribeToMessage(messageId, listener),
+    getReplies,
+    getReplies,
   );
 
   useLayoutEffect(() => {
@@ -267,40 +272,34 @@ export function AssistantInlineReplies({
     return () => window.removeEventListener("scroll", dismissOnScroll, true);
   }, [selectionAction]);
 
-  const addParagraphReply = useCallback(
-    (blockId: string) => {
-      const blockElement = rootRef.current?.querySelector<HTMLElement>(
-        `[data-inline-reply-block-id="${blockId}"]`,
-      );
-      if (!blockElement) return;
-      const quote = normalizedBlockText(blockElement);
-      if (!quote) return;
-      const replyId = store.add({
-        messageId,
-        blockId,
-        anchorKind: "paragraph",
-        quote,
-      });
-      focusReplyEditor(replyId);
-    },
-    [messageId, store],
+  const addParagraphReply = (blockId: string) => {
+    const blockElement = rootRef.current?.querySelector<HTMLElement>(
+      `[data-inline-reply-block-id="${blockId}"]`,
+    );
+    if (!blockElement) return;
+    const quote = normalizedBlockText(blockElement);
+    if (!quote) return;
+    const replyId = store.add({
+      messageId,
+      blockId,
+      anchorKind: "paragraph",
+      quote,
+    });
+    focusReplyEditor(replyId);
+  };
+
+  const renderBlock: ChatMarkdownBlockRenderer = (block, element) => (
+    <InlineReplyBlock
+      key={block.id}
+      messageId={messageId}
+      block={block}
+      element={element}
+      store={store}
+      onParagraphReply={addParagraphReply}
+    />
   );
 
-  const renderBlock = useCallback<ChatMarkdownBlockRenderer>(
-    (block, element) => (
-      <InlineReplyBlock
-        key={block.id}
-        messageId={messageId}
-        block={block}
-        element={element}
-        store={store}
-        onParagraphReply={addParagraphReply}
-      />
-    ),
-    [addParagraphReply, messageId, store],
-  );
-
-  const updateSelectionAction = useCallback(() => {
+  const updateSelectionAction = () => {
     if (isStreaming) return;
     const root = rootRef.current;
     const selection = window.getSelection();
@@ -360,14 +359,14 @@ export function AssistantInlineReplies({
       left: Math.min(window.innerWidth - 144, Math.max(12, bounds.left + bounds.width / 2 - 66)),
       top: Math.max(12, bounds.top - 38),
     });
-  }, [isStreaming]);
+  };
 
   useEffect(() => {
     document.addEventListener("selectionchange", updateSelectionAction);
     return () => document.removeEventListener("selectionchange", updateSelectionAction);
   }, [updateSelectionAction]);
 
-  const addSelectionReply = useCallback(() => {
+  const addSelectionReply = () => {
     if (!selectionAction) return;
     const replyId = store.add({
       messageId,
@@ -379,7 +378,7 @@ export function AssistantInlineReplies({
     setSelectionAction(null);
     window.getSelection()?.removeAllRanges();
     focusReplyEditor(replyId);
-  }, [messageId, selectionAction, store]);
+  };
 
   if (isStreaming) return <ChatMarkdown {...markdownProps} isStreaming />;
 

@@ -14,6 +14,7 @@ in browsers. On the fleet:
 
 - sshd listens on 2222 (tailscale0 only) and port 22 belongs to a haproxy forwarder,
   so the probe passes for the wrong daemon and a bare hostname reaches the wrong port.
+  Upstream's Tailscale SSH fallback only applies when nothing listens on port 22.
 - The release unit has no `tailscale` on PATH, so only `srv-2.local` is advertised.
 - Workstations run VSCodium and Cursor, not VS Code, so `vscode://` has no handler.
 
@@ -22,7 +23,8 @@ in browsers. On the fleet:
 - `T3CODE_REMOTE_OPEN_HOST` (server env) advertises one target of kind
   `configured` and skips probing. Infra sets it to the host's managed ssh alias,
   which `lib/managed-hosts.nix` renders into every workstation's ssh config with
-  the right user, port and key.
+  the right user, port and key. The configured target carries no `username`, unlike
+  upstream's probed targets, because the alias already supplies the user.
 - In a browser, remote-link mode offers every remote-capable editor (VS Code first,
   then VSCodium, Cursor, Zed and the other forks) and remembers the pick. The
   desktop app keeps probing its own machine.

@@ -7,7 +7,6 @@
  *
  * @module JjWorkflow
  */
-import * as NodeCrypto from "node:crypto";
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -111,8 +110,8 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const runAction: JjWorkflow["Service"]["runAction"] = (input) =>
-    Effect.gen(function* () {
+  const runAction: JjWorkflow["Service"]["runAction"] = Effect.fn("JjWorkflow.runAction")(
+    function* (input) {
       const action = input.action;
       const fail = (detail: string, cause?: unknown) =>
         new JjActionError({
@@ -345,78 +344,77 @@ const make = Effect.gen(function* () {
       });
 
       /** Pushes a change under its bookmark, creating `t3code/<slug>` when it has none. */
-      const push = (changeId: string | undefined) =>
-        Effect.gen(function* () {
-          const target =
-            changeId !== undefined
-              ? revision(changeId)
-              : (yield* read(["log", "--no-graph", "-r", "@", "-T", "empty"])) === "true"
-                ? "@-"
-                : "@";
-          const [resolvedChange = "", description = "", bookmarksJson = "[]"] = (yield* read([
+      const push = Effect.fn("JjWorkflow.push")(function* (changeId: string | undefined) {
+        const target =
+          changeId !== undefined
+            ? revision(changeId)
+            : (yield* read(["log", "--no-graph", "-r", "@", "-T", "empty"])) === "true"
+              ? "@-"
+              : "@";
+        const [resolvedChange = "", description = "", bookmarksJson = "[]"] = (yield* read([
+          "log",
+          "--no-graph",
+          "-r",
+          target,
+          "-T",
+          'change_id ++ "\\t" ++ json(description) ++ "\\t" ++ json(local_bookmarks.map(|b| b.name()))',
+        ])).split("\t");
+        const bookmarks = yield* Effect.try(() => decodeJsonStrings(bookmarksJson)).pipe(
+          Effect.mapError((cause) => fail("Could not read the change's bookmarks.", cause)),
+        );
+        const settings = yield* projectSettings;
+        const remote = "origin";
+        if (settings.jjStripTrailersRemotes.includes(remote)) {
+          const tagged = (yield* read([
             "log",
             "--no-graph",
             "-r",
-            target,
+            `(trunk()..${target}) & description(regex:"(?m)^T3-(Thread|Turn): ")`,
             "-T",
-            'change_id ++ "\\t" ++ json(description) ++ "\\t" ++ json(local_bookmarks.map(|b| b.name()))',
-          ])).split("\t");
-          const bookmarks = yield* Effect.try(() => decodeJsonStrings(bookmarksJson)).pipe(
-            Effect.mapError((cause) => fail("Could not read the change's bookmarks.", cause)),
-          );
-          const settings = yield* projectSettings;
-          const remote = "origin";
-          if (settings.jjStripTrailersRemotes.includes(remote)) {
-            const tagged = (yield* read([
-              "log",
-              "--no-graph",
+            'change_id ++ "\\n"',
+          ]))
+            .split("\n")
+            .filter((line) => line.length > 0);
+          for (const tag of tagged) {
+            yield* run([
+              "describe",
               "-r",
-              `(trunk()..${target}) & description(regex:"(?m)^T3-(Thread|Turn): ")`,
-              "-T",
-              'change_id ++ "\\n"',
-            ]))
-              .split("\n")
-              .filter((line) => line.length > 0);
-            for (const tag of tagged) {
-              yield* run([
-                "describe",
-                "-r",
-                revision(tag),
-                "-m",
-                stripT3Trailers(yield* describeOf(revision(tag))),
-              ]);
-            }
+              revision(tag),
+              "-m",
+              stripT3Trailers(yield* describeOf(revision(tag))),
+            ]);
           }
-          if (bookmarks.length > 0) {
-            yield* run(["git", "push", "--remote", remote, "-b", bookmarks[0]!]);
-            return { bookmark: bookmarks[0]!, changeId: resolvedChange, target };
-          }
-          const existing = new Set(
-            (yield* read(["bookmark", "list", "-T", 'name ++ "\\n"']))
-              .split("\n")
-              .filter((line) => line.length > 0),
-          );
-          const base = bookmarkSlug(
-            yield* Effect.try(() => decodeJsonString(description)).pipe(
-              Effect.mapError((cause) => fail("Could not read the change's description.", cause)),
-            ),
-            resolvedChange,
-          );
-          let name = base;
-          for (let suffix = 2; existing.has(name); suffix += 1) name = `${base}-${suffix}`;
-          yield* run([
-            "git",
-            "push",
-            "--remote",
-            remote,
-            "--named",
-            `${name}=${revision(resolvedChange)}`,
-          ]);
-          return { bookmark: name, changeId: resolvedChange, target };
-        });
+        }
+        if (bookmarks.length > 0) {
+          yield* run(["git", "push", "--remote", remote, "-b", bookmarks[0]!]);
+          return { bookmark: bookmarks[0]!, changeId: resolvedChange, target };
+        }
+        const existing = new Set(
+          (yield* read(["bookmark", "list", "-T", 'name ++ "\\n"']))
+            .split("\n")
+            .filter((line) => line.length > 0),
+        );
+        const base = bookmarkSlug(
+          yield* Effect.try(() => decodeJsonString(description)).pipe(
+            Effect.mapError((cause) => fail("Could not read the change's description.", cause)),
+          ),
+          resolvedChange,
+        );
+        let name = base;
+        for (let suffix = 2; existing.has(name); suffix += 1) name = `${base}-${suffix}`;
+        yield* run([
+          "git",
+          "push",
+          "--remote",
+          remote,
+          "--named",
+          `${name}=${revision(resolvedChange)}`,
+        ]);
+        return { bookmark: name, changeId: resolvedChange, target };
+      });
 
-      const openPullRequest = (pushed: { readonly bookmark: string; readonly changeId: string }) =>
-        Effect.gen(function* () {
+      const openPullRequest = Effect.fn("JjWorkflow.openPullRequest")(
+        function* (pushed: { readonly bookmark: string; readonly changeId: string }) {
           const handle = yield* sourceControl
             .resolveHandle({ cwd: root })
             .pipe(
@@ -470,7 +468,7 @@ const make = Effect.gen(function* () {
               .join("\n");
           const bodyFile = path.join(
             yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-jj-pr-" }),
-            `${NodeCrypto.randomUUID()}.md`,
+            "body.md",
           );
           yield* fileSystem.writeFileString(bodyFile, body);
           yield* handle.provider
@@ -493,12 +491,12 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.orElseSucceed(() => []));
           return created[0]?.url;
-        }).pipe(
-          Effect.scoped,
-          Effect.mapError((cause) =>
-            isJjActionError(cause) ? cause : fail("Could not open the pull request.", cause),
-          ),
-        );
+        },
+        Effect.scoped,
+        Effect.mapError((cause) =>
+          isJjActionError(cause) ? cause : fail("Could not open the pull request.", cause),
+        ),
+      );
 
       const operationHead = read(["op", "log", "-n", "1", "--no-graph", "-T", "id"]);
       // Under the lock no turn can start or seal, so the turn check holds and
@@ -545,7 +543,8 @@ const make = Effect.gen(function* () {
         conflictedChanges,
         ...(pullRequestUrl === undefined ? {} : { pullRequestUrl }),
       } satisfies JjRunActionResult;
-    });
+    },
+  );
 
   return JjWorkflow.of({ runAction });
 });

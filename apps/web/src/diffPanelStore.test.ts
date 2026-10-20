@@ -1,29 +1,108 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId, RunId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { selectThreadDiffPanelSelection, useDiffPanelStore } from "./diffPanelStore";
+import {
+  selectThreadDiffPanelSelection,
+  useDiffPanelSessionStore,
+  useDiffPanelStore,
+} from "./diffPanelStore";
 
 const THREAD_REF = scopeThreadRef(EnvironmentId.make("environment-1"), ThreadId.make("thread-1"));
 
 describe("diffPanelStore", () => {
-  beforeEach(() =>
+  beforeEach(() => {
     useDiffPanelStore.setState({
       byThreadKey: {},
       branchBaseRefByThreadKey: {},
-    }),
-  );
-
-  it("defaults each thread to working tree changes without requiring git status", () => {
-    expect(
-      selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, THREAD_REF),
-    ).toEqual({ kind: "unstaged" });
+    });
+    useDiffPanelSessionStore.setState({ collapsedFileKeysByScopeKey: {} });
   });
 
-  it("defaults to working tree changes before a thread is selected", () => {
-    expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, null)).toEqual({
-      kind: "unstaged",
+  it("retains fold choices when a panel consumer returns with fresh defaults", () => {
+    const scopeKey = "environment-1:thread-1:branch";
+    const defaults = new Set(["src/app.ts", "src/index.ts"]);
+    useDiffPanelSessionStore.getState().updateCollapsedFileKeys(scopeKey, defaults, (current) => {
+      const next = new Set(current);
+      next.delete("src/app.ts");
+      return next;
     });
+
+    expect(useDiffPanelSessionStore.getState().collapsedFileKeysByScopeKey[scopeKey]).toEqual(
+      new Set(["src/index.ts"]),
+    );
+
+    useDiffPanelSessionStore.getState().updateCollapsedFileKeys(scopeKey, new Set(), (current) => {
+      const next = new Set(current);
+      next.delete("src/index.ts");
+      return next;
+    });
+    expect(useDiffPanelSessionStore.getState().collapsedFileKeysByScopeKey[scopeKey]).toEqual(
+      new Set(),
+    );
+
+    useDiffPanelSessionStore
+      .getState()
+      .updateCollapsedFileKeys(scopeKey, defaults, (current) => current);
+    expect(useDiffPanelSessionStore.getState().collapsedFileKeysByScopeKey[scopeKey]).toEqual(
+      new Set(),
+    );
+    expect(defaults).toEqual(new Set(["src/app.ts", "src/index.ts"]));
+  });
+
+  it("persists selection while fold changes and no-op unfolds never write to storage", async () => {
+    const { storage, name } = useDiffPanelStore.persist.getOptions();
+    if (!storage || !name) throw new Error("Diff panel persistence storage is unavailable.");
+    const setItem = vi.spyOn(storage, "setItem");
+    try {
+      useDiffPanelStore.getState().selectBranchBaseRef(THREAD_REF, "origin/release");
+      expect(setItem).toHaveBeenCalledOnce();
+      const beforeFolding = await storage.getItem(name);
+      expect(beforeFolding).toMatchObject({
+        state: { byThreadKey: useDiffPanelStore.getState().byThreadKey },
+      });
+      setItem.mockClear();
+
+      const scopeKey = "environment-1:thread-1:branch";
+      useDiffPanelSessionStore
+        .getState()
+        .updateCollapsedFileKeys(scopeKey, new Set(), () => new Set(["src/app.ts"]));
+      useDiffPanelSessionStore
+        .getState()
+        .updateCollapsedFileKeys(scopeKey, new Set(), (current) => current);
+
+      expect(setItem).not.toHaveBeenCalled();
+      const persisted = await storage.getItem(name);
+      expect(persisted).toEqual(beforeFolding);
+      expect(persisted?.state).not.toHaveProperty("collapsedFileKeysByScopeKey");
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("defaults each thread to Changes without requiring git status", () => {
+    expect(
+      selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, THREAD_REF),
+    ).toEqual({ kind: "branch", baseRef: null });
+  });
+
+  it("defaults to Changes before a thread is selected", () => {
+    expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, null)).toEqual({
+      kind: "branch",
+      baseRef: null,
+    });
+  });
+
+  it("keeps a custom base when a generic open selects Changes again", () => {
+    const store = useDiffPanelStore.getState();
+    store.selectBranchBaseRef(THREAD_REF, "origin/release");
+    store.selectGitScope(THREAD_REF, "branch");
+    store.selectTurn(THREAD_REF, RunId.make("turn-1"));
+    store.selectGitScope(THREAD_REF, "branch");
+
+    expect(
+      selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, THREAD_REF),
+    ).toEqual({ kind: "branch", baseRef: "origin/release" });
   });
 
   it("preserves an explicit branch selection", () => {

@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as PlatformError from "effect/PlatformError";
 import { isSeparateProject, projectProviderView } from "./SeparateProjectRegistry.ts";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as ChildProcess from "effect/process/ChildProcess";
 
 /** The host launcher resolves persistent project registrations by cwd. Unregistered paths pass through. */
 export function projectExecutionArguments(cwd: string, command: string, args: readonly string[]) {

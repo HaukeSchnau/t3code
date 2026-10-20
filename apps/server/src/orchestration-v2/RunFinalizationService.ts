@@ -72,14 +72,16 @@ const make = Effect.gen(function* () {
       );
     const cwd = projection.checkpointScopes.find((scope) => scope.id === input.scopeId)?.cwd;
     if (cwd !== undefined) {
-      yield* observer
-        .refresh({ cwd, threadId: input.threadId, runId: input.runId })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new RunFinalizationError({ ...input, operation: "refresh-workspace", cause }),
-          ),
-        );
+      // Retrying a display refresh after the checkpoint is durable blocks the next turn.
+      yield* observer.refresh({ cwd, threadId: input.threadId, runId: input.runId }).pipe(
+        Effect.catchTags({
+          RunFinalizationRefreshError: (cause) =>
+            Effect.logWarning("Failed to refresh workspace after checkpoint capture", {
+              ...input,
+              cause,
+            }),
+        }),
+      );
     }
   });
   return RunFinalizationService.of({ finalize });
@@ -87,7 +89,7 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(RunFinalizationService, make);
 
-export const observerLive = Layer.effect(
+export const layerObserver = Layer.effect(
   RunFinalizationObserver,
   Effect.gen(function* () {
     const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -96,8 +98,8 @@ export const observerLive = Layer.effect(
     const pullRequests = yield* PullRequestService.PullRequestService;
     return {
       refreshAfterTurn: pullRequests.refreshAfterTurn,
-      refresh: ({ cwd, threadId, runId }) =>
-        Effect.gen(function* () {
+      refresh: Effect.fn("RunFinalizationService.refresh")(
+        function* ({ cwd, threadId, runId }) {
           const [, local] = yield* Effect.all(
             [workspaceEntries.refresh(cwd), vcsStatus.refreshLocalStatus(cwd)],
             { concurrency: "unbounded" },
@@ -115,7 +117,10 @@ export const observerLive = Layer.effect(
               }),
             ),
           );
-        }).pipe(Effect.mapError((cause) => new RunFinalizationRefreshError({ cwd, cause }))),
+        },
+        (effect, { cwd }) =>
+          effect.pipe(Effect.mapError((cause) => new RunFinalizationRefreshError({ cwd, cause }))),
+      ),
     };
   }),
 );

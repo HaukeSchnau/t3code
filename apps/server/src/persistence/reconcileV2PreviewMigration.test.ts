@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
@@ -21,6 +21,16 @@ describe("V2 preview upgrade on the fork ledger", () => {
         [79, "RemoveRedundantProjectionIndexes"],
         [80, "AgentWatches"],
         [81, "SkillPackThreadSelections"],
+        [82, "ScheduledTaskWebhooks"],
+        [83, "WebhookRelayDeliveries"],
+        [84, "McpAppModelContext"],
+        [85, "ThreadSnapshotWindowIndexes"],
+        [86, "PullRequestReviewGuides"],
+        [87, "ThreadFailureLookupIndex"],
+        [88, "DropUnusedV1Projections"],
+        [89, "CanonicalizeThreadPullRequestLinks"],
+        [90, "CodexUsageNativeTurnIndex"],
+        [91, "RepairClientSettlementTimestamps"],
       ]);
       assert.deepStrictEqual(yield* reconcileV2PreviewMigration(), []);
 

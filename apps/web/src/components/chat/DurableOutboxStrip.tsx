@@ -8,7 +8,7 @@ import {
   RotateCwIcon,
   Trash2Icon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import {
@@ -28,32 +28,29 @@ import { presentDurableOutboxEntries, retryCountdownText } from "./durableOutbox
 /** Delivers saved messages for the whole session and reports rejections wherever the user is. */
 export function DurableOutboxDelivery() {
   const navigate = useNavigate();
-  const onRejected = useCallback(
-    (entry: DurableComposerEntry) => {
-      const threadRef = scopeThreadRef(entry.command.environmentId, entry.command.threadId);
-      const open = () => {
-        const draftId =
-          readThreadShell(threadRef) === null
-            ? useComposerDraftStore.getState().getDraftIdByRef(threadRef)
-            : null;
-        void (draftId
-          ? navigate({ to: "/draft/$draftId", params: { draftId } })
-          : navigate({
-              to: "/$environmentId/$threadId",
-              params: buildThreadRouteParams(threadRef),
-            }));
-      };
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "A saved message was not delivered",
-          ...(entry.state._tag === "Rejected" ? { description: entry.state.failure.message } : {}),
-          actionProps: { children: "Open", onClick: open },
-        }),
-      );
-    },
-    [navigate],
-  );
+  const onRejected = (entry: DurableComposerEntry) => {
+    const threadRef = scopeThreadRef(entry.command.environmentId, entry.command.threadId);
+    const open = () => {
+      const draftId =
+        readThreadShell(threadRef) === null
+          ? useComposerDraftStore.getState().getDraftIdByRef(threadRef)
+          : null;
+      void (draftId
+        ? navigate({ to: "/draft/$draftId", params: { draftId } })
+        : navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(threadRef),
+          }));
+    };
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "A saved message was not delivered",
+        ...(entry.state._tag === "Rejected" ? { description: entry.state.failure.message } : {}),
+        actionProps: { children: "Open", onClick: open },
+      }),
+    );
+  };
   useDurableCommandOutbox(onRejected);
   return null;
 }
@@ -72,10 +69,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   onRestore,
   className,
 }: DurableOutboxStripProps) {
-  const views = useMemo(
-    () => presentDurableOutboxEntries(entries, connected),
-    [connected, entries],
-  );
+  const views = presentDurableOutboxEntries(entries, connected);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [busyId, setBusyId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -98,9 +92,8 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
       setActionError(
         cause instanceof Error ? cause.message : "The saved message could not change.",
       );
-    } finally {
-      setBusyId(null);
     }
+    setBusyId(null);
   };
 
   return (

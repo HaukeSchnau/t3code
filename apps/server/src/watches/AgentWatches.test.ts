@@ -22,20 +22,19 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import type {
-  ProviderAdapterV2Event,
-  ProviderAdapterV2Shape,
-} from "../orchestration-v2/ProviderAdapter.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { layerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as AgentWatches from "./AgentWatches.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
@@ -46,7 +45,9 @@ const watcherId = ThreadId.make("thread:watcher");
 const targetId = ThreadId.make("thread:target");
 
 /** Completes every turn, except that a gated thread's turns wait for their gate. */
-function makeAdapter(gates: Map<ThreadId, Deferred.Deferred<void>>): ProviderAdapterV2Shape {
+function makeAdapter(
+  gates: Map<ThreadId, Deferred.Deferred<void>>,
+): ProviderAdapter.ProviderAdapterV2["Service"] {
   return {
     instanceId,
     driver,
@@ -54,9 +55,9 @@ function makeAdapter(gates: Map<ThreadId, Deferred.Deferred<void>>): ProviderAda
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (session) =>
       Effect.gen(function* () {
-        const events = yield* PubSub.unbounded<ProviderAdapterV2Event>();
+        const events = yield* PubSub.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const now = yield* DateTime.now;
-        const publish = (batch: ReadonlyArray<ProviderAdapterV2Event>) =>
+        const publish = (batch: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
           PubSub.publishAll(events, batch);
         const unused = () => Effect.die("unused in watch tests");
         return {
@@ -178,7 +179,7 @@ function makeAdapter(gates: Map<ThreadId, Deferred.Deferred<void>>): ProviderAda
 }
 
 const runtimeLayer = (cwd: string, gates: Map<ThreadId, Deferred.Deferred<void>>) => {
-  const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
+  const orchestrator = layerWithRegistry(
     {
       name: "agent-watches",
       runtimePolicyOverride: {
@@ -187,14 +188,18 @@ const runtimeLayer = (cwd: string, gates: Map<ThreadId, Deferred.Deferred<void>>
         sandboxPolicy: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false },
       },
     },
-    ProviderAdapterRegistry.makeLayer([makeAdapter(gates)]),
+    ProviderAdapterRegistry.layerFromAdapters([makeAdapter(gates)]),
   );
   return Layer.mergeAll(
     orchestrator,
-    ThreadManagementService.layer.pipe(Layer.provide(orchestrator)),
+    ThreadManagementService.layer.pipe(
+      Layer.provide(orchestrator),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(CommandReceiptStore.layer),
+    ),
     ProjectStore.layer,
     NodeServices.layer,
-  ).pipe(Layer.provideMerge(SqlitePersistenceMemory));
+  ).pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 };
 
 /** A real orchestrator with a watcher thread and a target thread whose turns wait for `release`. */

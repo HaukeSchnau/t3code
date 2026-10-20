@@ -25,17 +25,17 @@ import { projectHostPath } from "./project/SeparateProjectRegistry.ts";
  * thread's other attachments. Best effort: a failure leaves the item without a
  * snapshot and never fails event ingestion.
  */
-export const snapshotObservedImage = (input: {
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly attachmentsDir: string;
-  readonly threadId: ThreadId;
-  /** The path as the agent reported it. */
-  readonly path: string;
-  /** The thread's host cwd. Paths from agents in separate projects map through it. */
-  readonly cwd: string | null;
-  readonly agentExecState: string | undefined;
-}): Effect.Effect<ChatImageAttachment | undefined> =>
-  Effect.gen(function* () {
+export const snapshotObservedImage = Effect.fn("snapshotObservedImage")(
+  function* (input: {
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly attachmentsDir: string;
+    readonly threadId: ThreadId;
+    /** The path as the agent reported it. */
+    readonly path: string;
+    /** The thread's host cwd. Paths from agents in separate projects map through it. */
+    readonly cwd: string | null;
+    readonly agentExecState: string | undefined;
+  }) {
     const mimeType = isWorkspaceImagePreviewPath(input.path)
       ? mediaMimeTypeFromExtension(NodePath.extname(input.path))
       : null;
@@ -80,12 +80,14 @@ export const snapshotObservedImage = (input: {
       yield* input.fileSystem.rename(partial, target);
     }
     return attachment;
-  }).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("Failed to snapshot an observed image.", {
-        path: input.path,
-        cause,
-      }).pipe(Effect.as(undefined)),
+  },
+  (effect, input) =>
+    effect.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to snapshot an observed image.", {
+          path: input.path,
+          cause,
+        }).pipe(Effect.as<ChatImageAttachment | undefined>(undefined)),
+      ),
     ),
-    Effect.withSpan("snapshotObservedImage"),
-  );
+);

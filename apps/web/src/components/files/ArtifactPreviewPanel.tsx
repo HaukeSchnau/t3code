@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { isPublishedMarkdownUrl } from "@t3tools/shared/markdownLinks";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { artifactMarkdown } from "~/state/projects";
 import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
@@ -56,7 +56,7 @@ function PublishedMarkdown({
     );
   }
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
+    <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-auto">
       <ChatMarkdown
         text={value.value.contents}
         cwd={undefined}

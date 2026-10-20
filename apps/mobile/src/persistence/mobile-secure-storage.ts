@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SecureStore from "expo-secure-store";
-import { Platform } from "react-native";
 
 const MobileSecureStorageOperation = Schema.Literals(["read", "write", "delete"]);
 
@@ -40,12 +39,13 @@ export class MobileSecureStorage extends Context.Service<
  * class, so they move to the new service on first read instead.
  */
 export const IOS_KEYCHAIN_SERVICE = "t3code.background";
-const iosOptions = {
-  keychainService: IOS_KEYCHAIN_SERVICE,
-  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
-} satisfies SecureStore.SecureStoreOptions;
-// Android ignores both options, and its existing storage stays as it is.
-const writeOptions = () => (Platform.OS === "ios" ? iosOptions : undefined);
+// Android ignores both options, and its existing storage stays as it is. Upstream's tests import this
+// module without mocking react-native or AFTER_FIRST_UNLOCK, so the platform comes from EXPO_OS,
+// which Expo inlines, and the iOS options are built only on iOS.
+const writeOptions = (): SecureStore.SecureStoreOptions | undefined =>
+  process.env.EXPO_OS === "ios"
+    ? { keychainService: IOS_KEYCHAIN_SERVICE, keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK }
+    : undefined;
 
 const read = (key: string, options?: SecureStore.SecureStoreOptions) =>
   Effect.tryPromise({

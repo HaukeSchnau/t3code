@@ -11,7 +11,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
@@ -218,8 +218,8 @@ export const createDirectoryCopy = Effect.fn("DirectoryCopyWorkspaces.create")(f
   readonly baseDir: string;
   readonly workspacesRoot: string;
 }) {
-  const platform = yield* HostProcessPlatform;
-  const environment = yield* HostProcessEnvironment;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
   const source = realpathOrResolve(input.source);
   if (!NodeFS.statSync(source, { throwIfNoEntry: false })?.isDirectory()) {
     return yield* fail(`The project '${source}' is not a directory.`);

@@ -69,53 +69,52 @@ it.layer(DriverLayer)("jj checkpoints", (it) => {
       return cwd;
     });
 
-  for (const colocated of [true, false]) {
-    it.effect(
-      `captures, diffs and restores ${colocated ? "colocated" : "jj-only"} working copies`,
-      () =>
-        Effect.gen(function* () {
-          const driver = yield* VcsDriver.VcsDriver;
-          const checkpoints = driver.checkpoints!;
-          const cwd = yield* makeRepo(colocated);
-          const before = CheckpointRef.make("refs/t3/test/0");
-          const after = CheckpointRef.make("refs/t3/test/1");
+  it.effect.each([
+    { colocated: true, label: "colocated" },
+    { colocated: false, label: "jj-only" },
+  ])("captures, diffs and restores $label working copies", ({ colocated }) =>
+    Effect.gen(function* () {
+      const driver = yield* VcsDriver.VcsDriver;
+      const checkpoints = driver.checkpoints!;
+      const cwd = yield* makeRepo(colocated);
+      const before = CheckpointRef.make("refs/t3/test/0");
+      const after = CheckpointRef.make("refs/t3/test/1");
 
-          assert.isFalse(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: before }));
-          yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: before });
-          yield* writeFile(cwd, "a.ts", "one\ntwo\n");
-          yield* writeFile(cwd, "b.ts", "new\n");
-          yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: after });
-          assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: after }));
+      assert.isFalse(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: before }));
+      yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: before });
+      yield* writeFile(cwd, "a.ts", "one\ntwo\n");
+      yield* writeFile(cwd, "b.ts", "new\n");
+      yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: after });
+      assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: after }));
 
-          const numstat = yield* checkpoints.diffCheckpoints({
-            cwd,
-            fromCheckpointRef: before,
-            toCheckpointRef: after,
-            ignoreWhitespace: false,
-            format: "numstat",
-          });
-          assert.deepStrictEqual(parseTurnDiffFilesFromNumstat(numstat), [
-            { path: "a.ts", additions: 1, deletions: 0 },
-            { path: "b.ts", additions: 1, deletions: 0 },
-          ]);
-          const patch = yield* checkpoints.diffCheckpoints({
-            cwd,
-            fromCheckpointRef: before,
-            toCheckpointRef: after,
-            ignoreWhitespace: false,
-          });
-          assert.include(patch, "diff --git a/b.ts b/b.ts");
+      const numstat = yield* checkpoints.diffCheckpoints({
+        cwd,
+        fromCheckpointRef: before,
+        toCheckpointRef: after,
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      assert.deepStrictEqual(parseTurnDiffFilesFromNumstat(numstat), [
+        { path: "a.ts", additions: 1, deletions: 0 },
+        { path: "b.ts", additions: 1, deletions: 0 },
+      ]);
+      const patch = yield* checkpoints.diffCheckpoints({
+        cwd,
+        fromCheckpointRef: before,
+        toCheckpointRef: after,
+        ignoreWhitespace: false,
+      });
+      assert.include(patch, "diff --git a/b.ts b/b.ts");
 
-          assert.isTrue(yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: before }));
-          const fileSystem = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          assert.equal(yield* fileSystem.readFileString(path.join(cwd, "a.ts")), "one\n");
-          assert.isFalse(yield* fileSystem.exists(path.join(cwd, "b.ts")));
-          // jj keeps every earlier version of @, so the later checkpoint still resolves.
-          assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: after }));
-        }),
-    );
-  }
+      assert.isTrue(yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: before }));
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      assert.equal(yield* fileSystem.readFileString(path.join(cwd, "a.ts")), "one\n");
+      assert.isFalse(yield* fileSystem.exists(path.join(cwd, "b.ts")));
+      // jj keeps every earlier version of @, so the later checkpoint still resolves.
+      assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: after }));
+    }),
+  );
 });
 
 describe("VcsDriverRegistry with jj", () => {

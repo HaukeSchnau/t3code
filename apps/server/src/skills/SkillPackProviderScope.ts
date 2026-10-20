@@ -1,6 +1,6 @@
 import type { ThreadId } from "@t3tools/contracts";
 
-import { resolveOpenCodeConfigContent } from "../provider/opencodeRuntime.ts";
+import { resolveOpenCodeConfigContent } from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import type { MaterializedSkillRoot } from "./SkillPackCatalog.ts";
 
 /**

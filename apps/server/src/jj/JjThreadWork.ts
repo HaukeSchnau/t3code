@@ -137,8 +137,8 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => 0),
       );
 
-  const find: JjThreadWork["Service"]["find"] = (threadId) =>
-    Effect.gen(function* () {
+  const find: JjThreadWork["Service"]["find"] = Effect.fn("JjThreadWork.find")(
+    function* (threadId) {
       const roots = yield* knownRepositories;
       const found = yield* Effect.forEach(
         roots,
@@ -152,13 +152,16 @@ const make = Effect.gen(function* () {
       return found.filter(
         (repository) => repository.changes.length > 0 || repository.taggedOperations > 0,
       );
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("could not search for the thread's jj work", { threadId, cause }).pipe(
-          Effect.as([]),
+    },
+    (effect, threadId) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("could not search for the thread's jj work", { threadId, cause }).pipe(
+            Effect.as([]),
+          ),
         ),
       ),
-    );
+  );
 
   return JjThreadWork.of({ find });
 });

@@ -14,8 +14,10 @@ model whether a batch was worth a wake-up, is gone on purpose.
 ## Behavior
 
 - The `t3-code` MCP server exposes `t3_watch`, `t3_watch_list` and `t3_watch_cancel`. They need the
-  `orchestration` capability. Creating and cancelling also need a live calling run, like the other
-  mutating thread tools. A watch belongs to the thread that created it.
+  `orchestration` capability and an agent inside a T3 thread; a client signed in from outside a
+  thread gets `thread_credential_required`. Creating and cancelling are declared
+  `McpToolAccess.writes`, so they also need a live calling run and refuse read-only clients, like
+  the other mutating thread tools. A watch belongs to the thread that created it.
 - A thread source fires once when a run ends as completed, failed, interrupted, cancelled or rolled
   back. Without a `runId` it follows the active run, then the next queued run, then the latest run,
   then the thread's first run. A run that already ended fires during `t3_watch`, which covers a
@@ -23,8 +25,8 @@ model whether a batch was worth a wake-up, is gone on purpose.
   in any project, so lookups use the unscoped `ThreadManagementService` methods. Deleting the target
   fires the watch too.
 - A command source runs `/bin/sh -c <command>` (the platform shell on Windows) in the watcher's
-  worktree or project root. It spawns through `ProviderProcessSpawner`, so a registered separate
-  project runs inside `agent-exec` and production commands get their own systemd scope. Stdout and
+  worktree or project root, inside upstream's `AgentScope` like a terminal. A registered separate
+  project's `agent-exec` launcher runs inside that scope. Stdout and
   stderr lines are batched for 200 ms, up to 1,024 lines and 3,000 characters per batch. A batch
   identical to the previous one is skipped, and a token bucket (ten bursts, one more every two
   seconds) fails the watch after 30 seconds of sustained overload. Exit closes the watch with one
@@ -41,7 +43,8 @@ model whether a batch was worth a wake-up, is gone on purpose.
 
 `apps/server/src/watches/AgentWatches.ts` owns the service and `WatchRuntime.ts` the batching, the
 gates, the shutdown guard and the command runner. The MCP toolkit lives in
-`apps/server/src/mcp/toolkits/watch/`.
+`apps/server/src/mcp/toolkits/watch/`, and its handlers declare their access through
+`McpToolAccess.toLayer`.
 
 Watches are rows in `agent_watches` (fork migration 80). A row is `open`, `closing` or `closed`.
 `closing` stores the final wake-up before it is sent, so a restart delivers it instead of running
@@ -78,10 +81,13 @@ same for every provider with access to the `t3-code` MCP server.
 ## Upstream hooks
 
 - `apps/server/src/persistence/Migrations.ts`: imports and registers migration 80.
-- `apps/server/src/mcp/McpHttpServer.ts`: imports `WatchToolkitRegistrationLive` and merges it into
+- `apps/server/src/mcp/McpHttpServer.ts`: registers `WatchToolkit` with
+  `toolkitRegistration(WatchToolkit, WatchHandlers.layer)` (`layerWatchToolkit`) and merges it into
   the MCP layer.
-- `apps/server/src/server.ts`: provides `AgentWatches.layer`, with `ProviderProcessSpawnerLayerLive`,
-  to the runtime.
+- `apps/server/src/server.ts`: provides `AgentWatches.layer` to the runtime.
+- `apps/server/scripts/migrate-dev-db.ts`: clears `agent_watches`. Startup respawns command watches
+  and wakes their threads, so a dev database copied from real data must not carry the developer's
+  watches. The table has no `thread_id` column, so the script's thread pruning misses it.
 
 ## Removal
 

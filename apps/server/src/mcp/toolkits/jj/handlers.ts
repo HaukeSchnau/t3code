@@ -7,8 +7,21 @@ import * as JjThreadWork from "../../../jj/JjThreadWork.ts";
 import * as JjWorkflow from "../../../jj/JjWorkflow.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
 import { JjToolkit } from "./tools.ts";
+
+const callingThread = Effect.gen(function* () {
+  const { caller } = yield* readCaller();
+  if (caller === undefined) {
+    return yield* new OrchestratorMcpFailure({
+      code: "thread_credential_required",
+      message:
+        "jj tools act on the calling T3 thread's working copy, so they need an agent running inside T3 Code.",
+    });
+  }
+  return caller;
+});
 
 /** The calling thread's working copy: its worktree, or its project's checkout. */
 const callerWorkingCopy = Effect.gen(function* () {
@@ -19,7 +32,7 @@ const callerWorkingCopy = Effect.gen(function* () {
       message: "This credential cannot use version control.",
     });
   }
-  const { caller } = yield* readCaller();
+  const caller = yield* callingThread;
   const projects = yield* Project.ProjectService;
   const project = yield* projects.getById(caller.projectId).pipe(Effect.mapError(unavailable));
   if (Option.isNone(project)) {
@@ -32,13 +45,14 @@ const callerWorkingCopy = Effect.gen(function* () {
 });
 
 const handlers = {
-  t3_jj_status: () =>
+  t3_jj_status: McpToolAccess.readsAsCaller(() =>
     Effect.gen(function* () {
       const { cwd } = yield* callerWorkingCopy;
       const reader = yield* JjStatusReader.JjStatusReader;
       return yield* reader.read(cwd);
     }),
-  t3_jj_action: (input) =>
+  ),
+  t3_jj_action: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const { cwd, threadId } = yield* callerWorkingCopy;
       const workflow = yield* JjWorkflow.JjWorkflow;
@@ -51,12 +65,14 @@ const handlers = {
           ),
         );
     }),
-  t3_jj_thread_work: () =>
+  ),
+  t3_jj_thread_work: McpToolAccess.readsAsCaller(() =>
     Effect.gen(function* () {
-      const { caller } = yield* readCaller();
+      const caller = yield* callingThread;
       const work = yield* JjThreadWork.JjThreadWork;
       return { repositories: yield* work.find(caller.id) };
     }),
-} satisfies Parameters<typeof JjToolkit.toLayer>[0];
+  ),
+} satisfies McpToolAccess.Handlers<typeof JjToolkit.tools>;
 
-export const JjToolkitHandlersLive = JjToolkit.toLayer(handlers);
+export const layer = McpToolAccess.toLayer(JjToolkit, handlers);

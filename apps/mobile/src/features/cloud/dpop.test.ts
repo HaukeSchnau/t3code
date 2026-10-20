@@ -8,12 +8,8 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import { verifyDpopProof } from "@t3tools/shared/dpop";
 
-import {
-  createDpopProof,
-  generateDpopProofKeyPair,
-  loadOrCreateDpopProofKeyPair,
-  cryptoLayer,
-} from "./dpop";
+import { createDpopProof, generateDpopProofKeyPair, loadOrCreateDpopProofKeyPair } from "./dpop";
+import * as Dpop from "./dpop";
 
 vi.mock("expo-crypto", () => ({
   CryptoDigestAlgorithm: {
@@ -76,7 +72,7 @@ describe("mobile DPoP", () => {
       expect(Buffer.from(digest).toString("hex")).toBe(
         NodeCrypto.createHash("sha256").update("typed-array").digest("hex"),
       );
-    }).pipe(Effect.provide(cryptoLayer)),
+    }).pipe(Effect.provide(Dpop.layer)),
   );
 
   it.effect("persists and reuses the installation proof key", () =>
@@ -87,7 +83,7 @@ describe("mobile DPoP", () => {
 
       expect(second.thumbprint).toBe(first.thumbprint);
       expect(second.privateJwk).toEqual(first.privateJwk);
-    }).pipe(Effect.provide(cryptoLayer)),
+    }).pipe(Effect.provide(Dpop.layer)),
   );
 
   it.effect("rejects malformed persisted proof keys", () =>
@@ -97,7 +93,7 @@ describe("mobile DPoP", () => {
       const error = yield* loadOrCreateDpopProofKeyPair().pipe(Effect.flip);
 
       expect(error.message).toBe("Stored DPoP proof key is invalid.");
-    }).pipe(Effect.provide(cryptoLayer)),
+    }).pipe(Effect.provide(Dpop.layer)),
   );
 
   it.effect("signs connect and bootstrap proofs with the same ephemeral proof key", () =>
@@ -136,7 +132,7 @@ describe("mobile DPoP", () => {
           nowEpochSeconds: proofIat(bootstrap.proof),
         }),
       ).toMatchObject({ ok: true, thumbprint: proofKey.thumbprint });
-    }).pipe(Effect.provide(cryptoLayer)),
+    }).pipe(Effect.provide(Dpop.layer)),
   );
 
   it.effect("signs DPoP proofs with RFC 9449 htu normalization", () =>
@@ -162,6 +158,6 @@ describe("mobile DPoP", () => {
           nowEpochSeconds: proofIat(proof.proof),
         }),
       ).toMatchObject({ ok: true });
-    }).pipe(Effect.provide(cryptoLayer)),
+    }).pipe(Effect.provide(Dpop.layer)),
   );
 });

@@ -26,8 +26,11 @@ passkeys) don't apply to the fork.
   then survive certificate renewals and a later move to Developer ID.
 - `scripts/build-desktop-artifact.ts` sets the app id `dev.schnau.t3code.desktop`, apart from
   the iOS app, which Apple Silicon Macs can also run. The product name is "T3 Code Schnau"
-  (`apps/desktop/package.json`). The in-app name stays "T3 Code (Alpha)": Electron names the
-  safeStorage keychain entry after it, and renaming would strand saved environment tokens.
+  (`apps/desktop/package.json`). The in-app name stays "T3 Code (Alpha)"
+  (`resolveDesktopAppStageLabel`), where upstream switched to "T3 Code (Beta)" (#20032). Electron
+  names the safeStorage keychain entry after the app, so the rename would make the MacBook's saved
+  environment tokens unreadable. Upstream's fix for that (#20907) was reverted (#22219); adopt
+  "Beta" once upstream relands a migration of the old keychain entry.
 - The publish config is a generic feed from `T3CODE_DESKTOP_UPDATE_URL`. Upstream's
   `GITHUB_REPOSITORY` fallback is gone: Gitea Actions set it to `schnau/t3code`, and
   `github.com/schnau` is an unrelated account. Signed builds add T3 Connect passkey entitlements

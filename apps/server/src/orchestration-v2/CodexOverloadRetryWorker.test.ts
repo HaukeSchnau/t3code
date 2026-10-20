@@ -19,7 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as CodexOverloadRetryWorker from "./CodexOverloadRetryWorker.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -158,7 +158,7 @@ const withWorker = <A, E, R>(
 ) =>
   effect.pipe(
     Effect.provide(
-      CodexOverloadRetryWorker.workerLive.pipe(
+      CodexOverloadRetryWorker.layer.pipe(
         Layer.provide(Scheduler.layer),
         Layer.provide(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -170,7 +170,7 @@ const withWorker = <A, E, R>(
     ),
   );
 
-const TestLayer = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory));
+const TestLayer = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 
 it.effect.each(["on time", "after restart"] as const)(
   "retries an overloaded Codex turn without a message %s",

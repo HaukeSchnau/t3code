@@ -40,7 +40,10 @@ export function meterSource(
     new Map([
       [
         environmentId,
-        { entry: { target: { label: "" } }, serverConfig: { usageLimitSources: sources } },
+        {
+          entry: { target: { label: "" } },
+          serverConfig: { providers: [], usageLimitSources: sources },
+        },
       ],
     ]),
   ).filter((account) => account.driver === provider.driver);

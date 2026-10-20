@@ -8,7 +8,7 @@ import {
   FolderGitIcon,
   FolderIcon,
 } from "lucide-react";
-import { memo, type ReactNode, useMemo, useState } from "react";
+import { memo, type ReactNode, useState } from "react";
 
 import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 import { useWorkspaceProfile } from "../lib/managedWorkspaces";
@@ -65,7 +65,7 @@ function Row(props: {
 }
 
 /**
- * Fork: the composer's workspace picker on servers with managed workspaces
+ * The composer's workspace picker on servers with managed workspaces
  * (patches/workspaces.md). Settled workspaces stay findable through search and
  * Show settled, which load archived threads on demand.
  */
@@ -77,30 +77,20 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
   const [query, setQuery] = useState("");
   const [showSettled, setShowSettled] = useState(false);
   const [profile, setProfile] = useWorkspaceProfile();
-  const projectRefs = useMemo(
-    () => (open ? [scopeProjectRef(props.environmentId, props.projectId)] : []),
-    [open, props.environmentId, props.projectId],
-  );
+  const projectRefs = open ? [scopeProjectRef(props.environmentId, props.projectId)] : [];
   const threads = useThreadShellsForProjectRefs(projectRefs);
-  const archiveEnvironmentIds = useMemo(
-    () =>
-      open && (showSettled || query.trim().length > 0)
-        ? [props.environmentId]
-        : EMPTY_ENVIRONMENT_IDS,
-    [open, showSettled, query, props.environmentId],
-  );
+  const archiveEnvironmentIds =
+    open && (showSettled || query.trim().length > 0)
+      ? [props.environmentId]
+      : EMPTY_ENVIRONMENT_IDS;
   const archive = useArchivedThreadSnapshots(archiveEnvironmentIds);
-  const workspaces = useMemo(
-    () =>
-      projectWorkspaceGroups({
-        projectId: props.projectId,
-        threads,
-        archived: archive.snapshots,
-        query,
-        showSettled,
-      }),
-    [props.projectId, threads, archive.snapshots, query, showSettled],
-  );
+  const workspaces = projectWorkspaceGroups({
+    projectId: props.projectId,
+    threads,
+    archived: archive.snapshots,
+    query,
+    showSettled,
+  });
 
   const isNew = props.effectiveEnvMode === "worktree" && props.activeWorktreePath === null;
   const label = props.forceNewWorktree

@@ -37,8 +37,8 @@ Upstream's OpenCode driver only reads OpenCode Go.
 
 ## Upstream touch points
 
-- `apps/server/src/provider/zaiUsage.ts` (fork-owned)
-- `apps/server/src/provider/Drivers/OpenCodeDriver.ts`: the probe merge, and `withOpenCodeClient`,
+- `packages/provider-opencode/src/server/zaiUsage.ts` (fork-owned)
+- `packages/provider-opencode/src/server/driver.ts`: the probe merge, and `withOpenCodeClient`,
   which workspace inventory loading shares
 
 ## Verification

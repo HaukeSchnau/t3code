@@ -24,6 +24,7 @@ import {
 } from "./androidNotifications";
 
 const activityMocks = vi.hoisted(() => ({
+  dismissEnded: vi.fn(),
   getInstances: vi.fn(() => []),
   start: vi.fn(() => ({})),
   updateSnapshot: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock("expo-widgets", () => ({
 }));
 
 vi.mock("./agentLiveActivity", () => ({
+  dismissEndedAgentLiveActivities: activityMocks.dismissEnded,
   getAgentLiveActivities: activityMocks.getInstances,
   startAgentLiveActivity: activityMocks.start,
 }));
@@ -241,6 +243,7 @@ describe("accountless agent awareness registration", () => {
     const environment = transport();
     setAgentAwarenessEnvironmentTransport(environment);
     const activity = {
+      getId: () => "activity-1",
       getPushToken: vi.fn(() => Promise.resolve("activity-token")),
       addPushTokenListener: vi.fn(),
     } as never;
@@ -251,6 +254,35 @@ describe("accountless agent awareness registration", () => {
         deviceId: "device-1",
         activityPushToken: "activity-token",
       });
+    });
+  });
+
+  it.effect("registers a Live Activity push token that rotates after registration", () => {
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+    let tokenListener: ((event: { readonly pushToken: string }) => void) | undefined;
+    const activity = {
+      getId: () => "activity-1",
+      getPushToken: vi.fn(() => Promise.resolve("activity-token")),
+      addPushTokenListener: vi.fn((listener: typeof tokenListener) => {
+        tokenListener = listener;
+        return { remove: vi.fn() };
+      }),
+    };
+
+    return Effect.gen(function* () {
+      expect(yield* registerLiveActivityPushToken({ activity: activity as never })).toBe(true);
+      tokenListener?.({ pushToken: "rotated-activity-token" });
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(environment.registerLiveActivity).toHaveBeenCalledTimes(2)),
+      );
+      expect(
+        vi.mocked(environment.registerLiveActivity).mock.calls.map(([input]) => input),
+      ).toEqual([
+        { deviceId: "device-1", activityPushToken: "activity-token" },
+        { deviceId: "device-1", activityPushToken: "rotated-activity-token" },
+      ]);
+      expect(activity.addPushTokenListener).toHaveBeenCalledTimes(1);
     });
   });
 

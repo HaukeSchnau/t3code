@@ -1,8 +1,15 @@
-import type { EnvironmentConnectionFreshnessProjection } from "@t3tools/client-runtime/state/connection-freshness";
+import {
+  projectEnvironmentConnectionFreshness,
+  type EnvironmentConnectionFreshnessProjection,
+} from "@t3tools/client-runtime/state/connection-freshness";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { CheckCircle2Icon, LoaderCircleIcon, WifiOffIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { environmentCatalog } from "~/connection/catalog";
 import { cn } from "~/lib/utils";
+import { useEnvironmentQuery } from "~/state/query";
+import { environmentShell } from "~/state/shell";
 import { Button } from "../ui/button";
 import {
   deriveTrainNetworkExperience,
@@ -22,6 +29,23 @@ interface TrainNetworkStatusProps {
   readonly onOpenConnections?: () => void;
 }
 
+/**
+ * Subscribes to the environment's connection and shell here, so their pushes re-render this strip
+ * and not the chat around it.
+ */
+export function EnvironmentNetworkStatus({
+  environmentId,
+  ...props
+}: Omit<TrainNetworkStatusProps, "projection"> & { readonly environmentId: EnvironmentId }) {
+  const connection = useEnvironmentQuery(environmentCatalog.stateAtom(environmentId)).data;
+  const shell = useEnvironmentQuery(environmentShell.stateAtom(environmentId)).data;
+  const projection =
+    connection !== null && shell !== null
+      ? projectEnvironmentConnectionFreshness(connection, shell)
+      : null;
+  return <TrainNetworkStatus projection={projection} {...props} />;
+}
+
 export function TrainNetworkStatus({
   projection,
   immediate = false,
@@ -30,10 +54,7 @@ export function TrainNetworkStatus({
   onOpenConnections,
 }: TrainNetworkStatusProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const nextView = useMemo(
-    () => (projection === null ? null : deriveTrainNetworkExperience(projection, nowMs)),
-    [nowMs, projection],
-  );
+  const nextView = projection === null ? null : deriveTrainNetworkExperience(projection, nowMs);
   const fullyRecovered =
     projection?.connection.phase === "connected" && projection.snapshot.status === "live";
   const [displayedView, setDisplayedView] = useState<TrainNetworkExperienceView | null>(() =>
@@ -43,6 +64,7 @@ export function TrainNetworkStatus({
 
   useEffect(() => {
     if (immediate) {
+      // oxlint-disable-next-line react/set-state-in-effect -- The hold timers follow connection changes the supervisor reports.
       setDisplayedView(nextView);
       previouslyDegradedRef.current = nextView?.kind === "degraded";
       return;

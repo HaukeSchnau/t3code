@@ -41,8 +41,8 @@ import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLe
 import * as Option from "effect/Option";
 import * as Struct from "effect/Struct";
 import * as Schema from "effect/Schema";
-import { AsyncResult } from "effect/unstable/reactivity";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { AsyncResult } from "effect/reactivity";
+import { useEffect, useSyncExternalStore } from "react";
 
 import {
   markPromotedDraftThreadByRef,
@@ -367,13 +367,10 @@ export function useThreadDurableOutbox(
 ): ReadonlyArray<DurableComposerEntry> {
   const entries = useOutboxEntries();
   const threadKey = threadRef === null ? null : scopedThreadKey(threadRef);
-  const threadEntries = useMemo(
-    () =>
-      threadKey === null
-        ? EMPTY_ENTRIES
-        : entries.filter((entry) => scopedThreadKey(entry.command) === threadKey),
-    [entries, threadKey],
-  );
+  const threadEntries =
+    threadKey === null
+      ? EMPTY_ENTRIES
+      : entries.filter((entry) => scopedThreadKey(entry.command) === threadKey);
   useEffect(() => {
     if (!threadEntries.some((entry) => serverMessageIds.has(entry.command.messageId))) return;
     void durableCommandOutbox().settle(

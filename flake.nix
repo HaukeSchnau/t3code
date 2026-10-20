@@ -53,9 +53,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-u+wcJvT8CVSeDqCAJPf7HHNT9C+P0XL7w8wuV2LaCBA=";
-            server = "sha256-Pp8S8N+UCymktJxjftjQm0iJHfF/WrM86q/LPJ7nsPE=";
-            runtime = "sha256-Q975B7PsQbpDy0XCypzDqaagQ3oMKBpC1UMqTrYqppU=";
+            web = "sha256-x0sDTGPwTxgLRPvEM/nDFObYs2asuKFJtYS7Re2ooPs=";
+            server = "sha256-LtnEQelfyQnm/Q6ybxUgXZEAoDLA1HL6AQQAAcxTTOQ=";
+            runtime = "sha256-LtnEQelfyQnm/Q6ybxUgXZEAoDLA1HL6AQQAAcxTTOQ=";
           },
         }:
         let
@@ -84,6 +84,17 @@
                 && !lib.hasSuffix ".test.tsx" file.name
               )
             ) path;
+          # The web and server builds import every provider and source-control package except the
+          # test kits, and upstream keeps adding them.
+          integrationPackages = lib.fileset.unions (
+            map (name: productionFiles (./packages + "/${name}")) (
+              lib.filter (
+                name:
+                (lib.hasPrefix "provider-" name || lib.hasPrefix "source-control-" name)
+                && !lib.hasSuffix "-testing" name
+              ) (lib.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./packages)))
+            )
+          );
           manifestSource = lib.fileset.toSource {
             root = ./.;
             fileset = manifestFiles;
@@ -96,13 +107,16 @@
               (productionFiles ./apps/web)
               (productionFiles ./packages/client-runtime)
               (productionFiles ./packages/contracts)
+              (productionFiles ./packages/effect-acp)
               (productionFiles ./packages/shared)
+              integrationPackages
               ./scripts/lib/public-config.ts
               ./scripts/lib/third-party-licenses.ts
               ./third-party-licenses.config.json
               ./apps/desktop/package.json
+              ./apps/server/src/device/deviceToolVersions.json
               ./native/libghostty-vt/LICENSE
-              ./apps/mobile/modules/t3-markdown-text/LICENSE
+              ./apps/mobile/modules/t3-source-text/LICENSE
               ./apps/mobile/modules/t3-composer-editor/LICENSE
             ];
           };
@@ -119,6 +133,7 @@
               (productionFiles ./packages/shared)
               (productionFiles ./packages/ssh)
               (productionFiles ./packages/tailscale)
+              integrationPackages
               ./scripts/lib/cli-external-packages.ts
               ./scripts/lib/public-config.ts
             ];
@@ -166,7 +181,9 @@
           runtimePnpmDeps = mkPnpmDeps {
             pname = "t3code-runtime-deps";
             src = manifestSource;
-            workspaces = [ "t3" ];
+            # The deploy injects the server's workspace dependencies, so their own dependencies
+            # (shared's @noble/curves, for one) must be in the offline store too.
+            workspaces = [ "t3..." ];
             prePnpmInstall = ''
               cp pnpm-deploy-lock.yaml pnpm-lock.yaml
               grep -q '^injectWorkspacePackages: true$' pnpm-workspace.yaml \
@@ -514,6 +531,10 @@
               export npm_config_nodedir="${nodejs}"
               # Tests match English tool messages; Calder workers inherit the host's German locale.
               export LC_ALL=C.UTF-8
+            ''
+            # Playwright's downloaded Chromium does not run on NixOS (apps/web/vitest.config.ts).
+            + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              export T3CODE_BROWSER_TEST_CHROMIUM="${lib.getExe pkgs.chromium}"
             '';
           };
         }

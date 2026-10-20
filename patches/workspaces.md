@@ -46,7 +46,10 @@ Setup scripts run in the workspace terminal as upstream does. Inside an isolated
 source checkout is not mounted there.
 
 `checkpoint.rollback` with `restoreFiles: false` accepts `missing` and `error` checkpoints, so
-"Edit from here" rewinds the conversation in folders without Git. jj workspaces have checkpoints
+"Edit from here" rewinds the conversation in folders without Git. On web, `ChatView.tsx` offers it
+for a first message whose starting checkpoint has no files, and the revert dialog in
+`chat/ChatOverlayHosts.tsx` shows "Revert files too" only when `canRestoreFiles` says files can be
+restored. jj workspaces have checkpoints
 and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 
 ## Contract
@@ -60,16 +63,21 @@ startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The serve
 
 ## Upstream hooks
 
-- `orchestration-v2/ThreadLaunchService.ts`: the internal strategy type includes `workspace`;
-  `prepareInBackground` resolves the strategy, creates a managed workspace in its own block, and
-  discards it on cancellation.
+- `orchestration-v2/ThreadLaunchService.ts`: the internal strategy type includes `workspace`, and
+  `PreparationInput` carries the launch `title` for the workspace name (a retried preparation uses
+  the thread's title). `prepareInBackground` resolves the strategy, tracks a `workspace` like a
+  worktree, creates the managed workspace in its own block, and discards it when a cancelled or
+  failed preparation abandons it. `schedulePreparation` races a `workspace` preparation against
+  run cancellation, as it does for worktrees.
 - `orchestration-v2/Orchestrator.ts`, `CheckpointRollbackService.ts`: conversation-only rollback
   without a ready checkpoint.
 - `ws.ts`: `vcs.removeWorktree` goes through `ManagedWorkspaces.removeWorktree`.
 - `server.ts`: provides the layer. `environment/ServerEnvironment.ts`: advertises the capability.
 - `project/ProjectSetupScriptRunner.ts`: visible setup paths.
 - `mcp/WorktreeMcpService.ts`: `t3_worktree_handoff` delegates to `mcp/ManagedWorkspaceHandoff.ts`
-  for non-Git backends. `t3_thread_launch` takes the new strategy through the schema.
+  for non-Git backends. `t3_thread_launch` takes the new strategy through the schema. The
+  `workspace` sentences in `mcp/toolkits/project/tools.ts` and `mcp/toolkits/worktree/tools.ts`
+  describe it to agents.
 - client-runtime `operations/commands.ts`: `bootstrap.prepareWorkspace` and the conversation-only
   revert. `state/workspaces.ts` is fork-owned.
 - web `BranchToolbar.tsx`, `ChatView.tsx`, `session-logic.ts`,
@@ -90,6 +98,9 @@ startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The serve
 - Mobile keeps the profile choice for the app session only.
 - Multi-model sends stay Git-only, as upstream; on isolated hosts the server still routes them
   into isolated workspaces with the Familiar profile.
+- Upstream's retried preparation reuses a Git worktree the first attempt recorded. A managed
+  workspace has no branch, so a retry after its workspace was recorded creates a new one and
+  leaves the first in place.
 
 ## Removal
 

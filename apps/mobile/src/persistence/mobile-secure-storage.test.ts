@@ -10,9 +10,7 @@ const keychain = vi.hoisted(() => ({
 const slot = (key: string, options?: { readonly keychainService?: string }) =>
   `${options?.keychainService ?? "app"}/${key}`;
 
-vi.mock("react-native", () => ({
-  Platform: { OS: "ios" },
-}));
+vi.stubEnv("EXPO_OS", "ios");
 
 vi.mock("expo-secure-store", () => ({
   AFTER_FIRST_UNLOCK: "after-first-unlock",

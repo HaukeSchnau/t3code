@@ -1,5 +1,5 @@
 import { SKILL_PACK_WS_METHODS } from "@t3tools/contracts";
-import type { Atom } from "effect/unstable/reactivity";
+import type { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
@@ -7,7 +7,7 @@ import {
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
 
-/** Fork: skill pack state and edits for one environment (patches/skill-packs.md). */
+/** Skill pack state and edits for one environment (patches/skill-packs.md). */
 export function createSkillPackEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {

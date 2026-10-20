@@ -16,9 +16,9 @@ import * as Stream from "effect/Stream";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
-import { formatThreadTitleContext } from "../textGeneration/ThreadTitleContext.ts";
+import { formatThreadTitleContext } from "@t3tools/provider-core/server/threadTitleContext";
 import * as ProjectStore from "./ProjectStore.ts";
-import { randomUuidV4 } from "./RandomUuid.ts";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
 // A burst of follow-ups or steering messages settles into one generation.

@@ -13,12 +13,20 @@ continuing those threads must keep working. Upstream has no project execution ba
 - Run registered commands as `<launcher> auto --cwd <cwd> -- <executable> <args...>`, with
   arguments kept separate. Unregistered commands never touch the launcher. A registered cwd without
   `T3CODE_EXECUTION_LAUNCHER` fails; it never falls back to host execution.
-- Route every process entry point: provider subprocesses and text generation through
-  `ProviderProcessSpawner`, the Claude SDK through `ProviderProcessSpawner.nativeProviderSpawn`,
-  `ProcessRunner`, and `TerminalManager`.
-- Codex and Claude v2 sessions use the host cwd for the subprocess and the visible cwd in thread
-  and turn parameters (`CodexAdapterV2.ts`, `ClaudeAdapterV2.ts`). Local MCP URLs use the
-  environment's host gateway, because v2 reaches its orchestration and preview tools over MCP.
+- Route every process entry point: provider subprocesses such as probes and text generation through
+  `ProviderProcessSpawner`, `ProcessRunner`, and `TerminalManager`.
+- Codex and Claude v2 sessions build the launcher command themselves, before upstream's agent scope
+  wraps it, so the launcher runs inside the `systemd-run` scope. Inside the project environment,
+  agent-exec replaces `XDG_RUNTIME_DIR` and drops the session bus, so a scope started there could
+  not reach the user manager. Codex spawns that command without a cwd, so `ProviderProcessSpawner`
+  does not route it again (`CodexAdapterV2.ts`). Claude points the SDK's executable at the
+  launcher and starts it in upstream's process group from the host cwd
+  (`withSeparateProjectLaunch` in `ClaudeAdapterV2.ts`).
+- Codex and Claude show the agent its visible cwd in thread and turn parameters. Local MCP URLs use
+  the environment's host gateway, because v2 reaches its orchestration and preview tools over MCP.
+- Codex metadata probes (`withCodexAppServerClient` in `provider/CodexProvider.ts`) set
+  `AGENT_EXEC_ENVIRONMENT=baseline`. Listing a project's skills needs its files and the provider
+  credentials, not a devenv or flake setup that can take minutes.
 - On a launcher host, Codex reports no session sharing (`separateProjectSessionCapabilities`), so
   each thread gets its own app-server. Upstream shares one per provider instance, and the launcher
   decides where a process runs only when it starts, so a shared process would run every thread
@@ -44,6 +52,10 @@ subagent helpers still pass the host cwd, and native forks with private provider
 unverified.
 
 ## Upstream maintenance
+
+Upstream's agent scopes (`apps/server/src/process/agentScope.ts`) replaced the fork's provider
+systemd scopes. Agents run in `app-t3code-agents-<hash>.slice` and terminals in
+`app-t3code-agents.slice`; infra's limits and observability cgroup paths must follow those names.
 
 Keep the helpers in `project/ProjectExecution.ts` and `project/SeparateProjectRegistry.ts`, and keep
 the hooks in upstream-owned files to single calls. If upstream adds a project execution backend,

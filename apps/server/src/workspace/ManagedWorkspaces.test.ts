@@ -11,7 +11,7 @@ import {
   ThreadId,
   type VcsStatusLocalResult,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it, vi } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,7 +20,7 @@ import * as Layer from "effect/Layer";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { copyOnWriteKind, fullCopyFallbackAllowed } from "./DirectoryCopyWorkspaces.ts";
@@ -111,14 +111,14 @@ function harness(options: { readonly environment?: NodeJS.ProcessEnv } = {}) {
         Layer.mock(TextGeneration.TextGeneration)({
           generateThreadTitle: () => Effect.succeed({ title: "Fix login redirect" }),
         }),
-        SqlitePersistenceMemory,
+        SqlitePersistence.layerMemory,
       ),
     ),
     Layer.provide(NodeServices.layer),
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(HostProcessPlatform, "linux"),
-        Layer.succeed(HostProcessEnvironment, {
+        Layer.succeed(HostProcess.Platform, "linux"),
+        Layer.succeed(HostProcess.Environment, {
           ...process.env,
           T3CODE_EXECUTION_LAUNCHER: undefined,
           ...options.environment,
