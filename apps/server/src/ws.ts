@@ -251,6 +251,7 @@ import {
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageLimitsRefresh from "./usage/UsageLimitsRefresh.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -1138,6 +1139,7 @@ const makeWsRpcLayer = (
             );
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
+      const usageLimitsRefresh = yield* UsageLimitsRefresh.UsageLimitsRefresh;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -2246,6 +2248,9 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
             Effect.gen(function* () {
+              if (input.usageLimitsOnly) {
+                return { providers: yield* usageLimitsRefresh.refresh };
+              }
               // Only explicit catalog refreshes bypass T3's caches. Workspace
               // discovery and background status checks retain their timers.
               if (input.refreshModels) {
@@ -2272,18 +2277,21 @@ const makeWsRpcLayer = (
               // includes quota from configured usage-limit sources. Awaited,
               // not forked: the RPC scope closes on return and would
               // interrupt a fork before the hub answered.
-              if (input.instanceId === undefined) {
-                yield* usageLimitSources.refresh;
-              }
-              let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
-                ? providerRegistry.refreshWorkspaceSnapshot({
-                    instanceId: input.instanceId,
-                    cwd: input.cwd,
-                    fresh: input.fresh === true,
-                  })
-                : input.instanceId !== undefined
-                  ? providerRegistry.refreshInstance(input.instanceId)
-                  : providerRegistry.refresh();
+              let [, providers] = yield* Effect.all(
+                [
+                  input.instanceId === undefined ? usageLimitSources.refresh : Effect.void,
+                  input.cwd !== undefined && input.instanceId !== undefined
+                    ? providerRegistry.refreshWorkspaceSnapshot({
+                        instanceId: input.instanceId,
+                        cwd: input.cwd,
+                        fresh: input.fresh === true,
+                      })
+                    : input.instanceId !== undefined
+                      ? providerRegistry.refreshInstance(input.instanceId)
+                      : providerRegistry.refresh(),
+                ],
+                { concurrency: 2 },
+              );
               if (input.refreshModels) {
                 const instances = yield* providerInstances.listInstances;
                 for (const instance of instances) {

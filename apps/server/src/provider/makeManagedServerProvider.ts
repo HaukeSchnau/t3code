@@ -1,9 +1,11 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   type ServerProvider,
+  type ServerProviderUsageLimits,
   ServerSettingsError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -11,13 +13,21 @@ import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { applyUsageLimitsUpdate, resolveUsageLimitsAfterProbe } from "./providerUsageLimits.ts";
+import {
+  applyUsageLimitsUpdate,
+  isUsageLimitsThrottled,
+  resolveUsageLimitsAfterProbe,
+  USAGE_LIMITS_MIN_READ_GAP_MS,
+  usageLimitsReadFailure,
+  type UsageLimitsReadError,
+} from "./providerUsageLimits.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
 
 interface ProviderSnapshotState {
@@ -54,6 +64,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   readonly refreshInterval?: Duration.Input;
   readonly refreshOnInterval?: boolean;
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
+  /** Read quota straight from the provider, in about a second instead of a full probe. */
+  readonly readUsageLimits?: (
+    snapshot: ServerProvider,
+  ) => Effect.Effect<ServerProviderUsageLimits, UsageLimitsReadError>;
 }): Effect.fn.Return<
   ServerProviderShape,
   ServerSettingsError,
@@ -204,6 +218,68 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       }
     });
 
+  // A reading goes out only when its numbers moved: every provider update
+  // sends each client the whole provider list. Status probes advance `checkedAt`.
+  const publishUsageReading = (reading: ServerProviderUsageLimits) =>
+    Effect.gen(function* () {
+      const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+        const published = state.snapshot.usageLimits;
+        const usageLimits = resolveUsageLimitsAfterProbe({ published, probed: reading });
+        if (
+          usageLimits === published ||
+          (published &&
+            usageLimits &&
+            Equal.equals({ ...usageLimits, checkedAt: published.checkedAt }, published))
+        ) {
+          return [null, state] as const;
+        }
+        const snapshot = withUsageLimits(state.snapshot, usageLimits);
+        return [snapshot, { ...state, snapshot }] as const;
+      });
+      if (snapshotToPublish !== null) {
+        yield* PubSub.publish(changesPubSub, snapshotToPublish);
+      }
+    });
+
+  const usageReadLock = yield* Semaphore.make(1);
+  const lastUsageReadRef = yield* Ref.make(Number.NEGATIVE_INFINITY);
+  // Queued callers re-check after the read ahead of them and reuse it.
+  const refreshUsageLimits: ServerProviderShape["refreshUsageLimits"] = Effect.gen(function* () {
+    const { snapshot } = yield* Ref.get(snapshotStateRef);
+    const published = snapshot.usageLimits;
+    if (!snapshot.enabled || published?.unavailable?.reason === "unsupported") return "current";
+    if (!input.readUsageLimits || !published) return "needsProbe";
+    const now = yield* DateTime.now;
+    const nowMs = DateTime.toEpochMillis(now);
+    if (
+      isUsageLimitsThrottled(published, nowMs) ||
+      nowMs - (yield* Ref.get(lastUsageReadRef)) < USAGE_LIMITS_MIN_READ_GAP_MS
+    ) {
+      return "current";
+    }
+    const read = yield* input.readUsageLimits(snapshot).pipe(Effect.result);
+    if (Result.isFailure(read) && read.failure.retryAt === undefined) {
+      yield* Effect.logDebug("direct usage read failed", {
+        instanceId: snapshot.instanceId,
+        detail: read.failure.detail,
+      });
+      return "needsProbe";
+    }
+    yield* Ref.set(lastUsageReadRef, nowMs);
+    if (Result.isFailure(read)) {
+      yield* Effect.logWarning("usage read throttled", {
+        instanceId: snapshot.instanceId,
+        retryAt: read.failure.retryAt,
+      });
+    }
+    yield* publishUsageReading(
+      Result.isSuccess(read)
+        ? read.success
+        : usageLimitsReadFailure(read.failure, DateTime.formatIso(now)),
+    );
+    return "current";
+  }).pipe(usageReadLock.withPermits(1));
+
   const refreshSnapshot = Effect.fn("refreshSnapshot")(function* () {
     const nextSettings = yield* input.getSettings;
     return yield* applySnapshot(nextSettings, { forceRefresh: true });
@@ -288,6 +364,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     getSnapshot: Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot)),
     refresh: refreshSnapshot().pipe(Effect.tapError(Effect.logError), Effect.orDie),
     applyUsageLimits,
+    refreshUsageLimits,
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },

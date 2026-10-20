@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyUsageLimitsUpdate, resolveUsageLimitsAfterProbe } from "./providerUsageLimits.ts";
+import {
+  applyUsageLimitsUpdate,
+  rateLimitRetryAt,
+  resolveUsageLimitsAfterProbe,
+} from "./providerUsageLimits.ts";
 
 const checkedAt = "2026-09-03T12:00:00.000Z";
 const session = {
@@ -85,5 +89,38 @@ describe("resolveUsageLimitsAfterProbe", () => {
     expect(resolveUsageLimitsAfterProbe({ published, probed: failed })).toBe(published);
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
+  });
+
+  it("keeps a newer reading over an older one, such as a cached Claude probe", () => {
+    const older = {
+      checkedAt: "2026-09-03T11:57:00.000Z",
+      windows: [{ ...session, usedPercent: 10 }],
+    };
+    const newer = { checkedAt: "2026-09-03T12:01:00.000Z", windows: [weekly] };
+    expect(resolveUsageLimitsAfterProbe({ published, probed: older })).toBe(published);
+    expect(resolveUsageLimitsAfterProbe({ published, probed: newer })).toBe(newer);
+  });
+
+  it("keeps the windows of a throttled read and records when to read again", () => {
+    const throttled = {
+      checkedAt: "2026-09-03T12:01:00.000Z",
+      windows: [],
+      unavailable: { reason: "probeFailed" as const },
+      rateLimitedUntil: "2026-09-03T12:06:00.000Z",
+    };
+    expect(resolveUsageLimitsAfterProbe({ published, probed: throttled })).toEqual({
+      ...published,
+      rateLimitedUntil: "2026-09-03T12:06:00.000Z",
+    });
+  });
+});
+
+describe("rateLimitRetryAt", () => {
+  const now = Date.parse(checkedAt);
+  it("honours Retry-After in seconds or as a date, and waits five minutes without one", () => {
+    expect(rateLimitRetryAt("90", now)).toBe("2026-09-03T12:01:30.000Z");
+    expect(rateLimitRetryAt("Thu, 03 Sep 2026 12:10:00 GMT", now)).toBe("2026-09-03T12:10:00.000Z");
+    expect(rateLimitRetryAt(undefined, now)).toBe("2026-09-03T12:05:00.000Z");
+    expect(rateLimitRetryAt("0", now)).toBe("2026-09-03T12:05:00.000Z");
   });
 });

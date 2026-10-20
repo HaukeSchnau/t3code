@@ -286,13 +286,27 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
   return [...accounts.values()];
 }
 
+/** Milliseconds until the provider allows the next read, or null when it is not throttling. */
+function throttledFor(limits: ServerProviderUsageLimits, now: number): number | null {
+  const until = limits.rateLimitedUntil === undefined ? NaN : Date.parse(limits.rateLimitedUntil);
+  return until > now ? until - now : null;
+}
+
+function nextReadIn(waits: readonly number[]): string {
+  return `Next read in ${formatDuration(Math.ceil(Math.min(...waits) / MINUTE) * MINUTE)}.`;
+}
+
 /**
  * What the pooled views cannot draw as a bar: a hub or hub account that failed
- * to read, a provider whose probe failed. Accounts that can never report (API keys)
+ * to read, a provider whose probe failed, and reads the provider is throttling,
+ * whose bars show the last reading. Accounts that can never report (API keys)
  * are left out; there is nothing for the user to act on. The environment
  * is named only when more than one is connected.
  */
-export function collectLimitNotices(presentations: LimitPresentations): readonly string[] {
+export function collectLimitNotices(
+  presentations: LimitPresentations,
+  now: number,
+): readonly string[] {
   const label = (environmentLabel: string, subject: string) =>
     presentations.size > 1 ? `${environmentLabel} · ${subject}` : subject;
   const notices: string[] = [];
@@ -302,23 +316,43 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
       // An account that can never report (API key) is left out; one that
       // failed, or reported nothing at all, is worth a line.
       if (provider.usageLimits?.unavailable?.reason === "unsupported") continue;
-      const notice = provider.usageLimits ? limitsNotice(provider.usageLimits) : null;
+      const throttled = provider.usageLimits ? throttledFor(provider.usageLimits, now) : null;
+      const notice =
+        throttled !== null
+          ? `Usage reads are rate-limited. ${nextReadIn([throttled])}`
+          : provider.usageLimits
+            ? limitsNotice(provider.usageLimits)
+            : null;
       const name = provider.displayName?.trim() || String(provider.driver);
       if (notice) notices.push(`${label(environmentLabel, name)}: ${notice}`);
     }
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
       // Counted, not named: the pooled views never print an account's email.
+      const throttled = source.accounts.flatMap((account) => {
+        const wait = throttledFor(account.usageLimits, now);
+        return wait === null ? [] : [wait];
+      });
       const unread = source.accounts.filter(
-        (account) => account.usageLimits.unavailable?.reason === "probeFailed",
+        (account) =>
+          account.usageLimits.unavailable?.reason === "probeFailed" &&
+          throttledFor(account.usageLimits, now) === null,
       ).length;
+      const subject = label(environmentLabel, source.label);
       if (source.error) {
-        notices.push(`${label(environmentLabel, source.label)}: ${source.error}`);
+        notices.push(`${subject}: ${source.error}`);
       } else if (source.accounts.length === 0) {
-        notices.push(`${label(environmentLabel, source.label)}: No accounts reported.`);
-      } else if (unread > 0) {
-        notices.push(
-          `${label(environmentLabel, source.label)}: Could not read ${unread} ${unread === 1 ? "account" : "accounts"}.`,
-        );
+        notices.push(`${subject}: No accounts reported.`);
+      } else {
+        if (unread > 0) {
+          notices.push(
+            `${subject}: Could not read ${unread} ${unread === 1 ? "account" : "accounts"}.`,
+          );
+        }
+        if (throttled.length > 0) {
+          notices.push(
+            `${subject}: Reads of ${throttled.length} ${throttled.length === 1 ? "account" : "accounts"} are rate-limited. ${nextReadIn(throttled)}`,
+          );
+        }
       }
     }
   }

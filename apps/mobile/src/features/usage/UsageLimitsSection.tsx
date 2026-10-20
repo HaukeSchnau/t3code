@@ -315,7 +315,12 @@ export function useRefreshLimits(
         connected.map(async ([environmentId, presentation]) => {
           const result = await refreshUsageLimits(
             environmentId,
-            () => refreshProviders({ environmentId, input: {} }),
+            // Enabling Cursor changes what its status probe can read, so that check is a full one.
+            () =>
+              refreshProviders({
+                environmentId,
+                input: afterPending ? {} : { usageLimitsOnly: true },
+              }),
             automatic,
             afterPending,
           );

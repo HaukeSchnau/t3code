@@ -168,7 +168,7 @@ it.each([0, 1])(
     });
     expect(state.refreshProviders).toHaveBeenCalledWith({
       environmentId: `test-${environmentNumber}`,
-      input: {},
+      input: { usageLimitsOnly: true },
     });
     expect(
       JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
@@ -197,7 +197,7 @@ it("uses the current time when returning to limits from tokens", async () => {
   expect(state.refreshProviders).toHaveBeenCalledTimes(2);
 });
 
-it("refreshes once on opening Limits and suppresses rapid returns and remounts", async () => {
+it("refreshes each time Limits opens, once per StrictMode mount", async () => {
   state.metric = "tokens";
   await act(() => {
     renderer = create(
@@ -213,20 +213,8 @@ it("refreshes once on opening Limits and suppresses rapid returns and remounts",
       .props.onValueChange([metric]);
   await act(() => selectMetric("limits"));
   expect(state.refreshProviders).toHaveBeenCalledTimes(1);
+  // The server spaces the reads, so returning to Limits asks again.
   await act(() => selectMetric("tokens"));
-  await act(() => selectMetric("limits"));
-  await act(() => renderer.unmount());
-  state.metric = "limits";
-  await act(() => {
-    renderer = create(
-      <StrictMode>
-        <UsagePage />
-      </StrictMode>,
-    );
-  });
-  expect(state.refreshProviders).toHaveBeenCalledTimes(1);
-  await act(() => selectMetric("tokens"));
-  vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T12:05:00Z"));
   await act(() => selectMetric("limits"));
   expect(state.refreshProviders).toHaveBeenCalledTimes(2);
 });
@@ -252,7 +240,10 @@ it("waits for connection and refreshes new environments during a slow refresh", 
   state.presentations = new Map([...state.presentations, [nextId, presentation]]);
   await act(() => renderer.update(<UsagePage />));
   expect(state.refreshProviders).toHaveBeenCalledTimes(2);
-  expect(state.refreshProviders).toHaveBeenLastCalledWith({ environmentId: nextId, input: {} });
+  expect(state.refreshProviders).toHaveBeenLastCalledWith({
+    environmentId: nextId,
+    input: { usageLimitsOnly: true },
+  });
   await act(() => finishRefresh());
 });
 

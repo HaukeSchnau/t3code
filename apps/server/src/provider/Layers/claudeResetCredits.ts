@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 const API_BASE = "https://api.anthropic.com";
+export const CLAUDE_USAGE_URL = `${API_BASE}/api/oauth/usage`;
 const PROGRAM = "cedar_ember";
 const GRANT_ID = /^[a-z0-9_-]{1,40}$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -148,7 +149,7 @@ const readJson = <S extends Schema.Top>(schema: S, file: string) =>
     );
   });
 
-const readAccessToken = (configDir: string) =>
+export const readClaudeAccessToken = (configDir: string) =>
   Effect.gen(function* () {
     if ((yield* HostProcessPlatform) === "darwin") return undefined;
     const path = yield* Path.Path;
@@ -156,7 +157,7 @@ const readAccessToken = (configDir: string) =>
     return credentials.claudeAiOauth?.accessToken?.trim() || undefined;
   });
 
-const withClaudeHeaders = (token: string, version: string) =>
+export const withClaudeHeaders = (token: string, version: string) =>
   HttpClientRequest.setHeaders({
     authorization: `Bearer ${token}`,
     "anthropic-beta": "oauth-2025-04-20",
@@ -169,11 +170,11 @@ const withClaudeHeaders = (token: string, version: string) =>
  */
 export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
   function* (configDir: string, version: string) {
-    const token = yield* readAccessToken(configDir);
+    const token = yield* readClaudeAccessToken(configDir);
     if (!token) return undefined;
     const client = yield* HttpClient.HttpClient;
     const response = yield* client.execute(
-      HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
+      HttpClientRequest.get(CLAUDE_USAGE_URL, {
         urlParams: { cedar_ember: "1", skip_spend: "1" },
       }).pipe(withClaudeHeaders(token, version)),
     );
@@ -216,7 +217,7 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   if (!GRANT_ID.test(input.grantId) || !REQUEST_ID.test(input.requestId)) {
     return yield* new ClaudeResetCreditError({ reason: "malformedCredit" });
   }
-  const token = yield* readAccessToken(input.configDir).pipe(
+  const token = yield* readClaudeAccessToken(input.configDir).pipe(
     Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "loginUnreadable", cause })),
   );
   const config = yield* readJson(Config, input.accountConfigPath).pipe(

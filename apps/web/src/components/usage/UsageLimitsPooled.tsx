@@ -576,7 +576,7 @@ export function UsageLimitsPooled({
   readonly cursorPrompt?: ReactNode;
 }) {
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
-  const notices = collectLimitNotices(presentations);
+  const notices = collectLimitNotices(presentations, now);
   const externalLinks = collectExternalUsageLinks(presentations);
   const cursorPromptAt =
     Math.max(

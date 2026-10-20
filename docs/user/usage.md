@@ -81,9 +81,12 @@ the bar show each account's quota, countdown, and credits. Tap a row to open its
 The same account signed in on more than one environment, or reported by a hub as well, counts once.
 Filter with the environment dropdown to see what a single machine has.
 
-Opening Limits checks the selected connected environments automatically. Each client waits at
-least five minutes between automatic checks of an environment, including after a failed check.
-If a window still looks stale, refresh Limits to re-check every provider and hub.
+While an app is connected, each environment re-reads its hubs and its Codex and Claude logins
+about every two minutes. On macOS, where Claude keeps its login in the Keychain, Claude's limits
+update with its regular status check instead. Opening or refreshing Limits checks every provider
+and hub on the selected environments right away. A check within 30 seconds of the last one
+reuses that reading. When a provider rate-limits these reads, the account keeps its last reading
+and Limits says when the next read happens.
 
 Pick `/usage-limits` from the composer's command menu, or send it as a message, to check the
 current model's limits without leaving the conversation. The result opens above the composer and
