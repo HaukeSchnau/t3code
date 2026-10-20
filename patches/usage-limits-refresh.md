@@ -14,8 +14,10 @@ cannot tell that apart from any other failure.
 ## Design
 
 - `UsageLimitsRefresh` reads the hubs and every provider that can read its quota directly every two
-  minutes while any client lease is active. `server.refreshProviders` with `usageLimitsOnly` runs
-  the same reads at once. Providers without a direct reader run their status probe instead. Older
+  minutes while any client holds a WebSocket connection (`SessionStore.hasConnectedSession`). It
+  does not use BackgroundPolicy leases: on srv-2 no `server.reportClientActivity` call arrived from
+  the desktop app (0.0.45, October 2026) in any trace, so lease-gated work never ran.
+  `server.refreshProviders` with `usageLimitsOnly` runs the same reads at once. Providers without a direct reader run their status probe instead. Older
   servers ignore the flag and run a full refresh.
 - Claude reads `/api/oauth/usage?cedar_ember=1&skip_spend=1` with the login file the CLI keeps,
   which also returns banked resets. Codex reads `wham/usage` with the ChatGPT login in `auth.json`

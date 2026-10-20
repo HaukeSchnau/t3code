@@ -409,6 +409,8 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<number, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
+    /** Whether any client holds an open WebSocket connection right now. */
+    readonly hasConnectedSession: Effect.Effect<boolean>;
     readonly recordClientConnection: (
       sessionId: AuthSessionId,
       client: {
@@ -1046,6 +1048,9 @@ export const make = Effect.gen(function* () {
     revokeAllExcept,
     markConnected,
     markDisconnected,
+    hasConnectedSession: Ref.get(connectedSessionsRef).pipe(
+      Effect.map((sessions) => sessions.size > 0),
+    ),
     recordClientConnection,
   });
 });
