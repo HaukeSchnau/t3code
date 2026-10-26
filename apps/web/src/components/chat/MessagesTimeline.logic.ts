@@ -67,7 +67,12 @@ import {
   type T3McpToolPresentation,
 } from "@t3tools/shared/t3McpToolPresentation";
 import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
-import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@t3tools/shared/htmlRender";
+import {
+  htmlRenderReferencesEqual,
+  htmlRenderVersionsEqual,
+  type HtmlRenderReference,
+  type HtmlRenderVersionEntry,
+} from "@t3tools/shared/htmlRender";
 import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcpApp";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
@@ -635,6 +640,7 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       htmlRender: HtmlRenderReference;
+      versions: ReadonlyArray<HtmlRenderVersionEntry>;
     }
   | {
       kind: "mcp-app";
@@ -1915,6 +1921,7 @@ export function deriveMessagesTimelineRows(input: {
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         htmlRender: timelineEntry.htmlRender,
+        versions: timelineEntry.versions,
       });
       continue;
     }
@@ -2387,7 +2394,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "html-render": {
       // Tool updates rebuild entries; preserve frames for unchanged pages.
       const bh = b as typeof a;
-      return a.createdAt === bh.createdAt && htmlRenderReferencesEqual(a.htmlRender, bh.htmlRender);
+      return (
+        a.createdAt === bh.createdAt &&
+        htmlRenderReferencesEqual(a.htmlRender, bh.htmlRender) &&
+        htmlRenderVersionsEqual(a.versions, bh.versions)
+      );
     }
 
     case "mcp-app": {

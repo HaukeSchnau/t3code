@@ -26,6 +26,12 @@ describe("HtmlRenderFrame", () => {
       <HtmlRenderFrame
         environmentId={EnvironmentId.make("environment")}
         htmlRender={{ attachmentId: "attachment", title: "Report", height: 200 }}
+        versions={[
+          {
+            itemId: "item",
+            htmlRender: { attachmentId: "attachment", title: "Report", height: 200 },
+          },
+        ]}
         threadRef={undefined}
         onFullscreenChange={onFullscreenChange}
       />,

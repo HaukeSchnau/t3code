@@ -409,7 +409,12 @@ function GuestThread({
   });
   const renderHtmlRender = useStableCallback(
     (row: Extract<TimelineRow, { kind: "html-render" }>) => (
-      <GuestHtmlRender itemId={row.id} reference={row.htmlRender} shareId={shareId} />
+      <GuestHtmlRender
+        key={row.versions.at(-1)?.itemId ?? row.id}
+        itemId={row.versions.at(-1)?.itemId ?? row.id}
+        reference={row.versions.at(-1)?.htmlRender ?? row.htmlRender}
+        shareId={shareId}
+      />
     ),
   );
   const unplaced = unplacedGuestMessages(messages, items, awaitingRowIds);
