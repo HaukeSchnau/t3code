@@ -58,14 +58,11 @@ export function useHtmlRenderHost(
       // Opaque origins require "*"; the window reference scopes delivery to this frame.
       post: (message) => target()?.postMessage(message, "*"),
       copy: (text) => navigator.clipboard.writeText(text),
+      // Each page document gets its own host, so its render and title are fixed for the host's life.
       bridge: bridged
         ? {
-            get renderId() {
-              return live().renderId;
-            },
-            get title() {
-              return live().title;
-            },
+            renderId: live().renderId,
+            title: live().title,
             send: async (message) => {
               const send = live().onSendMessage;
               if (send === undefined) {

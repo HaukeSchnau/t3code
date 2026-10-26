@@ -216,14 +216,11 @@ export function HtmlRenderWebView(props: {
           `window.__t3HtmlRenderReceive&&window.__t3HtmlRenderReceive(${JSON.stringify(message)});true;`,
         ),
       copy: (text) => Clipboard.setStringAsync(text).then(() => undefined),
+      // Each page document gets its own host, so its render and title are fixed for the host's life.
       bridge: bridged
         ? {
-            get renderId() {
-              return live().bridge.renderId;
-            },
-            get title() {
-              return live().title;
-            },
+            renderId: live().bridge.renderId,
+            title: live().title,
             send: async (message) => {
               const { environmentId, threadId } = live().bridge;
               await enqueueThreadOutboxMessage({
