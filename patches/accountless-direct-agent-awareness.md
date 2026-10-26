@@ -38,9 +38,10 @@ authorization boundary and is intentionally not removed.
 - Mobile `app.config.ts` still omits the `@clerk/expo` config plugin, Sign in with Apple, and the
   Clerk associated domains. The fork's bundle identifiers and team cannot sign those entitlements.
   The package stays installed and autolinked, so importing its JavaScript is safe without the plugin.
-- Upstream's mobile `CloudAuthProvider` mounts Clerk with a key and relay URL even without the JWT
-  template. The fork gates it on `hasCloudPublicConfig`, so partial config never loads Clerk. This
-  is the only change to upstream's mobile cloud files.
+- Upstream's mobile `CloudAuthProvider` attaches `cloudAccountService` and mounts Clerk with a key
+  and relay URL even without the JWT template. The fork derives its module-level `publishableKey`
+  from `hasCloudPublicConfig`, so partial config never loads Clerk. This is the only change to
+  upstream's mobile cloud files.
 - Drop legacy relay-managed mobile connections during migration; users pair those environments
   directly instead.
 - Register an iOS device and its Live Activity update token over the authenticated environment RPC.
@@ -48,7 +49,8 @@ authorization boundary and is intentionally not removed.
   environment first asks it to forget the device, so it stops pushing to the phone. That request is
   best effort and bounded to five seconds, so an unreachable server cannot block removal.
 - Mobile's Notifications settings always use this direct path and never ask for T3 Connect. The
-  relay token hooks that upstream's `CloudAuthProvider` calls in `remoteRegistration.ts` are no-ops.
+  relay token hooks that upstream's `cloudAccountService.ts` calls in `remoteRegistration.ts` are
+  no-ops.
 - Persist device registrations in the paired server's secret store and publish that server's local
   aggregate directly to APNs (`agentAwareness/LocalAgentAwareness.ts`, `ApnsProvider.ts`).
   Cross-environment aggregation is intentionally unsupported. Each server knows only its own
@@ -56,8 +58,10 @@ authorization boundary and is intentionally not removed.
 - `agentAwareness/LocalAgentAwarenessPublisher.ts` feeds that aggregate from orchestration v2 thread
   events. It reuses the helpers in upstream's `relay/AgentAwarenessRelay.ts` and follows the relay
   publisher's rules. Only work that finished after the server started can raise a first terminal
-  alert. A tombstone or a first `completed` state goes out only if the projection still holds it
-  five seconds later, because both appear briefly while a session boots.
+  alert. A tombstone or a `completed` state goes out only if the projection still holds it five
+  seconds later, because a run can complete moments before its continuation starts. A completion
+  settled during that hold still alerts, then clears on a new window. The publisher reimplements
+  this hold, so port relay changes to it by hand.
 - `ws.ts` serves the four `agentAwareness.*` RPCs that mobile calls: register device, unregister
   device, register Live Activity, and get snapshot. Upstream's v2 server has none of them.
   `auth/RpcAuthorization.ts` gives the three writes the operate scope and the snapshot the read
@@ -86,12 +90,15 @@ Prefer upstream direct-pairing and direct-push implementations if they become av
 The server deltas live in upstream-owned files: the RPC definitions in
 `packages/contracts/src/rpc.ts`, their handlers in `ws.ts`, their scopes in
 `auth/RpcAuthorization.ts`, their trace aggregate in `observability/RpcInstrumentation.ts`, and
-the publisher layers in `server.ts`. Leave `relay/AgentAwarenessRelay.ts` as upstream ships it; the
-local publisher reuses its event filter and `projectThreadAwarenessV2`, so relay fixes such as
-removing settled threads from the Live Activity apply to both.
+the publisher layers in `server.ts`. `relay/AgentAwarenessRelay.ts` only gains an `export` on
+`shouldPublishAgentAwarenessEvent`; the local publisher reuses that event filter and
+`projectThreadAwarenessV2`, so relay fixes such as removing settled threads from the Live
+Activity apply to both.
 
 Take upstream's web cloud files as they are during syncs. The web deltas left here are the `/pair`
-link in `ConnectionsSettings.tsx` and the lazy `ConnectOnboardingDialog` in `routes/__root.tsx`.
+link (`resolveAdvertisedEndpointPairingUrl` in `settings/ConnectionsSettings.logic.ts` and the
+per-link fallback in `settings/AuthorizedClientsSettings.tsx`) and the lazy
+`ConnectOnboardingDialog` in `routes/__root.tsx`.
 
 Take upstream's mobile cloud files as they are during syncs, keeping the `CloudAuthProvider` gate.
 The other mobile deltas live in upstream-owned files, so check each one survives a merge:
@@ -106,7 +113,8 @@ The other mobile deltas live in upstream-owned files, so check each one survives
   registration without linking environments to T3 Connect. The file stays the fork's whole:
   upstream's `canConfigureEnvironment` gate (#9786) only guards the T3 Connect link it replaces.
 - `features/settings/SettingsNotificationsRouteScreen.tsx`: the direct APNs path.
-- `features/settings/SettingsRouteScreen.tsx`: the Notifications row in local Settings.
+- `features/settings/SettingsRouteScreen.tsx`: the Notifications row in `LocalSettingsRouteScreen`'s
+  connections list.
 - `connection/migration.ts`: drops legacy relay-managed connections.
 - `App.tsx`: mounts the fork-only `AccountlessAgentAwarenessProvider` inside `CloudAuthProvider`.
 - `app.config.ts`: the signing removals above.

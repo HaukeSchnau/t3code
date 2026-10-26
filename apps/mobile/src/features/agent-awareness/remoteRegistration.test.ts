@@ -288,9 +288,6 @@ describe("accountless agent awareness registration", () => {
 
   it("skips the Live Activity seed when the environment reports publishing disabled", async () => {
     const { loadPreferences } = await import("../../persistence/imperative");
-    vi.mocked(loadPreferences).mockResolvedValueOnce({
-      liveActivitiesEnabled: true,
-    } as Preferences);
     environmentConfigsMock.configs.set("env-1", {
       environment: { capabilities: { agentActivityPublishing: false } },
     });
@@ -300,8 +297,8 @@ describe("accountless agent awareness registration", () => {
       threadTitle: "Fix the flaky test",
       projectTitle: "t3code",
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(loadPreferences).not.toHaveBeenCalled();
     expect(activityMocks.start).not.toHaveBeenCalled();
   });
 
@@ -319,8 +316,7 @@ describe("accountless agent awareness registration", () => {
       threadTitle: "Fix the flaky test",
       projectTitle: "t3code",
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(activityMocks.start).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(activityMocks.start).toHaveBeenCalledTimes(1));
 
     activityMocks.start.mockClear();
     vi.mocked(loadPreferences).mockResolvedValueOnce({
@@ -331,8 +327,7 @@ describe("accountless agent awareness registration", () => {
       threadTitle: "Fix the flaky test",
       projectTitle: "t3code",
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(activityMocks.start).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(activityMocks.start).toHaveBeenCalledTimes(1));
   });
 });
 

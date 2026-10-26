@@ -87,6 +87,7 @@ export function SettingsNotificationsRouteScreen() {
   };
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- Reads native notification permission on mount and on every foreground.
     void refreshNotifications();
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void refreshNotifications();
@@ -98,6 +99,7 @@ export function SettingsNotificationsRouteScreen() {
     if (!AsyncResult.isSuccess(preferencesResult)) {
       if (AsyncResult.isFailure(preferencesResult)) {
         reportAtomCommandResult(preferencesResult, { label: "live activity preference load" });
+        // oxlint-disable-next-line react/set-state-in-effect -- the toggle follows the stored preference once it loads
         setLiveActivityStatus("enabled");
       } else {
         setLiveActivityStatus("checking");

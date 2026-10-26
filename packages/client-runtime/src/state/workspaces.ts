@@ -1,10 +1,6 @@
-/**
- * Workspace lists for the fork's workspace pickers (patches/workspaces.md). A
- * workspace is the directory threads share through `worktreePath`, so the list
- * is derived from thread shells; archived shells are merged in on demand
- * through the existing archive query. Browsing settled workspaces changes no
- * lifecycle state.
- */
+// Workspace lists for the workspace pickers (patches/workspaces.md). A workspace is the
+// directory threads share through `worktreePath`, so the list derives from thread shells, with
+// archived shells merged in on demand. Browsing settled workspaces changes no lifecycle state.
 import * as DateTime from "effect/DateTime";
 
 import type { ArchivedSnapshotEntry } from "./archivedThreads.ts";

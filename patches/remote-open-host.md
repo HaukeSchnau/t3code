@@ -26,8 +26,10 @@ in browsers. On the fleet:
   the right user, port and key. The configured target carries no `username`, unlike
   upstream's probed targets, because the alias already supplies the user.
 - In a browser, remote-link mode offers every remote-capable editor (VS Code first,
-  then VSCodium, Cursor, Zed and the other forks) and remembers the pick. The
-  desktop app keeps probing its own machine.
+  then VSCodium, Cursor, Zed and the other forks) and remembers the pick:
+  `remoteCapableEditorsAtom` in `apps/web/src/remoteOpen.ts` returns
+  `BROWSER_REMOTE_EDITORS` when there is no desktop probe. The desktop app keeps
+  probing its own machine.
 - The preferred-editor fallback is the first available editor in the caller's
   order instead of catalog order, so the browser list can lead with VS Code while
   server PATH probes keep their catalog order.

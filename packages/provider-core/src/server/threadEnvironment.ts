@@ -3,11 +3,9 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
 /**
- * What a provider process or shell that serves one thread only adds to its
- * environment: the thread's jj config (patches/jujutsu.md) and, for OpenCode,
- * its skill packs (patches/skill-packs.md). Adapters whose process is shared
- * across threads must not apply it. The server provides the implementation;
- * the default adds nothing.
+ * Environment for a provider process or shell that serves one thread only: the
+ * thread's jj config (patches/jujutsu.md) and OpenCode skill packs
+ * (patches/skill-packs.md). Adapters whose process serves several threads must not apply it.
  */
 export interface ProviderThreadEnvironmentShape {
   /** Variables for the thread's processes and shell commands. */

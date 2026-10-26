@@ -1,17 +1,15 @@
-import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   OrchestrationV2SearchThreadResult,
   ThreadId,
 } from "@t3tools/contracts";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { SelectableMarkdownSkill } from "../../native/SelectableMarkdownText.types";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useDebouncedValue } from "../../state/queries";
 import { useEnvironmentQuery } from "../../state/query";
 import type { ThreadFindStart } from "./thread-find-feed";
-import { clearThreadFindHit, threadFindHitAtom } from "./thread-find-store";
 
 export type ThreadFindMatch = NonNullable<OrchestrationV2SearchThreadResult["match"]>;
 
@@ -139,6 +137,7 @@ export function useThreadFind(input: {
   // Reopening searches again from where the reader is now.
   const { readStart } = input;
   const wasOpen = useRef(input.open);
+  // oxlint-disable-next-line t3code/react-effect-budget -- the reader's place lives in the native list, readable only once find has opened
   useEffect(() => {
     const opened = input.open && !wasOpen.current;
     wasOpen.current = input.open;
@@ -151,47 +150,30 @@ export function useThreadFind(input: {
     );
   }, [input.open, readStart]);
 
-  // A thread search hit opens find on the matched message.
-  const hit = useAtomValue(threadFindHitAtom);
-  const hitHere = hit !== null && `${hit.environmentId}:${hit.threadId}` === threadKey ? hit : null;
-  useEffect(() => {
-    if (!input.open || hitHere === null) return;
+  // New content recounts from the current match without moving the reader.
+  const refreshCounts = useEffectEvent(() => {
+    if (!settled || match === null) return;
+    if (
+      state.offset === 0 &&
+      state.start?.entryId === match.entryId &&
+      state.start.occurrence === match.occurrence
+    ) {
+      remote.refresh();
+      return;
+    }
     setState((previous) => ({
       ...previous,
-      query: hitHere.query,
-      start: { entryId: hitHere.messageId, occurrence: 0 },
+      start: { entryId: match.entryId, occurrence: match.occurrence },
       offset: 0,
-      navigation: previous.navigation + 1,
     }));
-    clearThreadFindHit();
-  }, [hitHere, input.open]);
-
-  // New content recounts from the current match without moving the reader.
-  const refreshCounts = useRef(() => {});
-  useLayoutEffect(() => {
-    refreshCounts.current = () => {
-      if (!settled || match === null) return;
-      if (
-        state.offset === 0 &&
-        state.start?.entryId === match.entryId &&
-        state.start.occurrence === match.occurrence
-      ) {
-        remote.refresh();
-        return;
-      }
-      setState((previous) => ({
-        ...previous,
-        start: { entryId: match.entryId, occurrence: match.occurrence },
-        offset: 0,
-      }));
-    };
   });
   const lastContent = useRef(input.content);
+  // oxlint-disable-next-line t3code/react-effect-budget -- recounts once streamed content settles, on a timer the next change cancels
   useEffect(() => {
     if (lastContent.current === input.content) return;
     lastContent.current = input.content;
     if (!input.open || query.length === 0) return;
-    const timer = setTimeout(() => refreshCounts.current(), CONTENT_REFRESH_MS);
+    const timer = setTimeout(() => refreshCounts(), CONTENT_REFRESH_MS);
     return () => clearTimeout(timer);
   }, [input.content, input.open, query]);
 

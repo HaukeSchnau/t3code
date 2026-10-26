@@ -1,13 +1,7 @@
 /**
- * What T3 knows about one jj working copy: which runs have a turn open in it,
- * who changed each unsealed file, and the jj operations T3 ran there. Several
- * threads can share a checkout, so files in `@` are attributed per path from
- * the paths providers report and from time slices in which only one turn ran.
- *
- * Stored as `.jj/t3/working-copy.json`. Every write happens under the working
- * copy's lock in JjCli.
- *
- * @module JjWorkingCopyState
+ * T3's record of one jj working copy in `.jj/t3/working-copy.json`: open turns, who changed each
+ * unsealed file (from reported paths and single-turn time slices), and T3's jj operations.
+ * Every write must hold the working copy's lock in JjCli.
  */
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";

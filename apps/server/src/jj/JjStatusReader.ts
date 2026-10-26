@@ -1,10 +1,6 @@
 /**
- * Reads the jj side of a working copy's status: the stack from `trunk()` to
- * `@`, conflicts, trailers and unattributed files. Every read passes
- * `--ignore-working-copy`, so polling never snapshots or races an agent's own
- * jj commands; status is as fresh as the last snapshot.
- *
- * @module JjStatusReader
+ * The jj side of a working copy's status. Every read passes `--ignore-working-copy`, so polling
+ * never snapshots or races an agent's own jj commands; status is as fresh as the last snapshot.
  */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

@@ -31,6 +31,9 @@ describe("V2 preview upgrade on the fork ledger", () => {
         [89, "CanonicalizeThreadPullRequestLinks"],
         [90, "CodexUsageNativeTurnIndex"],
         [91, "RepairClientSettlementTimestamps"],
+        [92, "WebhookDedupe"],
+        [93, "ShellStopRequestIndex"],
+        [94, "ThreadMessageSearch"],
       ]);
       assert.deepStrictEqual(yield* reconcileV2PreviewMigration(), []);
 

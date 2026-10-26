@@ -1,8 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
-  RelayAgentAwarenessPhase,
   RelayAgentActivitySnapshotResponse,
   RelayDeviceRegistrationRequest,
   RelayDeviceUnregistrationParams,

@@ -10,7 +10,9 @@ const lockPath = NodePath.resolve(root, "pnpm-lock.yaml");
 const deployLockPath = NodePath.resolve(root, "pnpm-deploy-lock.yaml");
 const workspacePath = NodePath.resolve(root, "pnpm-workspace.yaml");
 const check = process.argv.slice(2).includes("--check");
-const expectedPnpmVersion = "11.10.0";
+const expectedPnpmVersion = JSON.parse(
+  NodeFS.readFileSync(NodePath.resolve(root, "package.json"), "utf8"),
+).packageManager.replace(/^pnpm@/, "");
 
 const version = NodeChildProcess.spawnSync("pnpm", ["--version"], {
   cwd: root,

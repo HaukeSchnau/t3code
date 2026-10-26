@@ -42,6 +42,7 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
     reportDefect: false,
   });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- publishes the transport to a module-level registration owner and withdraws it on unmount.
   useEffect(() => {
     if (environmentIds.length === 0) {
       setAgentAwarenessEnvironmentTransport(null);

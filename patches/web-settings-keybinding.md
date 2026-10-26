@@ -9,10 +9,18 @@ web client.
 
 - Keep `settings.open` in the shared keybinding contract and defaults so existing installations
   receive it through the normal non-conflicting default migration.
-- Dispatch the command from the app layout, including when an editor or terminal has focus. Do not
-  dispatch while the command palette or keybinding capture field is active.
+- Dispatch the command from `registerAppShellCommands` in `AppSidebarLayout.tsx`, as a capture-phase
+  `registerCommands` scope next to the desktop `open-settings` menu action, so it fires when an
+  editor or terminal has focus. Do not dispatch while the command palette or keybinding capture
+  field is active.
 - Show the configured shortcut on the command palette's **Open settings** action.
 - Match shifted comma by its physical `Comma` key code. Common browser layouts report the resulting
   `KeyboardEvent.key` as `<`, not `,`.
 
 Remove this patch when upstream provides an equivalent configurable web settings shortcut.
+
+## Reasoning effort default
+
+The fork also gives upstream's `composer.increaseEffort` command a default binding,
+`mod+shift+.` with `when: "!terminalFocus"`, in `packages/shared/src/keybindings.ts`. Upstream ships
+the command without a default. Drop the fork default if upstream adds one.

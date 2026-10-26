@@ -3,8 +3,6 @@
  * worktrees: jj repositories, plain directories, and hosts with isolated
  * runtimes. Mirrors the Git handoff in WorktreeMcpService: create, bind with
  * a recheck, queue the continuation, then run setup. See patches/workspaces.md.
- *
- * @module ManagedWorkspaceHandoff
  */
 import {
   type CommandId,

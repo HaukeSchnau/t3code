@@ -1,11 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- realpath and marker lookups are synchronous filesystem probes.
 /**
- * jj workspaces as managed workspaces. A new workspace shares the project's
- * repository store (`jj workspace add`), so changes are visible from every
- * workspace without pushing. In a colocated repository jj also creates a Git
- * worktree for it; T3 never runs `git worktree` itself for jj repositories.
- *
- * @module JjWorkspaces
+ * jj workspaces as managed workspaces. `jj workspace add` shares the repository store, so changes
+ * are visible across workspaces without pushing. In a colocated repository jj also creates the
+ * Git worktree; T3 never runs `git worktree` itself for jj repositories.
  */
 import * as NodePath from "node:path";
 

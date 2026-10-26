@@ -28,15 +28,19 @@ How it works is in [docs/internals/skill-packs.md](../docs/internals/skill-packs
   scopes.
 - `apps/server/src/orchestration-v2/runtimeLayer.ts`: provides `SkillPacks`.
 - `apps/server/src/orchestration-v2/ProviderTurnStartService.ts`: `prepareTurn` before the session
-  opens.
+  opens, after upstream's abandoned-turn recovery.
 - `CodexAdapterV2.ts` (extra root after `initialize`, per-thread `skills.config`),
   `ClaudeAdapterV2.ts` (`plugins`), and the OpenCode server environment through
   `ProviderThreadEnvironment.forOpenCodeServer` (`packages/provider-core/src/server/threadEnvironment.ts`,
   implemented in `apps/server/src/provider/ProviderThreadEnvironment.ts`).
+- `packages/provider-opencode/src/server/OpenCodeRuntime.ts` exports `resolveOpenCodeConfigContent`
+  for `skills/SkillPackProviderScope.ts`, which merges the packs into the same OpenCode config.
 - `apps/server/src/persistence/Migrations.ts` and the two migration manifest tests.
 - `packages/client-runtime/src/operations/commands.ts` (draft packs before `launchThread`) and
   `rpc/client.ts` (subscription tag).
-- Web: `ChatComposer.tsx` (first resting block), `ChatView.tsx` (control and draft bootstrap),
+- Web: `chat/ComposerControlsBar.tsx` (first resting block, fed by `ChatComposer.tsx`),
+  `ChatView.tsx` (control), `chat/useComposerSend.ts` and `chat/useMultipleModelSend.ts` (draft
+  bootstrap),
   `ProjectSettingsPanel.tsx` (Skills row).
 - Mobile: `ThreadSettingsSheet.tsx` (Skills row and page), `ThreadComposer.tsx`,
   `new-task-flow-provider.tsx`, `use-composer-drafts.ts`, `thread-outbox-model.ts`,

@@ -3,37 +3,32 @@ import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/threads";
 import * as Effect from "effect/Effect";
 import * as Atom from "effect/reactivity/Atom";
-import { act, useContext, useState, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { useContext, useState, type ReactNode } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 
+import { act, fakeTimers, render } from "../../../test/render";
 import { environmentThreads, useEnvironmentThreadMount } from "../../state/threads";
 import { SidebarThreadDetailPrewarmer } from "./SidebarThreadDetailPrewarmer";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
-
 describe("SidebarThreadDetailPrewarmer lifecycle", () => {
   it("shares active atoms and releases background ownership", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    using _timers = fakeTimers();
     const atoms = new Map<string, ReturnType<typeof environmentThreads.stateAtom>>();
     const atomKeys = new Map<ReturnType<typeof environmentThreads.stateAtom>, string>();
     const mounts: string[] = [];
     const releases: string[] = [];
-    vi.spyOn(environmentThreads, "stateAtom").mockImplementation((environmentId, threadId) => {
-      const key = `${environmentId}:${threadId}`;
-      const existing = atoms.get(key);
-      if (existing) return existing;
+    using _stateAtom = vi
+      .spyOn(environmentThreads, "stateAtom")
+      .mockImplementation((environmentId, threadId) => {
+        const key = `${environmentId}:${threadId}`;
+        const existing = atoms.get(key);
+        if (existing) return existing;
 
-      const atom = Atom.make(Effect.succeed(EMPTY_ENVIRONMENT_THREAD_STATE));
-      atoms.set(key, atom);
-      atomKeys.set(atom, key);
-      return atom;
-    });
+        const atom = Atom.make(Effect.succeed(EMPTY_ENVIRONMENT_THREAD_STATE));
+        atoms.set(key, atom);
+        atomKeys.set(atom, key);
+        return atom;
+      });
 
     function CaptureRegistryMounts() {
       const registry = useContext(RegistryContext);
@@ -75,45 +70,34 @@ describe("SidebarThreadDetailPrewarmer lifecycle", () => {
         {children}
       </RegistryProvider>
     );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    try {
-      await act(async () => {
-        root.render(
-          withRegistry([
-            <SidebarThreadDetailPrewarmer
-              key="prewarm"
-              threadKeys={["environment-a:thread-1", "environment-b:thread-2"]}
-            />,
-            <ActiveThreadOwner key="active" />,
-          ]),
-        );
-      });
+    // Mount order is the assertion, so render the tree directly instead of through a router outlet.
+    await using screen = await render(
+      withRegistry([
+        <SidebarThreadDetailPrewarmer
+          key="prewarm"
+          threadKeys={["environment-a:thread-1", "environment-b:thread-2"]}
+        />,
+        <ActiveThreadOwner key="active" />,
+      ]),
+      { router: false },
+    );
 
-      expect(mounts).toEqual([
-        "environment-a:thread-1",
-        "environment-b:thread-2",
-        "environment-a:thread-1",
-      ]);
+    expect(mounts).toEqual([
+      "environment-a:thread-1",
+      "environment-b:thread-2",
+      "environment-a:thread-1",
+    ]);
 
-      await act(async () => {
-        root.render(withRegistry([<ActiveThreadOwner key="active" />]));
-        vi.runAllTimers();
-      });
-      expect(releases).toEqual(["environment-a:thread-1", "environment-b:thread-2"]);
+    await screen.rerender(withRegistry([<ActiveThreadOwner key="active" />]));
+    await act(() => vi.runAllTimers());
+    expect(releases).toEqual(["environment-a:thread-1", "environment-b:thread-2"]);
 
-      await act(async () => {
-        root.unmount();
-        vi.runAllTimers();
-      });
-      expect(releases).toEqual([
-        "environment-a:thread-1",
-        "environment-b:thread-2",
-        "environment-a:thread-1",
-      ]);
-    } finally {
-      container.remove();
-    }
+    await screen.unmount();
+    await act(() => vi.runAllTimers());
+    expect(releases).toEqual([
+      "environment-a:thread-1",
+      "environment-b:thread-2",
+      "environment-a:thread-1",
+    ]);
   });
 });

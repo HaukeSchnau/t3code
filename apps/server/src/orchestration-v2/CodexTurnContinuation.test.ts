@@ -15,7 +15,6 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -107,9 +106,7 @@ const TestLayer = Layer.mergeAll(
       createWorktree: () => Effect.succeed({} as never),
     }),
   ),
-  Layer.provide(
-    Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
-  ),
+  Layer.provide(Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone })),
   Layer.provide(PlatformTestLayer),
 );
 

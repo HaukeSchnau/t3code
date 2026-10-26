@@ -14,7 +14,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import {
   makeEventNdjsonLogger,
   makeEventNdjsonLogStore,
@@ -304,32 +303,6 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
     }),
   );
 
-  it.effect("flushes an active batch without a permanent polling loop", () =>
-    Effect.gen(function* () {
-      const tempDir = NodeFS.realpathSync(
-        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
-      );
-      const filePath = NodePath.join(tempDir, "native.log");
-
-      try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 1_000,
-        });
-        assert.exists(logger);
-        if (!logger) return;
-        yield* logger.write({ id: "batched-event" }, ThreadId.make("thread-batched"));
-
-        assert.isFalse(NodeFS.existsSync(filePath));
-        yield* TestClock.adjust(1_000);
-        yield* logger.close();
-        assert.deepEqual(readEventIds(filePath), ["batched-event"]);
-      } finally {
-        NodeFS.rmSync(tempDir, { recursive: true, force: true });
-      }
-    }),
-  );
-
   it.effect("does not strand a later batch after an interrupted write", () =>
     Effect.gen(function* () {
       const tempDir = NodeFS.realpathSync(
@@ -527,39 +500,5 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
           NodeFS.rmSync(tempDir, { recursive: true, force: true });
         }
       }),
-  );
-
-  it.effect("reports logical provider log writes to resource attribution", () =>
-    Effect.gen(function* () {
-      const tempDir = NodeFS.realpathSync(
-        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
-      );
-      const filePath = NodePath.join(tempDir, "native.log");
-
-      try {
-        const attribution = yield* ResourceAttribution.make();
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 0,
-          attribution,
-        });
-        assert.exists(logger);
-        if (!logger) return;
-
-        yield* logger.write({ id: "attributed-event" }, ThreadId.make("thread-attribution"));
-        yield* logger.close();
-
-        const snapshot = yield* attribution.snapshot;
-        assert.equal(snapshot.entries.length, 1);
-        assert.deepInclude(snapshot.entries[0], {
-          component: "provider-event-log",
-          operation: "native.append",
-          count: 1,
-          logicalWriteBytes: NodeFS.statSync(filePath).size,
-        });
-      } finally {
-        NodeFS.rmSync(tempDir, { recursive: true, force: true });
-      }
-    }),
   );
 });

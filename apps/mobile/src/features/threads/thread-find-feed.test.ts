@@ -83,7 +83,7 @@ const projected = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
     item,
   }));
 
-// A settled run folds the work between its first and last answer.
+// A settled run folds the work between its first and last answer; plans stay visible.
 const feed = buildThreadFeed(
   projected([
     user("ask", 0, "Run the probe"),
@@ -106,15 +106,19 @@ describe("resolveThreadFindReveal", () => {
       match: { entryId, runId },
     });
 
-  it("opens the folds that hide a plan, and lands on the row that then shows it", () => {
+  it("opens the run fold that hides a message", () => {
+    expect(reveal("plan")).toEqual({
+      rowId: "plan",
+      runId,
+      workGroupId: null,
+      activityId: null,
+    });
+  });
+
+  it("expands a plan's row, which stays visible beside a folded run", () => {
     const target = reveal("proposal");
-    expect(target?.runId).toBe(runId);
-    const shown = deriveThreadFeedPresentation(
-      feed,
-      null,
-      new Set([runId]),
-      new Set(target?.workGroupId ? [target.workGroupId] : []),
-    );
+    expect(target?.runId).toBeNull();
+    const shown = deriveThreadFeedPresentation(feed, null, new Set());
     const row = shown.find((candidate) => candidate.id === target?.rowId);
     expect(row?.type).toBe("activity-group");
     expect(
@@ -142,8 +146,12 @@ describe("threadFindStartInRows", () => {
   it("counts from the first message or plan in the visible rows", () => {
     const rows = deriveThreadFeedPresentation(feed, null, new Set());
     const foldIndex = rows.findIndex((row) => row.type === "run-fold");
-    expect(threadFindStartInRows(rows, foldIndex, rows.length - 1)).toEqual({
+    expect(threadFindStartInRows(rows, foldIndex + 2, rows.length - 1)).toEqual({
       entryId: "answer",
+      occurrence: 0,
+    });
+    expect(threadFindStartInRows(rows, foldIndex, rows.length - 1)).toEqual({
+      entryId: "proposal",
       occurrence: 0,
     });
     expect(threadFindStartInRows(rows, 0, rows.length - 1)).toEqual({

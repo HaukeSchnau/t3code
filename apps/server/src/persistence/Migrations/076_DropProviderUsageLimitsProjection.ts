@@ -2,15 +2,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 /**
- * Drops the fork's provider usage-limit projection. Usage limits now live on
- * provider snapshots, so the `provider` aggregate's events and command
- * bookkeeping, the projection table and its projector cursor have no reader,
- * and the event store could no longer decode those events. Usage snapshots
- * that older fork versions appended as thread activities go too: no projector
- * filters them out anymore.
- *
- * Older builds query the dropped table unconditionally, so rolling back past
- * this migration needs a database backup.
+ * Usage limits now live on provider snapshots, so the fork's `provider` aggregate, its projection
+ * and old usage-snapshot thread activities have no reader, and the event store can no longer
+ * decode those events. Older builds query the dropped table, so rolling back needs a backup.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

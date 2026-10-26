@@ -15,9 +15,9 @@ one ordinary user message when sent.
   a quiet source highlight, and paragraph replies keep a small source indicator.
 - The existing main composer remains the only send control. Inline replies enable it even when its
   own prompt is empty (`hasExternalSendableContent`), and its text acts as an optional overall note.
-- `ChatView.tsx`'s send path formats the replies with `formatInlineReplyPrompt` for single-model,
-  multi-model, and plan follow-up sends. A successful send clears them, and a failed send restores
-  them. No provider or wire-contract specialization is allowed.
+- `chat/useComposerSend.ts` formats the replies with `formatInlineReplyPrompt` for single-model,
+  multi-model (`chat/useMultipleModelSend.ts`), plan follow-up, and outbox sends. A successful send
+  clears them, and a failed send restores them. No provider or wire-contract specialization is allowed.
 
 ## Maintenance notes
 
@@ -26,8 +26,9 @@ one ordinary user message when sent.
 - Inline replies are persisted as part of `composerDraftStore`'s per-thread draft. `ChatView` keeps
   one store per draft target in state, created from that slice, and every inline edit writes it back
   through the composer's existing debounced local-storage path.
-- `MessagesTimeline.tsx` renders `AssistantInlineReplies` in place of `ChatMarkdown` when the
-  store exists. Forward every prop upstream adds to the `ChatMarkdown` call beside it, such as
+- `chat/TimelineAssistantRows.tsx` renders `AssistantInlineReplies` in place of `ChatMarkdown`
+  when the store exists. ChatView passes the store to `ThreadTimeline`, which spreads it into
+  `MessagesTimeline`, and the rows read it from `chat/timelineRowContext.ts`. Forward every prop upstream adds to the `ChatMarkdown` call beside it, such as
   `onRunShellCommand`.
 - `ChatMarkdown.renderBlock` is the narrow upstream seam: the `p` and `li` renderers pass each block
   and its source offset to it through the renderer context. Preserve their default output when no

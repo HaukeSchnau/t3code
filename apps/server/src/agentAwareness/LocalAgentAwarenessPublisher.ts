@@ -25,10 +25,9 @@ function publishIdentity(state: AgentAwarenessState): string {
 }
 
 /**
- * Feeds paired devices from V2 thread events. Mirrors the relay publisher's rules: only work
- * finished by this process may raise a first terminal alert, and a tombstone or a first
- * "completed" state is published only if the projection still holds it five seconds later,
- * because both appear transiently while a session boots or the projector is mid-write.
+ * Feeds paired devices from V2 thread events with the relay publisher's rules: only work finished
+ * by this process may raise a first terminal alert, and a tombstone or "completed" state goes out
+ * only if the projection still holds it five seconds later.
  */
 export const make = Effect.gen(function* () {
   const awareness = yield* LocalAgentAwareness.LocalAgentAwareness;
@@ -39,6 +38,7 @@ export const make = Effect.gen(function* () {
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const published = new Map<ThreadId, string>();
   const confirmationDeadlines = new Map<ThreadId, number>();
+  const heldCompletions = new Set<ThreadId>();
   let scheduleConfirmation: (threadId: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
   const publishSnapshot = Effect.fn("LocalAgentAwarenessPublisher.publishSnapshot")(function* (
@@ -47,14 +47,11 @@ export const make = Effect.gen(function* () {
     const shell = yield* threads.getThreadShell(threadId);
     const thread = shell === null || shell.archivedAt !== null ? null : shell;
     const project = thread === null ? Option.none() : yield* projects.getById(thread.projectId);
+    const environmentId = yield* serverEnvironment.getEnvironmentId;
     const state =
       thread === null || Option.isNone(project)
         ? null
-        : projectThreadAwarenessV2({
-            environmentId: yield* serverEnvironment.getEnvironmentId,
-            project: project.value,
-            thread,
-          });
+        : projectThreadAwarenessV2({ environmentId, project: project.value, thread });
     const previous = published.get(threadId);
     if (state === null && previous === undefined) return;
     if (
@@ -68,9 +65,11 @@ export const make = Effect.gen(function* () {
     const identity = state === null ? undefined : publishIdentity(state);
     if (identity === previous) {
       confirmationDeadlines.delete(threadId);
+      heldCompletions.delete(threadId);
       return;
     }
-    if (state === null || (state.phase === "completed" && previous === undefined)) {
+    if (state === null || state.phase === "completed") {
+      if (state !== null) heldCompletions.add(threadId);
       const now = (yield* DateTime.now).epochMilliseconds;
       const deadline = confirmationDeadlines.get(threadId);
       if (deadline === undefined) {
@@ -78,8 +77,29 @@ export const make = Effect.gen(function* () {
         return yield* scheduleConfirmation(threadId);
       }
       if (now < deadline) return;
+      // Settled during the hold, not resumed: alert the held completion, then clear the card on a
+      // new window. Only settlement may hide it; queued or silent runs also project to null.
+      const unsettled =
+        state === null &&
+        heldCompletions.has(threadId) &&
+        thread?.settledOverride === "settled" &&
+        Option.isSome(project)
+          ? projectThreadAwarenessV2({
+              environmentId,
+              project: project.value,
+              thread: { ...thread, settledOverride: null },
+            })
+          : null;
+      if (unsettled?.phase === "completed") {
+        heldCompletions.delete(threadId);
+        yield* awareness.publish({ threadId, state: unsettled });
+        published.set(threadId, publishIdentity(unsettled));
+        confirmationDeadlines.set(threadId, now + CONFIRMATION_DELAY_MS);
+        return yield* scheduleConfirmation(threadId);
+      }
     }
     confirmationDeadlines.delete(threadId);
+    heldCompletions.delete(threadId);
     yield* awareness.publish({ threadId, state });
     if (identity === undefined) published.delete(threadId);
     else published.set(threadId, identity);

@@ -1,15 +1,7 @@
 /**
- * A per-thread jj config layer. Providers that run one process per thread get
- * `JJ_CONFIG` pointing at the user's config followed by this layer, so the
- * agent's own `jj commit`, `describe` and `new -m` add T3-Thread and T3-Turn
- * trailers, and every jj operation it runs is tagged with the thread and turn.
- * T3 rewrites the layer when each turn starts.
- *
- * On launcher hosts agent-exec owns the agent's environment and home, so the
- * layer would hide the agent's own jj config. Those agents only get
- * `JJ_OP_USERNAME`, and T3 adds trailers after the turn instead.
- *
- * @module JjThreadLayer
+ * A per-thread jj config layer, appended to the user's config through `JJ_CONFIG` and rewritten
+ * at each turn start, so the agent's own jj commits carry T3 trailers. On launcher hosts it
+ * would hide the agent's own jj config, so those agents only get `JJ_OP_USERNAME`.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- layer file names hash the thread id synchronously.
 import * as NodeCrypto from "node:crypto";

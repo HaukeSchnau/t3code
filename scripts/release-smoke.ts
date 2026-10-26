@@ -17,6 +17,7 @@ const workspaceFiles = [
   "apps/desktop/package.json",
   "apps/web/package.json",
   "apps/mobile/package.json",
+  "apps/mobile/modules/t3-highlights/package.json",
   "apps/mobile/modules/t3-source-text/package.json",
   "apps/mobile/modules/t3-review-diff/package.json",
   "apps/mobile/modules/t3-terminal/package.json",
@@ -40,6 +41,7 @@ const workspaceFiles = [
   "packages/source-control-azure-devops/package.json",
   "packages/source-control-bitbucket/package.json",
   "packages/source-control-core/package.json",
+  "packages/source-control-definitions/package.json",
   "packages/source-control-forgejo/package.json",
   "packages/source-control-gitcafe/package.json",
   "packages/source-control-github/package.json",
@@ -233,12 +235,15 @@ try {
     },
   );
 
-  // Refreshes the committed lockfile, as the release workflow does. Resolving from scratch would pick
-  // a patched dependency's newer release once it is a day old, then fail on the unused patch.
+  NodeFS.rmSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), { force: true });
+
   NodeChildProcess.execFileSync("vp", ["install", "--lockfile-only", "--ignore-scripts"], {
     cwd: tempRoot,
     stdio: "inherit",
   });
+
+  const lockfile = NodeFS.readFileSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), "utf8");
+  assertContains(lockfile, "lockfileVersion:", "Expected pnpm-lock.yaml to be regenerated.");
 
   for (const relativePath of [
     "apps/server/package.json",

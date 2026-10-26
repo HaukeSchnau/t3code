@@ -1,11 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 /**
- * Best-effort, metadata-only provider event logging
- * (patches/provider-event-metadata-logging.md).
- *
- * Native and canonical views share one globally rotated file and its batching,
- * rotation, and retention state. Provider payload values are never persisted;
- * high-frequency events are deterministically sampled.
+ * Metadata-only provider event logging (patches/provider-event-metadata-logging.md). Native and
+ * canonical views share one globally rotated file and its write state; payload values are never
+ * persisted and high-frequency events are sampled.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -213,8 +210,7 @@ export function shouldPersistProviderEvent(stream: EventNdjsonStream, event: unk
 
     const nested = Reflect.get(event, "event");
     const envelope = typeof nested === "object" && nested !== null ? nested : event;
-    // Decoded frames carry the same information as raw frames without another
-    // copy of every token delta.
+    // Decoded frames preserve raw-frame information without duplicating every token delta.
     if (Reflect.get(envelope, "stage") === "raw") return false;
     const decodedPayload = Reflect.get(envelope, "payload");
     const nativeEvent =

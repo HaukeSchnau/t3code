@@ -4,12 +4,10 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
 /**
- * Calder keeps node_modules between runs. When a package gains a patch while its unpatched copy is
- * still installed, pnpm 11.10 installs the patched variant without applying the patch. A fresh
- * node_modules over the same store applies it, so this starts from one whenever the lockfile's
- * patch set differs from the one the kept node_modules was installed with. (`--force` would also
- * install every platform's optional packages.) Drop it once pnpm applies patches on incremental
- * installs.
+ * pnpm (seen on 11.10) installs a newly patched package without applying the patch while its
+ * unpatched copy sits in Calder's kept node_modules, so start fresh whenever the lockfile's patch
+ * set changes. `--force` would also install every platform's optional packages. Drop this once
+ * pnpm applies patches on incremental installs.
  */
 const marker = "node_modules/.t3-patch-set";
 const lockfile = NodeFS.readFileSync("pnpm-lock.yaml", "utf8");

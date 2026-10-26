@@ -3,9 +3,8 @@ import type { AgentAwarenessDeviceRegistrationInput } from "@t3tools/contracts";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import { supportsAgentAwarenessPush } from "./capabilities";
 
-// Local Xcode builds can use a production app variant while still being
-// development-signed, so prefer the APNs environment captured by app.config.
-// The variant fallback preserves compatibility with older updates.
+// Local Xcode builds can be development-signed with a production variant, so prefer the APNs
+// environment app.config captured; the variant fallback covers older updates.
 export function resolveApsEnvironment(
   configuredEnvironment: unknown,
   appVariant: unknown,

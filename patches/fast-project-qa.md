@@ -10,15 +10,17 @@ and fork lockfile check.
 
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
 - Calder (`.calder/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
-  (`Pnpm.install` from `@calder-ci/std`) installs dependencies once per lockfile state and keeps
+  installs dependencies once per lockfile state and keeps
   `node_modules`, with Vite+'s task cache and Vitest's module cache, and TypeScript build info
   between tasks; each task starts from a copy of the prepared workspace. Build output doesn't carry
   over, since a task would read what another revision built.
 - CI installs the committed lockfile with `--frozen-lockfile --trust-lockfile`, matching Nix release
   builds. Dependency changes retain normal pnpm policy checks when resolving the lockfile; CI does
   not recheck every locked version against live registry metadata. That pnpm 11.10 verification
-  exhausted the 15-minute setup budget in run 387 before any QA command ran.
-- `scripts/ci-pnpm-install.ts` runs that install. pnpm 11.10 installs a package that just gained a
+  exhausted the 15-minute setup budget in run 387 before any QA command ran. The install and
+  `apple-install` inputs include `.pnpmfile.cjs`: pnpm 12 rejects a frozen install whose pnpmfile no
+  longer matches the checksum in the lockfile.
+- `scripts/ci-pnpm-install.ts` runs that install. pnpm (seen on 11.10) installs a package that just gained a
   patch without applying it when the slot's kept node_modules already holds the unpatched copy, so
   the script deletes the node_modules folders whenever the lockfile's `patchedDependencies` differ
   from the set recorded in `node_modules/.t3-patch-set`; the kept store makes the reinstall
@@ -38,6 +40,9 @@ and fork lockfile check.
   the package's test script, and writes the JSON report that tells Calder what passed. It bypasses
   `vp run --cache`, so a report never holds replayed results. A nightly run repeats every check
   without reuse.
+- The package and scripts suites run whole through `vp run` without `--cache`, as upstream's CI does.
+  Upstream's task-cache tests start their own `vp run`, which exits with an error under a caching
+  one: the outer run's file spy reaches the nested process.
 - The server and web suites each run as two Vitest projects. Most files share one module graph per
   worker (`isolate: false`) and keep transformed modules in `node_modules/.vitest-cache`
   (`fsModuleCache`), which Calder keeps between runs. Files that call `vi.mock`, `vi.doMock`,
@@ -56,8 +61,8 @@ and fork lockfile check.
   `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)). It runs as
   its own step, `test-web-browser`: beside the unit projects, one job outgrew a Calder worker's
   4.5 GB.
-- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, relay
-  and the oxlint plugin) run together when their directories or anything their tests import
+- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, relay,
+  task-cache and the oxlint plugin) run together when their directories or anything their tests import
   changed. The provider and source-control packages run the same way in `test-integrations`, a
   step of their own because together they ran past 20 minutes. Upstream adds a package per
   provider and per source-control host; add new ones to `integrationPackages` in `.calder/ci.ts`.
@@ -74,17 +79,6 @@ and fork lockfile check.
   110 s and an unchanged one 8 s. Vite+ never caches it because it rewrites the build info it read.
   Remove `incremental` if upstream makes the server incremental or composite, and the checker limit
   once Calder can budget memory per step.
-- Upstream runs the orchestrator replay fixtures as one file, `OrchestratorReplayFixtures.integration.test.ts`:
-  123 replays that took 12 to 21 minutes on Calder, and a file is the smallest unit Calder and Vitest
-  split. The fork moves its code to `OrchestratorReplayFixtures.testkit.ts` and runs it as six
-  `OrchestratorReplayFixtures.part<N>.integration.test.ts` files of about two minutes each. Port
-  upstream changes to the old file into the testkit. Remove the split once upstream splits the file.
-- srv-2's load varies between 10 and 45, so a few upstream tests get more time. The orchestrator MCP
-  toolkit scenario took up to 121 s against the 120 s default; it has 600 s, and its polling loops
-  give up after 10,000 rounds instead of 1,000. The ACP direct Stop test waits 30 s instead of 3 s
-  for a teardown that itself sleeps a 1 s grace and waits up to 10 s. The timeline tests' import
-  hook in `MessagesTimeline.test.tsx` has 120 s instead of 30 s. Keep these when upstream changes
-  those tests.
 - `apps/server/src/testUtils/gitConfig.setup.ts` appends its git settings once per process instead
   of once per test file, so server tests can later share a worker without growing every git
   child's environment.

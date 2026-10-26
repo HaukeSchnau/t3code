@@ -1,17 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- workspace kinds are recognised from on-disk markers.
 /**
- * ManagedWorkspaces - the fork's workspaces next to upstream's Git worktrees.
- *
- * A workspace is a directory bound to threads through `worktreePath`, so
- * several threads can share it the way they share a worktree. The project
- * picks the backend: an isolated agent-exec runtime on Linux hosts with the
- * launcher, a jj workspace for jj repositories, a guarded copy for plain
- * directories. Plain Git projects keep upstream's worktrees. Managed
- * directories live under `<baseDir>/workspaces/<project>/<name>`.
- *
- * See patches/workspaces.md.
- *
- * @module ManagedWorkspaces
+ * The fork's workspaces next to upstream's Git worktrees (patches/workspaces.md). The project
+ * picks the backend: an isolated agent-exec runtime on Linux hosts with the launcher, a jj
+ * workspace for jj repositories, a guarded copy for plain directories. Plain Git projects keep
+ * upstream's worktrees.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

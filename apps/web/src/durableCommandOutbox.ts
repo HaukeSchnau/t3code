@@ -1,10 +1,6 @@
-/**
- * Durable composer sends for web and desktop. A send made while the
- * environment is unreachable, or whose reply never arrived, waits here across
- * reloads and is delivered in order once the environment is back. The command
- * id stays fixed, so the server's command receipts turn a repeated delivery
- * into a replay. See patches/durable-client-command-outbox.md.
- */
+// A send made while the environment is unreachable, or whose reply never arrived, waits here
+// across reloads and is delivered in order. Its fixed command id turns a repeated delivery into
+// a replay on the server (patches/durable-client-command-outbox.md).
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
@@ -348,6 +344,7 @@ function useOutboxEntries(): ReadonlyArray<DurableComposerEntry> {
 
 /** Starts delivery for the app session and reports rejections wherever the user is. */
 export function useDurableCommandOutbox(onRejected: (entry: DurableComposerEntry) => void): void {
+  // oxlint-disable-next-line t3code/react-effect-budget -- Delivery and the rejection listener live as long as the app shell.
   useEffect(() => {
     durableCommandOutbox();
     rejectionListeners.add(onRejected);
@@ -371,6 +368,7 @@ export function useThreadDurableOutbox(
     threadKey === null
       ? EMPTY_ENTRIES
       : entries.filter((entry) => scopedThreadKey(entry.command) === threadKey);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Settles entries once the server shows them, which arrives from the thread subscription.
   useEffect(() => {
     if (!threadEntries.some((entry) => serverMessageIds.has(entry.command.messageId))) return;
     void durableCommandOutbox().settle(

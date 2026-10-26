@@ -1,11 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- free-space and filesystem-type checks need statfs, which Effect's FileSystem does not expose.
 /**
- * Guarded directory copies as workspaces for projects without a repository.
- * Copy-on-write clones (APFS, BTRFS) are bounded by a transient-space budget;
- * full copies need a size limit and free space, and a failed clone never falls
- * back to a full copy that those checks would refuse.
- *
- * @module DirectoryCopyWorkspaces
+ * Guarded directory copies as workspaces for projects without a repository. Copy-on-write clones
+ * (APFS, BTRFS) are bounded by a transient-space budget; full copies need a size limit and free
+ * space, and a failed clone never falls back to a full copy that those checks would refuse.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

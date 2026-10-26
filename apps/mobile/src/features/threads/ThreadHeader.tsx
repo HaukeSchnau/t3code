@@ -17,17 +17,24 @@ export function ThreadHeader(
     readonly onToggleInspector: () => void;
     readonly onOpenGitInspector: () => void;
     readonly onOpenFilesInspector: () => void;
-    readonly onOpenFind: () => void;
+    readonly onOpenFind?: () => void;
   },
 ) {
   const goBack = useWorkspaceBackNavigation("threads");
-  const { layout, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
+  const { layout, panes, toggleAuxiliaryPane, composerKeyboardActive } =
+    useAdaptiveWorkspaceLayout();
   const { onOpenTerminal, onMergeBack } = props.gitControls;
   const native = useThreadHeaderOptions(props);
   const androidHeaderActions = useMemo<ReadonlyArray<AppBarAction>>(() => {
-    const actions: AppBarAction[] = [
-      { accessibilityLabel: "Find in thread", icon: "magnifyingglass", onPress: props.onOpenFind },
-    ];
+    const actions: AppBarAction[] = props.onOpenFind
+      ? [
+          {
+            accessibilityLabel: "Find in thread",
+            icon: "magnifyingglass",
+            onPress: props.onOpenFind,
+          },
+        ]
+      : [];
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -104,6 +111,7 @@ export function ThreadHeader(
         onBack={layout.usesSplitView ? undefined : goBack}
         actions={androidHeaderActions}
         hideBottomBorder
+        compact={composerKeyboardActive}
       />
       {native.fallback}
     </>

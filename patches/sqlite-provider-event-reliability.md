@@ -7,28 +7,24 @@ failed. Otherwise the provider keeps working without visible output, and a retry
 still active. This follows the October 10 incident where SQLite rejected event writes and Claude
 continued in the background.
 
-The stop must only reach the turn this run owns. A stale subscription, a run whose attempt was
-replaced, or a provider turn that never reported its id must not interrupt another turn, and server
-shutdown leaves the run to restart recovery as before.
+The stop must only reach the turn this run owns. A stale subscription or a run whose attempt was
+replaced must not restart a runtime that a newer run uses.
 
 ## Why upstream does not meet it
 
-Upstream writes writer transactions with `BEGIN IMMEDIATE` in the shared SQLite client, so a
-read-to-write upgrade no longer fails under concurrent access (#15488). When ingestion still fails,
-upstream fails the run and retries that write until it lands, but never stops the provider.
+Upstream now interrupts the root provider turn with `requestRuntimeRestart: true` when ingestion
+fails (#23169, #22846), and the next start recovers a turn whose interrupt failed. It does not check
+whether this run still owns the provider thread before interrupting.
 
 ## Implementation
 
-`apps/server/src/orchestration-v2/RunExecutionService.ts`: the ingestion-failure handler (the
-`Effect.catchCauseIf` for causes other than interruption) runs `stopProviderTurnAfterIngestionFailure`
-before `writeFinalRunEvents`. It interrupts the root provider turn with
-`requestRuntimeRestart: true` only when the turn's id is known, the provider thread's owner was not
-lost, and `shouldFinalizeRun` confirms the run's attempt is still current. A failed stop is logged
-and the run is still failed.
+`apps/server/src/orchestration-v2/RunExecutionService.ts`: the ingestion-failure handler adds
+`ownsProviderThread` to upstream's interrupt condition. The run owns the thread unless
+`providerThreadOwnerLost` is set or `shouldFinalizeRun` returns false or fails.
 
-`RunExecutionService.test.ts` covers the stop, a run that lost ownership, and the upstream recovery
-tests with the stop in their recorded order.
+`RunExecutionService.test.ts` ("does not interrupt the provider after a failed ingestion loses
+ownership to a newer run") covers the guard. Upstream's ingestion-failure tests cover the stop.
 
 ## Removal
 
-Drop this patch when upstream stops a provider turn whose events it cannot record.
+Drop this patch when upstream checks ownership before its ingestion-failure interrupt.

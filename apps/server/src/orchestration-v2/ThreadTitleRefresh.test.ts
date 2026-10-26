@@ -44,6 +44,7 @@ function makeHarness(
   options: {
     readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
     readonly refreshGeneratedThreadTitles?: boolean;
+    readonly threadTitleInstructions?: string;
   } = {},
 ) {
   const database = SqlitePersistence.layerMemory;
@@ -52,11 +53,14 @@ function makeHarness(
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
     { databaseLayer: database, runEffectWorker: false },
   );
-  const settings = ServerSettings.layerTest(
-    options.refreshGeneratedThreadTitles === undefined
+  const settings = ServerSettings.layerTest({
+    ...(options.refreshGeneratedThreadTitles === undefined
       ? {}
-      : { refreshGeneratedThreadTitles: options.refreshGeneratedThreadTitles },
-  );
+      : { refreshGeneratedThreadTitles: options.refreshGeneratedThreadTitles }),
+    ...(options.threadTitleInstructions === undefined
+      ? {}
+      : { threadTitleInstructions: options.threadTitleInstructions }),
+  });
   const threadManagement = ThreadManagement.layer.pipe(
     Layer.provide(orchestrator),
     Layer.provide(settings),
@@ -208,7 +212,7 @@ describe("title mode", () => {
 describe("ThreadTitleRefresh", () => {
   it.effect("refreshes an automatic title once after a burst of later turns", () =>
     Effect.gen(function* () {
-      const harness = makeHarness();
+      const harness = makeHarness({ threadTitleInstructions: "Use two words." });
       yield* Effect.gen(function* () {
         const refresh = yield* ThreadTitleRefresh.make;
         const threadId = yield* createThread("thread:refresh");
@@ -227,6 +231,7 @@ describe("ThreadTitleRefresh", () => {
         const input = harness.generateThreadTitle.mock.calls[0]?.[0];
         assert.equal(input?.previousTitle, "Seed title");
         assert.isTrue(input?.automaticRefresh);
+        assert.equal(input?.instructions, "Use two words.");
         assert.include(input?.message, "USER:\nUser request second");
         const thread = yield* readThread(threadId);
         assert.equal(thread.title, "Refined title");

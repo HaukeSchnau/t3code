@@ -12,9 +12,9 @@ thread and model-picker navigation. The desktop client keeps the native app shor
 - Browsers on Windows and Linux use the same keys with `alt`.
 
 `clientSpecificKeybindings` in `packages/shared/src/keybindings.ts` expands each default into those
-three rules. The web keybinding context (`apps/web/src/keybindings.ts`) exposes `desktop`,
-`browser`, and `mac` next to upstream's `isDesktop` and `isWeb`; `ChatView`'s `getShortcutContext`
-sets them for `useChatShortcuts`. Startup migration replaces exact copies of the former
+three rules. The web keybinding context (`apps/web/src/keybindings.ts`) exposes optional `desktop`,
+`browser`, and `mac` next to upstream's `isDesktop` and `isWeb`. `resolveContext` derives them from
+`isDesktop`, `isWeb`, and the platform, so call sites leave them out. Startup migration replaces exact copies of the former
 client-agnostic defaults in `keybindings.json`; user-defined rules remain unchanged. Upstream now
 scopes `mod+1` through `mod+9` to `isDesktop`, but gives browsers no alternative and leaves
 `mod+shift+[` / `mod+shift+]` unscoped.

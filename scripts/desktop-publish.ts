@@ -1,13 +1,8 @@
 #!/usr/bin/env node
-// Publishes a signed macOS build to the fork's desktop update feed
-// (patches/desktop-distribution.md). Calder's desktop-publish step runs it on srv-2
-// after desktop-package.ts built the app on the Apple builder.
-//
-// Layout under --updates-dir, which the update host serves as /desktop/:
-//   latest-mac.yml               electron-updater's feed, replaced last
-//   T3-Code-<version>-arm64.zip  plus its .blockmap, the newest few builds
-//   install.sh, index.html       first install and a human-readable status page
-//   published.json               version and commit of the current build
+// Publishes a signed macOS build to the fork's desktop update feed under --updates-dir
+// (patches/desktop-distribution.md). `latest-mac.yml`, electron-updater's feed, is replaced last,
+// after the newest builds' zips and blockmaps. install.sh, index.html and published.json (version
+// and commit of the current build) sit beside them.
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";

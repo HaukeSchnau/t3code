@@ -87,19 +87,12 @@ export class AgentAwarenessDeliveryUnavailableError extends Schema.TaggedError<A
   }
 }
 
-// Keyed by ActivityKit id: getAgentLiveActivities() wraps the same native
-// activity in a new object on every call. The server keeps only the latest token
-// a device registers, so each activity's token reads and registrations run one
-// at a time; otherwise a lookup that read the old token could land after the
-// rotated one.
+// ActivityKit returns new wrappers per id; serialize by id to prevent stale-token registration.
 const activityPushTokenLocks = new Map<string, Semaphore.Semaphore>();
-// But the registration is not a pure no-op: the server replays the current
-// aggregate to this device on every accepted registration, and that replay is
-// the foreground reconciliation that repairs drifted or orphaned activities.
+// Each accepted registration replays the server aggregate, repairing drifted or orphaned activities.
 const ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS = 60_000;
-// Locally started activities carry the same stale window the paired server puts
-// on every push (STALE_AFTER_SECONDS in apps/server agentAwareness/ApnsProvider.ts),
-// so a card whose registration never lands still degrades instead of looking alive forever.
+// Match the paired server's STALE_AFTER_SECONDS (apps/server agentAwareness/ApnsProvider.ts) so
+// activities expire even if registration fails.
 const LIVE_ACTIVITY_STALE_AFTER_MS = 10 * 60_000;
 const liveActivityStaleDate = () => new Date(Date.now() + LIVE_ACTIVITY_STALE_AFTER_MS);
 const registeredActivityPushTokens = new Map<string, number>();
@@ -224,11 +217,9 @@ export function setAgentAwarenessEnvironmentTransport(
   enqueueDeviceRegistration({}, "device registration after environment activation failed");
 }
 
-// Upstream's CloudAuthProvider hands T3 Connect credentials to relay-backed
-// awareness through these hooks. Here devices register with paired environments
-// instead, so account sign-in, sign-out, and remounts leave registration alone.
-// They can go once the fork adopts upstream's awareness transport or upstream's
-// CloudAuthProvider stops calling into agent awareness (patches/accountless-direct-agent-awareness.md).
+// Upstream's CloudAuthProvider hands T3 Connect credentials to relay-backed awareness through
+// these hooks. Devices register with paired environments here, so account changes leave
+// registration alone (patches/accountless-direct-agent-awareness.md).
 export function setAgentAwarenessRelayTokenProvider(
   _provider: (() => Promise<string | null>) | null,
   _identity?: string,
@@ -616,10 +607,7 @@ function startPendingDeviceRegistration(): void {
       runtime.runPromiseExit(registerDevice(next.input, generation)),
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      // A transient failure on a later refresh (e.g. token rotation) leaves
-      // the prior accepted registration intact on the server, so an already
-      // registered device stays "registered" rather than flipping the
-      // settings toggles off.
+      // Refresh failures leave the server's accepted registration intact; preserve registered status.
       if (registrationStatus !== "registered") {
         setRegistrationStatus("failed");
       }
@@ -896,9 +884,7 @@ export const registerLiveActivityPushToken = Effect.fn(
   );
 });
 
-// iOS can replace an activity's push token while it runs, not only deliver a
-// late first one. The server keeps pushing to the old token until APNs rejects
-// it, so every activity needs a listener that registers each new token.
+// Observe every token replacement: the server otherwise keeps pushing to the old token until APNs rejects it.
 function observeLiveActivityPushTokens(
   activity: LiveActivity<AgentActivityProps>,
 ): Semaphore.Semaphore {
@@ -1006,23 +992,17 @@ export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
     activities = activities.slice(0, 1);
   }
 
-  // Unlike a Live Activity, the home-screen widget does not receive the
-  // server's ActivityKit pushes. Reconcile its snapshot whenever the app
-  // reconnects or returns to the foreground. A null aggregate is
-  // authoritative idle state; a null response means the read failed and
-  // must not erase the last useful snapshot.
+  // The home-screen widget gets no ActivityKit pushes, so reconcile it on reconnect and foreground.
+  // A null aggregate is authoritative idle state; a null response is a failed read and keeps the
+  // last useful snapshot.
   const snapshot = yield* readAgentActivitySnapshot();
   if (snapshot) {
     updateAgentActivityWidgetSnapshot(snapshot.aggregate ?? idleAgentActivityWidgetProps());
   }
 
-  // Activities are only ever created here, in the foreground, where the
-  // update token can be observed and registered immediately — the server
-  // never remote-starts one (background push-to-start wakes proved too
-  // unreliable to hand the token over). Arming is conditional: the server is
-  // asked what the card would show first, so an idle open never creates an
-  // empty lock-screen card, and an armed card is born with the real
-  // aggregate instead of a placeholder.
+  // Activities start only here in the foreground, where the update token registers at once; the
+  // server never push-to-starts one because background wakes proved too unreliable. Asking the
+  // server for the aggregate first keeps an idle open from creating an empty lock-screen card.
   if (activities.length === 0) {
     const preferences = yield* Effect.tryPromise({
       try: () => loadPreferences(),
