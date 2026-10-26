@@ -70,7 +70,13 @@ const desktopBuild = Task.make("desktop-build", {
   setup: install,
   inputs: Files.union(
     Files.workspace("apps/desktop", "apps/server", "apps/web"),
-    Files.of("assets", "native/browser-secret", "scripts/lib"),
+    Files.of(
+      "assets",
+      "native/browser-secret",
+      "native/libghostty-vt/LICENSE",
+      "scripts/lib",
+      "third-party-licenses.config.json",
+    ),
   ),
   run: sh("vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs"),
 }).pipe(Step.timeout("30 minutes"));
@@ -84,7 +90,7 @@ const rust = Task.make("rust", {
   shell: nativeShell,
   inputs: Files.of(...rustCrates),
   run: sh(
-    'for crate; do cargo fmt --manifest-path "$crate/Cargo.toml" -- --check; done; ' +
+    'set -e; for crate; do cargo fmt --manifest-path "$crate/Cargo.toml" -- --check; done; ' +
       'for crate; do cargo test --locked --manifest-path "$crate/Cargo.toml"; done',
     ...rustCrates,
   ),
