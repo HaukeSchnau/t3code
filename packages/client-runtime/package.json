@@ -463,6 +463,14 @@
       "types": "./src/state/mcpApps.ts",
       "default": "./src/state/mcpApps.ts"
     },
+    "./html-render": {
+      "types": "./src/htmlRender/host.ts",
+      "default": "./src/htmlRender/host.ts"
+    },
+    "./state/html-render": {
+      "types": "./src/state/htmlRender.ts",
+      "default": "./src/state/htmlRender.ts"
+    },
     "./source-control-clients": {
       "types": "./src/sourceControlClients.ts",
       "default": "./src/sourceControlClients.ts"
