@@ -17,6 +17,10 @@ it.effect(
       const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-setup-test-"));
       try {
         NodeFS.mkdirSync(NodePath.join(root, "bin"));
+        // The script sets up the checkout it lives in, so it runs from a copy inside `root`.
+        NodeFS.mkdirSync(NodePath.join(root, "scripts"));
+        const script = NodePath.join(root, "scripts", "setup-worktree.ts");
+        NodeFS.copyFileSync(setup, script);
         for (const name of ["pnpm", "devenv"]) {
           NodeFS.writeFileSync(
             NodePath.join(root, "bin", name),
@@ -27,7 +31,7 @@ it.effect(
         const log = NodePath.join(root, "commands");
         const run = (native: boolean, exitCode = "0") => {
           NodeFS.writeFileSync(log, "");
-          return NodeChildProcess.spawnSync(process.execPath, [setup], {
+          return NodeChildProcess.spawnSync(process.execPath, [script], {
             cwd: root,
             encoding: "utf8",
             env: {

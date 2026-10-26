@@ -28,6 +28,9 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 - `scripts/notify-discord-release.test.ts`: the shells that run the release workflow's Discord steps get
   PATH. Their environment replaces the inherited one, and without PATH Node looks for `bash` only in `/bin`
   and `/usr/bin`.
+- `apps/web/test/browserWaitFor.ts` (a browser-project setup file): `vi.waitFor` waits five seconds by
+  default instead of one. Calder's aarch64 workers take longer than that to parse and lay out heavy file
+  previews (a 2,000-output notebook, ODS, RTF, fonts), and Vitest has no setting for the default.
 
 ## Removing it
 

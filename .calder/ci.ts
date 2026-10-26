@@ -85,6 +85,7 @@ const web = {
     "apps/web/vitest.config.ts",
     ...setupFiles,
     "apps/web/test/browserSetup.ts",
+    "apps/web/test/browserWaitFor.ts",
   ]),
 };
 
@@ -186,7 +187,8 @@ const packageSuites = (name: string, dirs: ReadonlyArray<string>) =>
       Files.of("vitest.config.ts", ...dirs),
       Files.imports([...dirs.map((dir) => `${dir}/**/*.test.ts`), ...setupFiles], { aliases }),
     ),
-    run: cmd`vp run --cache --parallel --concurrency-limit 1 ${filters(dirs)} test ${workers}`,
+    // No `--cache`: the task-cache tests start their own `vp run`, which fails under a caching one.
+    run: cmd`vp run --parallel --concurrency-limit 1 ${filters(dirs)} test ${workers}`,
   }).pipe(Step.timeout("20 minutes"));
 
 const testPackages = packageSuites("test-packages", [
@@ -218,7 +220,8 @@ const testIntegrations = packageSuites(
 const testScripts = Task.make("test-scripts", {
   shell,
   setup: install,
-  run: cmd`vp run --cache --filter ./scripts test ${workers}`,
+  // No `--cache`, as in `packageSuites`.
+  run: cmd`vp run --filter ./scripts test ${workers}`,
 }).pipe(Step.timeout("30 minutes"));
 
 /**

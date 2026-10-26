@@ -40,6 +40,9 @@ and fork lockfile check.
   the package's test script, and writes the JSON report that tells Calder what passed. It bypasses
   `vp run --cache`, so a report never holds replayed results. A nightly run repeats every check
   without reuse.
+- The package and scripts suites run whole through `vp run` without `--cache`, as upstream's CI does.
+  Upstream's task-cache tests start their own `vp run`, which exits with an error under a caching
+  one: the outer run's file spy reaches the nested process.
 - The server and web suites each run as two Vitest projects. Most files share one module graph per
   worker (`isolate: false`) and keep transformed modules in `node_modules/.vitest-cache`
   (`fsModuleCache`), which Calder keeps between runs. Files that call `vi.mock`, `vi.doMock`,

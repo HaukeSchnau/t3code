@@ -80,7 +80,7 @@ const browserTestProject = {
     name: "browser",
     include: browserInclude,
     ...browserTimeouts,
-    setupFiles: ["./test/browserSetup.ts"],
+    setupFiles: ["./test/browserSetup.ts", "./test/browserWaitFor.ts"],
     api: { port: browserTestApiPort, strictPort: false },
     browser: {
       enabled: true,
