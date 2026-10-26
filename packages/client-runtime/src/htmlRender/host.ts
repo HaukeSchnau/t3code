@@ -19,9 +19,12 @@ import {
 import * as Predicate from "effect/Predicate";
 
 const MAX_PENDING_REQUESTS = 4;
-// A click stays transient user activation for about 5 s (Chrome, Firefox). Page script can post
-// the activated notice itself during that time, so a spent click blocks new credit until it ends.
-const ACTIVATION_WINDOW_MS = 5_000;
+// Page script can post the activated notice itself while a click's transient activation lasts
+// (about 5 s), and the host cannot tell it from the bootstrap's. Every notice earns credit, so quick
+// real clicks all work. Messages, the one action nothing else gates, are capped at 3 per 5 s;
+// tools that change things ask first, and the server rate-limits tool calls.
+const MESSAGE_WINDOW_MS = 5_000;
+const MAX_MESSAGES_PER_WINDOW = 3;
 const encoder = new TextEncoder();
 
 type JsonRpcId = string | number;
@@ -107,7 +110,7 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
   let pending = 0;
   // One trusted click in the page buys one send or tool call.
   let clickCredit = false;
-  let spentAt = Number.NEGATIVE_INFINITY;
+  let messages: ReadonlyArray<number> = [];
   const now = options.now ?? Date.now;
 
   const post = (message: unknown) => {
@@ -137,8 +140,13 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
   const spendClick = (active: boolean) => {
     if (!active || !clickCredit) return false;
     clickCredit = false;
-    spentAt = now();
     return true;
+  };
+
+  const recentMessages = () => {
+    const at = now();
+    messages = messages.filter((sent) => at - sent < MESSAGE_WINDOW_MS);
+    return messages.length;
   };
 
   const callTool = async (
@@ -202,10 +210,15 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
           fail(id, -32000, "Only a page shown in a thread can send messages.");
           return;
         }
+        if (recentMessages() >= MAX_MESSAGES_PER_WINDOW) {
+          fail(id, -32000, "This page sent 3 messages in the last 5 seconds. Wait a moment.");
+          return;
+        }
         if (!spendClick(active)) {
           fail(id, -32000, "Sending needs a click in the page, one message per click.");
           return;
         }
+        messages = [...messages, now()];
         answer(id, () => bridge.send(htmlRenderMessage(bridge, text)));
         return;
       }
@@ -242,7 +255,7 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
         return;
       }
       if (method === HTML_RENDER_ACTIVATED_METHOD) {
-        if (active && now() - spentAt >= ACTIVATION_WINDOW_MS) clickCredit = true;
+        if (active) clickCredit = true;
         return;
       }
       if (method === HTML_RENDER_STORAGE_METHOD) {

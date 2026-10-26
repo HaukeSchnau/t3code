@@ -103,7 +103,7 @@ export function HtmlRenderFrame(props: {
       {last > 0 ? (
         <div
           className={cn(
-            "absolute start-2 top-2 flex items-center gap-1 transition-opacity duration-150 focus-within:opacity-100 group-hover/html-render:opacity-100 pointer-coarse:opacity-100",
+            "absolute end-10 top-2 flex items-center gap-1 transition-opacity duration-150 focus-within:opacity-100 group-hover/html-render:opacity-100 pointer-coarse:opacity-100",
             index < last ? "opacity-100" : "opacity-0",
           )}
         >

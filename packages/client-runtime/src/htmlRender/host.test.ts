@@ -65,20 +65,34 @@ function setup(
 }
 
 describe("makeHtmlRenderHost", () => {
-  it("ignores activated notices while a spent click is still active", async () => {
+  it("takes quick real clicks and caps messages, not tool calls", async () => {
     let time = 0;
-    const { host, sent, response } = setup({}, true, () => time);
-    host.receive(click, active);
-    host.receive(send("first", "One"), active);
+    const { host, sent, toolCalls, response } = setup({}, true, () => time);
+    const act = async (at: number, request: Record<string, unknown>) => {
+      time = at;
+      host.receive(click, active);
+      host.receive(request, active);
+      return response(String(request.id));
+    };
+    // Three reads and a send, half a second apart, are four real clicks.
+    await act(0, callTool("a", "t3_thread_read"));
+    await act(500, callTool("b", "t3_thread_read"));
+    await act(1_000, callTool("c", "t3_thread_read"));
+    await act(1_500, send("pick", "One"));
     // Page script can post the notice itself while the click's activation lasts.
-    host.receive(click, active);
-    host.receive(send("forged", "Two"), active);
-    time = 5_000;
-    host.receive(click, active);
-    host.receive(send("next", "Three"), active);
+    await act(1_600, send("second", "Two"));
+    await act(1_700, send("third", "Three"));
+    const capped = await act(1_800, send("capped", "Four"));
+    await act(6_600, send("later", "Five"));
 
-    expect(sent.map((message) => message.text.split(") ")[1])).toEqual(["One", "Three"]);
-    expect(await response("forged")).toMatchObject({ error: { code: -32000 } });
+    expect(toolCalls).toHaveLength(3);
+    expect(sent.map((message) => message.text.split(") ")[1])).toEqual([
+      "One",
+      "Two",
+      "Three",
+      "Five",
+    ]);
+    expect(capped).toMatchObject({ error: { message: expect.stringContaining("Wait a moment") } });
   });
 
   it("sends one message per click, marked as coming from the page", async () => {

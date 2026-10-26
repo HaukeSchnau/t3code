@@ -113,14 +113,27 @@ export interface HtmlRenderBridgeTarget {
   readonly renderId: string;
 }
 
-// What pages saved on this device, so the feed row and the full-screen page, which mount at
-// once and share a cached read, start from the latest save rather than that read.
-const savedHere = new Map<string, HtmlRenderState>();
+// What pages saved on this device while a view of the render is mounted, so the feed row and the
+// full-screen page, which mount at once and share a cached read, start from the latest save. The
+// entry goes with the last view, so a later visit reads what other devices saved since.
+const savedHere = new Map<string, { state: HtmlRenderState | undefined; views: number }>();
 const savedKey = (target: HtmlRenderBridgeTarget) =>
   `${target.environmentId}\u0000${target.threadId}\u0000${target.renderId}`;
 
 /** The render's saved state: this device's latest save, else a read when the view mounts. */
 export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefined) {
+  const key = target === undefined ? undefined : savedKey(target);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Counts mounted views so the local save outlives none of them.
+  useEffect(() => {
+    if (key === undefined) return;
+    const entry = savedHere.get(key) ?? { state: undefined, views: 0 };
+    savedHere.set(key, { ...entry, views: entry.views + 1 });
+    return () => {
+      const current = savedHere.get(key);
+      if (current === undefined || current.views <= 1) savedHere.delete(key);
+      else savedHere.set(key, { ...current, views: current.views - 1 });
+    };
+  }, [key]);
   const query = useEnvironmentQuery(
     target === undefined
       ? null
@@ -133,11 +146,10 @@ export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefin
     // An older server lacks the state RPC; its pages still open, without saved state.
     ready: target === undefined || query.isSuccess || query.error !== null,
     read: () =>
-      (target === undefined ? undefined : savedHere.get(savedKey(target))) ??
-      query.data ??
-      NO_STATE,
+      (key === undefined ? undefined : savedHere.get(key)?.state) ?? query.data ?? NO_STATE,
     saved: (state: HtmlRenderState) => {
-      if (target !== undefined) savedHere.set(savedKey(target), state);
+      const entry = key === undefined ? undefined : savedHere.get(key);
+      if (key !== undefined && entry !== undefined) savedHere.set(key, { ...entry, state });
     },
   };
 }
@@ -449,7 +461,7 @@ export function ThreadHtmlRender(props: {
           </View>
         )}
         {last > 0 ? (
-          <View className="absolute left-1.5 top-1.5 flex-row items-center gap-1">
+          <View className="absolute right-10 top-1.5 flex-row items-center gap-1">
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Previous version"
