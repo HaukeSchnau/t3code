@@ -16,6 +16,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as HtmlRender from "../../../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as McpAlwaysLoad from "../../McpAlwaysLoad.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_000)).annotate({
@@ -91,7 +92,8 @@ export const HtmlPreviewTool = Tool.make("html_preview", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpAlwaysLoad.AlwaysLoad, true);
 
 // These affect only the caller's thread, not its workspace, so read-only sandboxes and plan mode may use them.
 const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
@@ -117,7 +119,8 @@ const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpAlwaysLoad.AlwaysLoad, true);
 
 const HtmlRenderUpdateTool = Tool.make(HTML_RENDER_UPDATE_TOOL_NAME, {
   description:

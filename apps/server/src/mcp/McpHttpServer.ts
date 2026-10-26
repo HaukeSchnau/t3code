@@ -37,6 +37,7 @@ import {
 } from "../telemetry/ProviderDimensions.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import * as McpAlwaysLoad from "./McpAlwaysLoad.ts";
 import * as McpToolDirectory from "./McpToolDirectory.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
@@ -936,6 +937,33 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Advertises tools annotated with `AlwaysLoad` so Claude Code loads them up front. */
+const advertisingAlwaysLoad = Effect.fnUntraced(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const server = yield* McpServer.McpServer;
+  return yield* registration.pipe(
+    Effect.provideService(
+      McpServer.McpServer,
+      McpServer.McpServer.of({
+        ...server,
+        addTool: (options) =>
+          server.addTool(
+            Context.get(options.annotations, McpAlwaysLoad.AlwaysLoad)
+              ? {
+                  ...options,
+                  tool: new McpSchema.Tool({
+                    ...options.tool,
+                    _meta: { ...options.tool._meta, "anthropic/alwaysLoad": true },
+                  }),
+                }
+              : options,
+          ),
+      }),
+    ),
+  );
+});
+
 /** Records every tool `registration` adds, when a directory is provided. */
 const recordingTools = Effect.fnUntraced(function* <A, E, R>(registration: Effect.Effect<A, E, R>) {
   const directory = yield* Effect.serviceOption(McpToolDirectory.McpToolDirectory);
@@ -964,7 +992,11 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    recordingTools(withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    recordingTools(
+      withToolAnalytics(
+        advertisingAlwaysLoad(McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+      ),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -979,7 +1011,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) =>
-  Layer.effectDiscard(recordingTools(withToolAnalytics(register))).pipe(
+  Layer.effectDiscard(recordingTools(withToolAnalytics(advertisingAlwaysLoad(register)))).pipe(
     Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
   );
 
