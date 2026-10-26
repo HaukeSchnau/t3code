@@ -65,11 +65,17 @@ import {
 import { claudeResumeCompactionAge } from "@t3tools/shared/claudeCompaction";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { truncate } from "@t3tools/shared/String";
-import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
+import {
+  htmlRenderVersion,
+  htmlRenderVersionsEqual,
+  type HtmlRenderReference,
+  type HtmlRenderVersionEntry,
+} from "@t3tools/shared/htmlRender";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
 import {
   compactDynamicToolOutput,
   htmlRenderFromToolItem,
+  htmlRenderUpdateFromToolItem,
   mcpAppFromToolItem,
 } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
@@ -182,7 +188,10 @@ type RawThreadFeedEntry =
       readonly id: string;
       readonly createdAt: string;
       readonly runId: RunId | null;
+      /** The first version; its attachment id is the render id. */
       readonly render: HtmlRenderReference;
+      /** Every loaded version, oldest first, when an update has arrived. */
+      readonly versions?: ReadonlyArray<HtmlRenderVersionEntry>;
     }
   | {
       readonly type: "mcp-app";
@@ -2054,10 +2063,55 @@ interface ThreadFeedBuild {
 export interface ThreadFeedCache {
   feedBuild: ThreadFeedBuild | null;
   presentation: ThreadFeedPresentationBuild | null;
+  versionedRenders: WeakMap<ThreadFeedEntry, ThreadFeedEntry>;
 }
 
 export function createThreadFeedCache(): ThreadFeedCache {
-  return { feedBuild: null, presentation: null };
+  return { feedBuild: null, presentation: null, versionedRenders: new WeakMap() };
+}
+
+/**
+ * Updates join their render's row after the cached build, so a version arriving late never
+ * rewrites a reused prefix. An update whose render is not loaded only shows as tool activity.
+ */
+function withHtmlRenderVersions(
+  feed: ThreadFeedEntry[],
+  visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  cache: ThreadFeedCache | undefined,
+): ThreadFeedEntry[] {
+  const updates = new Map<
+    string,
+    Array<{ itemId: string; update: NonNullable<ReturnType<typeof htmlRenderUpdateFromToolItem>> }>
+  >();
+  for (const row of visibleTurnItems) {
+    const { item } = row;
+    if (item.type !== "dynamic_tool" || item.status !== "completed") continue;
+    const update = htmlRenderUpdateFromToolItem(item);
+    if (update === undefined) continue;
+    const list = updates.get(update.renderId) ?? [];
+    list.push({ itemId: row.sourceItemId, update });
+    updates.set(update.renderId, list);
+  }
+  if (updates.size === 0) return feed;
+  return feed.map((entry) => {
+    if (entry.type !== "html-render") return entry;
+    const list = updates.get(entry.render.attachmentId);
+    if (list === undefined) return entry;
+    const versions: HtmlRenderVersionEntry[] = [{ itemId: entry.id, htmlRender: entry.render }];
+    for (const { itemId, update } of list) {
+      versions.push({ itemId, htmlRender: htmlRenderVersion(versions.at(-1)!.htmlRender, update) });
+    }
+    const previous = cache?.versionedRenders.get(entry);
+    if (
+      previous?.type === "html-render" &&
+      htmlRenderVersionsEqual(previous.versions ?? [], versions)
+    ) {
+      return previous;
+    }
+    const next: ThreadFeedEntry = { ...entry, versions };
+    cache?.versionedRenders.set(entry, next);
+    return next;
+  });
 }
 
 function setsEqual<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
@@ -2357,5 +2411,5 @@ export function buildThreadFeed(
             restarts,
           };
   }
-  return feed;
+  return withHtmlRenderVersions(feed, visibleTurnItems, cache);
 }
