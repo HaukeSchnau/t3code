@@ -40,6 +40,12 @@ import {
   ServerAuthSessionMethod,
 } from "./auth.ts";
 import {
+  ThreadGlance,
+  ThreadGlanceList,
+  ThreadReplyInput,
+  ThreadReplyResult,
+} from "./agentAwareness.ts";
+import {
   ExecutionEnvironmentDescriptor,
   ORCHESTRATION_PROTOCOL_HEADER,
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
@@ -127,6 +133,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_thread_snapshot_failed",
   "orchestration_thread_bounded_snapshot_failed",
   "orchestration_thread_history_failed",
+  // Fork: the thread reply and stop endpoints. See patches/notification-replies.md.
+  "orchestration_dispatch_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -737,6 +745,42 @@ class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+// Fork: notification replies and the Apple Watch. The phone's native code calls these with the
+// saved connection's bearer token and no protocol header. See patches/notification-replies.md
+// and patches/apple-watch.md.
+class EnvironmentThreadControlHttpApi extends HttpApiGroup.make("threadControl")
+  .add(
+    HttpApiEndpoint.post("reply", "/api/orchestration/threads/:threadId/reply", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      payload: ThreadReplyInput,
+      success: ThreadReplyResult,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("stop", "/api/orchestration/threads/:threadId/stop", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("glance", "/api/orchestration/glance", {
+      headers: OptionalBearerHeaders,
+      success: ThreadGlanceList,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("threadGlance", "/api/orchestration/threads/:threadId/glance", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      success: ThreadGlance,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/projects", {
@@ -871,6 +915,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentThreadControlHttpApi)
   .add(EnvironmentServerHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
