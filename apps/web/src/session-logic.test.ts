@@ -1552,6 +1552,59 @@ describe("HTML renders in the timeline", () => {
     expect(rowsFor(entries, true)).toEqual(["message", "turn-fold", "attempt-fold", "html-render"]);
   });
 
+  const updateCall = (id: string, second: number, renderId: string): OrchestrationV2TurnItem => ({
+    ...base(id, second),
+    type: "dynamic_tool",
+    toolName: "mcp__t3-code__html_render_update",
+    input: { renderId },
+    output: {
+      structuredContent: { htmlRenderUpdate: { renderId, attachmentId: `${id}.html` } },
+      content: [],
+    },
+  });
+  const render = renderCall("completed", { structuredContent: { htmlRender }, content: [] });
+
+  it("pages an update into its render's row and keeps it in the work log", () => {
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [render, updateCall("v2", 3, htmlRender.attachmentId)].map(visible),
+      optimisticMessages: [],
+    });
+    expect(entries.map((entry) => entry.kind)).toEqual(["html-render", "work"]);
+    expect(entries[0]).toMatchObject({
+      htmlRender,
+      versions: [
+        { itemId: "render", htmlRender },
+        { itemId: "v2", htmlRender: { attachmentId: "v2.html", title: "Chart", height: 420 } },
+      ],
+    });
+  });
+
+  it("shows nothing for an update whose render is not loaded", () => {
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [visible(updateCall("v2", 3, htmlRender.attachmentId))],
+      optimisticMessages: [],
+    });
+    expect(entries.map((entry) => entry.kind)).toEqual(["work"]);
+  });
+
+  it("adds a version that arrives after the render's row was built", () => {
+    const first = deriveTimelineEntriesFromVisibleTurnItemsWithState({
+      visibleTurnItems: [visible(render)],
+      optimisticMessages: [],
+    });
+    const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(
+      {
+        visibleTurnItems: [render, updateCall("v2", 3, htmlRender.attachmentId)].map(visible),
+        optimisticMessages: [],
+      },
+      first,
+    );
+    const row = next.entries.find((entry) => entry.kind === "html-render");
+    expect(
+      row?.kind === "html-render" ? row.versions.map((version) => version.itemId) : [],
+    ).toEqual(["render", "v2"]);
+  });
+
   it.each([
     ["running", "running", undefined],
     ["failed", "failed", { content: [{ type: "text", text: "Invalid HTML" }], isError: true }],

@@ -3,7 +3,7 @@ import * as Dialog from "../../components/ui/Dialog";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import type { MenuAction } from "@react-native-menu/menu";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { useEffect, useRef, useState } from "react";
 import { Platform, View } from "react-native";
@@ -28,7 +28,11 @@ import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SourceFileSurface } from "./SourceFileSurface";
 import { WorkspaceFileWebPreview } from "./WorkspaceFileWebPreview";
-import { HtmlRenderWebView } from "../threads/HtmlRenderWebView";
+import {
+  type HtmlRenderBridgeTarget,
+  HtmlRenderWebView,
+  useHtmlRenderSavedState,
+} from "../threads/HtmlRenderWebView";
 
 export type AttachmentFileRouteParams = {
   readonly environmentId?: string;
@@ -39,6 +43,8 @@ export type AttachmentFileRouteParams = {
   readonly sizeBytes: string;
   readonly draftKey?: string;
   readonly htmlRender?: "1";
+  /** The render this page is a version of, so the page can reach its thread. */
+  readonly renderId?: string;
 };
 
 type AttachmentFileScreenProps = StaticScreenProps<AttachmentFileRouteParams>;
@@ -50,11 +56,31 @@ function nativeViewerKind(kind: ReturnType<typeof useAttachmentDocument>["kind"]
   return null;
 }
 
+function FullScreenHtmlRender(props: {
+  readonly uri: string;
+  readonly title: string;
+  readonly bridge: HtmlRenderBridgeTarget | undefined;
+}) {
+  const savedState = useHtmlRenderSavedState(props.bridge);
+  if (!savedState.ready) return <FilePreviewLoading message="Loading page..." />;
+  return (
+    <HtmlRenderWebView
+      uri={props.uri}
+      title={props.title.replace(/\.html$/i, "")}
+      nested={false}
+      bridge={props.bridge}
+      state={savedState.read()}
+      onStateSaved={savedState.saved}
+    />
+  );
+}
+
 function AttachmentDocumentBody(props: {
   readonly document: ReturnType<typeof useAttachmentDocument>;
   readonly name: string;
   readonly environmentId: EnvironmentId | null;
   readonly htmlRender: boolean;
+  readonly htmlRenderBridge: HtmlRenderBridgeTarget | undefined;
   readonly nativeViewer: "pending" | "open" | "unavailable" | null;
   readonly nativeError: string | null;
   readonly onOpenNative: () => void;
@@ -109,7 +135,12 @@ function AttachmentDocumentBody(props: {
   }
   if (document.kind === "html") {
     return props.htmlRender ? (
-      <HtmlRenderWebView key={document.uri} uri={document.uri} title={props.name} nested={false} />
+      <FullScreenHtmlRender
+        key={document.uri}
+        uri={document.uri}
+        title={props.name}
+        bridge={props.htmlRenderBridge}
+      />
     ) : (
       <WorkspaceFileWebPreview uri={document.uri} />
     );
@@ -351,6 +382,15 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
         name={params.name}
         environmentId={environmentId}
         htmlRender={params.htmlRender === "1"}
+        htmlRenderBridge={
+          environmentId !== null && params.threadId !== undefined && params.renderId !== undefined
+            ? {
+                environmentId,
+                threadId: ThreadId.make(params.threadId),
+                renderId: params.renderId,
+              }
+            : undefined
+        }
         nativeViewer={nativeViewer}
         nativeError={nativeError}
         onOpenNative={() => {

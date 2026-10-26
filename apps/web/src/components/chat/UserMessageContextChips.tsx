@@ -338,6 +338,23 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
         ),
     },
     {
+      kind: "html-render",
+      canRender: (record) => record.kind === "html-render",
+      render: (record, context) =>
+        record.kind === "html-render" ? (
+          <UserMessageContextChip
+            icon={<MousePointerClickIcon />}
+            label={`From ${record.title}`}
+            kindLabel="Page"
+            tooltip="The page sent this when you clicked in it"
+            copyMarkdown={context.copyMarkdown}
+            kind="html-render"
+          />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
       kind: "image",
       canRender: (record, context) =>
         record.kind === "image" &&

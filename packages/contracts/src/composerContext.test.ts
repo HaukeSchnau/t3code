@@ -112,6 +112,13 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     threadId: "thread-1",
     title: "Fix login flow",
   },
+  "html-render": {
+    ...base,
+    kind: "html-render",
+    label: "From Quiz",
+    renderId: "thread-1-0f6b2b4e-html",
+    title: "Quiz",
+  },
 };
 
 describe("ComposerContextRecord", () => {

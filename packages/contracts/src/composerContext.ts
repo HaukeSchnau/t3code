@@ -24,6 +24,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "mention",
   "skill",
   "thread",
+  "html-render",
 ] as const;
 export type KnownComposerContextKind = (typeof COMPOSER_CONTEXT_KINDS)[number];
 
@@ -211,6 +212,15 @@ export const ThreadContextRecord = Schema.Struct({
 });
 export type ThreadContextRecord = typeof ThreadContextRecord.Type;
 
+/** A message an `html_render` page sent for the user who clicked in it. */
+export const HtmlRenderContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("html-render"),
+  renderId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  title: ContextLabel,
+});
+export type HtmlRenderContextRecord = typeof HtmlRenderContextRecord.Type;
+
 const isJson = Schema.is(Schema.Json);
 
 /** Excludes known discriminators so malformed known records fail their own schema. */
@@ -241,6 +251,7 @@ export const KnownComposerContextRecord = Schema.Union([
   MentionContextRecord,
   SkillContextRecord,
   ThreadContextRecord,
+  HtmlRenderContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;
 

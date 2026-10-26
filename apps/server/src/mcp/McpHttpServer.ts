@@ -37,6 +37,7 @@ import {
 } from "../telemetry/ProviderDimensions.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import * as McpToolDirectory from "./McpToolDirectory.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -935,6 +936,23 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Records every tool `registration` adds, when a directory is provided. */
+const recordingTools = Effect.fnUntraced(function* <A, E, R>(registration: Effect.Effect<A, E, R>) {
+  const directory = yield* Effect.serviceOption(McpToolDirectory.McpToolDirectory);
+  if (Option.isNone(directory)) return yield* registration;
+  const server = yield* McpServer.McpServer;
+  return yield* registration.pipe(
+    Effect.provideService(
+      McpServer.McpServer,
+      McpServer.McpServer.of({
+        ...server,
+        addTool: (options) =>
+          directory.value.record(options).pipe(Effect.andThen(server.addTool(options))),
+      }),
+    ),
+  );
+});
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -946,7 +964,7 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+    recordingTools(withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -961,7 +979,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) =>
-  Layer.effectDiscard(withToolAnalytics(register)).pipe(
+  Layer.effectDiscard(recordingTools(withToolAnalytics(register))).pipe(
     Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
   );
 

@@ -1,8 +1,9 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { HtmlRenderState, ScopedThreadRef } from "@t3tools/contracts";
 import { MinusIcon, PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
+import type { HtmlRenderPageBridge } from "../files/useHtmlRenderHost";
 import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 
@@ -10,6 +11,8 @@ export function HtmlRenderDialog(props: {
   readonly src: string;
   readonly title: string;
   readonly threadRef?: ScopedThreadRef | undefined;
+  readonly bridge?: HtmlRenderPageBridge | undefined;
+  readonly state?: HtmlRenderState | undefined;
   readonly onClose: () => void;
 }) {
   const [zoom, setZoom] = useState(1);
@@ -41,6 +44,8 @@ export function HtmlRenderDialog(props: {
                 src={props.src}
                 title={props.title}
                 threadRef={props.threadRef}
+                bridge={props.bridge}
+                state={props.state}
                 className="block size-full"
               />
             </div>

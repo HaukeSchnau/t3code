@@ -274,8 +274,10 @@ export function HtmlRenderTimelineRow({
         key={row.htmlRender.attachmentId}
         environmentId={ctx.activeThreadEnvironmentId}
         htmlRender={row.htmlRender}
+        versions={row.versions}
         threadRef={ctx.threadRef ?? undefined}
         onFullscreenChange={onFullscreenChange}
+        onSendMessage={ctx.onSendAppMessage}
       />
     </div>
   );

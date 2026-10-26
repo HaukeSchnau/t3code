@@ -17,6 +17,8 @@ const BOUNDED_TEXT_MARKER = "[Earlier output truncated]\n\n";
 const KEPT_HTML_END_LENGTH = 8_000;
 
 interface KeptHtmlRender {
+  /** The file an agent passed instead of HTML; its call reports only this path. */
+  readonly path: string | undefined;
   readonly title: string;
   readonly height: number;
   readonly htmlLength: number;
@@ -35,13 +37,23 @@ export class McpProviderSessions extends Context.Service<
     readonly clear: (threadId: ThreadId) => Effect.Effect<void>;
     readonly recordHtmlRender: (
       threadId: ThreadId,
-      input: { readonly html: string; readonly title: string; readonly height: number },
+      input: {
+        readonly html: string;
+        readonly path?: string | undefined;
+        readonly title: string;
+        readonly height: number;
+      },
       reference: HtmlRenderReference,
     ) => Effect.Effect<void>;
     // A reported attachment consumes that exact page; otherwise only unique input matches count.
     readonly takeHtmlRender: (
       threadId: ThreadId,
-      input: { readonly html?: unknown; readonly title?: unknown; readonly height?: unknown },
+      input: {
+        readonly html?: unknown;
+        readonly path?: unknown;
+        readonly title?: unknown;
+        readonly height?: unknown;
+      },
       reported?: HtmlRenderReference,
     ) => Effect.Effect<HtmlRenderReference | undefined>;
   }
@@ -49,16 +61,29 @@ export class McpProviderSessions extends Context.Service<
 
 const matchingPageIndex = (
   kept: ReadonlyArray<KeptHtmlRender>,
-  input: { readonly html?: unknown; readonly title?: unknown; readonly height?: unknown },
+  input: {
+    readonly html?: unknown;
+    readonly path?: unknown;
+    readonly title?: unknown;
+    readonly height?: unknown;
+  },
 ): number => {
-  const html = input.html;
-  if (typeof html !== "string" || html.length === 0) {
-    return -1;
-  }
   const height =
     typeof input.height === "string" && input.height.trim() !== ""
       ? Number(input.height)
       : input.height;
+  if (typeof input.path === "string" && input.path.length > 0) {
+    const matches = kept.flatMap((page, index) =>
+      page.path === input.path && page.title === input.title && page.height === height
+        ? [index]
+        : [],
+    );
+    return matches.length === 1 ? matches[0]! : -1;
+  }
+  const html = input.html;
+  if (typeof html !== "string" || html.length === 0) {
+    return -1;
+  }
   const htmlHash = hashHtml(html);
   const tail = html.startsWith(BOUNDED_TEXT_MARKER)
     ? html.slice(BOUNDED_TEXT_MARKER.length)
@@ -114,6 +139,7 @@ const make = Effect.gen(function* () {
           [
             ...(current.get(threadId) ?? []),
             {
+              path: input.path,
               title: input.title,
               height: input.height,
               htmlLength: input.html.length,

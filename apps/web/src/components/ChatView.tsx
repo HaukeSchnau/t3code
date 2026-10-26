@@ -50,7 +50,7 @@ import {
   codexResumableRunId,
   isCodexRunActive,
 } from "@t3tools/shared/codexTurnContinuation";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+import type { OrchestrationMessageContext, UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
@@ -1895,7 +1895,7 @@ export default function ChatView(props: ChatViewProps) {
     scheduleComposerFocus();
   };
   const insertArtifactTemplateStable = useStableCallback(insertArtifactTemplate);
-  const sendAppMessage = async (text: string) => {
+  const sendAppMessage = async (text: string, context?: OrchestrationMessageContext) => {
     if (!isServerThread || activeThreadId === null) {
       throw new Error("Messages from apps need a started thread.");
     }
@@ -1903,7 +1903,13 @@ export default function ChatView(props: ChatViewProps) {
       environmentId,
       input: {
         threadId: activeThreadId,
-        message: { messageId: newMessageId(), role: "user", text, attachments: [] },
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text,
+          attachments: [],
+          ...(context === undefined ? {} : { context }),
+        },
         runtimeMode,
         interactionMode,
         dispatchMode: "queue",

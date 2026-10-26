@@ -106,6 +106,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
+  clientInteractionModeCeiling,
   clientRuntimeModeCeiling,
   type McpInvocationScope,
   type McpThreadInvocationScope,
@@ -1155,7 +1156,7 @@ const make = Effect.gen(function* () {
         parent: undefined,
         limits: {
           runtimeMode: clientRuntimeModeCeiling(scope.client),
-          interactionMode: "default",
+          interactionMode: clientInteractionModeCeiling(scope.client),
         } satisfies { runtimeMode: RuntimeMode; interactionMode: ProviderInteractionMode },
       } as const;
     }

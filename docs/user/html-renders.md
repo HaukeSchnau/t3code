@@ -4,6 +4,14 @@ Agents can answer with a page instead of only text: a chart, table, diagram, ima
 
 Pages use your current theme, including custom themes, and follow light and dark mode as you switch. Scripts run inside the page, but it is sandboxed away from T3 Code and your session. Links you click in a page open in your browser. Use the expand button to open a page full screen. On web and desktop, use the zoom controls to see more detail.
 
+## Interactive pages
+
+A page can do more than show something. After you click or tap in it, it can send a message to the thread for you, which shows a "From <page>" chip, and it can call T3 Code's own tools for the thread, such as reading threads or queuing work. Tools that change something ask you first and name the page, the tool and what it passes. Each message or tool call needs its own click, so a page cannot act while you are not using it. A page acts within the thread's permission mode.
+
+A page keeps what it saves in its browser storage with the thread, so it reopens as you left it on any device. Guests on a guest link see that saved state but cannot change it, send, or call tools. On web and desktop a page can also download files; on mobile it cannot.
+
+An agent can replace a page it showed. The row shows the newest version; use the arrows in its corner to page back through older ones. While you read an older version, a newer one only marks itself instead of taking over.
+
 Agents can place local images in a page by file path. T3 Code embeds them when the page is published, so the page keeps working after the original files move or are deleted. Deleting the thread deletes its pages.
 
 Before publishing, agents check their work with screenshots from a small headless browser that T3 Code keeps for itself; it never uses a browser you installed. The first preview on a machine downloads it once (about 120 MB) into T3 Code's data folder, so that preview can take a minute. Browser tabs on a remote environment use the same browser, so whichever comes first downloads it. Some Linux hosts need [setup](remote-access.md#browser-host-setup) before it can start. Pages publish without it.
