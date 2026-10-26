@@ -148,7 +148,9 @@ const write = (threadId: ThreadId, events: ReadonlyArray<Omit<OrchestrationV2Dom
         (event, index) =>
           ({
             ...event,
-            id: EventId.make(`seed:${threadId}:${event.type}:${index}`),
+            id: EventId.make(
+              `seed:${threadId}:${event.type}:${"id" in event.payload ? event.payload.id : index}`,
+            ),
           }) as OrchestrationV2DomainEvent,
       ),
     });
@@ -275,6 +277,46 @@ it.effect("rejects replies the notification can't deliver", () =>
         t.getThreadShell(threadId),
       );
       assert.equal(shell?.pendingRuntimeRequest?.id, RuntimeRequestId.make(`request:${threadId}`));
+    }
+  }).pipe(Effect.provide(layerTest)),
+);
+
+// The shell summarizes only the newest pending request; replies must still see the others.
+it.effect("rejects a reply while another request waits behind the newest question", () =>
+  Effect.gen(function* () {
+    const control = yield* ThreadControl.ThreadControl;
+    const cases = [
+      ["older-approval", "command", "approval_pending"],
+      ["second-question", "user_input", "question_needs_client"],
+    ] as const;
+    for (const [name, kind, reason] of cases) {
+      const threadId = ThreadId.make(`thread:${name}`);
+      yield* seedPendingRequest(threadId, { questions: [question("runner")] });
+      const run = (yield* projection(threadId)).runs.at(-1)!;
+      const now = yield* DateTime.now;
+      const earlier = DateTime.subtract(now, { minutes: 1 });
+      yield* write(threadId, [
+        {
+          type: "runtime-request.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: RuntimeRequestId.make(`other:${threadId}`),
+            nodeId: run.rootNodeId!,
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind,
+            status: "pending",
+            responseCapability: { type: "message" },
+            createdAt: earlier,
+            resolvedAt: null,
+          },
+        },
+      ]);
+      assert.deepEqual(
+        yield* control.reply({ threadId, replyId: `reply:${name}`, text: "Vitest" }),
+        { outcome: "rejected", reason },
+      );
     }
   }).pipe(Effect.provide(layerTest)),
 );

@@ -116,23 +116,33 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * The pending question when the thread waits on exactly one question with one part, which is
-   * what a notification or the watch can answer. Anything else needs the full client.
+   * What a notification or the watch can do about the thread's pending runtime requests: nothing
+   * pending, an approval (which needs the app), several questions or a multi-part one (which need
+   * the full client), or exactly one single-part question it can answer. The shell summarizes
+   * only the newest request, so every pending one is read.
    */
-  const singlePendingQuestion = Effect.fn("ThreadControl.singlePendingQuestion")(function* (
+  const pendingReplyTarget = Effect.fn("ThreadControl.pendingReplyTarget")(function* (
     shell: OrchestrationV2ThreadShell,
   ) {
-    const request = shell.pendingRuntimeRequest;
-    if (request?.kind !== "user_input") return null;
-    // The shell summary carries only the request id, so the questions come from its turn item.
-    const { turnItems } = yield* threads.getThreadRecords(shell.id, ["turnItems"], {
-      turnItemTypes: ["user_input_request"],
-    });
-    const item = turnItems.find(
-      (candidate) => candidate.type === "user_input_request" && candidate.requestId === request.id,
+    const { runtimeRequests, turnItems } = yield* threads.getThreadRecords(
+      shell.id,
+      ["runtimeRequests", "turnItems"],
+      { turnItemTypes: ["user_input_request"] },
     );
-    if (item?.type !== "user_input_request" || item.questions.length !== 1) return null;
-    return { requestId: request.id, question: item.questions[0]! };
+    const pending = runtimeRequests.filter(
+      (request) => request.status === "pending" && request.kind !== "auth_refresh",
+    );
+    if (pending.length === 0) return { kind: "none" } as const;
+    if (pending.some((request) => request.kind !== "user_input")) {
+      return { kind: "approval" } as const;
+    }
+    const [request] = pending;
+    const item = turnItems.find(
+      (candidate) => candidate.type === "user_input_request" && candidate.requestId === request!.id,
+    );
+    if (pending.length !== 1 || item?.type !== "user_input_request" || item.questions.length !== 1)
+      return { kind: "needs_client" } as const;
+    return { kind: "question", requestId: request!.id, question: item.questions[0]! } as const;
   });
 
   // Shell rows never carry message bodies, so the excerpt comes from the latest run's messages.
@@ -160,14 +170,14 @@ const make = Effect.gen(function* () {
       }
 
       const shell = yield* readShell(input.threadId);
-      const request = shell.pendingRuntimeRequest;
-      if (request !== null && request.kind !== "user_input" && request.kind !== "auth_refresh") {
+      const pending = yield* pendingReplyTarget(shell);
+      if (pending.kind === "approval") {
         return { outcome: "rejected", reason: "approval_pending" } as const;
       }
-      if (request?.kind === "user_input") {
-        const pending = yield* singlePendingQuestion(shell);
-        if (pending === null)
-          return { outcome: "rejected", reason: "question_needs_client" } as const;
+      if (pending.kind === "needs_client") {
+        return { outcome: "rejected", reason: "question_needs_client" } as const;
+      }
+      if (pending.kind === "question") {
         const answer = matchUserInputAnswer(pending.question, input.text);
         if (answer === null) return { outcome: "rejected", reason: "no_matching_option" } as const;
         yield* threads.dispatch({
@@ -233,7 +243,8 @@ const make = Effect.gen(function* () {
         projectThreadAwarenessV2({ environmentId, project: { title: projectTitle }, thread: shell })
           ?.phase ?? null;
       const excerpt = yield* latestAgentExcerpt(shell);
-      const pending = yield* singlePendingQuestion(shell);
+      const target = yield* pendingReplyTarget(shell);
+      const pending = target.kind === "question" ? target : null;
       return {
         environmentId,
         threadId: shell.id,

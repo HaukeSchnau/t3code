@@ -19,6 +19,9 @@ import * as Layer from "effect/Layer";
 import * as ThreadControlHttp from "./http.ts";
 import * as ThreadControl from "./ThreadControl.ts";
 
+const missing = (threadId: ThreadId) =>
+  Effect.fail(new ThreadControl.ThreadControlThreadNotFoundError({ threadId }));
+
 class ThreadControlTestApi extends HttpApi.make("environment").add(
   EnvironmentHttpApi.groups.threadControl,
 ) {}
@@ -32,9 +35,14 @@ it.effect("serves the phone's requests with the orchestration scopes", () =>
       Layer.provide(ThreadControlHttp.layer),
       Layer.provide(
         Layer.mock(ThreadControl.ThreadControl)({
-          reply: () => Effect.succeed({ outcome: "sent" }),
-          stop: (threadId) => Effect.sync(() => void stopped.push(threadId)),
+          reply: ({ threadId }) =>
+            threadId === "missing" ? missing(threadId) : Effect.succeed({ outcome: "sent" }),
+          stop: (threadId) =>
+            threadId === "missing"
+              ? missing(threadId)
+              : Effect.sync(() => void stopped.push(threadId)),
           listGlances: () => Effect.succeed({ threads: [] }),
+          getGlance: (threadId) => missing(threadId),
         }),
       ),
       Layer.provide(
@@ -82,5 +90,13 @@ it.effect("serves the phone's requests with the orchestration scopes", () =>
     scopes = ["orchestration:read", "orchestration:operate"];
     expect(yield* requests()).toEqual([200, 200, 204]);
     expect(stopped).toEqual(["thread-1"]);
+    // The phone stops retrying a deleted thread only on a 404.
+    expect(
+      yield* Effect.all([
+        call("POST", "/api/orchestration/threads/missing/reply", { replyId: "r", text: "Go" }),
+        call("POST", "/api/orchestration/threads/missing/stop"),
+        call("GET", "/api/orchestration/threads/missing/glance"),
+      ]),
+    ).toEqual([404, 404, 404]);
   }),
 );
