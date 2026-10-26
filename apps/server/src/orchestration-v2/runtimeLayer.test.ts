@@ -51,6 +51,7 @@ import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.t
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -5080,6 +5081,142 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           "Edited second message",
         );
         assert.equal(resumed.runs.length, 3, "resume retries must not duplicate messages or runs");
+      }),
+  );
+
+  it.effect(
+    "delivers a restart-held queue, including a provider wake, after the continuation",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const recovery = yield* ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService;
+        const threadId = ThreadId.make("runtime-layer-restart-held-queue");
+        const messageId = (key: string) => MessageId.make(`${threadId}:${key}`);
+        const runFor = (key: string) =>
+          Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) => {
+            const run = runs.find((candidate) => candidate.userMessageId === messageId(key));
+            assert.isDefined(run);
+            return run;
+          });
+        const complete = (key: string) =>
+          Effect.gen(function* () {
+            const run = yield* runFor(key);
+            const now = yield* DateTime.now;
+            yield* eventSink.write({
+              events: [
+                {
+                  id: EventId.make(`${threadId}:${key}:completed`),
+                  type: "run.updated",
+                  threadId,
+                  runId: run.id,
+                  ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+                  providerInstanceId: run.providerInstanceId,
+                  occurredAt: now,
+                  payload: { ...run, status: "completed", startedAt: now, completedAt: now },
+                },
+              ],
+            });
+          });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Restart-held queue",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:active`),
+          threadId,
+          messageId: messageId("active"),
+          text: "Active",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "mcp",
+          commandId: CommandId.make(`${threadId}:message:sent`),
+          threadId,
+          messageId: messageId("sent"),
+          text: "Sent by another thread",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+        });
+        yield* recovery.reconcile("shutdown");
+        const cut = yield* runFor("active");
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "server",
+          commandId: CommandId.make(`command:restart-continuation:${cut.id}`),
+          threadId,
+          messageId: messageId("continuation"),
+          text: "Continue where you left off.",
+          notification: {
+            source: { kind: "system" },
+            outcome: "updated",
+            summary: "T3 Code restarted and resumed this turn",
+          },
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          restartContinuationOfRunId: cut.id,
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "provider",
+          commandId: CommandId.make(`${threadId}:message:wake`),
+          threadId,
+          messageId: messageId("wake"),
+          text: "Background command finished",
+          notification: {
+            source: { kind: "command" },
+            outcome: "completed",
+            summary: "Background command finished",
+          },
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+        });
+        const { runs } = yield* orchestrator.getThreadProjection(threadId);
+        assert.isFalse(runs.some((run) => run.status === "queued" && run.queueHeld === true));
+
+        const startedRunIds = yield* Queue.unbounded<RunId>();
+        const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+        yield* eventSink.stream({ threadId, afterSequence }).pipe(
+          Stream.runForEach((stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting"
+              ? Queue.offer(startedRunIds, stored.event.payload.id)
+              : Effect.void,
+          ),
+          Effect.forkScoped,
+        );
+        yield* Effect.yieldNow;
+
+        yield* complete("continuation");
+        assert.equal(yield* Queue.take(startedRunIds), (yield* runFor("sent")).id);
+        // The provider runs its wake turn natively; its MCP calls need a live run on the thread.
+        assert.isTrue(
+          OrchestratorMcpService.isLiveCallerShell(
+            yield* orchestrator.getThreadShell(threadId),
+            modelSelection.instanceId,
+          ),
+        );
+        yield* complete("sent");
+        assert.equal(yield* Queue.take(startedRunIds), (yield* runFor("wake")).id);
       }),
   );
 
