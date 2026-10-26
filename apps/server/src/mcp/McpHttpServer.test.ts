@@ -21,6 +21,7 @@ import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/http
 import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
+import * as McpAlwaysLoad from "./McpAlwaysLoad.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
@@ -900,6 +901,69 @@ it.effect("lists pull request watch tools only to threads that are not delegated
       expect(childTools).toContain("link_pull_request");
       expect(childTools).not.toContain("watch_pull_request");
       expect(childTools).not.toContain("unwatch_pull_request");
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("advertises only AlwaysLoad tools to Claude Code as always loaded", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = (name: string) =>
+        Tool.make(name, { parameters: Tool.EmptyParams, success: Schema.String });
+      const ProbeToolkit = Toolkit.make(
+        probe("probe_always").annotate(McpAlwaysLoad.AlwaysLoad, true),
+        probe("probe_deferred"),
+      );
+      const serverLayer = McpHttpServer.toolkitRegistration(
+        ProbeToolkit,
+        McpToolAccess.toLayer(ProbeToolkit, {
+          probe_always: McpToolAccess.reads(() => Effect.succeed("ok")),
+          probe_deferred: McpToolAccess.reads(() => Effect.succeed("ok")),
+        }),
+      ).pipe(
+        Layer.provideMerge(McpHttpServer.layerMcpTransport),
+        Layer.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: () => Effect.succeed(invocation),
+          }),
+        ),
+        Layer.provide(NodeServices.layer),
+      );
+      yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
+        Layer.build,
+      );
+      const httpClient = yield* HttpClient.HttpClient;
+      const headers = {
+        accept: "application/json, text/event-stream",
+        authorization: "Bearer probeToken",
+      };
+      const initialize = yield* httpClient.post("/mcp", {
+        headers,
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+          "application/json",
+        ),
+      });
+      const listed = yield* httpClient.post("/mcp", {
+        headers: {
+          ...headers,
+          "mcp-session-id": initialize.headers["mcp-session-id"]!,
+          "mcp-protocol-version": "2025-06-18",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+          "application/json",
+        ),
+      });
+      const body = (yield* listed.json) as {
+        readonly result: {
+          readonly tools: ReadonlyArray<{ readonly name: string; readonly _meta?: unknown }>;
+        };
+      };
+      expect(body.result.tools.map((tool) => [tool.name, tool._meta])).toEqual([
+        ["probe_always", { "anthropic/alwaysLoad": true }],
+        ["probe_deferred", undefined],
+      ]);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
