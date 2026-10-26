@@ -9,8 +9,9 @@ Only Codex and Claude can run in a separate environment. Starting a thread there
 provider fails with a message asking you to switch. While a directory is registered, you can't
 move its project to another folder in project settings. Ask for outside help to migrate it.
 
-On these hosts, **New workspace** in the composer creates a separate environment for the task,
-with its own checkout of the project's repositories. Under **Advanced**, **Familiar** keeps your
+On these hosts, **New workspace** in the composer creates a separate environment for the task
+in jj repositories and folders without Git, with its own checkout of the project's repositories.
+Git projects get ordinary worktrees. Under **Advanced**, **Familiar** keeps your
 global instructions and skills; **Minimal** starts with the project's own guidance. Deleting the
 workspace stops its environment and removes its files. This version can't create new separate
 projects from T3 Code.

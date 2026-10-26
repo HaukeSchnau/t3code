@@ -25,7 +25,7 @@ reaches every orchestration and preview tool over the `t3-code` MCP endpoint. Fi
 by an environment path resolve through `projectHostPath` in `WorkspaceFileSystem` and
 `AssetAccess` before T3 reads them.
 
-New workspaces on a launcher host are registrations too. `workspace/IsolatedWorkspaces.ts` runs
+New jj and directory workspaces on a launcher host are registrations too. `workspace/IsolatedWorkspaces.ts` runs
 `agent-exec fork` and `retire --remove-checkout` from `/`, because provisioning is a host
 operation even when the source project is itself registered; see
 [workspaces](../../patches/workspaces.md).

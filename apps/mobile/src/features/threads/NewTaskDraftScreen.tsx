@@ -84,7 +84,7 @@ import {
 } from "../keyboard/hardwareKeyboardCommands";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
-import { managedWorkspaceDisplayLabel, managedWorkspacesFor } from "./managed-workspaces";
+import { managedWorkspaceDisplayLabel } from "./managed-workspaces";
 import {
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
@@ -186,11 +186,8 @@ export function NewTaskDraftScreen(props: {
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
     selectedProject?.environmentId ?? null,
   );
-  // Managed workspaces need no Git and have their own picker (patches/workspaces.md).
-  const managedWorkspaces = managedWorkspacesFor(
-    selectedEnvironmentServerConfig,
-    selectedProject?.workspaceRoot,
-  );
+  // jj and directory projects pick a managed workspace instead (patches/workspaces.md).
+  const managedWorkspaces = flow.managedWorkspaces;
   const environmentConnected = connectionState === "connected";
   const canOperate = useEnvironmentScope(
     selectedProject?.environmentId ?? null,

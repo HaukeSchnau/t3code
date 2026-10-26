@@ -1,10 +1,12 @@
 // Workspace lists for the workspace pickers (patches/workspaces.md). A workspace is the
 // directory threads share through `worktreePath`, so the list derives from thread shells, with
 // archived shells merged in on demand. Browsing settled workspaces changes no lifecycle state.
+import type { ManagedWorkspacesCapability, ServerConfig, VcsDriverKind } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import type { ArchivedSnapshotEntry } from "./archivedThreads.ts";
 import { type EnvironmentThreadShell, threadRuntimeIsActive } from "./models.ts";
+import { isScratchProject } from "./projects.ts";
 
 export interface WorkspaceThread {
   readonly environmentId: string;
@@ -27,6 +29,40 @@ interface WorkspaceGroup {
   /** Every thread is settled or archived and none is running. */
   readonly settled: boolean;
   readonly updatedAtMs: number;
+}
+
+/**
+ * The managed workspace capability for a project, or null where clients use upstream's worktree
+ * flow: plain Git projects and scratch threads, which already get a folder of their own.
+ * `vcsKind` is the project checkout's status kind; while it is unknown the server still turns a
+ * managed launch on a Git project into a worktree.
+ */
+export function managedWorkspacesForProject(input: {
+  readonly config:
+    | {
+        readonly environment: {
+          readonly capabilities: Pick<
+            ServerConfig["environment"]["capabilities"],
+            "managedWorkspaces"
+          >;
+        };
+        readonly scratchWorkspaceRoot?: string | undefined;
+      }
+    | null
+    | undefined;
+  readonly projectRoot: string | null | undefined;
+  readonly vcsKind: VcsDriverKind | undefined;
+}): ManagedWorkspacesCapability | null {
+  const { config, projectRoot } = input;
+  if (
+    config == null ||
+    projectRoot == null ||
+    input.vcsKind === "git" ||
+    isScratchProject({ workspaceRoot: projectRoot }, config.scratchWorkspaceRoot)
+  ) {
+    return null;
+  }
+  return config.environment.capabilities.managedWorkspaces ?? null;
 }
 
 export function workspaceLabel(path: string): string {

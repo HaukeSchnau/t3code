@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   EnvironmentId,
+  ManagedWorkspacesCapability,
   ModelSelection,
   ProjectReadFileResult,
   ProviderInteractionMode,
@@ -123,6 +124,7 @@ import {
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 import { managedWorkspaceCreation } from "./managed-workspaces";
+import { managedWorkspacesForProject } from "@t3tools/client-runtime/state/workspaces";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { useOlderSettledCount } from "../../state/olderSettledShelf";
 
@@ -170,6 +172,8 @@ type NewTaskFlowContextValue = {
   readonly workspaceMode: WorkspaceMode;
   readonly isGitRepo: boolean;
   readonly isGitRepoKnown: boolean;
+  /** Fork: set for jj and directory projects on servers with managed workspaces. */
+  readonly managedWorkspaces: ManagedWorkspacesCapability | null;
   readonly canChooseWorkspace: boolean;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
@@ -466,6 +470,12 @@ export function NewTaskFlowProvider(
   });
   const knownIsGitRepo = projectGitStatus.data?.isRepo ?? projectBranches.data?.isRepo ?? null;
   const isGitRepo = knownIsGitRepo ?? true;
+  // Git projects keep upstream's worktree flow (patches/workspaces.md).
+  const managedWorkspaces = managedWorkspacesForProject({
+    config: selectedEnvironmentServerConfig,
+    projectRoot: selectedProject?.workspaceRoot,
+    vcsKind: projectGitStatus.data?.kind,
+  });
   const fileAccessSession = useEnvironmentQuery(
     selectedProject !== null && selectedProject.workspaceRoot !== ""
       ? environmentSession.sessionStateAtom(selectedProject.environmentId)
@@ -1040,10 +1050,7 @@ export function NewTaskFlowProvider(
         ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
           ? { startFromOrigin: true }
           : {}),
-        // Servers with managed workspaces pick the backend (patches/workspaces.md).
-        ...(mode === "worktree"
-          ? managedWorkspaceCreation(selectedEnvironmentServerConfig, selectedProject.workspaceRoot)
-          : {}),
+        ...(mode === "worktree" ? managedWorkspaceCreation(managedWorkspaces) : {}),
         ...(draft.skillPackIds ? { skillPackIds: draft.skillPackIds } : {}),
       },
       createdAt: metadata.createdAt,
@@ -1146,6 +1153,7 @@ export function NewTaskFlowProvider(
     workspaceMode,
     isGitRepo,
     isGitRepoKnown: knownIsGitRepo !== null,
+    managedWorkspaces,
     canChooseWorkspace,
     selectedBranchName,
     selectedWorktreePath,

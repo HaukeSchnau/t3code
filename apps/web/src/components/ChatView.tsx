@@ -1744,8 +1744,12 @@ export default function ChatView(props: ChatViewProps) {
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
   const vcsKind = gitStatusQuery.data?.kind;
-  // Managed workspaces need no Git (patches/workspaces.md).
-  const managedWorkspaces = useManagedWorkspaces(environmentId, activeProject?.workspaceRoot);
+  // Git projects keep upstream's worktree flow (patches/workspaces.md).
+  const managedWorkspaces = useManagedWorkspaces(
+    environmentId,
+    activeProject?.workspaceRoot,
+    vcsKind,
+  );
   const canChooseWorkspace = isGitRepo || managedWorkspaces !== null;
   // Provider-native subagents cannot take messages; approvals and questions go to the top-level parent.
   const showProviderSubagentBar = isProviderSubagent;
@@ -2931,6 +2935,7 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     isLocalDraftThread,
     isGitRepo,
+    managedWorkspaces,
     phase,
     runtimeMode,
     sendEnvMode,
@@ -3810,6 +3815,7 @@ export default function ChatView(props: ChatViewProps) {
                                 worktreePath={activeThread.worktreePath}
                                 isServerThread={isServerThread}
                                 showGitControls={isGitRepo}
+                                managedWorkspaces={managedWorkspaces}
                                 {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                 onEnvModeChange={onEnvModeChangeStable}
                                 startFromOrigin={startFromOrigin}

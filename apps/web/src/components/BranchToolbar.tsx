@@ -4,7 +4,12 @@ import { readLocalApi } from "../localApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ManagedWorkspacesCapability,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   FolderGit2Icon,
@@ -49,7 +54,6 @@ import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { JjStackControl } from "./JjStackControl";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ManagedWorkspaceSelector } from "./ManagedWorkspaceSelector";
-import { useManagedWorkspaces } from "../lib/managedWorkspaces";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -114,6 +118,8 @@ interface BranchToolbarProps {
   contextStripVisible?: boolean;
   /** A jj checkout shows its stack in the composer strip instead of a branch. */
   jjCwd?: string | null;
+  /** jj and directory projects choose a managed workspace instead (patches/workspaces.md). */
+  managedWorkspaces?: ManagedWorkspacesCapability | null;
 }
 
 function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string) {
@@ -650,6 +656,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   composerControlsHostRef,
   contextStripVisible = true,
   jjCwd = null,
+  managedWorkspaces = null,
 }: BranchToolbarProps) {
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = scopeThreadRef(environmentId, threadId);
@@ -660,8 +667,6 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeWorktreePath = forceNewWorktree ? null : worktreePath;
   const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
   const envModeLocked = envLocked || (isServerThread && activeWorktreePath !== null);
-  // Servers with managed workspaces offer them for non-Git projects too (patches/workspaces.md).
-  const managedWorkspaces = useManagedWorkspaces(environmentId, activeProject?.workspaceRoot);
   const showWorkspaceControls = showGitControls || managedWorkspaces !== null;
   const onSelectManagedWorkspace = (
     workspace: { readonly path: string; readonly branch: string | null } | null,
