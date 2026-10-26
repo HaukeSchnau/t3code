@@ -13,7 +13,7 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as UsageLimitSources from "./UsageLimitSources.ts";
 
-export const USAGE_LIMITS_REFRESH_INTERVAL = Duration.minutes(2);
+const USAGE_LIMITS_REFRESH_INTERVAL = Duration.minutes(2);
 
 /** Re-reads every limit this environment reports. Never fails; failures land on the snapshots. */
 export const readUsageLimits = (input: {

@@ -181,7 +181,7 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
   return rows.join("\n");
 };
 
-export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
+const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
     "T3 Code server is ready.",
     `Connection string: ${accessInfo.connectionString}`,

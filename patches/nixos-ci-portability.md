@@ -28,6 +28,10 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 - `scripts/notify-discord-release.test.ts`: the shells that run the release workflow's Discord steps get
   PATH. Their environment replaces the inherited one, and without PATH Node looks for `bash` only in `/bin`
   and `/usr/bin`.
+- `.github/scripts/relay-state-output.test.cjs` and `vercel-deployment-output.test.cjs`: the shells that run
+  workflow steps start with `--noprofile --norc`. Node connects a child's stdio through sockets, so NixOS's
+  bash takes itself for an SSH session, sources `/etc/bashrc` and resets PATH to the system profile, which
+  lacks the CI shell's `jq`.
 - `apps/web/test/browserWaitFor.ts` (a browser-project setup file): `vi.waitFor` waits five seconds by
   default instead of one. Calder's aarch64 workers take longer than that to parse and lay out heavy file
   previews (a 2,000-output notebook, ODS, RTF, fonts), and Vitest has no setting for the default.

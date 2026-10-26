@@ -35,7 +35,7 @@ function sameIdSet(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean 
 }
 
 /** Keep catalog order, drop duplicates and ids the catalog does not know. */
-export function normalizeSkillPackIds(
+function normalizeSkillPackIds(
   catalog: Pick<SkillPackCatalog, "packs">,
   packIds: ReadonlyArray<SkillPackId>,
 ): ReadonlyArray<SkillPackId> {

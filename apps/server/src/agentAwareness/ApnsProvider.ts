@@ -295,7 +295,7 @@ export class ApnsProvider extends Context.Service<
   }
 >()("t3/agentAwareness/ApnsProvider") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const configured = yield* Effect.try({
     try: () => resolveApnsProviderConfiguration(process.env),

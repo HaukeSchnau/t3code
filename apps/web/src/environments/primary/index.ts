@@ -6,8 +6,6 @@ export {
 export {
   createServerPairingCredential,
   clearOfflineAuthProof,
-  fetchSessionState,
-  hasValidOfflineAuthProof,
   offlineAuthProofExpiresAtEpochMs,
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,

@@ -637,22 +637,19 @@ export const WS_METHODS = {
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 } as const;
 
-export const WsAgentAwarenessRegisterDeviceRpc = Rpc.make(WS_METHODS.agentAwarenessRegisterDevice, {
+const WsAgentAwarenessRegisterDeviceRpc = Rpc.make(WS_METHODS.agentAwarenessRegisterDevice, {
   payload: AgentAwarenessDeviceRegistrationInput,
   success: AgentAwarenessRegistrationResult,
   error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
 });
 
-export const WsAgentAwarenessUnregisterDeviceRpc = Rpc.make(
-  WS_METHODS.agentAwarenessUnregisterDevice,
-  {
-    payload: AgentAwarenessDeviceUnregistrationInput,
-    success: Schema.Struct({ removed: Schema.Boolean }),
-    error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
-  },
-);
+const WsAgentAwarenessUnregisterDeviceRpc = Rpc.make(WS_METHODS.agentAwarenessUnregisterDevice, {
+  payload: AgentAwarenessDeviceUnregistrationInput,
+  success: Schema.Struct({ removed: Schema.Boolean }),
+  error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
+});
 
-export const WsAgentAwarenessRegisterLiveActivityRpc = Rpc.make(
+const WsAgentAwarenessRegisterLiveActivityRpc = Rpc.make(
   WS_METHODS.agentAwarenessRegisterLiveActivity,
   {
     payload: AgentAwarenessLiveActivityRegistrationInput,
@@ -661,7 +658,7 @@ export const WsAgentAwarenessRegisterLiveActivityRpc = Rpc.make(
   },
 );
 
-export const WsAgentAwarenessGetSnapshotRpc = Rpc.make(WS_METHODS.agentAwarenessGetSnapshot, {
+const WsAgentAwarenessGetSnapshotRpc = Rpc.make(WS_METHODS.agentAwarenessGetSnapshot, {
   payload: Schema.Struct({}),
   success: AgentAwarenessSnapshot,
   error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),

@@ -95,7 +95,7 @@ function sameIds(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boo
 }
 
 /** A thread without its own row follows its fork parent, then its project. */
-export function threadSkillScope(
+function threadSkillScope(
   row: SelectionRow | undefined,
   inheritedPackIds: ReadonlyArray<SkillPackId>,
 ): ThreadSkillScope {

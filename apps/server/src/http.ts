@@ -56,7 +56,7 @@ import {
 } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
-export const HEALTH_ROUTE_PATH = "/healthz";
+const HEALTH_ROUTE_PATH = "/healthz";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 // Opaque origin blocks cookies, storage and API access while allowing scripts.

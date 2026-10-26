@@ -31,6 +31,105 @@ const check = Task.make("static", { shell, setup: install, run: cmd`vp check` })
   Step.timeout("30 minutes"),
 );
 
+/** A command line of several steps. */
+const sh = (script: string, ...args: ReadonlyArray<string>) => cmd`bash -c ${script} sh ${args}`;
+
+/** Unused files, dependencies and exports, which knip finds across the whole repository. */
+const knip = Task.make("knip", { shell, setup: install, run: cmd`vp run knip:check` }).pipe(
+  Step.timeout("15 minutes"),
+);
+
+/** The generated GraphQL operations match their documents and schemas. */
+const graphql = Task.make("graphql", {
+  shell,
+  setup: install,
+  inputs: Files.union(
+    Files.of(
+      "packages/source-control-github/graphql.config.ts",
+      "packages/source-control-github/schema",
+      "apps/server/graphql.config.ts",
+      "apps/server/schema",
+    ),
+    Files.glob(
+      "packages/source-control-github/src/**/*.graphql",
+      "packages/source-control-github/src/**/*.graphql.ts",
+      "apps/server/src/device/**/*.graphql",
+      "apps/server/src/device/**/*.graphql.ts",
+    ),
+  ),
+  run: cmd`vp run --filter @t3tools/source-control-github --filter t3 generate --check`,
+}).pipe(Step.timeout("10 minutes"));
+
+/**
+ * The web, server and desktop bundles build, and the preload bundle exposes the desktop bridge under
+ * Electron's sandbox. Linux builds the same bundles as macOS; packaging and signing stay with
+ * `desktop-package`.
+ */
+const desktopBuild = Task.make("desktop-build", {
+  shell,
+  setup: install,
+  inputs: Files.union(
+    Files.workspace("apps/desktop", "apps/server", "apps/web"),
+    Files.of("assets", "native/browser-secret", "scripts/lib"),
+  ),
+  run: sh("vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs"),
+}).pipe(Step.timeout("30 minutes"));
+
+const nativeShell = flake.devShells["ci-native"];
+
+const rustCrates = ["native/resource-monitor", "native/kde-snap-shot", "native/hyprland-snap-shot"];
+
+/** Formatting and tests of the Rust helpers. Build output doesn't carry over, so a run compiles cold. */
+const rust = Task.make("rust", {
+  shell: nativeShell,
+  inputs: Files.of(...rustCrates),
+  run: sh(
+    'for crate; do cargo fmt --manifest-path "$crate/Cargo.toml" -- --check; done; ' +
+      'for crate; do cargo test --locked --manifest-path "$crate/Cargo.toml"; done',
+    ...rustCrates,
+  ),
+}).pipe(Step.timeout("30 minutes"));
+
+/**
+ * SwiftLint, ktlint and detekt over the mobile app's native sources. Linux SwiftLint has no
+ * SourceKit, so it skips the rules that need it.
+ */
+const lintMobile = Task.make("lint-mobile", {
+  shell: nativeShell,
+  setup: install,
+  inputs: Files.union(
+    Files.of("apps/mobile/.editorconfig", "apps/mobile/.swiftlint.yml", "apps/mobile/detekt.yml"),
+    Files.glob("apps/mobile/**/*.swift", "apps/mobile/**/*.kt"),
+    Files.optional(Files.glob("apps/mobile/**/*.kts")),
+    Files.imports("scripts/mobile-native-static-check.ts"),
+  ),
+  run: cmd`vp run lint:mobile`,
+}).pipe(Step.timeout("15 minutes"));
+
+/** PR evidence belongs on the pull request, not in the repository. */
+const prAssets = Task.make("pr-assets", {
+  inputs: Files.optional(Files.of(".github/pr-assets")),
+  run: sh(
+    'if [ -e .github/pr-assets ]; then echo "PR evidence must be uploaded, not committed:" >&2; find .github/pr-assets -type f >&2; exit 1; fi',
+  ),
+}).pipe(Step.timeout("5 minutes"));
+
+/** The workflow scripts' own tests. `relay-state-output.test.cjs` runs in `release-smoke`. */
+const githubScripts = Task.make("github-scripts", {
+  shell,
+  inputs: Files.of(
+    ".github/scripts",
+    ".github/workflows/release.yml",
+    ".github/workflows/web-preview.yml",
+  ),
+  run: sh(
+    "python3 -B .github/scripts/stage-preview-bundle.test.py && node --test " +
+      ".github/scripts/check-nightly-release.test.cjs " +
+      ".github/scripts/vercel-deployment-output.test.cjs " +
+      ".github/scripts/thread-transfer-report.test.cjs",
+  ),
+}).pipe(Step.timeout("10 minutes"));
+
 /** The import aliases of the root Vitest config and the web app's tsconfig. */
 const aliases = {
   "~": "apps/web/src",
@@ -419,6 +518,13 @@ export default Project.standard({
   checks: [
     ...deps,
     check,
+    knip,
+    graphql,
+    desktopBuild,
+    rust,
+    lintMobile,
+    githubScripts,
+    prAssets,
     ...typechecks,
     testServer,
     testWeb,

@@ -516,6 +516,15 @@
           ++ lib.optional (
             pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.isAarch64
           ) pkgs.qemu-user;
+          ciShellHook = ''
+            export npm_config_nodedir="${nodejs}"
+            # Tests match English tool messages; Calder workers inherit the host's German locale.
+            export LC_ALL=C.UTF-8
+          ''
+          # Playwright's downloaded Chromium does not run on NixOS (apps/web/vitest.config.ts).
+          + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+            export T3CODE_BROWSER_TEST_CHROMIUM="${lib.getExe pkgs.chromium}"
+          '';
         in
         {
           default = pkgs.mkShell {
@@ -536,16 +545,21 @@
 
           ci = pkgs.mkShellNoCC {
             packages = ciPackages;
+            shellHook = ciShellHook;
+          };
 
-            shellHook = ''
-              export npm_config_nodedir="${nodejs}"
-              # Tests match English tool messages; Calder workers inherit the host's German locale.
-              export LC_ALL=C.UTF-8
-            ''
-            # Playwright's downloaded Chromium does not run on NixOS (apps/web/vitest.config.ts).
-            + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-              export T3CODE_BROWSER_TEST_CHROMIUM="${lib.getExe pkgs.chromium}"
-            '';
+          # The Rust crates and the mobile native linters, apart from `ci` so the other checks'
+          # workers don't fetch Rust and a JDK.
+          ci-native = pkgs.mkShellNoCC {
+            packages = ciPackages ++ [
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.rustfmt
+              pkgs.swiftlint
+              pkgs.ktlint
+              pkgs.detekt
+            ];
+            shellHook = ciShellHook;
           };
         }
       );
