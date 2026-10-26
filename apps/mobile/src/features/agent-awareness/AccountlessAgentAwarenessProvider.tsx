@@ -15,13 +15,14 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import {
+  releaseAgentAwarenessEnvironmentTransport,
   setAgentAwarenessEnvironmentTransport,
   type AgentAwarenessEnvironmentTransport,
 } from "./remoteRegistration";
 import { commandFailure, runFirstConfiguredRegistration } from "./registrationEnvironmentSelection";
 
 export function AccountlessAgentAwarenessProvider(props: { readonly children: ReactNode }) {
-  const { savedConnectionsById } = useSavedRemoteConnections();
+  const { isLoadingSavedConnection, savedConnectionsById } = useSavedRemoteConnections();
   const environmentIds = useMemo(() => {
     const ids: EnvironmentId[] = [];
     for (const connection of Object.values(savedConnectionsById)) {
@@ -44,6 +45,7 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
 
   // oxlint-disable-next-line t3code/react-effect-budget -- publishes the transport to a module-level registration owner and withdraws it on unmount.
   useEffect(() => {
+    if (isLoadingSavedConnection) return;
     if (environmentIds.length === 0) {
       setAgentAwarenessEnvironmentTransport(null);
       return;
@@ -75,10 +77,8 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
         ),
     };
     setAgentAwarenessEnvironmentTransport(transport);
-    return () => {
-      setAgentAwarenessEnvironmentTransport(null);
-    };
-  }, [environmentIds, getSnapshot, registerDevice, registerLiveActivity]);
+    return releaseAgentAwarenessEnvironmentTransport;
+  }, [environmentIds, getSnapshot, isLoadingSavedConnection, registerDevice, registerLiveActivity]);
 
   return props.children;
 }

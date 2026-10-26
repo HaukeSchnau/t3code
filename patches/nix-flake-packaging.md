@@ -62,7 +62,9 @@ packages upstream adds.
 Production Nix builds disable web and server source maps. Local and development builds retain source maps by
 default; set `T3CODE_WEB_SOURCEMAP=false` or `T3CODE_SERVER_SOURCEMAP=false` to reproduce the production mode.
 Production configs use Vite without importing the test configuration. Vitest has dedicated config files, so
-the test resolver plugin is not loaded during production bundling.
+the test resolver plugin is not loaded during production bundling. `apps/server/vite.config.ts` is therefore a
+plain object, where upstream merges the root config into it; Vite+ reads lint and fmt settings from the
+workspace root, and server sources use no `~` alias.
 Upstream test setup belongs in these dedicated Vitest configs, including the shared temporary-directory
 setup and the server Git configuration fixture.
 

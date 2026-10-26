@@ -237,13 +237,14 @@ const config: ExpoConfig = {
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
-  updates: MOBILE_UPDATES_URL
-    ? { url: MOBILE_UPDATES_URL, checkAutomatically: "ON_LOAD", fallbackToCacheTimeout: 0 }
-    : {
-        // Without the fork's update server, run only the embedded bundle. Upstream's
-        // Expo project must never replace fork-only behavior after install.
-        enabled: false,
-      },
+  updates:
+    MOBILE_UPDATES_URL && repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0"
+      ? { url: MOBILE_UPDATES_URL, checkAutomatically: "ON_LOAD", fallbackToCacheTimeout: 0 }
+      : {
+          // Without the fork's update server, run only the embedded bundle. Upstream's
+          // Expo project must never replace fork-only behavior after install.
+          enabled: false,
+        },
   ios: {
     icon: variant.assets.iosIcon,
     // expo-widgets reads this top-level value when generating its extension.

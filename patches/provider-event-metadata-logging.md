@@ -21,15 +21,17 @@ characters per record.
   (event name, id, provider, provider instance and thread, turn, item), the body's value type, and
   a character, byte, item or field count. Payload values and payload key names never reach the
   record.
-- `apps/server/src/provider/EventNdjsonLogger.ts` writes every record to that one file and caps each
-  encoded record at 1 KiB. A high-frequency event, such as a delta or progress update, keeps its
-  first eight records per thread and event name and then every 256th, noting how many it skipped.
-  Other events, such as lifecycle and error events, are never sampled. Running OpenCode tool
-  snapshots, which repeat the whole growing output, are skipped. Rotation and retention keep
-  upstream's defaults.
-- The logger still exports upstream's `shouldPersistProviderEvent` and
-  `boundProviderEventForLogging`, because the orchestration v2 adapters call them before handing an
-  event to the logger. Keep those exports when upstream changes them.
+- `apps/server/src/provider/EventNdjsonLogger.ts` keeps upstream's `shouldPersistProviderEvent`
+  filter at the top of `write`, so canonical deltas and progress, raw native frames, token deltas
+  and running OpenCode tool snapshots never reach the file. It writes every remaining record to
+  that one file and caps each encoded record at 1 KiB; an oversized record keeps every identity
+  field clipped to 64 encoded bytes. A native event that still arrives at high frequency, such as
+  an OpenCode `message.updated` or another provider's delta, keeps its first eight records per
+  thread and event name and then every 256th, noting how many it skipped. Other events, such as
+  lifecycle and error events, are never sampled. Rotation and retention keep upstream's defaults.
+- The logger still exports upstream's `boundProviderEventForLogging`, and the orchestration v2
+  adapters still call `shouldPersistProviderEvent` before handing an event to the logger. Keep
+  those exports when upstream changes them.
 
 ## Removal
 

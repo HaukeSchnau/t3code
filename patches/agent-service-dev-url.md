@@ -13,8 +13,12 @@ servers.
 - `AGENT_SERVICE_PORT` remains the preferred app bind port on Linux/VPS.
 - On macOS, where `AGENT_SERVICE_PORT` is not provided, `PORT` is accepted as the app bind port only when
   `AGENT_SERVICE_URL` is present.
-- Vite HMR uses `AGENT_SERVICE_URL` when present, so reverse-proxied server runs connect through the public
-  browser origin instead of `localhost`.
+- Vite HMR follows upstream and derives its socket from the page origin, which already covers
+  reverse-proxied `AGENT_SERVICE_URL` and `--dev-url` origins.
+- `dev-runner` `--web-host` and `--web-port` bind the Vite listener through `HOST` and `PORT`. The devenv
+  `web` process uses them to listen where the Project Runtime proxies. Upstream pins HMR to any explicit
+  `HOST` for Electron, so `apps/web/vite.config.ts` skips that pin in single-origin browser dev; otherwise
+  a remote browser would try the listener address, such as `127.0.0.1`, on its own machine.
 - The root `dev` package script includes a `--` separator so Portless-appended Vite flags such as `--port`,
   `--strictPort`, and `--host` are captured as `dev-runner` run args instead of being parsed as
   `dev-runner` flags.
@@ -34,3 +38,5 @@ servers.
 - Keep the `dev` script separator unless `agent-service` stops appending Vite-style flags to managed commands.
 - Keep the agent-service run-arg filter while the shared dev graph would otherwise forward Vite flags to every
   task.
+- Keep the single-origin exception to upstream's HMR pin while devenv binds an explicit web listener. It can go
+  if upstream stops pinning HMR to `HOST` outside Electron or gains its own web listener flag.

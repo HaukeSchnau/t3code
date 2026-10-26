@@ -14,6 +14,7 @@ import {
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
   registerLiveActivityPushToken,
+  releaseAgentAwarenessEnvironmentTransport,
   setAgentAwarenessEnvironmentTransport,
   unregisterAgentAwarenessDeviceFromEnvironment,
   updateAgentAwarenessRegistrationPreferences,
@@ -177,6 +178,20 @@ describe("accountless agent awareness registration", () => {
       }),
     );
     expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+  });
+
+  it("ends Live Activities when the last environment goes away but not on release", async () => {
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+    await vi.waitFor(() => expect(environment.registerDevice).toHaveBeenCalledTimes(1));
+    const activity = { end: vi.fn(() => Promise.resolve()) };
+    activityMocks.getInstances.mockReturnValue([activity] as never);
+
+    releaseAgentAwarenessEnvironmentTransport();
+    expect(activity.end).not.toHaveBeenCalled();
+
+    setAgentAwarenessEnvironmentTransport(null);
+    expect(activity.end).toHaveBeenCalledWith("immediate");
   });
 
   it("reports missing server APNs credentials as a failed registration", async () => {

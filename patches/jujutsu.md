@@ -9,7 +9,9 @@ handling, because the maintainer and their agents work in jj repositories.
 
 - A repository whose nearest marker is `.jj` is jj, including colocated ones
   (`vcs/RepositoryMarker.ts`, `VcsDriverRegistry`). A colocated repository stays
-  `gitCompatible`, so every Git workflow, PR lookup and review diff keeps working there.
+  `gitCompatible`, so every server Git workflow, PR lookup and review diff keeps working there.
+  The web branch toolbar and thread details panel show `JjStackControl` in place of upstream's Git
+  actions and branch selector.
 - jj 0.46 or newer; older versions fall back to Git in colocated repositories.
 - Checkpoints are commit ids of `@` after a snapshot, recorded under `.jj/t3/checkpoints`
   (`vcs/JjVcsDriver.ts`). Diffs run Git against jj's backing store, so output matches the Git

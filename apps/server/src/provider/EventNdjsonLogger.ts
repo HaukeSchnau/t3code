@@ -44,6 +44,8 @@ const MAX_RECORD_FIELDS = 1_024;
 const MAX_RECORD_DEPTH = 16;
 const GLOBAL_THREAD_SEGMENT = "_global";
 const MAX_METADATA_RECORD_BYTES = 1024;
+// Eight clipped fields plus keys stay below MAX_METADATA_RECORD_BYTES.
+const MAX_FALLBACK_FIELD_BYTES = 64;
 const HIGH_FREQUENCY_FIRST_RECORDS = 8;
 const HIGH_FREQUENCY_SAMPLE_INTERVAL = 256;
 const HIGH_FREQUENCY_SAMPLE_KEY_CAPACITY = 2_048;
@@ -634,37 +636,24 @@ const drainPending = Effect.fnUntraced(function* (input: {
   ];
 });
 
-/** OpenCode republishes the full growing tool output for every running update. */
-function isRunningOpenCodeToolSnapshot(event: unknown): boolean {
-  if (typeof event !== "object" || event === null) return false;
-  try {
-    const nested = Reflect.get(event, "event");
-    const nativeEvent = typeof nested === "object" && nested !== null ? nested : event;
-    if (Reflect.get(nativeEvent, "type") !== "message.part.updated") return false;
-    const payload = Reflect.get(nativeEvent, "payload");
-    if (typeof payload !== "object" || payload === null) return false;
-    const properties = Reflect.get(payload, "properties");
-    if (typeof properties !== "object" || properties === null) return false;
-    const part = Reflect.get(properties, "part");
-    if (typeof part !== "object" || part === null || Reflect.get(part, "type") !== "tool") {
-      return false;
-    }
-    const state = Reflect.get(part, "state");
-    return (
-      typeof state === "object" && state !== null && Reflect.get(state, "status") === "running"
-    );
-  } catch {
-    return false;
+/** Shortens a field until its JSON encoding, escapes included, fits the fallback budget. */
+function clipForFallback(value: string): string {
+  let clipped = value.slice(0, MAX_FALLBACK_FIELD_BYTES);
+  while (Buffer.byteLength(JSON.stringify(clipped)) > MAX_FALLBACK_FIELD_BYTES + 2) {
+    clipped = clipped.slice(0, -1);
   }
+  return clipped;
 }
 
 function fallbackMetadata(record: ProviderEventMetadataRecord): ProviderEventMetadataRecord {
   return {
     schemaVersion: 1,
     stream: record.stream,
-    threadId: record.threadId,
-    event: { name: record.event.name },
-    body: { valueType: "missing" },
+    threadId: record.threadId === null ? null : clipForFallback(record.threadId),
+    event: Object.fromEntries(
+      Object.entries(record.event).map(([key, value]) => [key, clipForFallback(value)]),
+    ) as ProviderEventMetadataRecord["event"],
+    body: record.body,
     ...(record.sampling ? { sampling: record.sampling } : {}),
     metadataTruncated: true,
   };
@@ -836,7 +825,7 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
     };
 
     const write = Effect.fnUntraced(function* (event: unknown, threadId: ThreadId | null) {
-      if (stream === "native" && isRunningOpenCodeToolSnapshot(event)) return;
+      if (!shouldPersistProviderEvent(stream, event)) return;
       const metadata = sampledMetadata(event, threadId);
       if (metadata === null) return;
       const payload = yield* serializeMetadata(metadata);

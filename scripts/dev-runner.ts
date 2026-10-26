@@ -404,8 +404,8 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
 
   if (!isDesktopMode) {
     output.T3CODE_PORT = String(serverPort);
-    // An inherited HOST pins Vite's HMR socket (apps/web/vite.config.ts). Only an explicit
-    // web listener or desktop mode may set it.
+    // HOST is Vite's listener and, in desktop mode, its HMR host (apps/web/vite.config.ts).
+    // An inherited value must not move the listener; only --web-host or desktop mode sets it.
     delete output.HOST;
     if (webHost !== undefined) {
       output.HOST = webHost;

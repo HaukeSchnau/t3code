@@ -19,7 +19,7 @@ authorization boundary and is intentionally not removed.
   opens. Drop the gate once upstream lazy-loads the dialog.
 - Desktop keeps upstream's Clerk bridge. It holds Electron's single-instance lock and routes
   deeplinks from a second launch, and it stays inert without a publishable key: the renderer never
-  mounts Clerk. Signed macOS builds skip the passkey entitlements that only account sign-in needs.
+  mounts Clerk. Passkeys stay off; see `desktop-distribution.md`.
 - Pairing links in Connections settings always open the backend's own `/pair` page. The fork ships
   no hosted web app, and an `app.t3.codes` link would load upstream's client against this server.
 - Mobile keeps upstream's T3 Connect code in the tree and switched off. Fork builds set no Clerk or
@@ -108,7 +108,10 @@ The other mobile deltas live in upstream-owned files, so check each one survives
   delta to lose.
 - `features/agent-awareness/remoteRegistration.ts` and `registrationPayload.ts`: rewritten to
   register over the environment RPC instead of the relay. `remoteRegistration.ts` also keeps the
-  relay token hooks as no-ops.
+  relay token hooks as no-ops. Where upstream ended local Live Activities on T3 Connect sign-out,
+  `AccountlessAgentAwarenessProvider` ends them once no paired environment remains, since no server
+  can update or end them after that. Remounts and environment list changes only release the
+  transport (`releaseAgentAwarenessEnvironmentTransport`), as upstream's relay token release does.
 - `features/agent-awareness/liveActivityPreferences.ts`: toggling Live Activities updates the
   registration without linking environments to T3 Connect. The file stays the fork's whole:
   upstream's `canConfigureEnvironment` gate (#9786) only guards the T3 Connect link it replaces.

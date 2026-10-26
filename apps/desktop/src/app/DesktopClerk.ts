@@ -66,63 +66,6 @@ export class DesktopClerk extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
 
-const LEGACY_WORKSPACE_OPEN_SCHEME = "t3";
-
-function resolveProtocolClientLaunchArgs(input: {
-  readonly argv: readonly string[];
-}): readonly string[] {
-  return input.argv.slice(1);
-}
-
-function resolveConfiguredProtocolClient(): {
-  readonly path: string;
-  readonly args: readonly string[];
-} | null {
-  const path = process.env.T3CODE_DESKTOP_PROTOCOL_CLIENT_PATH?.trim();
-  if (!path) return null;
-
-  return {
-    path,
-    args: (process.env.T3CODE_DESKTOP_PROTOCOL_CLIENT_ARGS ?? "")
-      .split("\n")
-      .map((arg) => arg.trim())
-      .filter((arg) => arg.length > 0),
-  };
-}
-
-function isProtocolRegistrationManagedExternally(): boolean {
-  return process.env.T3CODE_DESKTOP_PROTOCOL_REGISTRATION_MANAGED?.trim() === "1";
-}
-
-function registerDefaultProtocolClient(input: {
-  readonly electronApp: ElectronApp.ElectronApp["Service"];
-  readonly protocol: string;
-  readonly isDevelopment: boolean;
-}): Effect.Effect<boolean> {
-  if (isProtocolRegistrationManagedExternally()) {
-    return Effect.succeed(false);
-  }
-
-  if (input.isDevelopment) {
-    const configuredClient = resolveConfiguredProtocolClient();
-    if (configuredClient) {
-      return input.electronApp.setAsDefaultProtocolClient(
-        input.protocol,
-        configuredClient.path,
-        configuredClient.args,
-      );
-    }
-
-    return input.electronApp.setAsDefaultProtocolClient(
-      input.protocol,
-      process.execPath,
-      resolveProtocolClientLaunchArgs({ argv: process.argv }),
-    );
-  }
-
-  return input.electronApp.setAsDefaultProtocolClient(input.protocol);
-}
-
 function resolveDesktopClerkFrontendApiHostname(
   publishableKey: string | undefined,
 ): string | undefined {
@@ -146,7 +89,6 @@ function createDesktopClerkBridge(stateDir: string, isDevelopment: boolean) {
   return createClerkBridge({
     storage: storage({ path: stateDir }),
     manageSingleInstanceLock: false,
-    passkeys: true,
     renderer: {
       scheme: ElectronProtocol.getDesktopScheme(isDevelopment),
       host: ElectronProtocol.DESKTOP_HOST,
@@ -208,18 +150,6 @@ export const make = Effect.gen(function* () {
       const openWorkspace = yield* DesktopOpenWorkspace.DesktopOpenWorkspace;
       const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
       const runPromise = Effect.runPromiseWith(context);
-      const desktopScheme = ElectronProtocol.getDesktopScheme(environment.isDevelopment);
-
-      yield* registerDefaultProtocolClient({
-        electronApp,
-        protocol: desktopScheme,
-        isDevelopment: environment.isDevelopment,
-      });
-      yield* registerDefaultProtocolClient({
-        electronApp,
-        protocol: LEGACY_WORKSPACE_OPEN_SCHEME,
-        isDevelopment: environment.isDevelopment,
-      });
 
       const startProviderAuthHandoff = (value: string | undefined) => {
         if (!value) return false;

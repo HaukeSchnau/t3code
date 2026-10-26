@@ -12,7 +12,6 @@ export {
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,
-  reauthenticatePrimaryEnvironment,
   revalidateOfflineServerAuthGateState,
   resolveInitialServerAuthGateState,
   revokeOtherServerClientSessions,

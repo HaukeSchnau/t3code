@@ -48,8 +48,9 @@ merge conflicts easier to reason about.
   `assertV2MigrationsCanRun`. The assert fails startup when the migrator would skip a V2 migration,
   that is, when an id from 78 up to the highest recorded one carries another name. The reconcile
   only rewrites ledgers that recorded `OrchestrationV2` at 53 or 54, which upstream preview builds
-  did, so it does nothing on fork databases. Move the constant with the migration if its id
-  changes.
+  did, so it does nothing on fork databases. Its upstream tests seed such preview ledgers, so the
+  fork replaces them with one test that proves the reconcile is a no-op on a fork ledger. Move the
+  constant with the migration if its id changes.
 - Upstream's `docs/internals/legacy-orchestration-migration.md` warns that the migrator compares
   ids only, so a fork migration at an id upstream later assigns masks upstream's migration forever.
   The fork's mapping avoids that by owning the whole id sequence. Fork databases only run fork
@@ -65,7 +66,8 @@ merge conflicts easier to reason about.
   When upstream gives a package test config in its `vite.config.ts`, move it to that package's
   `vitest.config.ts`. That includes the root `vite.config.ts` `test` block and its repo-root project
   routing, which `vp test run <file>` from the root relies on; the root `vite.config.ts` keeps only
-  upstream's `run`, lint and fmt settings. Tests import from `vite-plus/test`. The fork has no direct `vitest`
+  upstream's `run`, lint and fmt settings. `apps/desktop` and `packages/client-runtime` keep
+  upstream's `test` blocks, since neither config merges the root one. Tests import from `vite-plus/test`. The fork has no direct `vitest`
   dependency or catalog entry.
 - Package `typecheck` scripts stay upstream's `tsc --noEmit` (`typescript` is the `@tsc-rs/typescript`
   alias), or upstream's `run.tasks.typecheck` in an app's `vite.config.ts`. A limit only Calder needs, such as

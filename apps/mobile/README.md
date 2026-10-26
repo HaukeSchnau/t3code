@@ -67,12 +67,8 @@ vp run dev:client:reset
 Run that reset once after installing or changing the Uniwind dependency patch. Cached transforms
 can otherwise reference its previous pnpm package path. Ordinary Metro starts still keep the cache.
 
-Component edits use Fast Refresh. Connection-runtime edits replace the active Effect layer through
-a stable atom runtime, preserving navigation and existing atom subscribers. Replaced registries
-and managed runtimes dispose their resources; the app does not force a JavaScript reload. The Uniwind patch
-skips global style invalidation when generated styles and themes are unchanged, while real style
-changes still refresh. See [mobile development lifecycle](../../docs/internals/mobile-development.md)
-for the lifetime boundaries.
+Component edits use Fast Refresh. See [mobile development lifecycle](../../docs/internals/mobile-development.md)
+before changing runtime ownership or refresh behavior.
 
 From the repo root, the `Justfile` has wrappers for the physical iOS dev loop:
 
@@ -196,7 +192,9 @@ mobile-prod` or `vp run ios:*` run only their embedded bundle. See
 
 ## EAS Builds
 
-CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
+Preview and production variants use Expo fingerprinting so OTA updates only reach binaries with matching native dependencies, config plugins, and patches. CI uses the `preview:dev` profile to reuse a compatible native build when possible. Fork distribution pins one runtime version for the TestFlight build and its updates through `T3CODE_MOBILE_RUNTIME_VERSION`, which overrides the policy.
+
+The development variant uses `appVersion` to avoid recalculating the native fingerprint for each Metro launch manifest. `MOBILE_VERSION_POLICY` can override either default. If you distribute a custom Release build with the development identity and publish OTA updates to it, set `MOBILE_VERSION_POLICY=fingerprint` for both its build and updates. Changing the runtime policy requires a native rebuild for OTA matching; an existing dev client can still load local Metro bundles.
 
 Fork builds must not set any Clerk or relay variable (`T3CODE_CLERK_*`, `EXPO_PUBLIC_CLERK_*`,
 `VITE_CLERK_*`, `T3CODE_RELAY_URL`, `VITE_T3CODE_RELAY_URL`), neither in the environment nor in the

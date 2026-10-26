@@ -196,6 +196,8 @@ export function setAgentAwarenessEnvironmentTransport(
       clearTimeout(activeLiveActivityRegistrationRetry);
       activeLiveActivityRegistrationRetry = null;
     }
+    // With no paired environment left, nothing can update or end the activities.
+    endLocalLiveActivities("live activity cleanup after removing the last environment failed");
     setRegistrationStatus("unknown");
     return;
   }
@@ -215,6 +217,23 @@ export function setAgentAwarenessEnvironmentTransport(
     return;
   }
   enqueueDeviceRegistration({}, "device registration after environment activation failed");
+}
+
+// Remounts and environment list changes keep the registration and lock-screen activities.
+export function releaseAgentAwarenessEnvironmentTransport(): void {
+  environmentTransport = null;
+  deviceRegistrationGeneration++;
+  activeDeviceRegistration = null;
+  pendingDeviceRegistration = null;
+  androidDeviceReplayedAt = null;
+  pushTokenSubscription?.remove();
+  pushTokenSubscription = null;
+  appStateSubscription?.remove();
+  appStateSubscription = null;
+  if (activeLiveActivityRegistrationRetry) {
+    clearTimeout(activeLiveActivityRegistrationRetry);
+    activeLiveActivityRegistrationRetry = null;
+  }
 }
 
 // Upstream's CloudAuthProvider hands T3 Connect credentials to relay-backed awareness through
@@ -940,6 +959,22 @@ function dismissEndedLocalLiveActivities(): void {
     dismissEndedAgentLiveActivities();
   } catch (error) {
     logRegistrationError("ended live activity cleanup failed", error);
+  }
+}
+
+function endLocalLiveActivities(context: string): void {
+  if (!canRegisterRemoteLiveActivities()) {
+    return;
+  }
+  dismissEndedLocalLiveActivities();
+  try {
+    for (const activity of getAgentLiveActivities()) {
+      activity.end("immediate").catch((error: unknown) => {
+        logRegistrationError(context, error);
+      });
+    }
+  } catch (error) {
+    logRegistrationError(context, error);
   }
 }
 

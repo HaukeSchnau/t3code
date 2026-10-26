@@ -3,11 +3,24 @@
 ## Fork requirement
 
 Changes pushed to the fork must reach the release gate within a few minutes on Calder, the fleet's
-self-hosted CI. CI must still run the complete static checks, TypeScript checks, tests, release smoke,
-and fork lockfile check.
+self-hosted CI. CI must still run formatting and lint (`vp check`), TypeScript checks, tests,
+release smoke, and the fork lockfile check. Calder does not run upstream's knip, generated GraphQL
+drift, desktop preload verification, Rust or mobile native lint jobs; `vp run check:changed` runs
+knip locally.
 
 ## Implementation
 
+- Calder runs `.calder/ci.ts` on pull requests and on pushes to the Gitea `main` branch. Each step
+  reports a `calder/<step>` commit status, and branch protection requires them. The three
+  fixed-output pnpm store builds (`deps-web`, `deps-server`, `deps-runtime`) are checks of their
+  own, so a stale hash fails before the release gate. On `main`, the release deploys to srv-1 and
+  srv-2 once every check passed, and then the desktop and mobile steps ship the apps from the Apple
+  builder (`desktop-distribution.md`, `mobile-distribution.md`). Inspect runs at
+  https://calder.schnau.dev and preview the pipeline with `calder plan --event push:main` or
+  `calder plan --event pr:1`.
+- After a push, `just ci-watch <revision>` fetches `origin/main`, checks that each new head
+  descends from the revision, and follows the head's `calder` commit status. When a later push
+  cancels the run, it moves on to the descendant head instead of reporting the cancelled ancestor.
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
 - Calder (`.calder/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
   installs dependencies once per lockfile state and keeps
@@ -43,14 +56,18 @@ and fork lockfile check.
 - The package and scripts suites run whole through `vp run` without `--cache`, as upstream's CI does.
   Upstream's task-cache tests start their own `vp run`, which exits with an error under a caching
   one: the outer run's file spy reaches the nested process.
-- The server and web suites each run as two Vitest projects. Most files share one module graph per
-  worker (`isolate: false`) and keep transformed modules in `node_modules/.vitest-cache`
-  (`fsModuleCache`), which Calder keeps between runs. Files that call `vi.mock`, `vi.doMock`,
-  `vi.stubGlobal` or `vi.stubEnv` run isolated, since a mock or stub only reaches modules evaluated
-  after it; `packages/shared/src/testing/isolatedTestFiles.ts` finds them, plus a listed few that
-  fail for other reasons. On srv-2 the whole web suite went from 1167 to 551 CPU seconds with a warm
+- The server unit suite runs as two Vitest projects (`shared` and `isolated`), the web unit suite as
+  three (`unit`, `unit-vm` and `unit-isolated`), beside upstream's web `browser` and `renders`
+  projects. Most files share one module graph per worker (`isolate: false`) and keep transformed
+  modules in `node_modules/.vitest-cache` (`fsModuleCache`), which Calder keeps between runs. Files
+  that call `vi.mock`, `vi.doMock`, `vi.stubGlobal` or `vi.stubEnv` run isolated, since a mock or
+  stub only reaches modules evaluated after it; `packages/shared/src/testing/isolatedTestFiles.ts`
+  finds them, plus a listed few that fail for other reasons. On the web, isolated files get a VM
+  context each in `vmForks` workers capped at 512 MB (`unit-vm`); the few that fail in a VM context
+  or leak worker state are listed in `apps/web/vitest.config.ts` and run in a process each
+  (`unit-isolated`). On srv-2 the whole web suite went from 1167 to 551 CPU seconds with a warm
   cache, and a 40-file sample of small server files from 102 to 15. Upstream isolates every file;
-  when an upstream test fails only in the shared project, add it to the config's list.
+  when an upstream test fails only in a shared project, add it to the config's list.
 - A test that reads repository files its imports don't show has a `// calder: always` comment line and
   runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook,
   `apps/mobile/src/dependency-graph.test.ts` the whole source tree, and the web and mobile

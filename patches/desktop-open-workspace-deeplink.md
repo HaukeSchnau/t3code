@@ -21,7 +21,8 @@ path contains spaces or other URL-sensitive characters.
 - `apps/desktop/src/app/DesktopOpenWorkspace.ts` parses `<scheme>://open?cwd=<path>` for
   `t3code`, `t3code-dev` and the legacy `t3` scheme. `dispatchUrl` answers synchronously, because
   Electron's handlers decide on the spot whether to call `preventDefault`.
-- `DesktopClerk.configure` registers the schemes and checks every URL upstream's handlers see: the
+- Upstream's Clerk bridge registers the app scheme (`t3code` or `t3code-dev`) as the default
+  protocol client. `DesktopClerk.configure` checks every URL upstream's handlers see: the
   launch arguments, `open-url`, and second launches, which upstream buffers until `configure` runs.
   The deeplink check runs after upstream's provider-auth, web and prompt link handlers, and only a
   handled URL calls `preventDefault`. Removing the Clerk service also removes deeplink delivery.
@@ -30,10 +31,11 @@ path contains spaces or other URL-sensitive characters.
   request. That is upstream's broker for `t3 app <path>`. It holds the request until the renderer
   is ready, finds or creates the project in the primary environment, and opens a new thread.
   `DesktopAppActivation.ts` only adds the `request` method to the service.
-- Source launches (`apps/desktop/scripts/electron-launcher.mjs`) declare the app scheme and `t3`
-  in their Info.plist. Packaged builds declare only `t3code` and `t3code-dev` through
-  `scripts/build-desktop-artifact.ts`, and macOS only honors runtime registration for schemes the
-  Info.plist declares. `t3://` therefore reaches source launches only.
+- Nothing registers `t3` at runtime. macOS source launches
+  (`apps/desktop/scripts/electron-launcher.mjs`) declare it next to the app scheme in the
+  Info.plist they register with LaunchServices. Packaged builds declare only `t3code` and
+  `t3code-dev` through `scripts/build-desktop-artifact.ts`. `t3://` therefore reaches macOS source
+  launches only.
 
 ## Non-goals
 

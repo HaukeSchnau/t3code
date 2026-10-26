@@ -22,8 +22,9 @@ fork-only behavior such as accountless connections and native agent awareness.
 - `mobile-update` leaves the Linux-resolved runtime version in a file that `testflight` reads, and
   both pass it on through `T3CODE_MOBILE_RUNTIME_VERSION`. Fingerprints can differ between hosts,
   so the binary and its updates must share one value.
-- `apps/mobile/app.config.ts` enables Expo Updates only when `T3CODE_MOBILE_UPDATES_URL` is set.
-  Local and dev builds keep running only their embedded bundle.
+- `apps/mobile/app.config.ts` enables Expo Updates only when `T3CODE_MOBILE_UPDATES_URL` is set,
+  and upstream's `T3CODE_MOBILE_UPDATES_ENABLED=0` still turns them off. Local and dev builds keep
+  running only their embedded bundle.
 - App Store Connect: app "T3 Code Schnau" (`dev.schnau.t3code`, team `2243J9RD68`) with the
   internal TestFlight group "Hauke", which receives every build. Calder's agent on m1 provides the
   team's API key through `APP_STORE_CONNECT_API_KEY_*`. Xcode manages signing through that key.
@@ -32,7 +33,7 @@ fork-only behavior such as accountless connections and native agent awareness.
 ## Maintenance
 
 Keep the update URL fork-owned during upstream merges; upstream's `u.expo.dev` URL must not return.
-Keep upstream's `version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.0.0",` line in `app.config.ts`
+Keep upstream's `version: repoEnv.T3CODE_MOBILE_VERSION ?? "<version>",` line in `app.config.ts`
 verbatim: upstream's `fingerprint.config.js` reads the major version from it with a regex. The
 fork's `runtimeVersion` pin sits right below it.
 The static host and the qemu-wrapped Hermes compiler exist because srv-2 is aarch64 and
