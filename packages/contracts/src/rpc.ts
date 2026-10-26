@@ -22,6 +22,14 @@ import {
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
 import {
+  HtmlRenderCallToolInput,
+  HtmlRenderCallToolResult,
+  HtmlRenderRequestError,
+  HtmlRenderSetStateInput,
+  HtmlRenderState,
+  HtmlRenderStateInput,
+} from "./htmlRender.ts";
+import {
   ChatGptReconnectProfileInput,
   ChatGptReconnectProfile,
   ChatGptImportProfileInput,
@@ -445,6 +453,10 @@ export const WS_METHODS = {
   mcpAppsToolInfo: "mcpApps.toolInfo",
   mcpAppsReadResource: "mcpApps.readResource",
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
+
+  htmlRenderGetState: "htmlRender.getState",
+  htmlRenderSetState: "htmlRender.setState",
+  htmlRenderCallTool: "htmlRender.callTool",
 
   providerUploadFeedback: "provider.uploadFeedback",
   providerAuthStart: "provider.auth.start",
@@ -1425,6 +1437,23 @@ const WsMcpAppsReadResourceRpc = Rpc.make(WS_METHODS.mcpAppsReadResource, {
   error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsHtmlRenderGetStateRpc = Rpc.make(WS_METHODS.htmlRenderGetState, {
+  payload: HtmlRenderStateInput,
+  success: HtmlRenderState,
+  error: Schema.Union([HtmlRenderRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsHtmlRenderSetStateRpc = Rpc.make(WS_METHODS.htmlRenderSetState, {
+  payload: HtmlRenderSetStateInput,
+  error: Schema.Union([HtmlRenderRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsHtmlRenderCallToolRpc = Rpc.make(WS_METHODS.htmlRenderCallTool, {
+  payload: HtmlRenderCallToolInput,
+  success: HtmlRenderCallToolResult,
+  error: Schema.Union([HtmlRenderRequestError, EnvironmentAuthorizationError]),
+});
+
 const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
   payload: ProviderUploadFeedbackInput,
   success: ProviderUploadFeedbackResult,
@@ -2154,6 +2183,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsMcpAppsCallToolRpc,
   WsMcpAppsToolInfoRpc,
   WsMcpAppsReadResourceRpc,
+  WsHtmlRenderGetStateRpc,
+  WsHtmlRenderSetStateRpc,
+  WsHtmlRenderCallToolRpc,
   WsMcpAppsUpdateModelContextRpc,
   WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,

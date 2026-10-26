@@ -4,7 +4,11 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import type { ChatAttachment } from "@t3tools/contracts";
-import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
+import {
+  htmlRenderFromToolItem,
+  htmlRenderUpdateFromToolItem,
+  mcpAppFromToolItem,
+} from "@t3tools/shared/toolOutput";
 
 import {
   normalizeAttachmentRelativePath,
@@ -124,6 +128,12 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
   return match[1]?.toLowerCase() ?? null;
 }
 
+/** A render's attachment ids carry the segment of the thread that published it. */
+export function attachmentBelongsToThread(threadId: string, attachmentId: string): boolean {
+  const segment = toSafeThreadAttachmentSegment(threadId);
+  return segment !== null && parseThreadSegmentFromAttachmentId(attachmentId) === segment;
+}
+
 /** Only this thread's ids qualify, preserving source pages when deleting a fork. */
 export function threadHtmlRenderAttachmentIds(
   threadId: string,
@@ -133,7 +143,9 @@ export function threadHtmlRenderAttachmentIds(
   if (segment === null) return [];
   return Array.from(items).flatMap((item) => {
     const attachmentId =
-      htmlRenderFromToolItem(item)?.attachmentId ?? mcpAppFromToolItem(item)?.attachmentId;
+      htmlRenderFromToolItem(item)?.attachmentId ??
+      htmlRenderUpdateFromToolItem(item)?.attachmentId ??
+      mcpAppFromToolItem(item)?.attachmentId;
     return attachmentId !== undefined &&
       parseThreadSegmentFromAttachmentId(attachmentId) === segment
       ? [attachmentId]

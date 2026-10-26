@@ -93,6 +93,30 @@ const rejectViewportHeight = (html: string) => {
   return Effect.void;
 };
 
+export class HtmlRenderPageSourceError extends Schema.TaggedError<HtmlRenderPageSourceError>()(
+  "HtmlRenderPageSourceError",
+  {
+    reason: Schema.Literals(["none-or-both", "relative-path", "unreadable"]),
+    path: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "none-or-both":
+        return "Pass exactly one of html and path.";
+      case "relative-path":
+        return `${this.path} is not an absolute path.`;
+      case "unreadable":
+        return `${this.path} could not be read as a file.`;
+    }
+  }
+}
+
+export interface HtmlRenderPageSource {
+  readonly html?: string | undefined;
+  readonly path?: string | undefined;
+}
+
 export class HtmlRenderStoreError extends Schema.TaggedError<HtmlRenderStoreError>()(
   "HtmlRenderStoreError",
   { cause: Schema.Defect() },
@@ -120,6 +144,10 @@ export interface HtmlPreview {
 export class HtmlRender extends Context.Service<
   HtmlRender,
   {
+    /** Reads a page passed as `path`; the page cap applies before images are inlined too. */
+    readonly loadPage: (
+      source: HtmlRenderPageSource,
+    ) => Effect.Effect<string, HtmlRenderPageSourceError | HtmlRenderPageTooLargeError>;
     readonly prepare: (html: string) => Effect.Effect<string, HtmlRenderPrepareError>;
     readonly publish: (input: {
       readonly threadId: ThreadId;
@@ -400,6 +428,24 @@ const make = Effect.gen(function* () {
   const inline = (html: string) =>
     inlineLocalImages(injectHtmlRenderBootstrap(html)).pipe(Effect.provideContext(services));
 
+  const loadPage = Effect.fn("HtmlRender.loadPage")(function* (source: HtmlRenderPageSource) {
+    if ((source.html === undefined) === (source.path === undefined)) {
+      return yield* new HtmlRenderPageSourceError({ reason: "none-or-both" });
+    }
+    if (source.html !== undefined) return source.html;
+    const path = source.path!;
+    if (!/^(?:\/|[a-z]:[\\/])/i.test(path)) {
+      return yield* new HtmlRenderPageSourceError({ reason: "relative-path", path });
+    }
+    const unreadable = () => new HtmlRenderPageSourceError({ reason: "unreadable", path });
+    const info = yield* fileSystem.stat(path).pipe(Effect.mapError(unreadable));
+    if (info.type !== "File") return yield* unreadable();
+    if (Number(info.size) > MAX_PAGE_BYTES) {
+      return yield* new HtmlRenderPageTooLargeError({ sizeBytes: Number(info.size) });
+    }
+    return yield* fileSystem.readFileString(path).pipe(Effect.mapError(unreadable));
+  });
+
   const prepare = Effect.fn("HtmlRender.prepare")(function* (html: string) {
     yield* rejectViewportHeight(html);
     const inlined = yield* inline(html);
@@ -494,7 +540,7 @@ const make = Effect.gen(function* () {
     } satisfies HtmlPreview;
   });
 
-  return HtmlRender.of({ prepare, publish, preview });
+  return HtmlRender.of({ loadPage, prepare, publish, preview });
 });
 
 export const layer = Layer.effect(HtmlRender, make);

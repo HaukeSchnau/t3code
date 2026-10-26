@@ -97,6 +97,7 @@ import Migration0091 from "./Migrations/066_RepairClientSettlementTimestamps.ts"
 import Migration0092 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0093 from "./Migrations/068_ShellStopRequestIndex.ts";
 import Migration0094 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0095 from "./Migrations/095_HtmlRenderState.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -197,6 +198,7 @@ const migrationEntries = [
   [92, "WebhookDedupe", Migration0092],
   [93, "ShellStopRequestIndex", Migration0093],
   [94, "ThreadMessageSearch", Migration0094],
+  [95, "HtmlRenderState", Migration0095],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

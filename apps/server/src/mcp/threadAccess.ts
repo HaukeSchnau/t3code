@@ -70,7 +70,7 @@ export const loadCaller = Effect.fn("mcp.loadCaller")(function* () {
       caller: undefined,
       limits: {
         runtimeMode: McpInvocationContext.clientRuntimeModeCeiling(scope.client),
-        interactionMode: "default",
+        interactionMode: McpInvocationContext.clientInteractionModeCeiling(scope.client),
       },
     } satisfies Caller;
   }

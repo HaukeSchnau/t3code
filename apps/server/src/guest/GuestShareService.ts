@@ -11,6 +11,7 @@ import {
   type GuestRedeemRequest,
   type GuestStreamEvent,
   type GuestSubmitRequest,
+  type HtmlRenderState as HtmlRenderStateMap,
   type OrchestrationV2AppThread,
   type OrchestrationV2CommandOutputFrame,
   type OrchestrationV2DomainEvent,
@@ -18,7 +19,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
-import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+import { htmlRenderFromToolItem, htmlRenderUpdateFromToolItem } from "@t3tools/shared/toolOutput";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -46,6 +47,7 @@ import {
   threadHtmlRenderAttachmentIds,
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as HtmlRenderState from "../htmlRender/HtmlRenderState.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
 import { GUEST_FAILURE } from "../orchestration-v2/GuestShareDecider.ts";
@@ -172,6 +174,11 @@ export class GuestShareService extends Context.Service<
       session: string,
       itemId: string,
     ) => Effect.Effect<{ readonly path: string; readonly title: string }, GuestShareAccessError>;
+    /** The saved page state of the render an item shows; guests read it and never write it. */
+    readonly renderState: (
+      session: string,
+      itemId: string,
+    ) => Effect.Effect<HtmlRenderStateMap, GuestShareAccessError>;
     /** One item of the shared thread, as the owner's expanded row loads it. */
     readonly item: (
       session: string,
@@ -217,6 +224,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const analytics = yield* AnalyticsService.AnalyticsService;
+  const htmlRenderStates = yield* HtmlRenderState.HtmlRenderState;
   const signingKey = yield* Effect.cached(
     secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32).pipe(Effect.orDie),
   );
@@ -577,13 +585,30 @@ const make = Effect.gen(function* () {
     const { thread, item } = yield* threadItem(session, itemId);
     if (item.type !== "dynamic_tool") return yield* unavailable;
     const reference = htmlRenderFromToolItem(item);
+    const update = htmlRenderUpdateFromToolItem(item);
     const [attachmentId] = threadHtmlRenderAttachmentIds(thread.id, [item]);
     const path =
       attachmentId === undefined
         ? null
         : resolveAttachmentPathById({ attachmentsDir, attachmentId });
-    if (reference === undefined || path === null) return yield* unavailable;
-    return { path, title: reference.title };
+    if ((reference === undefined && update === undefined) || path === null) {
+      return yield* unavailable;
+    }
+    return { path, title: reference?.title ?? update?.title ?? "Page" };
+  });
+
+  const renderState = Effect.fn("GuestShareService.renderState")(function* (
+    session: string,
+    itemId: string,
+  ) {
+    const { thread, item } = yield* threadItem(session, itemId);
+    if (item.type !== "dynamic_tool") return yield* unavailable;
+    const renderId =
+      htmlRenderFromToolItem(item)?.attachmentId ?? htmlRenderUpdateFromToolItem(item)?.renderId;
+    if (renderId === undefined) return yield* unavailable;
+    return yield* htmlRenderStates
+      .get({ threadId: thread.id, renderId })
+      .pipe(Effect.mapError(() => unavailable));
   });
 
   const item = Effect.fn("GuestShareService.item")(function* (session: string, itemId: string) {
@@ -637,10 +662,13 @@ const make = Effect.gen(function* () {
     submit,
     stream,
     render,
+    renderState,
     item,
     commandOutput,
     attachment,
   });
 });
 
-export const layer = Layer.effect(GuestShareService, make);
+export const layer = Layer.effect(GuestShareService, make).pipe(
+  Layer.provide(HtmlRenderState.layer),
+);

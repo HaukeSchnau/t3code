@@ -3,6 +3,7 @@ import {
   GUEST_COMMAND_OUTPUT_ROUTE,
   GUEST_ITEM_ROUTE,
   GUEST_RENDER_ROUTE,
+  GUEST_RENDER_STATE_ROUTE,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
@@ -266,6 +267,21 @@ const renderRoute = HttpRouter.add(
   }),
 );
 
+// Guests read a page's saved state so it opens as the owner left it; nothing writes it back.
+const renderStateRoute = HttpRouter.add(
+  "GET",
+  GUEST_RENDER_STATE_ROUTE,
+  Effect.gen(function* () {
+    const itemId = yield* itemParam;
+    if (!itemId) return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.renderState(yield* sessionToken, itemId).pipe(
+      Effect.map((state) => HttpServerResponse.jsonUnsafe(state, { headers: NO_STORE })),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
+    );
+  }),
+);
+
 const itemRoute = HttpRouter.add(
   "GET",
   GUEST_ITEM_ROUTE,
@@ -340,6 +356,7 @@ export const layer = Layer.mergeAll(
   submitRoute,
   streamRoute,
   renderRoute,
+  renderStateRoute,
   itemRoute,
   commandOutputRoute,
   attachmentRoute,

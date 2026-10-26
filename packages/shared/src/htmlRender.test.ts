@@ -1,6 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Runs the page bridge in a VM context instead of a browser.
+import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  HTML_RENDER_BRIDGE_SCRIPT,
+  htmlRenderVersion,
   injectHtmlRenderBootstrap,
   readHtmlRenderImageRequest,
   readHtmlRenderLinkRequest,
@@ -60,6 +64,96 @@ describe("injectHtmlRenderBootstrap", () => {
       injected.indexOf("<html><head>"),
     );
     expect(injected).toContain('<meta name="viewport" content="width=device-width');
+  });
+});
+
+type Listener = (event: Record<string, unknown>) => void;
+
+/** Runs the bridge the way a framed page does, with the window and host it talks to. */
+function runBridge(state?: Record<string, string>) {
+  const listeners = new Map<string, Array<Listener>>();
+  const posted: Array<Record<string, unknown>> = [];
+  const parent = {
+    postMessage: (message: unknown) => posted.push(structuredClone(message) as never),
+  };
+  const page: Record<string, unknown> = {
+    parent,
+    addEventListener: (type: string, listener: Listener) =>
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]),
+  };
+  const hash = `#t3-theme=x${state === undefined ? "" : `&t3-state=${encodeURIComponent(JSON.stringify(state))}`}`;
+  NodeVM.runInNewContext(HTML_RENDER_BRIDGE_SCRIPT, {
+    window: page,
+    location: { hash },
+    setTimeout,
+    clearTimeout,
+    TextEncoder,
+    DOMException,
+  });
+  const dispatch = (type: string, event: Record<string, unknown> = {}) =>
+    listeners.get(type)?.forEach((listener) => listener(event));
+  const storage = page.localStorage as Storage;
+  const t3 = page.t3 as {
+    send: (text: string) => Promise<void>;
+    callTool: (name: string, args?: unknown) => Promise<unknown>;
+  };
+  return { posted, dispatch, storage, t3, parent };
+}
+
+describe("page bridge", () => {
+  it("restores saved state into localStorage and hands changes back to the host", () => {
+    const { storage, dispatch, posted } = runBridge({ score: "3" });
+    expect(storage.getItem("score")).toBe("3");
+    storage.setItem("score", "4");
+    storage.removeItem("missing");
+    dispatch("pagehide");
+    expect(posted).toEqual([
+      { jsonrpc: "2.0", method: "t3/notifications/storage", params: { state: { score: "4" } } },
+    ]);
+  });
+
+  it("refuses a write past the cap, as a full localStorage would", () => {
+    const { storage } = runBridge();
+    expect(() => storage.setItem("big", "x".repeat(70 * 1024))).toThrow(/64 KiB/);
+    expect(storage.getItem("big")).toBeNull();
+    expect(storage.length).toBe(0);
+  });
+
+  it("reports only trusted clicks as activation", () => {
+    const { dispatch, posted } = runBridge();
+    dispatch("click", { isTrusted: false });
+    dispatch("click", { isTrusted: true });
+    expect(posted).toEqual([{ jsonrpc: "2.0", method: "t3/notifications/activated" }]);
+  });
+
+  it("settles t3 calls with the host's answer", async () => {
+    const { t3, posted, dispatch, parent } = runBridge();
+    const sent = t3.send("hi");
+    const listed = t3.callTool("t3_thread_list");
+    const [sendRequest, toolRequest] = posted;
+    expect(sendRequest).toMatchObject({ method: "t3/send", params: { text: "hi" } });
+    expect(toolRequest).toMatchObject({
+      method: "t3/call-tool",
+      params: { name: "t3_thread_list", arguments: {} },
+    });
+    dispatch("message", {
+      source: parent,
+      data: { jsonrpc: "2.0", id: sendRequest!.id, result: null },
+    });
+    dispatch("message", {
+      source: parent,
+      data: { jsonrpc: "2.0", id: toolRequest!.id, error: { code: -32000, message: "No." } },
+    });
+    await expect(sent).resolves.toBeUndefined();
+    await expect(listed).rejects.toThrow("No.");
+  });
+});
+
+describe("htmlRenderVersion", () => {
+  it("keeps the previous title and height when an update leaves them out", () => {
+    expect(
+      htmlRenderVersion(reference, { renderId: reference.attachmentId, attachmentId: "v2" }),
+    ).toEqual({ attachmentId: "v2", title: "Chart", height: 420 });
   });
 });
 

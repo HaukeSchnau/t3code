@@ -6,8 +6,11 @@ import * as Predicate from "effect/Predicate";
 
 import {
   HTML_RENDER_TOOL_NAME,
+  HTML_RENDER_UPDATE_TOOL_NAME,
   readHtmlRenderReference,
+  readHtmlRenderUpdate,
   type HtmlRenderReference,
+  type HtmlRenderUpdateReference,
 } from "./htmlRender.ts";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference, type McpAppReference } from "./mcpApp.ts";
 import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
@@ -40,6 +43,7 @@ interface CompactToolOutput {
   scheduledTaskId?: string;
   status?: "rolled_back";
   htmlRender?: HtmlRenderReference;
+  htmlRenderUpdate?: HtmlRenderUpdateReference;
   [MCP_APP_OUTPUT_KEY]?: McpAppReference;
   thread?: { threadId: string };
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
@@ -125,6 +129,8 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
     if (data.status === "rolled_back") output.status = "rolled_back";
     const htmlRender = readHtmlRenderReference(data.htmlRender);
     if (htmlRender !== undefined) output.htmlRender = htmlRender;
+    const htmlRenderUpdate = readHtmlRenderUpdate(data.htmlRenderUpdate);
+    if (htmlRenderUpdate !== undefined) output.htmlRenderUpdate = htmlRenderUpdate;
     const mcpApp = readMcpAppReference(data[MCP_APP_OUTPUT_KEY]);
     if (mcpApp !== undefined) output[MCP_APP_OUTPUT_KEY] = mcpApp;
     const nestedThreadId = Predicate.isObject(data.thread)
@@ -183,6 +189,15 @@ export function htmlRenderFromToolItem(item: {
   if (resolveT3McpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
+}
+
+export function htmlRenderUpdateFromToolItem(item: {
+  readonly toolName: string | null | undefined;
+  readonly output?: unknown;
+}): HtmlRenderUpdateReference | undefined {
+  if (resolveT3McpToolId(item.toolName) !== HTML_RENDER_UPDATE_TOOL_NAME) return undefined;
+  const output = compactDynamicToolOutput(item.output);
+  return output?.isError ? undefined : output?.htmlRenderUpdate;
 }
 
 /** Accept app references only when server and tool match the item, so tools cannot impersonate another app source. */
