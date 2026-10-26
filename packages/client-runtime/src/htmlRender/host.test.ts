@@ -19,7 +19,11 @@ const callTool = (id: string, name: string, args: Record<string, unknown> = {}) 
   params: { name, arguments: args },
 });
 
-function setup(overrides: Partial<HtmlRenderBridgeTarget> = {}, bridge = true) {
+function setup(
+  overrides: Partial<HtmlRenderBridgeTarget> = {},
+  bridge = true,
+  now: () => number = () => 0,
+) {
   const posted: Array<Record<string, unknown>> = [];
   const waiting = new Map<unknown, (message: Record<string, unknown>) => void>();
   const sent: Array<Parameters<HtmlRenderBridgeTarget["send"]>[0]> = [];
@@ -32,6 +36,7 @@ function setup(overrides: Partial<HtmlRenderBridgeTarget> = {}, bridge = true) {
       waiting.get(record.id)?.(record);
     },
     copy: async () => undefined,
+    now,
     bridge: bridge
       ? {
           renderId: "thread-1-0f6b2b4e-html",
@@ -60,6 +65,22 @@ function setup(overrides: Partial<HtmlRenderBridgeTarget> = {}, bridge = true) {
 }
 
 describe("makeHtmlRenderHost", () => {
+  it("ignores activated notices while a spent click is still active", async () => {
+    let time = 0;
+    const { host, sent, response } = setup({}, true, () => time);
+    host.receive(click, active);
+    host.receive(send("first", "One"), active);
+    // Page script can post the notice itself while the click's activation lasts.
+    host.receive(click, active);
+    host.receive(send("forged", "Two"), active);
+    time = 5_000;
+    host.receive(click, active);
+    host.receive(send("next", "Three"), active);
+
+    expect(sent.map((message) => message.text.split(") ")[1])).toEqual(["One", "Three"]);
+    expect(await response("forged")).toMatchObject({ error: { code: -32000 } });
+  });
+
   it("sends one message per click, marked as coming from the page", async () => {
     const { host, sent, response } = setup();
     host.receive(click, active);

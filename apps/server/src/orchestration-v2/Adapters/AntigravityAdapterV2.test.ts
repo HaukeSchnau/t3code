@@ -468,6 +468,8 @@ describe("AntigravityAdapterV2 html_render pages", () => {
       const report = { html: `<table>${rows.join("")}</table>`, title: "Revenue", height: 240 };
       const failed = { ...report, html: "<p>Revenue</p>" };
       const errored = { ...report, html: "<p>Revenue error</p>" };
+      // A page passed as a file: the call reports only its path.
+      const byPath = { path: "/tmp/revenue.html", title: "Revenue", height: 240 };
       const adapter = yield* makeAntigravityAdapterV2({
         instanceId,
         selfInvocation: yield* resolveSelfInvocation(),
@@ -508,6 +510,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
                     ["unpublished", { ...report, html: "<p>Costs</p>" }],
                     ["failed", failed],
                     ["error", errored],
+                    ["by-path", byPath],
                   ] as const;
                   for (const [toolCallId, rawInput] of calls) {
                     yield* send({
@@ -522,9 +525,15 @@ describe("AntigravityAdapterV2 html_render pages", () => {
                   yield* mcpSessions.recordHtmlRender(threadId, report, page("report"));
                   yield* mcpSessions.recordHtmlRender(threadId, failed, page("failed"));
                   yield* mcpSessions.recordHtmlRender(threadId, errored, page("error"));
+                  yield* mcpSessions.recordHtmlRender(
+                    threadId,
+                    { ...byPath, html: "<p>Revenue from a file</p>" },
+                    page("by-path"),
+                  );
                   for (const [toolCallId, status] of [
                     ["unpublished", "completed"],
                     ["failed", "failed"],
+                    ["by-path", "completed"],
                     ["published", "completed"],
                     ["published", "completed"],
                   ] as const) {
@@ -680,6 +689,12 @@ describe("AntigravityAdapterV2 html_render pages", () => {
         toolName: "t3-code.html_render",
         page: page("replacement"),
         output: { htmlRender: page("replacement") },
+      });
+      assert.deepEqual(tool("by-path"), {
+        status: "completed",
+        toolName: "t3-code.html_render",
+        page: page("by-path"),
+        output: { htmlRender: page("by-path") },
       });
       assert.deepEqual(tool("unpublished"), {
         status: "completed",

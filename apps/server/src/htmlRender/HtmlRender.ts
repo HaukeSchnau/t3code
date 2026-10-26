@@ -152,6 +152,8 @@ export class HtmlRender extends Context.Service<
     readonly publish: (input: {
       readonly threadId: ThreadId;
       readonly html: string;
+      /** The file the HTML came from, so a provider that reports only the path still finds the page. */
+      readonly path?: string | undefined;
       readonly title: string;
       readonly height: number;
     }) => Effect.Effect<HtmlRenderReference, HtmlRenderPrepareError | HtmlRenderStoreError>;
@@ -458,6 +460,7 @@ const make = Effect.gen(function* () {
   const publish = Effect.fn("HtmlRender.publish")(function* (input: {
     readonly threadId: ThreadId;
     readonly html: string;
+    readonly path?: string | undefined;
     readonly title: string;
     readonly height: number;
   }) {

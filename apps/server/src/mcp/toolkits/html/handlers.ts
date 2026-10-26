@@ -51,7 +51,7 @@ const handlers = {
       const htmlRender = yield* HtmlRender.HtmlRender;
       const reference = yield* htmlRender.loadPage({ html, path }).pipe(
         Effect.flatMap((page) =>
-          htmlRender.publish({ threadId: thread.threadId, ...input, html: page }),
+          htmlRender.publish({ threadId: thread.threadId, ...input, html: page, path }),
         ),
         Effect.mapError(toFailure),
       );

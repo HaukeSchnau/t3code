@@ -113,10 +113,13 @@ export interface HtmlRenderBridgeTarget {
   readonly renderId: string;
 }
 
-/**
- * The render's saved state, read fresh when the row or screen mounts. Pages opened later in
- * the same mount, such as another version, start from what earlier ones saved.
- */
+// What pages saved on this device, so the feed row and the full-screen page, which mount at
+// once and share a cached read, start from the latest save rather than that read.
+const savedHere = new Map<string, HtmlRenderState>();
+const savedKey = (target: HtmlRenderBridgeTarget) =>
+  `${target.environmentId}\u0000${target.threadId}\u0000${target.renderId}`;
+
+/** The render's saved state: this device's latest save, else a read when the view mounts. */
 export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefined) {
   const query = useEnvironmentQuery(
     target === undefined
@@ -126,13 +129,15 @@ export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefin
           input: { threadId: target.threadId, renderId: target.renderId },
         }),
   );
-  const latest = useRef<HtmlRenderState | null>(null);
   return {
     // An older server lacks the state RPC; its pages still open, without saved state.
     ready: target === undefined || query.isSuccess || query.error !== null,
-    read: () => latest.current ?? query.data ?? NO_STATE,
+    read: () =>
+      (target === undefined ? undefined : savedHere.get(savedKey(target))) ??
+      query.data ??
+      NO_STATE,
     saved: (state: HtmlRenderState) => {
-      latest.current = state;
+      if (target !== undefined) savedHere.set(savedKey(target), state);
     },
   };
 }

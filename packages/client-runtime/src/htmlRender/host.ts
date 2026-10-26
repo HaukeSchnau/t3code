@@ -19,6 +19,9 @@ import {
 import * as Predicate from "effect/Predicate";
 
 const MAX_PENDING_REQUESTS = 4;
+// A click stays transient user activation for about 5 s (Chrome, Firefox). Page script can post
+// the activated notice itself during that time, so a spent click blocks new credit until it ends.
+const ACTIVATION_WINDOW_MS = 5_000;
 const encoder = new TextEncoder();
 
 type JsonRpcId = string | number;
@@ -51,6 +54,8 @@ export interface HtmlRenderHostOptions {
   readonly post: (message: unknown) => void;
   readonly copy: (text: string) => Promise<void>;
   readonly bridge: HtmlRenderBridgeTarget | undefined;
+  /** Milliseconds; defaults to `Date.now`. */
+  readonly now?: () => number;
 }
 
 export interface HtmlRenderHost {
@@ -102,6 +107,8 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
   let pending = 0;
   // One trusted click in the page buys one send or tool call.
   let clickCredit = false;
+  let spentAt = Number.NEGATIVE_INFINITY;
+  const now = options.now ?? Date.now;
 
   const post = (message: unknown) => {
     if (!disposed) options.post(message);
@@ -130,6 +137,7 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
   const spendClick = (active: boolean) => {
     if (!active || !clickCredit) return false;
     clickCredit = false;
+    spentAt = now();
     return true;
   };
 
@@ -234,7 +242,7 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
         return;
       }
       if (method === HTML_RENDER_ACTIVATED_METHOD) {
-        if (active) clickCredit = true;
+        if (active && now() - spentAt >= ACTIVATION_WINDOW_MS) clickCredit = true;
         return;
       }
       if (method === HTML_RENDER_STORAGE_METHOD) {
