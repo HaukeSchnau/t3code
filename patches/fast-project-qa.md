@@ -47,7 +47,10 @@ plus the fork lockfile checks.
   typecheck groups, a test step for each package with a sizeable suite, one for the small packages,
   one for the repository scripts, the release smoke, and the fork and deploy lockfile checks.
 - Upstream's `changes` job skips jobs a change cannot affect; Calder reuses a step whose inputs are
-  unchanged instead. Knip reads the whole repository and runs on every change. `desktop-build` reads
+  unchanged instead. Knip reads the whole repository and runs on every change. Knip loads the mobile Metro
+  config and `desktop-build` runs the web license plugin; both write license notices that download
+  SPDX texts, and PR workers have no network, so these two steps first copy the flake's fixed-output
+  SPDX set (`nix/spdx.nix`, `$T3CODE_SPDX_NOTICES` in `.#ci`) into the notice cache. `desktop-build` reads
   the web, server and desktop packages and what they depend on. `graphql`, `rust`, `lint-mobile` and
   `github-scripts` read only their generator inputs, crates, native sources and workflow scripts.
 - `rust` and `lint-mobile` run in `.#ci-native`, which adds Rust, SwiftLint, ktlint and detekt to `.#ci`,

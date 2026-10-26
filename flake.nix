@@ -520,6 +520,8 @@
             export npm_config_nodedir="${nodejs}"
             # Tests match English tool messages; Calder workers inherit the host's German locale.
             export LC_ALL=C.UTF-8
+            # License notices download SPDX texts, and PR workers have no network.
+            export T3CODE_SPDX_NOTICES="${import ./nix/spdx.nix { inherit pkgs; }}"
           ''
           # Playwright's downloaded Chromium does not run on NixOS (apps/web/vitest.config.ts).
           + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''

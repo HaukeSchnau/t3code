@@ -34,10 +34,23 @@ const check = Task.make("static", { shell, setup: install, run: cmd`vp check` })
 /** A command line of several steps. */
 const sh = (script: string, ...args: ReadonlyArray<string>) => cmd`bash -c ${script} sh ${args}`;
 
-/** Unused files, dependencies and exports, which knip finds across the whole repository. */
-const knip = Task.make("knip", { shell, setup: install, run: cmd`vp run knip:check` }).pipe(
-  Step.timeout("15 minutes"),
-);
+/**
+ * Generating license notices downloads SPDX texts unless the cache holds them, and PR workers have
+ * no network, so steps that generate notices seed the cache from the flake's fixed-output copy.
+ */
+const withSpdxNotices = (script: string) =>
+  sh(
+    "rm -rf .generated/third-party-licenses/spdx && mkdir -p .generated/third-party-licenses && " +
+      'cp -R --no-preserve=mode "$T3CODE_SPDX_NOTICES" .generated/third-party-licenses/spdx && ' +
+      script,
+  );
+
+/** Unused files, dependencies and exports. Knip loads the mobile Metro config, which writes notices. */
+const knip = Task.make("knip", {
+  shell,
+  setup: install,
+  run: withSpdxNotices("vp run knip:check"),
+}).pipe(Step.timeout("15 minutes"));
 
 /** The generated GraphQL operations match their documents and schemas. */
 const graphql = Task.make("graphql", {
@@ -78,7 +91,9 @@ const desktopBuild = Task.make("desktop-build", {
       "third-party-licenses.config.json",
     ),
   ),
-  run: sh("vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs"),
+  run: withSpdxNotices(
+    "vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs",
+  ),
 }).pipe(Step.timeout("30 minutes"));
 
 const nativeShell = flake.devShells["ci-native"];
