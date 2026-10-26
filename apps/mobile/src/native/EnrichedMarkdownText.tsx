@@ -28,7 +28,6 @@ import { useRetryingImageSource } from "./useRetryingImageSource";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
 import {
   ENRICHED_INLINE_CODE_LINK_REGEX,
-  ENRICHED_INLINE_FILE_LINK_REGEX,
   enrichedLinkUrl,
   enrichedSkillLinkRegex,
   enrichedLinkVariantPattern,
@@ -162,13 +161,13 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const { markdown, fileHrefs } = useMemo(() => {
     if (!fileEmbedLabel) {
       return {
-        markdown: markdownForNativeRendering(props.markdown, ENRICHED_INLINE_FILE_LINK_REGEX),
+        markdown: markdownForNativeRendering(props.markdown, ENRICHED_INLINE_CODE_LINK_REGEX),
         fileHrefs: new Set<string>(),
       };
     }
     const content = markdownWithInlineFileLinks(
       markdownWithHtml(props.markdown),
-      ENRICHED_INLINE_FILE_LINK_REGEX,
+      ENRICHED_INLINE_CODE_LINK_REGEX,
     );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return { ...files, markdown: markdownWithTableBreaks(files.markdown) };
@@ -200,11 +199,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     [parsedLinkUrls, skillLinkKey],
   );
   const { linkVariants, linkPillContent } = useEnrichedLinkVariants(linkUrls, props, fileHrefs);
-  // Recognizing web URLs in code spans natively keeps their code styling (patches/inline-code-links.md).
-  const linkRecognition = useMemo(
-    () => ({ text: skillRegex ?? undefined, inlineCode: ENRICHED_INLINE_CODE_LINK_REGEX }),
-    [skillRegex],
-  );
+  const linkRecognition = useMemo(() => ({ text: skillRegex ?? undefined }), [skillRegex]);
   const [activeMenu, setActiveMenu] = useState<{
     url: string;
     menu: NonNullable<ReturnType<NonNullable<typeof props.fileContextMenu>>>;

@@ -468,7 +468,10 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       return;
     }
-    if (activeEnvironmentUnavailable && !offlineSendsQueue) {
+    const sendCtx = composerRef.current?.getSendContext();
+    // Only a live send can decline shown approvals, so a send meant to redirect never queues.
+    const approvalsShown = (sendCtx?.shownPendingApprovalIds.length ?? 0) > 0;
+    if (activeEnvironmentUnavailable && (!offlineSendsQueue || approvalsShown)) {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
       environmentUnavailableSendToastSlotRef.current =
         (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
@@ -482,7 +485,6 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
     if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();

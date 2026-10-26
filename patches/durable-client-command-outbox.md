@@ -86,8 +86,10 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   send. The outbox branch runs after upstream's operate-scope check and stores upstream's
   `turnDispatchMode`, so a send made while worktree setup runs still queues behind it. It skips
   upstream's compact-before-send for a stale Claude session: an outbox entry carries one message,
-  not the `/compact` run ahead of it. It also runs before upstream's approval decline, so a queued
-  send leaves pending approvals alone.
+  not the `/compact` run ahead of it. While approvals are shown, an offline send gets upstream's
+  "Not connected" toast instead of queueing, because only a live send can decline them as upstream's
+  redirect does. A send queued behind earlier outbox entries while online still skips the decline,
+  so it never overtakes them.
 - Guest share sends (`components/guest/GuestPage.tsx`) post to the guest routes and never reach
   the outbox.
 - `apps/web/src/routes/_chat.tsx`: mounts `DurableOutboxDelivery`, which starts delivery for the

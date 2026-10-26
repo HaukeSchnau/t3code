@@ -9,6 +9,7 @@ import {
   ENRICHED_INLINE_FILE_LINK_REGEX,
   threadChipTargets,
 } from "./enrichedLinkPresentation";
+import { markdownForNativeRendering } from "./markdownDocument";
 
 describe("Enriched link presentation", () => {
   it("recognizes file-shaped code without turning commands or URLs into links", () => {
@@ -45,6 +46,17 @@ describe("Enriched link presentation", () => {
     expect(opened("src/app.tsx:12")).toBe("src/app.tsx:12");
     expect(opened("index.ts")).toBeNull();
     expect(opened("node.meta")).toBeNull();
+  });
+
+  it("rewrites URL code spans into links before native rendering, leaving identifiers as code", () => {
+    expect(
+      markdownForNativeRendering(
+        "Open `files.schnau.dev` from `node.meta`, not ```\nhttps://example.com\n```",
+        ENRICHED_INLINE_CODE_LINK_REGEX,
+      ),
+    ).toBe(
+      "Open [files.schnau.dev](<files.schnau.dev>) from `node.meta`, not ```\nhttps://example.com\n```",
+    );
   });
 
   it("only recognizes complete known skill names and escapes their punctuation", () => {
