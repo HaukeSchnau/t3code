@@ -22,11 +22,13 @@ export function useManagedWorkspaces(
   environmentId: EnvironmentId | null,
   projectRoot: string | null | undefined,
   vcsKind: VcsDriverKind | undefined,
+  isRepo: boolean | undefined,
 ): ManagedWorkspacesCapability | null {
   return managedWorkspacesForProject({
     config: useAtomValue(serverEnvironment.configValueAtom(environmentId)),
     projectRoot,
     vcsKind,
+    isRepo,
   });
 }
 

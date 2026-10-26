@@ -1749,6 +1749,7 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     activeProject?.workspaceRoot,
     vcsKind,
+    liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd),
   );
   const canChooseWorkspace = isGitRepo || managedWorkspaces !== null;
   // Provider-native subagents cannot take messages; approvals and questions go to the top-level parent.

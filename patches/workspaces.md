@@ -67,9 +67,10 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 - `ExecutionEnvironmentCapabilities.managedWorkspaces = { isolated }` tells clients to offer
   managed workspaces and to show the profile choice. The capability is per server; clients apply
   it per project through `managedWorkspacesForProject` (client-runtime `state/workspaces.ts`),
-  which returns null when the project's VCS status reports `kind: "git"`. While the status is
-  unknown, clients show the managed picker and the server still turns the launch into a worktree
-  for a Git project.
+  which offers them only once the status confirms a jj checkout (`kind: "jj"`) or no repository
+  (`isRepo: false`). While the status is unknown (cold start, offline), clients use upstream's
+  flow and its base-branch guard; web remembers "no repository" per checkout, so directory
+  projects don't flash.
 
 ## Upstream hooks
 

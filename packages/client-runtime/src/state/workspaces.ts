@@ -32,10 +32,9 @@ interface WorkspaceGroup {
 }
 
 /**
- * The managed workspace capability for a project, or null where clients use upstream's worktree
- * flow: plain Git projects and scratch threads, which already get a folder of their own.
- * `vcsKind` is the project checkout's status kind; while it is unknown the server still turns a
- * managed launch on a Git project into a worktree.
+ * The managed workspace capability for a project confirmed to be a jj checkout or a folder without
+ * a repository. Plain Git projects, scratch threads and projects whose status hasn't loaded yet get
+ * null and use upstream's worktree flow, whose base-branch guard then applies.
  */
 export function managedWorkspacesForProject(input: {
   readonly config:
@@ -52,12 +51,14 @@ export function managedWorkspacesForProject(input: {
     | undefined;
   readonly projectRoot: string | null | undefined;
   readonly vcsKind: VcsDriverKind | undefined;
+  readonly isRepo: boolean | undefined;
 }): ManagedWorkspacesCapability | null {
   const { config, projectRoot } = input;
+  const managedKind = input.vcsKind === "jj" || input.isRepo === false;
   if (
     config == null ||
     projectRoot == null ||
-    input.vcsKind === "git" ||
+    !managedKind ||
     isScratchProject({ workspaceRoot: projectRoot }, config.scratchWorkspaceRoot)
   ) {
     return null;

@@ -475,6 +475,7 @@ export function NewTaskFlowProvider(
     config: selectedEnvironmentServerConfig,
     projectRoot: selectedProject?.workspaceRoot,
     vcsKind: projectGitStatus.data?.kind,
+    isRepo: knownIsGitRepo ?? undefined,
   });
   const fileAccessSession = useEnvironmentQuery(
     selectedProject !== null && selectedProject.workspaceRoot !== ""
