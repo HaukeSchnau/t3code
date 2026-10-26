@@ -40,6 +40,23 @@ function agentSliceMemoryLimits(totalBytes: number) {
   };
 }
 
+/**
+ * Each session may use a quarter of RAM, at least 4 GiB, so a runaway tool is
+ * killed inside its own session instead of taking the slice or the host with
+ * it. A host that budgets memory for other work sets the limits in systemd
+ * sizes such as `10G`.
+ */
+export function agentMemoryLimits(totalBytes: number, env: NodeJS.ProcessEnv) {
+  const slice = agentSliceMemoryLimits(totalBytes);
+  return {
+    high: env.T3CODE_AGENT_MEMORY_HIGH || slice.high,
+    max: env.T3CODE_AGENT_MEMORY_MAX || slice.max,
+    session:
+      env.T3CODE_AGENT_SESSION_MEMORY_MAX ||
+      Math.min(Math.max(Math.floor(totalBytes / 4), 4 * GiB), slice.max),
+  };
+}
+
 export interface ScopeState {
   readonly loadState: string;
   readonly activeState: string;
@@ -48,9 +65,20 @@ export interface ScopeState {
   readonly populated: boolean | undefined;
 }
 
-/** Pipes can close before systemd records oom-kill; stopping, empty or OOM-counted scopes remain pending. */
-export function classifyScope(state: ScopeState): "oom-killed" | "gone" | "running" | "stopping" {
+/**
+ * Under OOMPolicy=stop pipes can close before systemd records oom-kill, so
+ * stopping, empty or OOM-counted scopes remain pending. Under
+ * OOMPolicy=continue systemd records nothing and the session keeps running,
+ * so a kill counted since `reportedOomKills` is the answer.
+ */
+export function classifyScope(
+  state: ScopeState,
+  reportedOomKills?: number,
+): "oom-killed" | "gone" | "running" | "stopping" {
   if (state.result === "oom-kill") return "oom-killed";
+  if (reportedOomKills !== undefined && (state.oomKills ?? 0) > reportedOomKills) {
+    return "oom-killed";
+  }
   if (
     state.loadState !== "loaded" ||
     state.activeState === "inactive" ||
@@ -58,6 +86,7 @@ export function classifyScope(state: ScopeState): "oom-killed" | "gone" | "runni
   ) {
     return "gone";
   }
+  if (reportedOomKills !== undefined) return "running";
   if (
     state.activeState === "deactivating" ||
     (state.oomKills ?? 0) > 0 ||
@@ -172,7 +201,7 @@ export const make = Effect.gen(function* () {
         yield* Effect.logInfo("Agent scopes are off: no systemd user manager");
         return undefined;
       }
-      const limits = agentSliceMemoryLimits(NodeOS.totalmem());
+      const limits = agentMemoryLimits(NodeOS.totalmem(), hostEnvironment);
       const limited = yield* run(systemctl, [
         "--user",
         "set-property",
@@ -196,11 +225,22 @@ export const make = Effect.gen(function* () {
         systemctl,
         runtimeDir,
         supportsOomPolicy,
+        sessionMemoryMax: limits.session,
       };
     }),
   );
 
-  const scopeByThread = new Map<string, { unit: string; oomKilled: boolean }>();
+  // Scopes that continue after an OOM kill track how many kills the thread was
+  // told about, and the count `stop` read before it reaped the scope.
+  const scopeByThread = new Map<
+    string,
+    {
+      unit: string;
+      oomKilled: boolean;
+      reportedOomKills: number | undefined;
+      stoppedOomKills: number;
+    }
+  >();
 
   const readScope = Effect.fn("agentScope.readScope")(function* (systemctl: string, unit: string) {
     const shown = yield* run(systemctl, [
@@ -262,10 +302,18 @@ export const make = Effect.gen(function* () {
     systemctl: string,
     threadId: string,
     unit: string | undefined,
+    continues: boolean,
   ) {
     const previous = scopeByThread.get(threadId);
     scopeByThread.delete(threadId);
-    if (unit !== undefined) scopeByThread.set(threadId, { unit, oomKilled: false });
+    if (unit !== undefined) {
+      scopeByThread.set(threadId, {
+        unit,
+        oomKilled: false,
+        reportedOomKills: continues ? 0 : undefined,
+        stoppedOomKills: 0,
+      });
+    }
     if (previous !== undefined) yield* forget(systemctl, previous.unit);
     if (scopeByThread.size > MAX_TRACKED_THREADS) yield* evictOldest(systemctl);
   });
@@ -277,15 +325,28 @@ export const make = Effect.gen(function* () {
       if (tracked.oomKilled) return true;
       const scope = yield* systemd;
       if (scope === undefined) return false;
+      const reported = tracked.reportedOomKills;
       for (let attempt = 0; attempt < STOPPING_POLL_ATTEMPTS; attempt++) {
         const state = yield* readScope(scope.systemctl, tracked.unit);
-        if (state === undefined) return false;
-        const status = classifyScope(state);
+        const status =
+          state === undefined ? "gone" : classifyScope(state, tracked.reportedOomKills);
         if (status === "running") return false;
         if (status === "stopping") {
           yield* Effect.sleep(STOPPING_POLL_INTERVAL);
           continue;
         }
+        if (reported !== undefined && state?.result !== "oom-kill") {
+          // The session goes on, so a later failure is only an OOM kill if the scope counts another.
+          const kills = Math.max(state?.oomKills ?? 0, tracked.stoppedOomKills);
+          if (kills <= reported) return false;
+          tracked.reportedOomKills = kills;
+          yield* Effect.logWarning("A process in the agent scope was killed: out of memory", {
+            threadId,
+            unit: tracked.unit,
+          });
+          return true;
+        }
+        if (state === undefined) return false;
         yield* forget(scope.systemctl, tracked.unit);
         if (status === "gone") return false;
         yield* Effect.logWarning("Agent scope was killed: out of memory", {
@@ -312,10 +373,13 @@ export const make = Effect.gen(function* () {
       state.populated === false
     )
       return;
-    // The kernel counts OOM kills before signaling the victim. Let OOMPolicy
-    // record the result before a manual stop can overwrite it; an unreadable
-    // counter cannot rule out that race. Older managers need us to stop it.
-    if (scope.supportsOomPolicy && (state.oomKills === undefined || state.oomKills > 0)) return;
+    // Scopes continue after an OOM kill, so systemd records no result to wait
+    // for. Keep the count for oomKilled, which can run after the scope is gone.
+    for (const tracked of scopeByThread.values()) {
+      if (tracked.unit === unit) {
+        tracked.stoppedOomKills = Math.max(tracked.stoppedOomKills, state.oomKills ?? 0);
+      }
+    }
     const stopped = yield* run(scope.systemctl, ["--user", "stop", "--no-block", unit]);
     if (stopped._tag === "None" || stopped.value.code !== 0) {
       yield* Effect.logWarning("Could not stop an exited agent's scope", {
@@ -328,7 +392,7 @@ export const make = Effect.gen(function* () {
   const clear: AgentScopeShape["clear"] = Effect.fn("agentScope.clear")(function* (threadId) {
     if (!scopeByThread.has(threadId)) return;
     const scope = yield* systemd;
-    if (scope !== undefined) yield* track(scope.systemctl, threadId, undefined);
+    if (scope !== undefined) yield* track(scope.systemctl, threadId, undefined, false);
   });
 
   return {
@@ -346,23 +410,26 @@ export const make = Effect.gen(function* () {
       const scope = yield* systemd;
       if (scope === undefined) return agentScopeCommand({ command: resolved, args });
       const unit = `t3code-${name}-${NodeCrypto.randomUUID().slice(0, 8)}.scope`;
-      // A continuing shared scope cannot attribute a tool's OOM to one thread.
-      // Clear the launch thread's previous scope instead.
-      const continuing = shared === true && scope.supportsOomPolicy;
-      const owned = threadId !== undefined && !continuing;
-      if (threadId !== undefined) yield* track(scope.systemctl, threadId, owned ? unit : undefined);
+      // A shared scope cannot attribute a tool's OOM to one thread. Clear the
+      // launch thread's previous scope instead. Shared scopes serve several
+      // sessions, so only the slice limits them.
+      const sharedScope = shared === true && scope.supportsOomPolicy;
+      const owned = threadId !== undefined && !sharedScope;
+      if (threadId !== undefined) {
+        yield* track(scope.systemctl, threadId, owned ? unit : undefined, scope.supportsOomPolicy);
+      }
       const systemdScope: AgentSystemdScope = {
         systemdRun: scope.systemdRun,
         runtimeDir: scope.runtimeDir,
         slice: survivesRestart === true ? AGENT_SLICE : ownedSlice,
         unit,
         // Without an owning thread nothing reads the result, so let systemd
-        // unload the unit even when it fails.
+        // unload the unit even when it fails. A session outlives its tools'
+        // OOM kills, so the agent sees the killed tool and carries on.
         options: [
           STOP_TIMEOUT_OPTION,
-          ...(scope.supportsOomPolicy
-            ? [`--property=OOMPolicy=${continuing ? "continue" : "stop"}`]
-            : []),
+          ...(scope.supportsOomPolicy ? ["--property=OOMPolicy=continue"] : []),
+          ...(sharedScope ? [] : [`--property=MemoryMax=${scope.sessionMemoryMax}`]),
           ...(owned ? [] : ["--collect"]),
         ],
       };
