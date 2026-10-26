@@ -84,7 +84,8 @@ describe("offline authentication revalidation", () => {
         revalidate: async () => ({ status }),
         invalidate,
         clearProof: vi.fn(),
-        proofExpiresAtEpochMs: () => Date.now() + 60_000,
+        now: () => 0,
+        proofExpiresAtEpochMs: () => 60_000,
       });
 
       controller.start();
@@ -104,7 +105,8 @@ describe("offline authentication revalidation", () => {
       revalidate,
       invalidate,
       clearProof: vi.fn(),
-      proofExpiresAtEpochMs: () => Date.now() + 60_000,
+      now: () => 0,
+      proofExpiresAtEpochMs: () => 60_000,
     });
 
     controller.start();

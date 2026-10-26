@@ -25,12 +25,14 @@ autolinking, which forces the user to copy and paste it into a browser.
   `ChatMarkdown` appends `remarkLinkifyInlineCode` after the shared list instead of editing it. Running
   after `remarkNormalizeLinksAndTagInlineCode` is equivalent: the plugin rebuilds the code node inside
   the new link without the inline-code tag, and linking changes no text.
-- Mobile renders Markdown with `react-native-enriched-markdown` on both platforms. Its
-  `linkRecognition.inlineCode` regex links whole code spans and keeps their code styling.
-  `apps/mobile/src/lib/enrichedLinkPresentation.ts` combines upstream's file-path pattern with
-  `INLINE_CODE_WEB_LINK_PATTERN` from the shared module. The matched span becomes the link URL, so
-  `enrichedLinkUrl` gives a bare host its `https://` scheme before `EnrichedMarkdownText.tsx` hands
-  it to press handlers, link menus and pill presentation.
+- Mobile renders Markdown with `react-native-enriched-markdown` on both platforms. Upstream turns
+  file-path code spans into Markdown links before rendering, which drops their code styling. The
+  fork passes `ENRICHED_INLINE_CODE_LINK_REGEX` (upstream's file-path pattern plus
+  `INLINE_CODE_WEB_LINK_PATTERN`, in `apps/mobile/src/lib/enrichedLinkPresentation.ts`) as the
+  native `linkRecognition.inlineCode` regex, so web URLs stay code-styled. The matched span becomes
+  the link URL, so `enrichedLinkUrl` gives a bare host its `https://` scheme before
+  `EnrichedMarkdownText.tsx` hands it to press handlers, link menus and pill presentation. Natively
+  recognized links never reach `onLinksChange`, so they get no link variant or iOS link menu.
 
 Retire this patch if upstream linkifies code-formatted URLs on every client with equally
 conservative filename detection.

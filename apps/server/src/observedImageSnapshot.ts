@@ -19,11 +19,9 @@ import { createDeterministicAttachmentId, resolveAttachmentPath } from "./attach
 import { projectHostPath } from "./project/SeparateProjectRegistry.ts";
 
 /**
- * Copies an image an agent viewed into its thread's attachments, so the preview
- * survives later edits or deletion of the original. The id hashes the bytes, so
- * repeated views of one image share a copy. Thread deletion removes it with the
- * thread's other attachments. Best effort: a failure leaves the item without a
- * snapshot and never fails event ingestion.
+ * Copies an image an agent viewed into its thread's attachments, so the preview survives edits or
+ * deletion of the original. The id hashes the bytes, so repeated views share a copy. Best effort:
+ * a failure leaves the item without a snapshot and never fails event ingestion.
  */
 export const snapshotObservedImage = Effect.fn("snapshotObservedImage")(
   function* (input: {

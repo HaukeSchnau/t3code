@@ -1,9 +1,7 @@
 /**
- * Z.AI Coding Plan usage for OpenCode instances. OpenCode resolves the Z.AI
- * API key from its own provider config; T3 reads the matching quota endpoint
- * and publishes the result as ordinary provider usage windows, so the probe
- * and the adapter's live updates land on the same rows
- * (patches/zai-coding-plan-usage-limits.md).
+ * Z.AI Coding Plan usage for OpenCode instances (patches/zai-coding-plan-usage-limits.md).
+ * OpenCode resolves the API key from its own provider config; T3 reads the matching quota
+ * endpoint and publishes the result as ordinary provider usage windows.
  */
 import type { ProviderListResponse } from "@opencode-ai/sdk/v2";
 import type { ServerProviderUsageLimits, ServerProviderUsageWindow } from "@t3tools/contracts";
@@ -224,15 +222,9 @@ export const fetchZaiUsageWindows = Effect.fn("fetchZaiUsageWindows")(function* 
 });
 
 /**
- * Adds the Z.AI Coding Plan to an OpenCode probe's usage limits. The OpenCode
- * Go read reports `unsupported` without a Go key, and runtime updates never
- * land on an unsupported snapshot, so a configured Z.AI provider has to count
- * here.
- *
- * A failure on either side yields `probeFailed`, which keeps the windows the
- * last good probe published: publishing only the side that succeeded would
- * wipe the other side's windows. The provider lookup counts as a Z.AI failure
- * because it cannot tell an unreadable config from a missing plan.
+ * A failure on either side yields `probeFailed`, which keeps the last good probe's windows:
+ * publishing only the side that succeeded would wipe the other side's. The provider lookup counts
+ * as a Z.AI failure because it cannot tell an unreadable config from a missing plan.
  */
 export const withZaiUsageLimits = <E, R>(
   limits: ServerProviderUsageLimits,

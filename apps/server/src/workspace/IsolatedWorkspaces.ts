@@ -1,10 +1,7 @@
 /**
- * Isolated workspaces through the `agent-exec` launcher (`native/agent-exec`). The launcher
- * owns cloning, private homes, mounts, networking and retirement; T3 asks it
- * to fork the project and reads back the registration that project execution
- * (`project/ProjectExecution.ts`) later uses to route processes.
- *
- * @module IsolatedWorkspaces
+ * Isolated workspaces through the `agent-exec` launcher (`native/agent-exec`), which owns cloning,
+ * private homes, mounts, networking and retirement. T3 asks it to fork the project and reads back
+ * the registration that `project/ProjectExecution.ts` later uses to route processes.
  */
 import type { ManagedWorkspacesCapability, ProjectId, WorkspaceProfile } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";

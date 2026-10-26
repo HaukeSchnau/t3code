@@ -16,7 +16,7 @@ The flake exposes:
 - `devenv.nix`: native dependency setup, web/server development and Metro, using the same pinned toolchain.
   Managed previews supply endpoint and per-instance state bindings. Standalone `devenv up` uses `.devenv`
   state and loopback endpoints. Generated JSON is an artifact, not a source file or manual export step.
-- `devShells.default`: Node 24, pnpm 11.10, JJ, Git, SSH, and native build tooling.
+- `devShells.default`: Node 26.12.1, pnpm 12.14, JJ, Git, SSH, and native build tooling.
 - `nixosModules.default`: a `services.t3code` systemd service module for NixOS hosts.
 
 Pushes to the fork's Gitea `main` branch call the shared Project Release workflow from the pinned public
@@ -41,7 +41,7 @@ fetch takes the whole `t3...` closure too: the deploy injects the server's works
 own dependencies must be in the offline store. The runtime
 uses pnpm's current injected-workspace deploy algorithm with the dedicated `pnpm-deploy-lock.yaml`; the normal
 `pnpm-lock.yaml` and workspace configuration retain linked-workspace semantics for development installs.
-`supportedArchitectures` is limited to the build platform, preventing foreign
+pnpm installs only the build platform's optional packages (its default `supportedArchitectures`), preventing foreign
 Claude and native prebuilds from entering the result. `node-pty` is rebuilt explicitly because it needs a
 platform-specific native module and its generic install script cannot run during the broad script-free
 production install.
@@ -49,7 +49,7 @@ production install.
 `pnpm-deploy-lock.yaml` is generated, not hand-edited. After changing a workspace manifest, run
 `pnpm run fork:lockfile`; it regenerates and validates the canonical lockfile, derives the deploy lock,
 refreshes the three fixed-output Nix hashes, and verifies `projectReleaseGate`. Review and commit the
-generated files together. The scripts require the flake's pinned pnpm 11.10 and restore temporary edits even
+generated files together. The scripts require the pnpm version the root `packageManager` pins and restore temporary edits even
 when pnpm fails.
 
 The three derivations deliberately have separate source filters. Web-only edits do not invalidate the server
@@ -66,9 +66,17 @@ the test resolver plugin is not loaded during production bundling.
 Upstream test setup belongs in these dedicated Vitest configs, including the shared temporary-directory
 setup and the server Git configuration fixture.
 
-The flake pins pnpm 11.10 and uses fetcher version 4 with `trustLockfile`. This avoids re-resolving and
+The flake's pnpm is the exact release the root `packageManager` pins, and it uses fetcher version 4 with `trustLockfile`. This avoids re-resolving and
 re-verifying an already frozen lockfile while retaining Nix's fixed-output dependency hash as the integrity
 boundary.
+
+Node, pnpm, `fetchPnpmDeps` and `pnpmConfigHook` come from the `nixpkgs-node` input (flake and devenv),
+because the root `package.json` pins Node 26.12.1 exactly and pnpm 12, which the main nixpkgs pin predates.
+pnpm 12 is a Rust program whose newer releases nixpkgs cannot build from source, so `nix/pnpm.nix` installs
+the published `@pnpm/exe.<platform>` binary; bumping `packageManager` means updating its version and the
+four per-platform hashes. A pnpm that differs from `packageManager` tries to download the pinned release,
+which fails in the sandbox. Drop `nixpkgs-node` once the main pin ships Node 26.12.1 and nixpkgs' `pnpm_12`
+reaches the pinned release.
 
 The build environment sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to nixpkgs' `cacert` bundle. Vite+'s
 Rust-side build tooling initializes an HTTP client during `vp build`; without an explicit CA bundle, sandboxed

@@ -18,10 +18,15 @@ const FIRST_RETRY_DELAY_MS = 5_000;
 const RETRY_JITTER_RATIO = 0.2;
 const OVERLOAD_RETRY_MESSAGE_PREFIX = "codex-overload-retry:";
 
+/** Only error items are read in full, so clients may pass items stripped of streaming fields. */
+type ContinuationTurnItem =
+  | Extract<OrchestrationV2TurnItem, { type: "error" }>
+  | Pick<Exclude<OrchestrationV2TurnItem, { type: "error" }>, "type" | "runId">;
+
 interface ContinuationProjection {
   readonly thread: Pick<OrchestrationV2AppThread, "modelSelection">;
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
-  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly turnItems: ReadonlyArray<ContinuationTurnItem>;
   readonly providerThreads: ReadonlyArray<Pick<OrchestrationV2ProviderThread, "id" | "driver">>;
 }
 
@@ -173,7 +178,7 @@ const PROGRESS_ITEM_TYPES: ReadonlySet<OrchestrationV2TurnItem["type"]> = new Se
   "subagent",
 ]);
 
-function madeProgress(turnItems: ReadonlyArray<OrchestrationV2TurnItem>, runId: RunId) {
+function madeProgress(turnItems: ReadonlyArray<ContinuationTurnItem>, runId: RunId) {
   return turnItems.some((item) => item.runId === runId && PROGRESS_ITEM_TYPES.has(item.type));
 }
 

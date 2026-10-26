@@ -14,13 +14,14 @@ import { useEnvironmentServerConfig, useThreadShells } from "../../state/entitie
 import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
 import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { managedWorkspacesFor, workspaceProfileAtom } from "./managed-workspaces";
-import { PickerSurface, SelectionRow, ToggleRow } from "./NewTaskContextPickerScreens";
+import { SelectionRow } from "../../components/ui/SelectionRow";
+import { PickerSurface, ToggleRow } from "./NewTaskContextPickerScreens";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 
 const EMPTY_ENVIRONMENT_IDS: ReadonlyArray<EnvironmentId> = [];
 
 /**
- * Fork: choose a new workspace, the project checkout, or a workspace other
+ * Choose a new workspace, the project checkout, or a workspace other
  * threads already use (patches/workspaces.md). Settled workspaces are found
  * through search or Show settled, which load archived threads on demand.
  */

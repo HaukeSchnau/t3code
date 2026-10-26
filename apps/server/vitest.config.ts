@@ -15,15 +15,21 @@ const isolated = isolatedTestFiles(
   ],
 );
 
+// The root config's `projects` route repo-root runs to package configs,
+// including this one. Inheriting them would make this config a container.
+const { projects: _rootTestProjects, ...baseTestConfig } = baseConfig.test ?? {};
+
 export default mergeConfig(
-  baseConfig,
+  { ...baseConfig, test: baseTestConfig },
   defineConfig({
     test: {
-      // The server suite exercises sqlite, git, temp worktrees, and orchestration
-      // runtimes heavily. Running files in parallel introduces load-sensitive flakes.
+      // Parallel sqlite/git/worktree/orchestration tests introduce load-sensitive flakes.
       fileParallelism: false,
       sequence: { sequencer: WeightedShardSequencer },
-      setupFiles: ["./src/testUtils/gitConfig.setup.ts"],
+      setupFiles: [
+        "./src/testUtils/gitConfig.setup.ts",
+        "./src/testUtils/managedServiceEnv.setup.ts",
+      ],
       hookTimeout: 120_000,
       testTimeout: 120_000,
       // Most files share one module graph per worker: a fresh one per file took more CPU than

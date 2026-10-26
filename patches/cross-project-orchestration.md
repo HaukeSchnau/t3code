@@ -20,8 +20,8 @@ Each match names its `projectId`. With a `projectId`, it filters to that project
 
 ## Upstream hooks
 
-- `apps/server/src/mcp/toolkits/thread/handlers.ts`: `t3_thread_search` filters only by the
-  requested `projectId`, not by the caller's project.
+- `apps/server/src/mcp/toolkits/thread/handlers.ts`: `t3_thread_search` passes its input to
+  `ThreadSearch.searchThreads` unchanged. Upstream fills in the caller's `projectId` there.
 - `apps/server/src/mcp/toolkits/thread/tools.ts`: the tool description says so.
 
 `apps/server/src/mcp/toolkits/core.test.ts` ("searches every project unless the caller names one")

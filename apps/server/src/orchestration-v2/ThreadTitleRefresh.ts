@@ -91,14 +91,15 @@ export const make = Effect.gen(function* () {
     if (Option.isNone(project)) return;
 
     const context = formatThreadTitleContext(settled);
+    const projectSettings = resolveProjectSettings(settings, thread.projectId).settings;
     const generated = yield* textGeneration.generateThreadTitle({
       cwd: thread.worktreePath ?? project.value.workspaceRoot,
       message: context.message,
       attachments: context.attachments,
       previousTitle: thread.title,
       automaticRefresh: true,
-      modelSelection: resolveProjectSettings(settings, thread.projectId).settings
-        .textGenerationModelSelection,
+      instructions: projectSettings.threadTitleInstructions,
+      modelSelection: projectSettings.textGenerationModelSelection,
     });
     const title = generated.title.trim();
     if (title === "New thread" || title === thread.title.trim()) return;

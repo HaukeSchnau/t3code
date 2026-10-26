@@ -1,11 +1,7 @@
 #!/usr/bin/env node
-// Builds the production iOS app and uploads it to TestFlight unless a current
-// build already exists for the pinned runtime version. Runs on the Apple builder.
-//
-// JavaScript-only changes ship as OTA updates (scripts/mobile-update.ts), so a
-// new binary is needed only when the native fingerprint changes or the last
-// binary nears TestFlight's 90-day expiry. Each upload's "What to Test" note
-// records its runtime version; that note is how later runs find the build.
+// Builds the production iOS app and uploads it to TestFlight unless a current build exists for
+// the pinned runtime version (patches/mobile-distribution.md). Runs on the Apple builder. Each
+// upload's "What to Test" note records its runtime version; that note is how later runs find it.
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";

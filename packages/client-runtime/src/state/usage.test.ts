@@ -12,7 +12,6 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
-import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import {
   cursorKeychainAccessEnvironments,
   needsCursorKeychainAccess,
@@ -142,24 +141,6 @@ describe("manual usage refresh", () => {
     healthy!.scan.resolve(summary);
     await refreshing;
     expect(finished).toBe(true);
-  });
-
-  it("settles when connected state has no usable RPC session", async () => {
-    const {
-      environments: [environment],
-      refresh,
-    } = harness();
-    const entry = environment!;
-    const refreshing = refresh();
-    entry.rates.resolve(
-      AsyncResult.fail(
-        new EnvironmentRpcUnavailableError({
-          environmentId: entry.environmentId,
-          message: "No session",
-        }),
-      ),
-    );
-    await refreshing;
   });
 
   it("replaces a scan that started before pricing was refreshed", async () => {

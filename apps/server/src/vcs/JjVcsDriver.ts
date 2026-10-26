@@ -1,10 +1,7 @@
 /**
- * The jj VCS driver. Checkpoints are commit ids of `@` taken after a snapshot:
- * every snapshot is already a commit, and older versions of `@` stay
- * addressable after jj rewrites it. T3 records which commit a checkpoint ref
- * names in `.jj/t3/checkpoints`, so jj's history carries no T3 objects.
- *
- * @module JjVcsDriver
+ * Checkpoints are commit ids of `@` after a snapshot, since older versions of `@` stay
+ * addressable after jj rewrites it. Refs map to commits in `.jj/t3/checkpoints`, so jj's history
+ * carries no T3 objects.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- checkpoint file names hash the ref synchronously.
 import * as NodeCrypto from "node:crypto";

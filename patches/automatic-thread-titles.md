@@ -41,7 +41,7 @@ becomes clearer or changes, using the inexpensive text-generation model.
 Fork-owned files:
 
 - `apps/server/src/orchestration-v2/ThreadTitleRefresh.ts` subscribes to domain events, debounces
-  per thread, generates, and lands the result with a guarded
+  per thread, generates with the project's title instructions, and lands the result with a guarded
   `thread.title.regeneration.complete`.
 - `apps/server/src/orchestration-v2/threadTitleMode.ts` decides whether a finished generation may
   land. It is a separate module so the orchestrator can import it without a cycle.

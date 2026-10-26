@@ -12,7 +12,8 @@ const shell = flake.devShells.ci;
 const install = Setup.make("install", {
   shell,
   inputs: Files.union(
-    Files.glob("**/package.json", "pnpm-lock.yaml"),
+    // pnpm 12 rejects a frozen install when the pnpmfile no longer matches the lockfile's checksum.
+    Files.glob("**/package.json", "pnpm-lock.yaml", ".pnpmfile.cjs"),
     Files.optional(Files.glob("pnpm-workspace.yaml", ".npmrc", "patches/**/*.patch")),
     Files.of("scripts/ci-pnpm-install.ts"),
   ),
@@ -36,8 +37,11 @@ const aliases = {
   "expo-crypto": "apps/mobile/src/test-support/expo-crypto.ts",
 };
 
-/** The root Vitest config's setup file, which most packages' suites run with. */
-const longTempDir = "packages/shared/src/testing/longTempDir.ts";
+/** The root Vitest config's setup files, which most packages' suites run with. */
+const setupFiles = [
+  "packages/shared/src/testing/longTempDir.ts",
+  "packages/shared/src/testing/providerEnv.ts",
+];
 
 /** Suites besides the server's leave room for the tasks running beside them. */
 const workers = ["--maxWorkers", "3"];
@@ -58,9 +62,10 @@ const testServer = Vitest.files({
   inputs: Files.union(
     Files.of("vitest.config.ts", "apps/server/vitest.config.ts"),
     Files.imports([
-      longTempDir,
+      ...setupFiles,
       "packages/shared/src/testing/isolatedTestFiles.ts",
       "apps/server/src/testUtils/gitConfig.setup.ts",
+      "apps/server/src/testUtils/managedServiceEnv.setup.ts",
       "apps/server/src/testUtils/weightedShardSequencer.ts",
     ]),
   ),
@@ -73,7 +78,15 @@ const testServer = Vitest.files({
  * a shard thrashed against that limit until it timed out. Run apart on one shard's files, they
  * peaked at 3.6 and 2.9 GB.
  */
-const web = { ...suite, dir: "apps/web", inputs: Files.imports("apps/web/vitest.config.ts") };
+const web = {
+  ...suite,
+  dir: "apps/web",
+  inputs: Files.imports([
+    "apps/web/vitest.config.ts",
+    ...setupFiles,
+    "apps/web/test/browserSetup.ts",
+  ]),
+};
 
 // `tests` can't leave out the browser files, so this step gets them too and runs none of their
 // tests.
@@ -102,7 +115,11 @@ const testMobile = Vitest.files({
   name: "test-mobile",
   dir: "apps/mobile",
   tests: ["**/*.test.ts", "**/*.test.tsx"],
-  inputs: Files.imports(["apps/mobile/vitest.config.ts", longTempDir, aliases["expo-crypto"]]),
+  // The config loads babel.config.js through `require`, which `Files.imports` doesn't follow.
+  inputs: Files.union(
+    Files.of("apps/mobile/babel.config.js"),
+    Files.imports(["apps/mobile/vitest.config.ts", ...setupFiles, aliases["expo-crypto"]]),
+  ),
   args: ["--config", "vitest.config.ts", "--project", "unit", "--project", "react", ...workers],
 }).pipe(Step.timeout("20 minutes"));
 
@@ -111,7 +128,7 @@ const testDesktop = Vitest.files({
   name: "test-desktop",
   dir: "apps/desktop",
   tests: ["**/*.test.ts", "**/*.test.js", "**/*.test.mjs"],
-  inputs: Files.imports(["apps/desktop/vite.config.ts", longTempDir]),
+  inputs: Files.imports(["apps/desktop/vite.config.ts", ...setupFiles]),
   args: ["--passWithNoTests", ...workers],
   before: ["node", "scripts/ensure-electron-runtime.mjs"],
 }).pipe(Step.timeout("20 minutes"));
@@ -121,7 +138,7 @@ const testClientRuntime = Vitest.files({
   name: "test-client-runtime",
   dir: "packages/client-runtime",
   tests: ["src/**/*.test.ts"],
-  inputs: Files.imports(["packages/client-runtime/vite.config.ts", longTempDir]),
+  inputs: Files.imports(["packages/client-runtime/vite.config.ts", ...setupFiles]),
   // Upstream's own config keeps Vitest's 5 s default; the root config gives loaded workers 60 s.
   args: [...workers, "--testTimeout", "60000"],
 }).pipe(Step.timeout("20 minutes"));
@@ -131,7 +148,7 @@ const testShared = Vitest.files({
   name: "test-shared",
   dir: "packages/shared",
   tests: ["src/**/*.test.ts"],
-  inputs: Files.union(Files.of("vitest.config.ts"), Files.imports(longTempDir)),
+  inputs: Files.union(Files.of("vitest.config.ts"), Files.imports(setupFiles)),
   args: ["--config", "../../vitest.config.ts", "--dir", ".", ...workers],
 }).pipe(Step.timeout("20 minutes"));
 
@@ -152,6 +169,7 @@ const integrationPackages = [
   "packages/source-control-azure-devops",
   "packages/source-control-bitbucket",
   "packages/source-control-core",
+  "packages/source-control-definitions",
   "packages/source-control-forgejo",
   "packages/source-control-gitcafe",
   "packages/source-control-github",
@@ -166,7 +184,7 @@ const packageSuites = (name: string, dirs: ReadonlyArray<string>) =>
     setup: install,
     inputs: Files.union(
       Files.of("vitest.config.ts", ...dirs),
-      Files.imports([...dirs.map((dir) => `${dir}/**/*.test.ts`), longTempDir], { aliases }),
+      Files.imports([...dirs.map((dir) => `${dir}/**/*.test.ts`), ...setupFiles], { aliases }),
     ),
     run: cmd`vp run --cache --parallel --concurrency-limit 1 ${filters(dirs)} test ${workers}`,
   }).pipe(Step.timeout("20 minutes"));
@@ -178,14 +196,22 @@ const testPackages = packageSuites("test-packages", [
   "packages/ssh",
   "packages/tailscale",
   "infra/relay",
+  "infra/task-cache",
   "oxlint-plugin-t3code",
 ]);
 
 // The provider and source-control packages took the package step past 20 minutes on their own.
 const testIntegrations = packageSuites(
   "test-integrations",
-  // The source-control test kit has no tests of its own.
-  integrationPackages.filter((dir) => dir !== "packages/source-control-testing"),
+  // These packages have no tests of their own.
+  integrationPackages.filter(
+    (dir) =>
+      ![
+        "packages/provider-testing",
+        "packages/source-control-definitions",
+        "packages/source-control-testing",
+      ].includes(dir),
+  ),
 );
 
 /** The repository scripts' tests read manifests, lockfiles and configs all over the repository. */
@@ -251,6 +277,7 @@ const typechecks = [
       "apps/web/test/**/*.ts",
       "apps/web/vite.config.ts",
       "apps/web/vercel.ts",
+      "apps/web/scripts/warm-dep-cache.ts",
       "scripts/lib/public-config.ts",
       "scripts/lib/third-party-licenses.ts",
     ],
@@ -276,9 +303,10 @@ const typechecks = [
   // Astro checks .astro files, whose imports aren't followed, so marketing counts as a whole.
   typecheck(
     "tools",
-    ["infra/relay", "scripts", "oxlint-plugin-t3code", "apps/marketing"],
+    ["infra/relay", "infra/task-cache", "scripts", "oxlint-plugin-t3code", "apps/marketing"],
     [
       "infra/relay/**/*.ts",
+      "infra/task-cache/**/*.ts",
       "scripts/**/*.ts",
       "oxlint-plugin-t3code/**/*.ts",
       "apps/marketing/**/*",
@@ -314,7 +342,10 @@ const forkLockfile = Task.make("fork-lockfile", {
 const deployLock = Task.make("deploy-lock", {
   shell,
   setup: install,
-  inputs: Files.of("pnpm-deploy-lock.yaml", "vite.config.ts", "scripts/sync-pnpm-deploy-lock.mjs"),
+  inputs: Files.union(
+    Files.of("pnpm-deploy-lock.yaml", "scripts/sync-pnpm-deploy-lock.mjs"),
+    Files.imports("vite.config.ts"),
+  ),
   run: cmd`node scripts/sync-pnpm-deploy-lock.mjs --check`,
 }).pipe(Step.timeout("10 minutes"));
 
@@ -332,6 +363,7 @@ const appleInstall = Setup.make("apple-install", {
     "**/package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
+    ".pnpmfile.cjs",
     "patches/**/*.patch",
   ),
   run: cmd`corepack pnpm install --frozen-lockfile --trust-lockfile --network-concurrency 4`,

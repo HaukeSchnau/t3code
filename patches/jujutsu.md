@@ -64,7 +64,8 @@ handling, because the maintainer and their agents work in jj repositories.
 - `mcp/McpHttpServer.ts` registers the jj toolkit (`layerJjToolkit`). Its handlers declare access
   through `McpToolAccess`: status and thread work read as the calling thread, and `t3_jj_action`
   acts as it.
-- `vcs/VcsStatusBroadcaster.ts` (local status goes through the jj reader).
+- `vcs/VcsStatusBroadcaster.ts` (local status, including the branch picker's local-only refresh,
+  goes through the jj reader; remote status is skipped for jj without Git).
 - `auth/RpcAuthorization.ts` and `observability/RpcInstrumentation.ts` list the `vcs.jj.*` RPCs.
   Actions and path assignment need `source-control:write`, like upstream's VCS mutations; thread
   work needs `orchestration:read`. `server.ts` builds one `JjCli` for the jj services and the MCP

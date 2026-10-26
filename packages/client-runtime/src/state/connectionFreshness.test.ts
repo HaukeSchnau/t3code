@@ -7,7 +7,7 @@ import {
   ConnectionTransientError,
   type SupervisorConnectionState,
 } from "../connection/model.ts";
-import type { EnvironmentShellState } from "./shell.ts";
+import { EMPTY_SHELL_STATE, type EnvironmentShellState } from "./shell.ts";
 import {
   projectEnvironmentConnectionFreshness,
   projectEnvironmentConnectionProgress,
@@ -44,7 +44,7 @@ function shellState(
   snapshot: Option.Option<OrchestrationV2ShellSnapshot>,
   error = Option.none<string>(),
 ): EnvironmentShellState {
-  return { status, snapshot, error };
+  return { ...EMPTY_SHELL_STATE, status, snapshot, error };
 }
 
 describe("connection freshness projection", () => {

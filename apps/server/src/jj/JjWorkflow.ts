@@ -1,13 +1,8 @@
 /**
- * The jj actions users and agents run from T3: describe, commit, new, squash,
- * abandon, split, absorb, edit, bookmark, push, pull request, fetch, rebase
- * and undo. Actions that rewrite files on disk wait for no turn to be running
- * in the working copy, because jj overwrites files without checking for an
- * agent's unsnapshotted edits.
- *
- * @module JjWorkflow
+ * The jj actions users and agents run from T3. Actions that rewrite files on disk wait until no
+ * turn runs in the working copy, because jj overwrites files without checking for an agent's
+ * unsnapshotted edits.
  */
-
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

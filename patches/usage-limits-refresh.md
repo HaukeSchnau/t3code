@@ -19,7 +19,9 @@ per account when it is read too often, and upstream cannot tell that apart from 
   loop stops at an interval of 0; limits keep refreshing. `server.refreshProviders` with
   `usageLimitsOnly` runs the same reads at once (`readUsageLimits`), and providers without a direct
   reader run their status probe instead. Older servers ignore the flag and run a full refresh. The
-  hub's own polling loop in `UsageLimitSources.ts` is gone.
+  hub's own polling loop in `UsageLimitSources.ts` is gone. Web `UsagePage.tsx` and mobile
+  `features/usage/usageLimitsRefresh.ts` send the flag, except right after a provider is enabled
+  (`afterPending`), which needs a full status probe.
 - `makeManagedServerProvider` (`packages/provider-core/src/server/managedProvider.ts`) takes an
   optional `readUsageLimits` and exposes `refreshUsageLimits`. `ProviderRegistry.refreshUsageLimits`
   (`apps/server/src/provider/ProviderRegistry.ts`) runs it for every instance.

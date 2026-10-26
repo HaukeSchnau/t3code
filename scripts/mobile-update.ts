@@ -1,12 +1,8 @@
 #!/usr/bin/env node
-// Resolves the mobile runtime version and publishes the JavaScript bundle as a
-// self-hosted Expo update (protocol v1, https://docs.expo.dev/technical-specs/expo-updates-1/).
-//
-// Layout under --updates-dir, which the fork's update host serves statically:
-//   assets/<sha256>.<ext>                        immutable, content-addressed files
-//   <platform>/<runtime-version>/manifest.json   the newest update for that runtime
-// The host answers GET /manifest by routing the Expo-Platform and
-// Expo-Runtime-Version request headers to the matching manifest, and 204 otherwise.
+// Publishes the JavaScript bundle as a self-hosted Expo update (protocol v1,
+// https://docs.expo.dev/technical-specs/expo-updates-1/) under --updates-dir: content-addressed
+// `assets/<sha256>.<ext>` and `<platform>/<runtime-version>/manifest.json`. The host routes
+// GET /manifest by the Expo-Platform and Expo-Runtime-Version headers, and answers 204 otherwise.
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";

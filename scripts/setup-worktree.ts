@@ -1,50 +1,130 @@
-// @effect-diagnostics nodeBuiltinImport:off -- bootstraps dependencies before an Effect runtime is available.
+// @effect-diagnostics nodeBuiltinImport:off - runs before dependencies are installed, so only Node built-ins exist.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-function run(command: string, args: string[]) {
-  const result = NodeChildProcess.spawnSync(command, args, {
-    // Setup has no one answering prompts. A closed stdin makes a prompt fail instead of hanging.
-    stdio: ["ignore", "inherit", "inherit"],
-    // pnpm uses a .cmd shim on Windows; its fixed install command needs a shell.
-    // oxlint-disable-next-line t3code/no-global-process-runtime -- runs before workspace dependencies are installed.
-    shell: process.platform === "win32" && command === "pnpm",
+const ENV_FILES = [".env", NodePath.join("infra", "relay", ".env")];
+
+const worktree = NodePath.dirname(import.meta.dirname);
+
+// T3 runs setup in the background, so agents can start before it ends.
+// `setup-running` holds this PID until setup ends with `setup-done` or
+// `setup-failed`, so agents wait instead of racing it with their own install.
+const markerDir = NodePath.join(worktree, ".t3");
+const runningMarker = NodePath.join(markerDir, "setup-running");
+const doneMarker = NodePath.join(markerDir, "setup-done");
+const failedMarker = NodePath.join(markerDir, "setup-failed");
+NodeFS.rmSync(doneMarker, { force: true });
+NodeFS.rmSync(failedMarker, { force: true });
+NodeFS.mkdirSync(markerDir, { recursive: true });
+NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+let failureDetail = "";
+process.on("uncaughtExceptionMonitor", (error) => {
+  failureDetail = error.stack ?? String(error);
+});
+process.on("exit", (code) => {
+  if (code === 0) NodeFS.writeFileSync(doneMarker, "");
+  else NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
+  NodeFS.rmSync(runningMarker, { force: true });
+});
+// A cancelled setup must still leave a marker, or agents would wait forever.
+// During install, the signal goes on to the installer and setup exits when the
+// install output closes. Any child the installer leaves behind holds that output
+// open, so no marker appears while it can still write node_modules.
+let cancelSignal: NodeJS.Signals | undefined;
+let activeInstall: NodeChildProcess.ChildProcess | undefined;
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => {
+    cancelSignal = signal;
+    if (activeInstall) activeInstall.kill(signal);
+    else process.exit(1);
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-// Native entry already runs this task. Recheck its inputs instead of installing twice.
-if (
+// Native entry already runs the devenv task. Recheck its inputs instead of installing twice.
+// Elsewhere pnpm installs with the pinned version; `--yes` and closed stdin keep it unattended,
+// and a stale lockfile must fail, not be rewritten. Output is piped so the failure marker keeps its tail.
+const [installCommand, installArgs] =
   process.env.DEVENV_ROOT &&
-  NodeFS.realpathSync(process.env.DEVENV_ROOT) === NodeFS.realpathSync(process.cwd())
-) {
-  run("devenv", ["--no-tui", "tasks", "run", "t3:dependencies"]);
-} else {
-  run("pnpm", ["install", "--frozen-lockfile", "--yes"]);
+  NodeFS.realpathSync(process.env.DEVENV_ROOT) === NodeFS.realpathSync(worktree)
+    ? ["devenv", ["--no-tui", "tasks", "run", "t3:dependencies"]]
+    : ["pnpm", ["install", "--frozen-lockfile", "--yes"]];
+const install = NodeChildProcess.spawn(installCommand, installArgs, {
+  cwd: worktree,
+  stdio: ["ignore", "pipe", "pipe"],
+  // pnpm uses a .cmd shim on Windows; its fixed install command needs a shell.
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- runs before workspace dependencies are installed.
+  shell: process.platform === "win32" && installCommand === "pnpm",
+});
+activeInstall = install;
+let installOutput = "";
+for (const [source, target] of [
+  [install.stdout, process.stdout],
+  [install.stderr, process.stderr],
+] as const) {
+  source.setEncoding("utf8");
+  source.on("data", (chunk: string) => {
+    target.write(chunk);
+    installOutput = (installOutput + chunk).slice(-8_000);
+  });
+}
+const installStatus = await new Promise<number | null>((resolve, reject) => {
+  install.on("error", reject);
+  install.on("close", resolve);
+});
+activeInstall = undefined;
+if (installStatus !== 0 || cancelSignal) {
+  failureDetail = cancelSignal
+    ? `Cancelled by ${cancelSignal}.`
+    : installOutput.trimEnd().split("\n").slice(-30).join("\n");
+  process.exit(installStatus || 1);
 }
 
+// pnpm cannot clone or hardlink across filesystems, so a store on another
+// device silently turns every worktree install into a full copy.
+const modulesManifest = NodePath.join(worktree, "node_modules", ".modules.yaml");
+const storeDir: unknown = NodeFS.existsSync(modulesManifest)
+  ? JSON.parse(NodeFS.readFileSync(modulesManifest, "utf8")).storeDir
+  : undefined;
+if (
+  typeof storeDir === "string" &&
+  NodeFS.statSync(storeDir).dev !== NodeFS.statSync(NodePath.join(worktree, "node_modules")).dev
+) {
+  process.stderr.write(
+    [
+      "",
+      "WARNING: the pnpm store is on a different filesystem than this worktree.",
+      `  store:    ${storeDir}`,
+      `  worktree: ${worktree}`,
+      "pnpm cannot hardlink or clone across filesystems, so it copied every package into node_modules.",
+      "Fix: put the store on the worktree's filesystem, for example:",
+      `  pnpm config set store-dir ${JSON.stringify(NodePath.join(NodePath.dirname(worktree), ".pnpm-store"))} --global`,
+      "",
+      "",
+    ].join("\n"),
+  );
+}
+
+// Worktrees link main-checkout env files; replace only symlinks so real files always survive.
+// Isolated workspaces name themselves as the project root, so there is nothing to link.
 const projectRoot = process.env.T3CODE_PROJECT_ROOT;
-if (projectRoot && NodeFS.existsSync(projectRoot)) {
-  const sourceRoot = NodeFS.realpathSync(projectRoot);
-  const workspaceRoot = NodeFS.realpathSync(process.cwd());
-  // Isolated workspaces use their own project root and have no source checkout mount.
-  if (sourceRoot !== workspaceRoot) {
-    for (const relative of [".env", NodePath.join("infra", "relay", ".env")]) {
-      const source = NodePath.join(sourceRoot, relative);
-      const sourceStat = NodeFS.lstatSync(source, { throwIfNoEntry: false });
-      if (!sourceStat) continue;
-      if (!sourceStat.isFile()) {
-        process.stderr.write(`Skipping ${relative}: ${source} is not a regular file.\n`);
-        continue;
-      }
-      // Only a symlink is ever replaced, so a real env file in the workspace is never deleted.
-      const target = NodePath.join(workspaceRoot, relative);
-      const existing = NodeFS.lstatSync(target, { throwIfNoEntry: false });
-      if (existing && !existing.isSymbolicLink()) continue;
-      if (existing) NodeFS.rmSync(target);
-      NodeFS.symlinkSync(source, target, "file");
+if (
+  projectRoot &&
+  NodeFS.existsSync(projectRoot) &&
+  NodeFS.realpathSync(projectRoot) !== NodeFS.realpathSync(worktree)
+) {
+  for (const file of ENV_FILES) {
+    const source = NodePath.join(projectRoot, file);
+    const sourceStat = NodeFS.lstatSync(source, { throwIfNoEntry: false });
+    if (!sourceStat) continue;
+    if (!sourceStat.isFile()) {
+      process.stderr.write(`Skipping ${file}: ${source} is not a regular file.\n`);
+      continue;
     }
+    const target = NodePath.join(worktree, file);
+    const existing = NodeFS.lstatSync(target, { throwIfNoEntry: false });
+    if (existing && !existing.isSymbolicLink()) continue;
+    if (existing) NodeFS.rmSync(target);
+    NodeFS.symlinkSync(source, target, "file");
   }
 }

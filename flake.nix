@@ -6,6 +6,9 @@
     # T3's jj support needs jj 0.46 or newer, which the main pin predates. Drop
     # this once `nixpkgs` is updated past it.
     nixpkgs-jj.url = "github:NixOS/nixpkgs/6510408d147d8c5e6d76043e899e9251756f6a75";
+    # Node, pnpm and nixpkgs' pnpm fetcher come from here: the root package.json pins Node
+    # exactly and pnpm 12, which the main pin predates. Drop once `nixpkgs` ships both.
+    nixpkgs-node.url = "github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504";
     nix-infra-modules = {
       url = "github:HaukeSchnau/nix-infra-modules/c08469c9ed76a0e2223cb6bf1ac624580be6f98c";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -21,6 +24,7 @@
       self,
       nixpkgs,
       nixpkgs-jj,
+      nixpkgs-node,
       nix-infra-modules,
       devenv,
     }:
@@ -46,24 +50,33 @@
           overlays = [ (_final: _prev: { inherit (nixpkgs-jj.legacyPackages.${system}) jujutsu; }) ];
         };
 
-      mkPnpm = import ./nix/pnpm.nix;
+      mkNodeToolchain =
+        system:
+        let
+          nodePkgs = nixpkgs-node.legacyPackages.${system};
+        in
+        {
+          nodejs = nodePkgs.nodejs_26;
+          pnpm = import ./nix/pnpm.nix nodePkgs;
+          inherit (nodePkgs) fetchPnpmDeps pnpmConfigHook node-gyp;
+        };
 
       mkT3CodePackageWith =
         {
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-x0sDTGPwTxgLRPvEM/nDFObYs2asuKFJtYS7Re2ooPs=";
-            server = "sha256-LtnEQelfyQnm/Q6ybxUgXZEAoDLA1HL6AQQAAcxTTOQ=";
-            runtime = "sha256-LtnEQelfyQnm/Q6ybxUgXZEAoDLA1HL6AQQAAcxTTOQ=";
+            web = "sha256-794uwh6tOc4SYfTfLWLN5lr68/iu7nBEgn2whuFipgw=";
+            server = "sha256-0g4+b3vrUy3m2ZxhOO1Wr8qfnyXJCZdCUlvF7FbejxM=";
+            runtime = "sha256-0g4+b3vrUy3m2ZxhOO1Wr8qfnyXJCZdCUlvF7FbejxM=";
           },
         }:
         let
-          nodejs = pkgs.nodejs_24;
-          pnpm = mkPnpm pkgs nodejs;
-          installFlags = [ "--ignore-scripts" ];
+          toolchain = mkNodeToolchain pkgs.stdenv.hostPlatform.system;
+          inherit (toolchain) nodejs pnpm;
 
           manifestFiles = lib.fileset.unions [
+            ./.pnpmfile.cjs
             ./package.json
             ./pnpm-deploy-lock.yaml
             ./pnpm-lock.yaml
@@ -147,14 +160,14 @@
               hash,
               prePnpmInstall ? "",
             }:
-            pkgs.fetchPnpmDeps {
+            toolchain.fetchPnpmDeps {
               inherit
                 pname
                 src
                 pnpm
                 hash
                 ;
-              # pnpm 11 checks registry metadata for every locked package. On a loaded
+              # pnpm checks registry metadata for every locked package. On a loaded
               # builder one request can exceed the 60-second default and fail the fetch.
               prePnpmInstall = ''
                 export pnpm_config_fetch_timeout=300000
@@ -163,7 +176,6 @@
               version = packageJson.version;
               fetcherVersion = 4;
               pnpmWorkspaces = workspaces;
-              pnpmInstallFlags = installFlags;
             };
 
           webPnpmDeps = mkPnpmDeps {
@@ -194,7 +206,7 @@
 
           commonNativeBuildInputs = [
             nodejs
-            pkgs.pnpmConfigHook
+            toolchain.pnpmConfigHook
             pnpm
           ];
           commonEnv = {
@@ -210,7 +222,6 @@
             src = webSource;
             pnpmDeps = webPnpmDeps;
             pnpmWorkspaces = [ "@t3tools/web..." ];
-            pnpmInstallFlags = installFlags;
             nativeBuildInputs = commonNativeBuildInputs;
             env = commonEnv // {
               T3CODE_WEB_SOURCEMAP = "false";
@@ -235,7 +246,6 @@
             src = serverSource;
             pnpmDeps = serverPnpmDeps;
             pnpmWorkspaces = [ "t3..." ];
-            pnpmInstallFlags = installFlags;
             nativeBuildInputs = commonNativeBuildInputs;
             env = commonEnv // {
               T3CODE_SERVER_SOURCEMAP = "false";
@@ -260,10 +270,11 @@
             src = manifestSource;
             pnpmDeps = runtimePnpmDeps;
             pnpmWorkspaces = [ "t3" ];
-            pnpmInstallFlags = installFlags;
             nativeBuildInputs = [
               nodejs
               pnpm
+              # pnpm 12 no longer bundles node-gyp, and the production deploy lacks the workspace's.
+              toolchain.node-gyp
               pkgs.pkg-config
               pkgs.python3
               pkgs.sqlite
@@ -479,8 +490,7 @@
         system:
         let
           pkgs = mkPkgs system;
-          nodejs = pkgs.nodejs_24;
-          pnpm = mkPnpm pkgs nodejs;
+          inherit (mkNodeToolchain system) nodejs pnpm;
           ciPackages = [
             nodejs
             pnpm

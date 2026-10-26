@@ -49,7 +49,7 @@ Upstream-owned files with hooks:
   `attachment.cleanup` effect then removes them.
 - `packages/client-runtime/src/work-log/presentation.ts` adds `workEntryObservedImage`.
   `resolveViewedImageAsset` uses the copy when there is one.
-- `apps/web/src/components/chat/MessagesTimeline.tsx` passes the copy to `resolveViewedImageAsset`.
+- `apps/web/src/components/chat/TimelineWorkEntryRow.tsx` passes the copy to `resolveViewedImageAsset`.
 - `apps/mobile/src/features/threads/thread-work-log.tsx` and `ThreadFeed.tsx` pass the copy through
   the viewed-image renderer.
 

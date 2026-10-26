@@ -26,9 +26,11 @@ five times, about 5, 10, 20, 40 and 80 seconds apart, across server restarts.
   run it continues and makes the dispatch idempotent. The attempt number is the length of that chain
   of overloaded runs, and the wait counts from the failed run's `completedAt`. A retry with agent
   output, or any continuation the user started, begins a new sequence. Other errors never match.
-- Web and desktop: `ChatView.tsx` prefers the Codex resumable run, sends the empty message, passes
-  `canPauseTurn` through `ChatComposer.tsx` to `ComposerPrimaryActions.tsx`, and gives
-  `ThreadErrorBanner.tsx` the retry line. Mobile: `useCodexTurnContinuation.ts` feeds
+- Web and desktop: `ChatView.tsx` prefers the Codex resumable run, `chat/useComposerResume.ts`
+  sends the empty message, `canPauseTurn` goes through `ChatComposer.tsx` and
+  `ComposerFooterPrimaryActions` (`chat/ComposerFooterControls.tsx`) to
+  `ComposerPrimaryActions.tsx`, and `chat/ChatBannerLane.tsx` gives `ThreadErrorBanner.tsx` the
+  retry line. Mobile: `useCodexTurnContinuation.ts` feeds
   `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx` (with `CodexOverloadRetryCard.tsx`) and
   `ThreadComposer.tsx`. `AppSymbol.tsx` maps the pause and filled play icons for Android.
 - Codex usage-limit stops resume without a message too. The automatic resume at reset
@@ -45,7 +47,8 @@ five times, about 5, 10, 20, 40 and 80 seconds apart, across server restarts.
 - `CodexAdapterV2.ts`: the empty-input condition in `startTurn`.
 - `runtimeLayer.ts`: the worker beside `UsageLimitRecoveryWorker`.
 - `packages/shared/package.json`: the subpath export.
-- Web: `ChatView.tsx`, `ChatComposer.tsx`, `ComposerPrimaryActions.tsx`, `ThreadErrorBanner.tsx`.
+- Web: `ChatView.tsx`, `useComposerResume.ts`, `ChatComposer.tsx`, `ComposerFooterControls.tsx`,
+  `ComposerPrimaryActions.tsx`, `ChatBannerLane.tsx`, `ThreadErrorBanner.tsx`.
 - Mobile: `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx`, `ThreadComposer.tsx`, `AppSymbol.tsx`.
 
 ## Removal

@@ -36,7 +36,7 @@ repeatable through `agent-device` and a one-time pairing URL.
   into the same flow; they win over the environment variables. Drop the environment fallback once
   upstream reads a development pairing URL at build time.
 - Prefer snapshots and Metro logs as primary physical-device verification. `agent-device network
-dump` can be empty unless log capture has been explicitly started.
+  dump` can be empty unless log capture has been explicitly started.
 
 ## Upstream touch points
 

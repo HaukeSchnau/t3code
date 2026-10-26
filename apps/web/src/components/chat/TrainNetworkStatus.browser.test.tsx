@@ -1,7 +1,7 @@
 import type { EnvironmentConnectionFreshnessProjection } from "@t3tools/client-runtime/state/connection-freshness";
-import { act, type ReactElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { act, fakeTimers, render, type Screen } from "../../../test/render";
 
 import { TrainNetworkStatus } from "./TrainNetworkStatus";
 import { NETWORK_DEGRADATION_HOLD_MS, NETWORK_RECOVERY_HOLD_MS } from "./trainNetworkExperience";
@@ -39,70 +39,57 @@ const synchronizing: EnvironmentConnectionFreshnessProjection = {
   snapshot: { ...cachedSnapshot, status: "synchronizing" },
 };
 
-let container: HTMLDivElement;
-let root: Root;
-
-const render = (element: ReactElement) => act(async () => root.render(element));
-const visibleStatus = () =>
-  container.querySelector("[data-train-network-status]")?.getAttribute("data-train-network-status");
-
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.runOnlyPendingTimers();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+const visibleStatus = (screen: Screen) =>
+  screen.container
+    .querySelector("[data-train-network-status]")
+    ?.getAttribute("data-train-network-status");
+const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 
 describe("TrainNetworkStatus mounted timing", () => {
   it("mounts degradation only after the 250ms anti-flicker hold", async () => {
-    await render(<TrainNetworkStatus projection={offline} />);
+    using _timers = fakeTimers();
+    await using screen = await render(<TrainNetworkStatus projection={offline} />);
 
-    expect(visibleStatus()).toBeUndefined();
-    await act(async () => vi.advanceTimersByTime(NETWORK_DEGRADATION_HOLD_MS - 1));
-    expect(visibleStatus()).toBeUndefined();
-    await act(async () => vi.advanceTimersByTime(1));
-    expect(visibleStatus()).toBe("degraded");
+    expect(visibleStatus(screen)).toBeUndefined();
+    await advance(NETWORK_DEGRADATION_HOLD_MS - 1);
+    expect(visibleStatus(screen)).toBeUndefined();
+    await advance(1);
+    expect(visibleStatus(screen)).toBe("degraded");
   });
 
   it("mounts recovery immediately and keeps it visible for exactly 500ms", async () => {
-    await render(<TrainNetworkStatus projection={offline} />);
-    await act(async () => vi.advanceTimersByTime(NETWORK_DEGRADATION_HOLD_MS));
-    expect(visibleStatus()).toBe("degraded");
+    using _timers = fakeTimers();
+    await using screen = await render(<TrainNetworkStatus projection={offline} />);
+    await advance(NETWORK_DEGRADATION_HOLD_MS);
+    expect(visibleStatus(screen)).toBe("degraded");
 
-    await render(<TrainNetworkStatus projection={live} />);
-    expect(visibleStatus()).toBe("recovered");
-    await act(async () => vi.advanceTimersByTime(NETWORK_RECOVERY_HOLD_MS - 1));
-    expect(visibleStatus()).toBe("recovered");
-    await act(async () => vi.advanceTimersByTime(1));
-    expect(visibleStatus()).toBeUndefined();
+    await screen.rerender(<TrainNetworkStatus projection={live} />);
+    expect(visibleStatus(screen)).toBe("recovered");
+    await advance(NETWORK_RECOVERY_HOLD_MS - 1);
+    expect(visibleStatus(screen)).toBe("recovered");
+    await advance(1);
+    expect(visibleStatus(screen)).toBeUndefined();
   });
 
   it("clears reconnecting quietly until the cached snapshot becomes live", async () => {
-    await render(<TrainNetworkStatus projection={offline} />);
-    await act(async () => vi.advanceTimersByTime(NETWORK_DEGRADATION_HOLD_MS));
-    expect(visibleStatus()).toBe("degraded");
+    using _timers = fakeTimers();
+    await using screen = await render(<TrainNetworkStatus projection={offline} />);
+    await advance(NETWORK_DEGRADATION_HOLD_MS);
+    expect(visibleStatus(screen)).toBe("degraded");
 
-    await render(<TrainNetworkStatus projection={synchronizing} />);
-    expect(visibleStatus()).toBeUndefined();
+    await screen.rerender(<TrainNetworkStatus projection={synchronizing} />);
+    expect(visibleStatus(screen)).toBeUndefined();
 
-    await render(<TrainNetworkStatus projection={live} />);
-    expect(visibleStatus()).toBe("recovered");
+    await screen.rerender(<TrainNetworkStatus projection={live} />);
+    expect(visibleStatus(screen)).toBe("recovered");
   });
 
   it("cleans pending hold timers when unmounted", async () => {
-    await render(<TrainNetworkStatus projection={offline} />);
+    using _timers = fakeTimers();
+    await using screen = await render(<TrainNetworkStatus projection={offline} />);
     const pendingWhileMounted = vi.getTimerCount();
     expect(pendingWhileMounted).toBeGreaterThan(0);
-    await render(<></>);
+    await screen.rerender(<></>);
     expect(vi.getTimerCount()).toBe(pendingWhileMounted - 1);
   });
 });

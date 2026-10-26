@@ -1,16 +1,7 @@
 /**
- * Turn boundaries in jj working copies. When a turn ends, T3 commits the files
- * that turn changed into a change of its own ("sealing"), so every turn leaves
- * a change behind even when the agent never commits. An agent that commits its
- * own work leaves nothing to seal. Changes carry T3-Thread and T3-Turn
- * trailers; reverting a thread abandons the changes it made after the
- * checkpoint and restores its files, leaving other threads' work in place.
- *
- * Seals run when the agent is idle, after the turn. Several threads may share
- * one checkout, so only the files attributed to the ending turn are sealed.
- * See JjWorkingCopyState for attribution.
- *
- * @module JjTurnService
+ * Turn boundaries in jj working copies: sealing each turn's files into its own change, and
+ * reverting a thread (patches/jujutsu.md). Several threads may share one checkout, so a seal
+ * takes only the files JjWorkingCopyState attributes to the ending turn.
  */
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -393,12 +384,9 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Changes the agent made during the turn. A change that existed when the
-   * turn started is not the agent's, except the turn's own `@`, which the
-   * agent's commands describe or commit in place. Neither is a change T3
-   * recorded or tagged for another thread. When another thread's turn shared
-   * the working copy, only commits with this thread's trailer are provably
-   * the agent's.
+   * Changes that existed at turn start are not the agent's, except the turn's own `@`, which its
+   * commands describe or commit in place; neither are changes T3 recorded for another thread. In
+   * a shared working copy, only commits with this thread's trailer are provably the agent's.
    */
   const agentChanges = Effect.fn("JjTurnService.agentChanges")(
     function* (root: string, run: ActiveRun, state: WorkingCopyState) {

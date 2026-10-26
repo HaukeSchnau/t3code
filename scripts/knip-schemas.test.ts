@@ -10,7 +10,7 @@ const require = NodeModule.createRequire(import.meta.url);
 const cli = NodePath.join(NodePath.dirname(require.resolve("knip")), "cli.js");
 const preprocessor = NodePath.join(import.meta.dirname, "knip-schemas.ts");
 
-// Two real Knip runs take over a minute when CI shares its host with other work.
+// oxlint-disable-next-line t3code/no-test-timeout-or-unreasoned-skip -- two real Knip CLI runs take over a minute on a shared CI host, not a hidden wait.
 it("allows types and schemas through the real Knip CLI without hiding runtime or file findings", () => {
   // Keeping the disposable project here gives it the same Effect installation as the scripts.
   const cwd = NodeFS.mkdtempSync(NodePath.join(import.meta.dirname, ".knip-test-"));

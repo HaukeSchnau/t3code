@@ -16,6 +16,7 @@ import {
 } from "./AgentDeviceTarget.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+const decodeArgs = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 describe("host-bound agent commands", () => {
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
@@ -136,11 +137,7 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
         const result = yield* Effect.promise(() =>
           exec(process.execPath, [path.join(shim, "agent-device-launcher.mjs"), ...args]),
         );
-        expect(
-          yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String)))(
-            result.stdout,
-          ),
-        ).toEqual(args);
+        expect(yield* decodeArgs(result.stdout)).toEqual(args);
       }
       for (const args of [
         ["snapshot"],

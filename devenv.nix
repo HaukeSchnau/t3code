@@ -1,7 +1,8 @@
 { pkgs, inputs, ... }:
 let
-  nodejs = pkgs.nodejs_24;
-  pnpm = (import ./nix/pnpm.nix) pkgs nodejs;
+  nodePkgs = inputs.nixpkgs-node.legacyPackages.${pkgs.stdenv.system};
+  nodejs = nodePkgs.nodejs_26;
+  pnpm = import ./nix/pnpm.nix nodePkgs;
 in
 {
   imports = [

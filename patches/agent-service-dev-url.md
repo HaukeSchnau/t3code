@@ -23,6 +23,8 @@ servers.
   wiring and `apps/web/vite.config.ts`; forwarding the flags would also send them to the backend task.
 - The server CLI accepts `--strictPort` as a no-op so Vite-style strict-port args remain harmless in local
   development command paths.
+- `apps/server/src/http.ts` `isLoopbackHostname` treats `*.localhost` as loopback, so a Portless origin
+  gets the dev-server redirect. The fork exports the function for its test in `http.test.ts`.
 
 ## Requirements
 

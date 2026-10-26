@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { environmentCatalog } from "~/connection/catalog";
 import { cn } from "~/lib/utils";
 import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { environmentShell } from "~/state/shell";
 import { Button } from "../ui/button";
 import {
@@ -36,14 +37,23 @@ interface TrainNetworkStatusProps {
 export function EnvironmentNetworkStatus({
   environmentId,
   ...props
-}: Omit<TrainNetworkStatusProps, "projection"> & { readonly environmentId: EnvironmentId }) {
+}: Omit<TrainNetworkStatusProps, "projection" | "onReconnect"> & {
+  readonly environmentId: EnvironmentId;
+}) {
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow);
   const connection = useEnvironmentQuery(environmentCatalog.stateAtom(environmentId)).data;
   const shell = useEnvironmentQuery(environmentShell.stateAtom(environmentId)).data;
   const projection =
     connection !== null && shell !== null
       ? projectEnvironmentConnectionFreshness(connection, shell)
       : null;
-  return <TrainNetworkStatus projection={projection} {...props} />;
+  return (
+    <TrainNetworkStatus
+      projection={projection}
+      onReconnect={() => void retryEnvironment(environmentId)}
+      {...props}
+    />
+  );
 }
 
 export function TrainNetworkStatus({
@@ -62,6 +72,7 @@ export function TrainNetworkStatus({
   );
   const previouslyDegradedRef = useRef(false);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- The anti-flicker holds are timers that follow connection changes.
   useEffect(() => {
     if (immediate) {
       // oxlint-disable-next-line react/set-state-in-effect -- The hold timers follow connection changes the supervisor reports.
@@ -95,6 +106,7 @@ export function TrainNetworkStatus({
     return () => window.clearTimeout(timeout);
   }, [fullyRecovered, immediate, nextView]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- The retry countdown ticks with the wall clock.
   useEffect(() => {
     if (nextView?.retryRemainingMs === null || nextView?.retryRemainingMs === undefined) return;
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);

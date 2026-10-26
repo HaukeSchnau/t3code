@@ -29,14 +29,10 @@ export class MobileSecureStorage extends Context.Service<
 >()("@t3tools/mobile/persistence/MobileSecureStorage") {}
 
 /**
- * The iOS keychain service for everything this app stores. Its items stay readable from the
- * first unlock after a reboot, so the native notification Reply handler can read the saved
- * connections while the phone is locked. Keep in sync with the service name in
- * modules/t3-agent-notifications/ios/EnvironmentConnections.swift.
- *
- * Earlier builds used expo-secure-store's defaults, service "app" and WHEN_UNLOCKED. Re-saving
- * can't migrate those items, because expo-secure-store's update path keeps the old protection
- * class, so they move to the new service on first read instead.
+ * Readable from the first unlock after a reboot, so the native Reply handler can read saved
+ * connections while the phone is locked (patches/notification-replies.md). Keep in sync with
+ * modules/t3-agent-notifications/ios/EnvironmentConnections.swift. Items from earlier builds
+ * (service "app", WHEN_UNLOCKED) move here on first read; re-saving keeps the old protection class.
  */
 export const IOS_KEYCHAIN_SERVICE = "t3code.background";
 // Android ignores both options, and its existing storage stays as it is. Upstream's tests import this

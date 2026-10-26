@@ -1,13 +1,7 @@
 /**
- * Runs jj for T3. Every call names the workspace root with `-R` and spawns
- * from the server's cwd, so an isolated project's environment never routes it.
- * Output settings from the user's config are pinned off.
- *
- * jj has no stable API; templates are the contract. Callers always pass
- * explicit `-T` templates and parse stdout only, because jj writes warnings
- * and progress to stderr.
- *
- * @module JjCli
+ * Every call names the workspace root with `-R` and spawns from the server's cwd, so an isolated
+ * project's environment never routes it. jj has no stable API: callers pass explicit `-T`
+ * templates and parse stdout only, because jj writes warnings and progress to stderr.
  */
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -186,10 +180,8 @@ const make = Effect.gen(function* () {
     );
 
   /**
-   * Another workspace rewrote this one's `@` or an ancestor. `update-stale`
-   * snapshots the files on disk into a divergent copy of `@` and checks out
-   * the rewritten `@` without the edits made since the last snapshot. jj
-   * rebases the copy beside `@`, so its tree is the up-to-date one: `@` takes
+   * `update-stale` moves unsnapshotted edits into a divergent copy of `@` and checks out the
+   * rewritten `@` without them. jj rebases the copy beside `@`, so its tree is current: `@` takes
    * it and the copy goes. A copy left on other parents is squashed instead.
    */
   const updateStale = Effect.fn("JjCli.updateStale")(function* (input: JjRunInput) {

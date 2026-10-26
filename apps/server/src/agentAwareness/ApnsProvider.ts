@@ -167,11 +167,14 @@ function responseHeader(headers: NodeHttp2.IncomingHttpHeaders, name: string): s
   return typeof value === "string" ? value : null;
 }
 
+const decodeApnsReason = Schema.decodeOption(
+  Schema.fromJsonString(Schema.Struct({ reason: Schema.optional(Schema.String) })),
+);
+const isApnsProviderConfigurationError = Schema.is(ApnsProviderConfigurationError);
+
 function parseApnsReason(body: string): string | null {
   if (!body.trim()) return null;
-  return Schema.decodeUnknownOption(
-    Schema.fromJsonString(Schema.Struct({ reason: Schema.optional(Schema.String) })),
-  )(body).pipe(
+  return decodeApnsReason(body).pipe(
     Option.map((decoded) => decoded.reason ?? body),
     Option.getOrElse(() => body),
   );
@@ -297,7 +300,7 @@ export const make = Effect.gen(function* () {
   const configured = yield* Effect.try({
     try: () => resolveApnsProviderConfiguration(process.env),
     catch: (cause) =>
-      Schema.is(ApnsProviderConfigurationError)(cause)
+      isApnsProviderConfigurationError(cause)
         ? cause
         : new ApnsProviderConfigurationError({ message: String(cause) }),
   });

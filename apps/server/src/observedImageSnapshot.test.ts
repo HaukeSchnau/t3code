@@ -21,6 +21,9 @@ import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 
+const encodeProjectRegistration = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Struct({ root: Schema.String })),
+);
 const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-observed-image-test-",
 });
@@ -143,9 +146,7 @@ describe("snapshotObservedImage", () => {
       yield* fileSystem.makeDirectory(path.join(state, "projects"), { recursive: true });
       yield* fileSystem.writeFileString(
         path.join(state, "projects", `${id}.json`),
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Struct({ root: Schema.String })))({
-          root,
-        }),
+        yield* encodeProjectRegistration({ root }),
       );
       const scratch = path.join(state, "environments", id, "tmp");
       yield* fileSystem.makeDirectory(scratch, { recursive: true });

@@ -94,8 +94,11 @@ import Migration0088 from "./Migrations/063_DropUnusedV1Projections.ts";
 import Migration0089 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
 import Migration0090 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
 import Migration0091 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0092 from "./Migrations/067_WebhookDedupe.ts";
+import Migration0093 from "./Migrations/068_ShellStopRequestIndex.ts";
+import Migration0094 from "./Migrations/069_ThreadMessageSearch.ts";
 
-export const migrationEntries = [
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -180,7 +183,7 @@ export const migrationEntries = [
   [79, "RemoveRedundantProjectionIndexes", Migration0079],
   [80, "AgentWatches", Migration0080],
   [81, "SkillPackThreadSelections", Migration0081],
-  // Upstream ids 57-66.
+  // Upstream ids 57-69.
   [82, "ScheduledTaskWebhooks", Migration0082],
   [83, "WebhookRelayDeliveries", Migration0083],
   [84, "McpAppModelContext", Migration0084],
@@ -191,6 +194,9 @@ export const migrationEntries = [
   [89, "CanonicalizeThreadPullRequestLinks", Migration0089],
   [90, "CodexUsageNativeTurnIndex", Migration0090],
   [91, "RepairClientSettlementTimestamps", Migration0091],
+  [92, "WebhookDedupe", Migration0092],
+  [93, "ShellStopRequestIndex", Migration0093],
+  [94, "ThreadMessageSearch", Migration0094],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;
@@ -206,12 +212,7 @@ const makeMigrationLoader = (throughId?: number) =>
     ),
   );
 
-/**
- * Fail before migrating when the migrator would skip one of V2's own
- * migrations. It skips every id up to the highest recorded one, whatever name
- * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
- */
+// Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
 ) {

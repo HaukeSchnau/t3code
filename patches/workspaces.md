@@ -55,7 +55,7 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 ## Contract
 
 - `OrchestrationV2ThreadLaunchWorkspaceStrategy` gains `{ type: "workspace", baseRef?,
-startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The server also routes a
+  startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The server also routes a
   plain `worktree` launch on a jj, directory or isolated project to the same backends, so
   upstream clients and agents never create Git worktrees there.
 - `ExecutionEnvironmentCapabilities.managedWorkspaces = { isolated }` tells clients to offer
@@ -78,22 +78,27 @@ startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The serve
   for non-Git backends. `t3_thread_launch` takes the new strategy through the schema. The
   `workspace` sentences in `mcp/toolkits/project/tools.ts` and `mcp/toolkits/worktree/tools.ts`
   describe it to agents.
+- `packages/provider-core/src/server/orchestrationInstructions.ts`: one sentence in the
+  `t3_thread_launch` bullet points agents at `{"type":"workspace"}`.
 - client-runtime `operations/commands.ts`: `bootstrap.prepareWorkspace` and the conversation-only
   revert. `state/workspaces.ts` is fork-owned.
-- web `BranchToolbar.tsx`, `ChatView.tsx`, `session-logic.ts`,
+- web `BranchToolbar.tsx`, `ChatView.tsx`, `ChatView.logic.ts` (`planComposerTurn` returns
+  `shouldCreateWorktree`), `chat/useComposerSend.ts` (the `prepareWorkspace` bootstrap),
+  `session-logic.ts`,
   `settings/scheduledTasksSettings.logic.ts`; fork-owned `ManagedWorkspaceSelector.tsx` and
   `lib/managedWorkspaces.ts`.
-- mobile `Stack.tsx`, `NewTaskDraftScreen.tsx`, `new-task-flow-provider.tsx`,
-  `NewTaskContextPickerScreens.tsx` (exports its rows), `lib/projectThreadStartTurn.ts`,
-  `state/thread-outbox-model.ts`, `state/use-thread-outbox-drain.ts`,
+- mobile `Stack.tsx` (the `NewTaskWorkspace` root route), `layout/workspace-overlay-routes.ts`,
+  `NewTaskDraftScreen.tsx`, `new-task-flow-provider.tsx`,
+  `NewTaskContextPickerScreens.tsx` (exports `PickerSurface` and `ToggleRow`),
+  `lib/projectThreadStartTurn.ts`, `state/thread-outbox-model.ts`, `state/use-thread-outbox-drain.ts`,
   `settings/scheduledTaskDraft.ts`; fork-owned `NewTaskWorkspacePickerRouteScreen.tsx` and
   `managed-workspaces.ts`.
 - Test harnesses of `ThreadLaunchService` and `WorktreeMcpService` provide a mock layer.
 
 ## Not carried over
 
-- The CLI flags `t3 thread create --worktree --workspace-profile` and `--workspace ID`; v2 has no
-  `t3 thread` command.
+- The CLI flags `--workspace-profile` and `--workspace ID`. Upstream's `t3 thread start` has only
+  `--worktree`, which the server turns into a managed workspace where it would for an agent.
 - jj workspaces no thread ever used are not listed in the pickers.
 - Mobile keeps the profile choice for the app session only.
 - Multi-model sends stay Git-only, as upstream; on isolated hosts the server still routes them

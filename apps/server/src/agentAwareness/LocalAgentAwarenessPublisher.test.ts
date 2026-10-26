@@ -10,7 +10,6 @@ import type { RelayAgentActivityState } from "@t3tools/contracts/relay";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -85,18 +84,16 @@ const makePublisher = Effect.gen(function* () {
         }),
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>
-            Effect.succeed(
-              Option.some({
-                id: PROJECT_ID,
-                title: "Project",
-                workspaceRoot: "/workspace",
-                defaultModelSelection: null,
-                scripts: [],
-                createdAt: NOW,
-                updatedAt: NOW,
-                deletedAt: null,
-              }),
-            ),
+            Effect.succeedSome({
+              id: PROJECT_ID,
+              title: "Project",
+              workspaceRoot: "/workspace",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: NOW,
+              updatedAt: NOW,
+              deletedAt: null,
+            }),
         }),
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getEnvironmentId: Effect.succeed(EnvironmentId.make("environment")),
@@ -166,5 +163,55 @@ it.effect("keeps completions from before startup quiet", () =>
     yield* TestClock.adjust("5 seconds");
     yield* publisher.drain;
     assert.equal(published.length, 0);
+  }),
+);
+
+it.effect("drops a completion when the continuation starts within five seconds", () =>
+  Effect.gen(function* () {
+    const { publisher, currentShell, published } = yield* makePublisher;
+    yield* publisher.publishThread(THREAD_ID);
+    yield* Ref.set(
+      currentShell,
+      shell({
+        status: "completed",
+        latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+      }),
+    );
+    yield* publisher.publishThread(THREAD_ID);
+
+    yield* Ref.set(currentShell, shell());
+    yield* publisher.publishThread(THREAD_ID);
+    yield* TestClock.adjust("5 seconds");
+    yield* publisher.drain;
+    assert.deepEqual(
+      published.map((state) => state?.phase),
+      ["running"],
+    );
+  }),
+);
+
+it.effect("alerts a held completion that is settled during the hold, then clears it", () =>
+  Effect.gen(function* () {
+    const { publisher, currentShell, published } = yield* makePublisher;
+    yield* publisher.publishThread(THREAD_ID);
+    const completed = shell({
+      status: "completed",
+      latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+    });
+    yield* Ref.set(currentShell, completed);
+    yield* publisher.publishThread(THREAD_ID);
+
+    yield* Ref.set(currentShell, { ...completed, settledOverride: "settled" });
+    yield* publisher.publishThread(THREAD_ID);
+    yield* TestClock.adjust("5 seconds");
+    yield* publisher.drain;
+    assert.deepEqual(
+      published.map((state) => state?.phase ?? null),
+      ["running", "completed"],
+    );
+
+    yield* TestClock.adjust("5 seconds");
+    yield* publisher.drain;
+    assert.deepEqual(published.at(-1), null);
   }),
 );
