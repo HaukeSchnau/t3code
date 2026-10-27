@@ -11,7 +11,7 @@ import { resolveProjectExecution } from "../project/ProjectExecution.ts";
  * adapters that run inside an agent scope route their own launch and spawn it
  * without a cwd, so the launcher stays inside the scope.
  */
-export const make = (
+const make = (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   environment: NodeJS.ProcessEnv,
 ): ChildProcessSpawner.ChildProcessSpawner["Service"] =>

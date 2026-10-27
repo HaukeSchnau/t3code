@@ -37,7 +37,12 @@ export default mergeConfig(
       fsModuleCache: true,
       projects: [
         { extends: true, test: { name: "isolated", include: isolated } },
-        { extends: true, test: { name: "shared", exclude: isolated, isolate: false } },
+        // Vitest groups projects by `groupOrder` and rejects a group whose projects' maxWorkers
+        // differ, as one-worker `shared` and other packages' projects do in a repo-root run.
+        {
+          extends: true,
+          test: { name: "shared", exclude: isolated, isolate: false, sequence: { groupOrder: 1 } },
+        },
       ],
     },
   }),

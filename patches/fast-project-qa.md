@@ -3,10 +3,8 @@
 ## Fork requirement
 
 Changes pushed to the fork must reach the release gate within a few minutes on Calder, the fleet's
-self-hosted CI. CI must still run formatting and lint (`vp check`), TypeScript checks, tests,
-release smoke, and the fork lockfile check. Calder does not run upstream's knip, generated GraphQL
-drift, desktop preload verification, Rust or mobile native lint jobs; `vp run check:changed` runs
-knip locally.
+self-hosted CI. CI must still run every check upstream's GitHub CI (`.github/workflows/ci.yml`) runs,
+plus the fork lockfile checks.
 
 ## Implementation
 
@@ -43,9 +41,23 @@ knip locally.
 - Server-test temporary files live below T3 Code's persistent CI cache. The worker's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `.calder/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
-  seven typecheck groups, a test step for each package with a sizeable suite, one for the small
-  packages, one for the repository scripts, the release smoke, and the fork and deploy lockfile
-  checks.
+  `knip:check`, the generated GraphQL drift checks (`graphql`), `build:desktop` with the preload
+  verifier (`desktop-build`), `cargo fmt --check` and `cargo test` of the three Rust crates upstream
+  checks (`rust`), `lint:mobile`, the `.github/scripts` tests, upstream's PR-asset rejection, seven
+  typecheck groups, a test step for each package with a sizeable suite, one for the small packages,
+  one for the repository scripts, the release smoke, and the fork and deploy lockfile checks.
+- Upstream's `changes` job skips jobs a change cannot affect; Calder reuses a step whose inputs are
+  unchanged instead. Knip reads the whole repository and runs on every change. Knip loads the mobile Metro
+  config and `desktop-build` runs the web license plugin; both write license notices that download
+  SPDX texts, and PR workers have no network, so these two steps first copy the flake's fixed-output
+  SPDX set (`nix/spdx.nix`, `$T3CODE_SPDX_NOTICES` in `.#ci`) into the notice cache. `desktop-build` reads
+  the web, server and desktop packages and what they depend on. `graphql`, `rust`, `lint-mobile` and
+  `github-scripts` read only their generator inputs, crates, native sources and workflow scripts.
+- `rust` and `lint-mobile` run in `.#ci-native`, which adds Rust, SwiftLint, ktlint and detekt to `.#ci`,
+  so the other steps' workers don't fetch Rust and a JDK. Upstream lints the native sources on macOS;
+  Calder lints them on Linux, where nixpkgs' SwiftLint has no SourceKit and skips the rules that need
+  it (`statement_position` in the current config). `desktop-build` builds the bundles on Linux;
+  packaging and signing stay with `desktop-package` on the Apple builder.
 - The server, web, mobile, desktop, client-runtime and shared suites run file by file (Calder's `each`
   over `Files.imports`). A test file runs again only when it, something it imports or its package's
   other files changed, and Calder splits the files that run across jobs by their recorded durations.
@@ -67,7 +79,10 @@ knip locally.
   or leak worker state are listed in `apps/web/vitest.config.ts` and run in a process each
   (`unit-isolated`). On srv-2 the whole web suite went from 1167 to 551 CPU seconds with a warm
   cache, and a 40-file sample of small server files from 102 to 15. Upstream isolates every file;
-  when an upstream test fails only in a shared project, add it to the config's list.
+  when an upstream test fails only in a shared project, add it to the config's list. The server's
+  `shared` project has its own `sequence.groupOrder`: Vitest rejects a repo-root run (as in
+  `check:changed`) whose projects share a group but not a worker count, and `fileParallelism: false`
+  gives it one worker.
 - A test that reads repository files its imports don't show has a `// calder: always` comment line and
   runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook,
   `apps/mobile/src/dependency-graph.test.ts` the whole source tree, and the web and mobile

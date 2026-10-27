@@ -225,7 +225,7 @@ function decodeRows(rows: ReadonlyArray<unknown>): ReadonlyArray<DurableComposer
   );
 }
 
-export const indexedDbOutboxStore: CommandOutboxStore<DurableComposerCommand> = {
+const indexedDbOutboxStore: CommandOutboxStore<DurableComposerCommand> = {
   list: () =>
     transact<ReadonlyArray<DurableComposerEntry>>("readonly", (store, settle) => {
       const request = store.getAll();

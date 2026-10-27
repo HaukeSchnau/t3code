@@ -34,10 +34,11 @@ passkeys) don't apply to the fork.
 - The publish config is a generic feed from `T3CODE_DESKTOP_UPDATE_URL`. Upstream's
   `GITHUB_REPOSITORY` fallback is gone: Gitea Actions set it to `schnau/t3code`, and
   `github.com/schnau` is an unrelated account.
-- Desktop builds stage no Clerk passkey binaries, and the Clerk bridge runs without passkeys
-  (`DesktopClerk.ts`, `preload.ts`). Passkeys only serve T3 Connect sign-in. Signed builds skip
-  upstream's passkey entitlements unless `T3CODE_MACOS_PROVISIONING_PROFILE` is set, which no fork
-  pipeline does.
+- Desktop builds stage no Clerk passkey binaries; passkeys only serve T3 Connect sign-in. The Clerk
+  bridge keeps upstream's `passkeys: true` (`DesktopClerk.ts`, `preload.ts`), which loads the native
+  module only when sign-in uses a passkey, and upstream's preload verifier requires the exposure.
+  Signed builds skip upstream's passkey entitlements unless `T3CODE_MACOS_PROVISIONING_PROFILE` is
+  set, which no fork pipeline does.
 - `scripts/desktop-publish.ts` runs in the `desktop-publish` step and writes into
   `T3CODE_DESKTOP_UPDATES_DIR`. Infra's `modules/features/t3/mobile-updates.nix` serves it at
   `https://t3code-updates.schnau.dev/desktop/`, Tailnet only. The zip lands before

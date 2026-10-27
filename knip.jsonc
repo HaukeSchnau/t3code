@@ -25,6 +25,9 @@
       "entry": [
         // These fixture scripts are injected into a browser page by path.
         "fixtures/*/*.js",
+        // Calder runs these from .calder/ci.ts.
+        "ci-pnpm-install.ts",
+        "desktop-package.ts",
         "knip-schemas.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
@@ -58,7 +61,14 @@
       // The Vite+ web build prerequisite.
       // Native and disk-loaded provider packages stay external to the bundle; the
       // CLI archive and desktop sidecar stage them from this manifest.
-      "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web", "@napi-rs/keyring"],
+      // The fork's Nix packaging (d56c1b23c5) added `vite` when it dropped `@t3tools/web`, and
+      // nothing imports it. Once a Nix build passes without it, drop it here and from package.json.
+      "ignoreDependencies": [
+        "@effect/platform-node-shared",
+        "@t3tools/web",
+        "@napi-rs/keyring",
+        "vite",
+      ],
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.
@@ -100,6 +110,8 @@
         "index.ts!",
         "fingerprint.config.js",
         "plugins/*.cjs",
+        // @bacons/apple-targets loads each target's config by filename.
+        "targets/*/expo-target.config.js",
         "scripts/generate-device-stream.mts",
         "src/features/devices/device-stream.browser.ts!",
         "src/features/browser/preview-stream.browser.ts!",

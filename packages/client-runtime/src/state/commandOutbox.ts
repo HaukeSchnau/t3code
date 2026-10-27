@@ -94,7 +94,7 @@ export function classifyCommandDeliveryFailure(error: unknown): CommandOutboxFai
   };
 }
 
-export function commandOutboxRetryDelayMs(attempt: number): number {
+function commandOutboxRetryDelayMs(attempt: number): number {
   return Math.min(1_000 * 2 ** Math.max(0, attempt - 1), MAX_RETRY_DELAY_MS);
 }
 

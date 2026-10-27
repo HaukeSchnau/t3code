@@ -28,6 +28,8 @@ function runStep(script, stdout, exitCode = 0) {
     const result = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         'vp() { printf "%s\\n" "$FIXTURE_STDOUT"; return "$FIXTURE_EXIT"; }\n' +
           'curl() { printf \'{"id":"fixture-project"}\\n\'; }\n' +
