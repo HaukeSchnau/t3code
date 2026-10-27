@@ -1024,7 +1024,7 @@ it.effect("runs a Scratch scheduled task saved with a worktree in its own folder
   }).pipe(Effect.provide(harness.layer));
 });
 
-// jj, directory and isolated projects get managed workspaces (patches/workspaces.md).
+// jj and directory projects get managed workspaces (patches/workspaces.md).
 it.effect("binds a managed workspace instead of creating a Git worktree", () =>
   Effect.gen(function* () {
     const create = vi.fn((_input: ManagedWorkspaces.CreateManagedWorkspaceInput) =>

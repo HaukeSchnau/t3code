@@ -164,7 +164,7 @@ const make = Effect.gen(function* () {
     const project = yield* loadProject(scope, projection.thread.projectId);
     const projectCwd = project.workspaceRoot;
 
-    // jj, directory and isolated projects get managed workspaces (patches/workspaces.md).
+    // jj and directory projects get managed workspaces (patches/workspaces.md).
     if ((yield* managedWorkspaces.backendFor(projectCwd)) !== "git") {
       return yield* managedWorkspaceHandoff(
         {

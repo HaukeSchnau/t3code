@@ -303,7 +303,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    // jj, directory and isolated projects get managed workspaces (patches/workspaces.md).
+    // jj and directory projects get managed workspaces (patches/workspaces.md).
     const input: PreparationInput = {
       ...requestedInput,
       workspaceStrategy: yield* managedWorkspaces

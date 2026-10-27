@@ -40,8 +40,10 @@ continuing those threads must keep working. Upstream has no project execution ba
 This reduces accidental context discovery. It is not a security boundary.
 
 New isolated workspaces return through [Workspaces](workspaces.md). On a host with the
-launcher, every new workspace is an `agent-exec fork` registered here, so the routing above runs
-its providers, terminals and setup scripts inside it.
+launcher, every new jj or directory workspace is an `agent-exec fork` registered here, so the
+routing above runs its providers, terminals and setup scripts inside it. Git projects get
+upstream's worktrees; isolated workspaces that earlier versions forked from Git projects keep
+their registrations, so their threads still run and the workspaces can still be deleted.
 
 ## Not carried after the v2 merge
 

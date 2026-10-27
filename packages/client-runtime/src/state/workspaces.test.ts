@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   filterWorkspaceGroups,
   groupThreadsByWorkspace,
+  managedWorkspacesForProject,
   type WorkspaceThread,
 } from "./workspaces.ts";
 
@@ -45,5 +46,49 @@ describe("workspace groups", () => {
     expect(labels({ query: "", showSettled: false })).toEqual(["docs"]);
     expect(labels({ query: "", showSettled: true })).toEqual(["fix-login", "docs"]);
     expect(labels({ query: "LOGIN", showSettled: false })).toEqual(["fix-login"]);
+  });
+});
+
+describe("managedWorkspacesForProject", () => {
+  const capability = { isolated: true };
+  const config = {
+    environment: { capabilities: { managedWorkspaces: capability } },
+    scratchWorkspaceRoot: "/home/me/.t3/scratch",
+  };
+  const forProject = (
+    projectRoot: string,
+    status: { readonly kind?: "git" | "jj"; readonly isRepo: boolean } | undefined,
+  ) =>
+    managedWorkspacesForProject({
+      config,
+      projectRoot,
+      vcsKind: status?.kind,
+      isRepo: status?.isRepo,
+    });
+
+  it("leaves plain Git projects to upstream's worktree flow", () => {
+    expect(forProject("/code/app", { kind: "git", isRepo: true })).toBeNull();
+  });
+
+  it("offers managed workspaces for jj checkouts and folders without a repository", () => {
+    expect(forProject("/code/app", { kind: "jj", isRepo: true })).toBe(capability);
+    expect(forProject("/code/notes", { isRepo: false })).toBe(capability);
+  });
+
+  // Upstream's flow applies its base-branch guard until the status says otherwise.
+  it("offers none while the project's status is unknown", () => {
+    expect(forProject("/code/app", undefined)).toBeNull();
+  });
+
+  it("offers none for scratch threads or servers without the capability", () => {
+    expect(forProject("/home/me/.t3/scratch", { isRepo: false })).toBeNull();
+    expect(
+      managedWorkspacesForProject({
+        config: { environment: { capabilities: {} } },
+        projectRoot: "/code/app",
+        vcsKind: "jj",
+        isRepo: true,
+      }),
+    ).toBeNull();
   });
 });

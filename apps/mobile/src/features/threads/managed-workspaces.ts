@@ -1,15 +1,11 @@
 /**
  * Fork: server-managed workspaces in the new-task flow (patches/workspaces.md).
- * Servers that advertise them create jj workspaces, guarded directory copies
- * or isolated runtimes, so a new workspace needs neither Git nor a base branch.
+ * For jj and directory projects, servers that advertise them create jj workspaces, guarded
+ * directory copies or isolated runtimes, so a new workspace needs neither Git nor a base branch.
+ * Plain Git projects keep upstream's worktree flow.
  */
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { workspaceLabel } from "@t3tools/client-runtime/state/workspaces";
-import type {
-  ManagedWorkspacesCapability,
-  ServerConfig,
-  WorkspaceProfile,
-} from "@t3tools/contracts";
+import type { ManagedWorkspacesCapability, WorkspaceProfile } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -20,27 +16,10 @@ export const workspaceProfileAtom = Atom.make<WorkspaceProfile>("familiar").pipe
   Atom.withLabel("mobile:workspace-profile"),
 );
 
-/** Threads without a project already get a folder of their own. */
-export function managedWorkspacesFor(
-  config: ServerConfig | null | undefined,
-  projectRoot: string | null | undefined,
-): ManagedWorkspacesCapability | null {
-  if (
-    config == null ||
-    projectRoot == null ||
-    isScratchProject({ workspaceRoot: projectRoot }, config.scratchWorkspaceRoot)
-  ) {
-    return null;
-  }
-  return config.environment.capabilities.managedWorkspaces ?? null;
-}
-
 /** What a queued task records for a new managed workspace, spread into its creation. */
-export function managedWorkspaceCreation(
-  config: ServerConfig | null | undefined,
-  projectRoot: string | null | undefined,
-): { readonly managedWorkspace?: { readonly profile?: WorkspaceProfile } } {
-  const capability = managedWorkspacesFor(config, projectRoot);
+export function managedWorkspaceCreation(capability: ManagedWorkspacesCapability | null): {
+  readonly managedWorkspace?: { readonly profile?: WorkspaceProfile };
+} {
   if (capability === null) return {};
   return {
     managedWorkspace: capability.isolated

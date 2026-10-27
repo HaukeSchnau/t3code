@@ -1,54 +1,35 @@
 /**
  * Server-managed workspaces in the composer (patches/workspaces.md).
- * Servers that advertise them create jj workspaces, guarded directory copies
- * or isolated runtimes, so a new workspace needs neither Git nor a base branch.
+ * For jj and directory projects, servers that advertise them create jj workspaces, guarded
+ * directory copies or isolated runtimes, so a new workspace needs neither Git nor a base branch.
+ * Plain Git projects keep upstream's worktree flow.
  */
 import { useAtomValue } from "@effect/atom-react";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { managedWorkspacesForProject } from "@t3tools/client-runtime/state/workspaces";
 import {
   type EnvironmentId,
   type ManagedWorkspacesCapability,
-  type ServerConfig,
+  type VcsDriverKind,
   WorkspaceProfile,
 } from "@t3tools/contracts";
 
 import { getLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { serverEnvironment } from "../state/server";
 
 const WORKSPACE_PROFILE_STORAGE_KEY = "t3code:workspace-profile";
 
-function capabilityFor(
-  config: ServerConfig | null,
-  projectRoot: string | null | undefined,
-): ManagedWorkspacesCapability | null {
-  // Threads without a project already get a folder of their own.
-  if (
-    config === null ||
-    projectRoot == null ||
-    isScratchProject({ workspaceRoot: projectRoot }, config.scratchWorkspaceRoot)
-  ) {
-    return null;
-  }
-  return config.environment.capabilities.managedWorkspaces ?? null;
-}
-
 export function useManagedWorkspaces(
   environmentId: EnvironmentId | null,
   projectRoot: string | null | undefined,
+  vcsKind: VcsDriverKind | undefined,
+  isRepo: boolean | undefined,
 ): ManagedWorkspacesCapability | null {
-  return capabilityFor(useAtomValue(serverEnvironment.configValueAtom(environmentId)), projectRoot);
-}
-
-/** Read at send time, so a reconnect to another server version is honoured. */
-function readManagedWorkspaces(
-  environmentId: EnvironmentId,
-  projectRoot: string,
-): ManagedWorkspacesCapability | null {
-  return capabilityFor(
-    appAtomRegistry.get(serverEnvironment.configValueAtom(environmentId)),
+  return managedWorkspacesForProject({
+    config: useAtomValue(serverEnvironment.configValueAtom(environmentId)),
     projectRoot,
-  );
+    vcsKind,
+    isRepo,
+  });
 }
 
 /** Familiar unless the user chose Minimal under Advanced; only isolated workspaces use it. */
@@ -68,14 +49,13 @@ function readWorkspaceProfile(): WorkspaceProfile {
   }
 }
 
-/** The bootstrap field for a new managed workspace, or undefined when the server has none. */
+/** The bootstrap field for a new managed workspace, or undefined for upstream's worktree flow. */
 export function managedWorkspaceBootstrap(input: {
-  readonly environmentId: EnvironmentId;
-  readonly projectRoot: string;
+  readonly capability: ManagedWorkspacesCapability | null;
   readonly baseBranch: string | null;
   readonly startFromOrigin: boolean;
 }) {
-  const capability = readManagedWorkspaces(input.environmentId, input.projectRoot);
+  const { capability } = input;
   if (capability === null) return undefined;
   return {
     ...(input.baseBranch === null ? {} : { baseRef: input.baseBranch }),

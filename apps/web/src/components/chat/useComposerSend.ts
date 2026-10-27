@@ -21,6 +21,7 @@ import {
   CommandId,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type ManagedWorkspacesCapability,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ThreadId,
@@ -184,6 +185,7 @@ interface ComposerSendInput {
   readonly isServerThread: boolean;
   readonly isLocalDraftThread: boolean;
   readonly isGitRepo: boolean;
+  readonly managedWorkspaces: ManagedWorkspacesCapability | null;
   readonly phase: SessionPhase;
   readonly runtimeMode: RuntimeMode;
   readonly sendEnvMode: DraftThreadEnvMode;
@@ -279,6 +281,7 @@ export function useComposerSend(input: ComposerSendInput) {
     isServerThread,
     isLocalDraftThread,
     isGitRepo,
+    managedWorkspaces,
     phase,
     runtimeMode,
     sendEnvMode,
@@ -825,8 +828,7 @@ export function useComposerSend(input: ComposerSendInput) {
     });
     const managedWorkspace = shouldCreateWorktree
       ? managedWorkspaceBootstrap({
-          environmentId: activeThread.environmentId,
-          projectRoot: activeProject.workspaceRoot,
+          capability: managedWorkspaces,
           baseBranch: activeThreadBranch,
           startFromOrigin,
         })

@@ -359,6 +359,15 @@ if (args[0] === "fork") {
       const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const project = directoryProject();
       assert.equal(yield* workspaces.backendFor(project), "isolated");
+      // Git projects keep upstream's worktrees even where the launcher exists.
+      const gitProject = tempDir("t3-git-project-");
+      run("git", ["init", "-q"], gitProject);
+      assert.equal(yield* workspaces.backendFor(gitProject), "git");
+      const worktree = { type: "worktree", baseRef: "main" } as const;
+      assert.equal(
+        yield* workspaces.resolveLaunchStrategy({ projectRoot: gitProject, strategy: worktree }),
+        worktree,
+      );
       const created = yield* workspaces.create({
         projectId,
         projectRoot: project,

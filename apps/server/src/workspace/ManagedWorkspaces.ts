@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- workspace kinds are recognised from on-disk markers.
 /**
  * The fork's workspaces next to upstream's Git worktrees (patches/workspaces.md). The project
- * picks the backend: an isolated agent-exec runtime on Linux hosts with the launcher, a jj
- * workspace for jj repositories, a guarded copy for plain directories. Plain Git projects keep
- * upstream's worktrees.
+ * picks the backend: plain Git projects keep upstream's worktrees; jj repositories and plain
+ * directories get an isolated agent-exec runtime on Linux hosts with the launcher, else a jj
+ * workspace or a guarded copy.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -90,9 +90,9 @@ export class ManagedWorkspaces extends Context.Service<
   {
     readonly backendFor: (projectRoot: string) => Effect.Effect<WorkspaceBackend>;
     /**
-     * New workspaces on jj, directory and isolated projects become `workspace`
-     * launches; a `workspace` launch on a plain Git project becomes upstream's
-     * `worktree` launch from the given or current branch.
+     * New workspaces on jj and directory projects become `workspace` launches;
+     * a `workspace` launch on a plain Git project becomes upstream's `worktree`
+     * launch from the given or current branch.
      */
     readonly resolveLaunchStrategy: <S extends LaunchWorkspaceStrategy>(input: {
       readonly projectRoot: string;
@@ -154,9 +154,10 @@ const make = Effect.gen(function* () {
     new ManagedWorkspaceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 
   const backendFor: ManagedWorkspaces["Service"]["backendFor"] = (projectRoot) =>
-    Effect.sync(() =>
-      isolated ? "isolated" : (findRepositoryMarker(projectRoot)?.kind ?? "directory"),
-    );
+    Effect.sync(() => {
+      const kind = findRepositoryMarker(projectRoot)?.kind ?? "directory";
+      return kind !== "git" && isolated ? "isolated" : kind;
+    });
 
   const resolveLaunchStrategy: ManagedWorkspaces["Service"]["resolveLaunchStrategy"] = Effect.fn(
     "ManagedWorkspaces.resolveLaunchStrategy",

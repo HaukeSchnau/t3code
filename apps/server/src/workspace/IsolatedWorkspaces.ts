@@ -12,11 +12,7 @@ import { projectProviderView, readSeparateProject } from "../project/SeparatePro
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import { resolveJjStartRevision } from "./JjWorkspaces.ts";
 import { slug } from "./WorkspaceNaming.ts";
-import {
-  ManagedWorkspaceError,
-  runWorkspaceCommand,
-  runWorkspaceCommandOrFail,
-} from "./WorkspaceCommand.ts";
+import { ManagedWorkspaceError, runWorkspaceCommandOrFail } from "./WorkspaceCommand.ts";
 
 /** What the environment descriptor advertises to clients. */
 export function managedWorkspacesCapability(
@@ -66,32 +62,6 @@ function isolatedVisibleName(projectRoot: string): string {
   return /^[a-z0-9]/.test(name) ? name : `p${name}`.slice(0, 64);
 }
 
-/** Git sources start from origin like Git worktrees do, and fall back to the local base. */
-const gitStartRevision = Effect.fn("IsolatedWorkspaces.gitStartRevision")(function* (input: {
-  readonly source: string;
-  readonly baseRef: string | undefined;
-  readonly startFromOrigin: boolean;
-}) {
-  const local = input.baseRef ?? "HEAD";
-  if (!input.startFromOrigin || input.baseRef === undefined) return local;
-  const git = (args: ReadonlyArray<string>) =>
-    runWorkspaceCommand({
-      operation: "IsolatedWorkspaces.fetch",
-      command: "git",
-      args: ["-C", input.source, ...args],
-      timeout: "3 minutes",
-    });
-  if ((yield* git(["remote", "get-url", "origin"])).code !== 0) return local;
-  const fetched = yield* git(["fetch", "origin", input.baseRef]);
-  if (fetched.code === 0) return "FETCH_HEAD";
-  // `ls-remote --exit-code` exits 2 only when origin has no such ref.
-  if ((yield* git(["ls-remote", "--exit-code", "origin", input.baseRef])).code === 2) return local;
-  return yield* fail(
-    "IsolatedWorkspaces.fetch",
-    fetched.stderr.trim() || "Could not fetch the requested base revision.",
-  );
-});
-
 export const createIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.create")(function* (input: {
   readonly source: string;
   readonly destination: string;
@@ -104,6 +74,7 @@ export const createIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.create")(fu
   const launcher = yield* requireLauncher("IsolatedWorkspaces.create");
   const environment = yield* HostProcess.Environment;
   const marker = findRepositoryMarker(input.source);
+  // Git projects use upstream's worktrees, so the source is a jj repository or a directory.
   const revision =
     marker?.kind === "jj"
       ? ((yield* resolveJjStartRevision({
@@ -111,13 +82,7 @@ export const createIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.create")(fu
           baseRef: input.baseRef,
           startFromOrigin: input.startFromOrigin === true,
         })) ?? "@")
-      : marker?.kind === "git"
-        ? yield* gitStartRevision({
-            source: input.source,
-            baseRef: input.baseRef,
-            startFromOrigin: input.startFromOrigin === true,
-          })
-        : "@";
+      : "@";
   const sourceRegistration = yield* Effect.tryPromise({
     try: () => readSeparateProject(input.source, environment.AGENT_EXEC_STATE),
     catch: (cause) =>
