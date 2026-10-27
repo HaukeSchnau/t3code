@@ -96,7 +96,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
         assert.exists(logger);
         if (!logger) return;
         yield* logger.write(
-          { type: "content.delta", eventId: "evt-giant", payload: circular },
+          { type: "item.completed", eventId: "evt-giant", payload: circular },
           ThreadId.make("thread-giant"),
         );
         yield* logger.close();
@@ -111,7 +111,123 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
     }),
   );
 
-  it.effect("samples 9,200 high-frequency deltas deterministically", () =>
+  it.effect("samples 9,200 high-frequency native events deterministically", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
+      const filePath = NodePath.join(tempDir, "native.log");
+
+      try {
+        const logger = yield* makeEventNdjsonLogger(filePath, {
+          stream: "native",
+          batchWindowMs: 0,
+        });
+        assert.exists(logger);
+        if (!logger) return;
+        for (let index = 0; index < 9_200; index += 1) {
+          yield* logger.write(
+            { event: { type: "message.updated", payload: { text: `chunk-${index}` } } },
+            ThreadId.make("thread-stress"),
+          );
+        }
+        yield* logger.close();
+
+        const lines = readLines(filePath);
+        assert.equal(lines.length, 43);
+        const last = parsePayload(lines.at(-1) ?? "");
+        assert.deepInclude(last, {
+          sampling: { occurrence: 9_216 - 256, suppressedSincePrevious: 255 },
+        });
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("drops transient provider events before sampling", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
+      const filePath = NodePath.join(tempDir, "events.log");
+      const threadId = ThreadId.make("thread-transient");
+
+      try {
+        const store = yield* makeEventNdjsonLogStore(filePath, { batchWindowMs: 0 });
+        const native = store.logger("native");
+        const canonical = store.logger("canonical");
+        yield* canonical.write({ type: "content.delta", eventId: "canonical-delta" }, threadId);
+        yield* native.write({ event: { id: "raw-frame", stage: "raw", payload: {} } }, threadId);
+        yield* native.write(
+          {
+            event: {
+              id: "acp-chunk",
+              method: "session/update",
+              payload: { update: { sessionUpdate: "agent_message_chunk" } },
+            },
+          },
+          threadId,
+        );
+        yield* canonical.write({ type: "turn.completed", eventId: "completed" }, threadId);
+        yield* store.close();
+
+        assert.deepEqual(readEventIds(filePath), ["completed"]);
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("bounds oversized records while retaining failure details", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
+      const filePath = NodePath.join(tempDir, "native.log");
+      // JSON escapes each control character to six bytes.
+      const escaped = "\u0000".repeat(128);
+
+      try {
+        const logger = yield* makeEventNdjsonLogger(filePath, {
+          stream: "native",
+          batchWindowMs: 0,
+        });
+        assert.exists(logger);
+        if (!logger) return;
+        yield* logger.write(
+          {
+            event: {
+              method: "error",
+              id: escaped,
+              itemId: escaped,
+              provider: "codex",
+              turnId: "native-turn",
+              payload: { error: { message: "The provider is unavailable." }, output: "x" },
+            },
+          },
+          ThreadId.make("large-error"),
+        );
+        yield* logger.close();
+
+        const contents = NodeFS.readFileSync(filePath, "utf8");
+        assert.isBelow(Buffer.byteLength(contents), 1_200);
+        const record = parsePayload(contents.trim());
+        assert.equal(record.threadId, "large-error");
+        assert.equal(record.metadataTruncated, true);
+        assert.deepInclude(record.event as Record<string, unknown>, {
+          name: "error",
+          provider: "codex",
+          turnId: "native-turn",
+        });
+        assert.deepEqual(record.body, { valueType: "object", fieldCount: 2 });
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("serializes concurrent first writes for the same segment", () =>
     Effect.gen(function* () {
       const tempDir = NodeFS.realpathSync(
         NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
@@ -125,20 +241,19 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
         });
         assert.exists(logger);
         if (!logger) return;
-        for (let index = 0; index < 9_200; index += 1) {
-          yield* logger.write(
-            { type: "content.delta", payload: { delta: `chunk-${index}` } },
-            ThreadId.make("thread-stress"),
-          );
-        }
+        yield* Effect.all(
+          [
+            logger.write({ id: "evt-concurrent-1" }, null),
+            logger.write({ id: "evt-concurrent-2" }, null),
+          ],
+          { concurrency: "unbounded" },
+        );
         yield* logger.close();
 
-        const lines = readLines(filePath);
-        assert.equal(lines.length, 43);
-        const last = parsePayload(lines.at(-1) ?? "");
-        assert.deepInclude(last, {
-          sampling: { occurrence: 9_216 - 256, suppressedSincePrevious: 255 },
-        });
+        assert.deepEqual(readEventIds(filePath).toSorted(), [
+          "evt-concurrent-1",
+          "evt-concurrent-2",
+        ]);
       } finally {
         NodeFS.rmSync(tempDir, { recursive: true, force: true });
       }

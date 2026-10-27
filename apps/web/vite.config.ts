@@ -27,7 +27,6 @@ const port = Number(process.env.PORT ?? 5733);
 const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
 const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
-const configuredDevServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
 const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
@@ -151,35 +150,6 @@ const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .filter((entry) => entry.length > 0);
 const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
-function resolveDevServerHmrConfig() {
-  if (process.env.AGENT_SERVICE_PORT?.trim() && !process.env.AGENT_SERVICE_URL?.trim()) {
-    return undefined;
-  }
-
-  if (configuredDevServerUrl) {
-    try {
-      const url = new URL(configuredDevServerUrl);
-      if (url.protocol === "http:" || url.protocol === "https:") {
-        return {
-          protocol: url.protocol === "https:" ? "wss" : "ws",
-          host: url.hostname,
-          clientPort: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
-        };
-      }
-    } catch {
-      // Fall back to the local Vite endpoint below.
-    }
-  }
-
-  return {
-    protocol: "ws",
-    host,
-    clientPort: port,
-  };
-}
-
-const hmrConfig = resolveDevServerHmrConfig();
-
 export default defineConfig(() => {
   return {
     run: {
@@ -285,11 +255,14 @@ export default defineConfig(() => {
             ),
           }
         : {}),
-      // HMR connects through the browser-facing dev URL; see patches/agent-service-dev-url.md.
-      ...(hmrConfig
+      // Electron needs an explicit HMR host; elsewhere derive it from page origin for Tailscale/LAN.
+      // Browser dev may bind an explicit listener (patches/agent-service-dev-url.md).
+      ...(explicitHost && !isSingleOriginDev
         ? {
             hmr: {
-              ...hmrConfig,
+              protocol: "ws",
+              host: explicitHost,
+              clientPort: port,
             },
           }
         : {}),

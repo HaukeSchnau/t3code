@@ -3,39 +3,19 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { migrationManifest, runMigrations } from "./Migrations.ts";
+import { migrationManifest, ORCHESTRATION_V2_MIGRATION_ID, runMigrations } from "./Migrations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
-// The fork registers upstream's V2 migrations at 77-79. Its ids 53-56 belong to fork
-// migrations, so upstream's preview ledger repair must never apply to a fork database.
+// Fork ids 53 and 54 hold fork migrations, never OrchestrationV2 (patches/fork-workflow.md), so
+// upstream's preview ledger repair can never apply to a fork database.
 describe("V2 preview upgrade on the fork ledger", () => {
-  it.effect("leaves fork migrations 53-76 untouched and runs V2 at its fork ids", () =>
+  it.effect("is a no-op before and after the fork runs V2", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 76 });
-
+      yield* runMigrations({ toMigrationInclusive: ORCHESTRATION_V2_MIGRATION_ID - 1 });
       assert.deepStrictEqual(yield* reconcileV2PreviewMigration(), []);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [77, "ProjectionThreadsAutoSettleDisabledAt"],
-        [78, "OrchestrationV2"],
-        [79, "RemoveRedundantProjectionIndexes"],
-        [80, "AgentWatches"],
-        [81, "SkillPackThreadSelections"],
-        [82, "ScheduledTaskWebhooks"],
-        [83, "WebhookRelayDeliveries"],
-        [84, "McpAppModelContext"],
-        [85, "ThreadSnapshotWindowIndexes"],
-        [86, "PullRequestReviewGuides"],
-        [87, "ThreadFailureLookupIndex"],
-        [88, "DropUnusedV1Projections"],
-        [89, "CanonicalizeThreadPullRequestLinks"],
-        [90, "CodexUsageNativeTurnIndex"],
-        [91, "RepairClientSettlementTimestamps"],
-        [92, "WebhookDedupe"],
-        [93, "ShellStopRequestIndex"],
-        [94, "ThreadMessageSearch"],
-        [95, "HtmlRenderState"],
-      ]);
+
+      yield* runMigrations();
       assert.deepStrictEqual(yield* reconcileV2PreviewMigration(), []);
 
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`

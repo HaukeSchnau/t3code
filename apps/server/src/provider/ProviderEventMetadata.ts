@@ -5,16 +5,6 @@ const MAX_EVENT_NAME_LENGTH = 160;
 const MAX_IDENTITY_LENGTH = 128;
 const MAX_PROVIDER_LENGTH = 64;
 
-const HIGH_FREQUENCY_CANONICAL_EVENTS = new Set([
-  "content.delta",
-  "turn.proposed.delta",
-  "thread.realtime.audio.delta",
-  "item.updated",
-  "task.progress",
-  "hook.progress",
-  "tool.progress",
-]);
-
 interface ProviderEventBodyMetadata {
   readonly valueType:
     | "missing"
@@ -166,8 +156,8 @@ export function isHighFrequencyProviderEvent(
   stream: ProviderEventMetadataStream,
   name: string,
 ): boolean {
-  if (stream === "canonical") return HIGH_FREQUENCY_CANONICAL_EVENTS.has(name);
-  if (stream === "orchestration") return false;
+  // shouldPersistProviderEvent already drops the high-frequency canonical types.
+  if (stream !== "native") return false;
 
   const normalized = name.toLowerCase();
   return (

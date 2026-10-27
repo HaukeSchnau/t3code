@@ -91,7 +91,6 @@ describe("ProviderEventMetadata", () => {
   });
 
   it("classifies only known high-frequency provider event families", () => {
-    assert.isTrue(isHighFrequencyProviderEvent("canonical", "content.delta"));
     assert.isTrue(isHighFrequencyProviderEvent("native", "item/commandExecution/outputDelta"));
     assert.isTrue(
       isHighFrequencyProviderEvent("native", "claude/stream_event/content_block_delta/text_delta"),
