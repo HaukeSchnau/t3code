@@ -5220,6 +5220,120 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
+  it.effect("starts a provider wake that queued behind a finishing run past a held queue", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-wake-past-held-queue");
+      const messageId = (key: string) => MessageId.make(`${threadId}:${key}`);
+      const runFor = (key: string) =>
+        Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) => {
+          const run = runs.find((candidate) => candidate.userMessageId === messageId(key));
+          assert.isDefined(run);
+          return run;
+        });
+      const update = (key: string, patch: Partial<OrchestrationV2Run>) =>
+        Effect.gen(function* () {
+          const run = yield* runFor(key);
+          const now = yield* DateTime.now;
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`${threadId}:${key}:${Object.keys(patch).join(",")}`),
+                type: "run.updated",
+                threadId,
+                runId: run.id,
+                ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: now,
+                payload: { ...run, ...patch },
+              },
+            ],
+          });
+        });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId: ProjectId.make(`${threadId}:project`),
+        title: "Wake past a held queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:message:active`),
+        threadId,
+        messageId: messageId("active"),
+        text: "Active",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make(`${threadId}:message:held`),
+        threadId,
+        messageId: messageId("held"),
+        text: "Held after a stop",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+      });
+      yield* update("held", { queueHeld: true });
+      // Claude began its wake turn natively; the run that turn followed has not settled yet.
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "provider",
+        commandId: CommandId.make(`${threadId}:message:wake`),
+        threadId,
+        messageId: messageId("wake"),
+        text: "Background command finished",
+        notification: {
+          source: { kind: "command" },
+          outcome: "completed",
+          summary: "Background command finished",
+        },
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+      });
+
+      const startedRunIds = yield* Queue.unbounded<RunId>();
+      const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.runForEach((stored) =>
+          stored.event.type === "run.updated" && stored.event.payload.status === "starting"
+            ? Queue.offer(startedRunIds, stored.event.payload.id)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      const now = yield* DateTime.now;
+      yield* update("active", { status: "completed", startedAt: now, completedAt: now });
+      assert.equal(yield* Queue.take(startedRunIds), (yield* runFor("wake")).id);
+      assert.isTrue(
+        OrchestratorMcpService.isLiveCallerShell(
+          yield* orchestrator.getThreadShell(threadId),
+          modelSelection.instanceId,
+        ),
+      );
+      const held = yield* runFor("held");
+      assert.equal(held.status, "queued");
+      assert.isTrue(held.queueHeld);
+    }),
+  );
+
   it.effect("edits and removes queued runs", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
