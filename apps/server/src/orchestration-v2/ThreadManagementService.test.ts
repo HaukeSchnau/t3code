@@ -441,3 +441,65 @@ it.effect.each([
     expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
   }),
 );
+
+it.effect.each([
+  { name: "an agent's message queues", createdBy: "agent", expected: "queue_after_active" },
+  { name: "the user's message steers", createdBy: "user", expected: "steer_active" },
+] as const)("$name behind a question the thread is waiting on", ({ createdBy, expected }) => {
+  const projectId = ProjectId.make("project:thread-management:question");
+  const threadId = ThreadId.make("thread:thread-management:question");
+  const instanceId = ProviderInstanceId.make("claude_work");
+  const dispatchModes: Array<string> = [];
+  const projection = {
+    thread: {
+      id: threadId,
+      projectId,
+      deletedAt: null,
+      archivedAt: null,
+      modelSelection: { instanceId, model: "test" },
+    },
+    runs: [
+      { id: RunId.make("run:question"), status: "running", activeAttemptId: "attempt", ordinal: 1 },
+    ],
+    providerTurns: [{ runAttemptId: "attempt", status: "running" }],
+    runtimeRequests: [{ status: "pending" }],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layerTest = ThreadManagementService.layer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadRecords: () => Effect.succeed(projection),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            if (command.type === "message.dispatch") dispatchModes.push(command.dispatchMode.type);
+            return { sequence: 1, storedEvents: [] } as never;
+          }),
+      }),
+    ),
+    Layer.provide(
+      ServerSettings.layerTest({
+        providerInstances: { [instanceId]: { driver: "claudeAgent", enabled: true } },
+      }),
+    ),
+    Layer.provideMerge(layerReceiptsTest),
+  );
+
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    // The mock projection holds no message, so the send fails after it dispatched.
+    yield* Effect.exit(
+      threads.sendToThread({
+        projectId,
+        threadId,
+        commandId: CommandId.make(`command:thread-management:question-${createdBy}`),
+        messageId: MessageId.make(`message:thread-management:question-${createdBy}`),
+        text: "Coordinator to rest: go ahead.",
+        attachments: [],
+        mode: "auto",
+        createdBy,
+        creationSource: createdBy === "user" ? "web" : "mcp",
+      }),
+    );
+    expect(dispatchModes).toEqual([expected]);
+  }).pipe(Effect.provide(layerTest));
+});

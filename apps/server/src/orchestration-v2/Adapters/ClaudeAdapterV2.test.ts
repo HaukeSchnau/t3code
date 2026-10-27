@@ -1468,6 +1468,114 @@ describe("ClaudeAdapterV2 resume compaction", () => {
   );
 });
 
+describe("ClaudeAdapterV2 runtime requests", () => {
+  it.effect("closes a question Claude aborts before the user answers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir: yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-aborted-question-",
+          }),
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator: yield* IdAllocator.IdAllocatorV2,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-aborted-question"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedOptions = input.options;
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-aborted-question");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-aborted-question"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-aborted-question"),
+            text: "ask me",
+            attachments: [],
+          }),
+        );
+        const requestUpdates = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "runtime_request.updated"),
+          Stream.map((event) =>
+            event.type === "runtime_request.updated" ? event.runtimeRequest : undefined,
+          ),
+          Stream.takeUntil((request) => request?.nativeRequestRef?.nativeId === "tool-sentinel"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const ask = (toolUseID: string) =>
+          Effect.promise(() =>
+            openedOptions!.canUseTool!(
+              "AskUserQuestion",
+              {
+                questions: [
+                  {
+                    header: "Target",
+                    question: "Where should it deploy?",
+                    options: [
+                      { label: "Production", description: "Deploy to production." },
+                      { label: "Staging", description: "Deploy to staging." },
+                    ],
+                    multiSelect: false,
+                  },
+                ],
+              },
+              // A steer at priority "now" makes Claude Code abort the pending question.
+              { signal: AbortSignal.abort(), toolUseID, requestId: `request-${toolUseID}` },
+            ),
+          );
+
+        assert.equal((yield* ask("tool-aborted-question"))?.behavior, "deny");
+        // A later question marks where the first one's updates end.
+        yield* ask("tool-sentinel");
+        const statuses = Array.from(yield* Fiber.join(requestUpdates))
+          .filter((request) => request?.nativeRequestRef?.nativeId === "tool-aborted-question")
+          .map((request) => request?.status);
+        assert.deepEqual(statuses, ["pending", "cancelled"]);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
 describe("ClaudeAdapterV2 attachments", () => {
   it.effect.each([
     ...[
