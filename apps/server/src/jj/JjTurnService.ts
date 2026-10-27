@@ -599,13 +599,10 @@ const make = Effect.gen(function* () {
               "@",
               "change_id",
             );
-            if (description.trim().length > 0 && paths.length === changedPaths.length) {
-              // The agent named this change; keep its words and start the next one.
-              if (trailers && !description.includes(`${JJ_THREAD_TRAILER}: ${input.threadId}`)) {
-                yield* describe(root, "JjTurnService.tagWorkingCopy", "@", tag(description));
-              }
-              yield* jj.run({ operation: "JjTurnService.sealNew", root, args: ["new"] });
-            } else {
+            // The agent named `@` and may keep working in it, during its next turn or while
+            // another thread's turn ends here. The seal leaves it whole and in its words.
+            const named = description.trim().length > 0;
+            if (!named) {
               const provisional = tag(
                 `wip: ${title} (turn ${input.ordinal})\n${
                   input.failed ? "\nTurn ended with an error.\n" : ""
@@ -626,13 +623,16 @@ const make = Effect.gen(function* () {
                 failed: input.failed,
               };
             }
-            state = recordChange(state, sealedChangeId, input.threadId);
-            if (mixedPaths.length > 0) {
-              state = addForeignPaths(
-                addFlag(state, sealedChangeId, "mixed"),
-                sealedChangeId,
-                mixedPaths,
-              );
+            // A named `@` holding files the seal did not select is not provably the thread's.
+            if (!named || paths.length === changedPaths.length) {
+              state = recordChange(state, sealedChangeId, input.threadId);
+              if (mixedPaths.length > 0) {
+                state = addForeignPaths(
+                  addFlag(state, sealedChangeId, "mixed"),
+                  sealedChangeId,
+                  mixedPaths,
+                );
+              }
             }
             state = recordOperation(state, { before, after: yield* operationHead(root) });
           }
@@ -693,14 +693,17 @@ const make = Effect.gen(function* () {
       ),
   );
 
-  /** Paths the changes touch, both sides of renames. */
-  const filesOf = (root: string, changes: ReadonlyArray<{ readonly changeId: string }>) =>
-    changes.length === 0
+  const changeRevisions = (changes: ReadonlyArray<{ readonly changeId: string }>) =>
+    changes.map((change) => `change_id(${change.changeId})`);
+
+  /** Paths the revisions touch, both sides of renames. */
+  const filesOf = (root: string, revisions: ReadonlyArray<string>) =>
+    revisions.length === 0
       ? Effect.succeed<ReadonlyArray<string>>([])
       : readRevision(
           root,
           "JjTurnService.filesOf",
-          changes.map((change) => `change_id(${change.changeId})`).join(" | "),
+          revisions.join(" | "),
           'json(diff.files().map(|f| f.path())) ++ "\\t" ++ json(diff.files().map(|f| f.source().path())) ++ "\\n"',
         ).pipe(
           Effect.flatMap((output) =>
@@ -786,11 +789,13 @@ const make = Effect.gen(function* () {
           // Change ids, not commits: later rewrites (descriptions, rebases)
           // must not make earlier work look new. Whatever was sealed into the
           // checkpoint's own `@` since then is later work.
+          const atCheckpoint = yield* listChanges(root, `::${checkpoint} & mutable()`);
           const before = new Set(
-            (yield* listChanges(root, `::${checkpoint} & mutable()`))
+            atCheckpoint
               .filter((change) => change.commitId !== checkpoint)
               .map((change) => change.changeId),
           );
+          const checkpointChange = atCheckpoint.find((change) => change.commitId === checkpoint);
           // Only changes known to be this thread's go: what T3 recorded for it
           // and what carries its trailer. Anything else is someone else's work.
           const stack = "(::@ & mutable()) ~ @";
@@ -814,6 +819,13 @@ const make = Effect.gen(function* () {
               (yield* otherWorkspacesBuildOn(root, change.changeId));
             (shared ? kept : abandoned).push(change);
           }
+          // The checkpoint's own `@` may be a change the agent described, holding its
+          // files at the checkpoint; abandoning it must not delete them.
+          const checkpointFiles = abandoned.some(
+            (change) => change.changeId === checkpointChange?.changeId,
+          )
+            ? yield* filesOf(root, [checkpoint])
+            : [];
           if (abandoned.length > 0) {
             yield* jj.run({
               operation: "JjTurnService.revert.abandon",
@@ -837,7 +849,7 @@ const make = Effect.gen(function* () {
               (owner) => owner === null || owner.threadId !== input.threadId,
             );
           const blocked = new Set([
-            ...(yield* filesOf(root, otherWork)),
+            ...(yield* filesOf(root, changeRevisions(otherWork))),
             ...kept.flatMap((change) => state.foreignPaths[change.changeId] ?? []),
             ...Object.entries(state.owners)
               .filter(([, owner]) => owner === null || owner.threadId !== input.threadId)
@@ -848,7 +860,8 @@ const make = Effect.gen(function* () {
               ...Object.entries(state.owners)
                 .filter(([, owner]) => owner != null && owner.threadId === input.threadId)
                 .map(([path]) => path),
-              ...(yield* filesOf(root, kept)),
+              ...(yield* filesOf(root, changeRevisions(kept))),
+              ...checkpointFiles,
             ]),
           ].filter((path) => !blocked.has(path));
           if (!otherThreadInvolved) {

@@ -206,6 +206,59 @@ it.layer(TestLayer)("JjTurnService", (it) => {
     }),
   );
 
+  // A seal used to rename such a change to "wip: ..." and split off files it did
+  // not select, or close it with `jj new` so the agent's next turn landed beside it.
+  it.effect("leaves a change the agent described as `@`, whole and in its words", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeRepo;
+      yield* start(cwd, threadA, runA1, 1);
+      yield* start(cwd, threadB, runB1, 1);
+      world.reported.set(runA1, ["a.ts"]);
+      yield* jj(cwd, ["describe", "-m", "perf: the stream is gzipped"]);
+      yield* write(cwd, "a.ts", "a\n");
+      yield* write(cwd, "generated.ts", "?\n");
+      yield* seal(cwd, threadA, runA1, 1);
+      assert.deepStrictEqual(yield* changes(cwd), [
+        "perf: the stream is gzipped | a.ts,generated.ts |",
+      ]);
+
+      yield* seal(cwd, threadB, runB1, 1);
+      const turns = yield* JjTurnService.JjTurnService;
+      yield* turns.assignPaths({ cwd, threadId: threadA, paths: ["generated.ts"] });
+      yield* start(cwd, threadA, runA2, 2);
+      yield* write(cwd, "a.ts", "a2\n");
+      yield* seal(cwd, threadA, runA2, 2);
+      assert.deepStrictEqual(yield* changes(cwd), [
+        "perf: the stream is gzipped | a.ts,generated.ts |",
+      ]);
+    }),
+  );
+
+  it.effect("reverts to a checkpoint whose `@` the agent described", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeRepo;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* start(cwd, threadA, runA1, 1);
+      yield* jj(cwd, ["describe", "-m", "feat: a"]);
+      yield* write(cwd, "a.ts", "a1\n");
+      yield* seal(cwd, threadA, runA1, 1);
+      const cpA1 = yield* checkpoint(cwd, "a1");
+
+      yield* start(cwd, threadA, runA2, 2);
+      yield* fileSystem.remove(`${cwd}/a.ts`);
+      yield* jj(cwd, ["new"]);
+      yield* seal(cwd, threadA, runA2, 2);
+      yield* start(cwd, threadB, runB1, 1);
+      yield* write(cwd, "b.ts", "b\n");
+      yield* seal(cwd, threadB, runB1, 1);
+
+      const turns = yield* JjTurnService.JjTurnService;
+      yield* turns.revert({ threadId: threadA, cwd, checkpointRef: cpA1 });
+      assert.strictEqual(yield* fileSystem.readFileString(`${cwd}/a.ts`), "a1\n");
+      assert.isTrue(yield* exists(cwd, "b.ts"));
+    }),
+  );
+
   it.effect("merges a fork's changes from its own workspace into the parent's stack", () =>
     Effect.gen(function* () {
       const cwd = yield* makeRepo;
