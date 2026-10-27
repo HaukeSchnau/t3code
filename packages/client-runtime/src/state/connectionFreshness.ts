@@ -40,7 +40,7 @@ export type EnvironmentConnectionProgress =
       readonly stage: "waiting-to-retry";
       /** Supervisor-owned absolute epoch time. Observers must not schedule retries from it. */
       readonly retryAt: number;
-      readonly failure: PresentedConnectionFailure;
+      readonly failure: PresentedConnectionFailure | null;
     })
   | (ConnectionProgressBase & {
       readonly phase: "connected";
@@ -101,17 +101,18 @@ function optionalFailure(error: ConnectionAttemptError | null): PresentedConnect
   return error === null ? null : presentFailure(error);
 }
 
-function requireFailure(
-  state: SupervisorConnectionState,
-  phase: "backoff" | "blocked",
-): PresentedConnectionFailure {
-  if (state.lastFailure === null) {
-    return invalidProjectionSource(`${phase} connection has no failure`);
-  }
-  if (phase === "backoff" && state.lastFailure._tag !== "ConnectionTransientError") {
+function backoffFailure(state: SupervisorConnectionState): PresentedConnectionFailure | null {
+  if (state.lastFailure?._tag === "ConnectionBlockedError") {
     return invalidProjectionSource("backoff connection carries a blocked failure");
   }
-  if (phase === "blocked" && state.lastFailure._tag !== "ConnectionBlockedError") {
+  return optionalFailure(state.lastFailure);
+}
+
+function blockedFailure(state: SupervisorConnectionState): PresentedConnectionFailure {
+  if (state.lastFailure === null) {
+    return invalidProjectionSource("blocked connection has no failure");
+  }
+  if (state.lastFailure._tag !== "ConnectionBlockedError") {
     return invalidProjectionSource("blocked connection carries a transient failure");
   }
   return presentFailure(state.lastFailure);
@@ -205,7 +206,7 @@ export function projectEnvironmentConnectionProgress(
         attempt: state.attempt,
         generation: state.generation,
         retryAt: state.retryAt,
-        failure: requireFailure(state, "backoff"),
+        failure: backoffFailure(state),
       };
     case "connected":
       requireDesiredState(state);
@@ -233,7 +234,7 @@ export function projectEnvironmentConnectionProgress(
         stage: "blocked",
         attempt: state.attempt,
         generation: state.generation,
-        failure: requireFailure(state, "blocked"),
+        failure: blockedFailure(state),
       };
   }
 }
