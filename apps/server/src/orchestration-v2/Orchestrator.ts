@@ -727,7 +727,7 @@ function delegatedTaskTerminalStatus(
 function nextQueuedRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
 ): OrchestrationV2Run | undefined {
-  return queuedRunsInDeliveryOrder(projection)[0];
+  return queuedRunsInDeliveryOrder(projection).find((run) => run.queueHeld !== true);
 }
 
 function followsCurrentConversation(
@@ -1461,8 +1461,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
-        projection.runs.some(isBlockingRun) ||
-        projection.runs.some((run) => run.status === "queued" && run.queueHeld === true)
+        projection.runs.some(isBlockingRun)
       ) {
         return;
       }
@@ -1471,7 +1470,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         options?.queuedRunId === undefined
           ? nextQueuedRun(projection)
           : projection.runs.find(
-              (run) => run.id === options.queuedRunId && run.status === "queued",
+              (run) =>
+                run.id === options.queuedRunId && run.status === "queued" && run.queueHeld !== true,
             );
       if (storedQueuedRun === undefined) {
         return;
@@ -5585,8 +5585,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         rootNodeId,
         activeAttemptId: attemptId,
         status: "queued",
+        // A provider wake is a turn the provider already runs natively. It skips the hold so it
+        // starts once the run ahead settles, and the turn's MCP calls find a live run.
         ...(worktreeMissingRun !== undefined ||
         (heldRunsToRelease.length === 0 &&
+          !isBufferedProviderNotification(command) &&
           projection.runs.some(
             (candidate) => candidate.status === "queued" && candidate.queueHeld === true,
           ))
@@ -11861,7 +11864,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             });
           }
         }
-        const nextRun = selectedRun ?? nextQueuedRun(projection);
+        const nextRun = selectedRun ?? queuedRunsInDeliveryOrder(projection)[0];
         if (
           usageLimitHoldsQueue(
             projection,
