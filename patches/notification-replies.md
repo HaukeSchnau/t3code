@@ -6,16 +6,25 @@ Answer an agent's question, or tell it what to do next, straight from an iPhone 
 including one mirrored to an Apple Watch, without opening the app. Upstream notifications only
 open the thread.
 
-## Status
-
-The server half is missing. The reply endpoint ran on v1 orchestration and was not ported to
-orchestration v2. The iOS and Watch code and the JavaScript still ship, so **Answer** and **Reply**
-currently fail and end in a "Reply not delivered" notification. The v1 implementation is in fork
-commit `49e8d42dbd`: `apps/server/src/orchestration/threadReply.ts`, the `reply` handler in
-`orchestration/http.ts`, and the `ThreadReply*` schemas in `packages/contracts/src/agentAwareness.ts`.
-
 ## Implementation
 
+- `AgentReplyHandler.swift` posts `{ replyId, text }` to
+  `POST /api/orchestration/threads/:threadId/reply` and reads `{ outcome, reason? }`. `outcome` is
+  `answered`, `sent`, `already_delivered` or `rejected`, and a rejection gives `approval_pending`,
+  `question_needs_client` or `no_matching_option`. The server decides what the text means, in
+  `apps/server/src/threadControl/ThreadControl.ts`.
+- The command id derives from `replyId`, and the service looks up its v2 command receipt before
+  anything else. An accepted receipt answers `already_delivered`, because on a retry the answered
+  question is gone and planning again would turn the answer into a message.
+- A pending approval rejects the reply. A pending question with exactly one part takes the text
+  as its answer through `runtime-request.respond`, matched against its options. The shell only
+  names the request, so the questions come from its `user_input_request` turn item. Without a
+  pending request the text goes out as `message.dispatch` with `queue_after_active`, which starts
+  an idle thread or queues behind the running turn.
+- The reply, stop and glance routes are their own `threadControl` HTTP group. They take the
+  connection's bearer token without the orchestration protocol header, which the native code
+  doesn't send, and require the same `orchestration:operate` (writes) and `orchestration:read`
+  scopes as the rest of orchestration.
 - The server sends question, completion and failure alerts as regular APNs notifications with a
   category (`AGENT_INPUT`, `AGENT_DONE`) and a per-thread `thread-id`. A device with a Live
   Activity gets that update without its own alert. Live Activity alerts can't carry actions, and
@@ -31,28 +40,6 @@ commit `49e8d42dbd`: `apps/server/src/orchestration/threadReply.ts`, the `reply`
   so the handler can read connections while the phone is locked. Items from earlier builds move
   there on first read, because expo-secure-store can't change an existing item's protection class
   in place.
-
-## Porting the endpoint to v2
-
-`AgentReplyHandler.swift` posts `{ replyId, text }` to
-`POST /api/orchestration/threads/:threadId/reply` and reads `{ outcome, reason? }`. Keep that
-contract. `outcome` is `answered`, `sent`, `already_delivered` or `rejected`, and a rejection gives
-`approval_pending`, `question_needs_client` or `no_matching_option`. The server decides what the
-text means.
-
-1. Derive the command id from `replyId`. Before planning, look it up in `CommandReceiptStoreV2`
-   (`orchestration-v2/CommandReceiptStore.ts`). An accepted receipt answers `already_delivered`. The
-   check has to come first, because the answered question is gone on a retry.
-2. Read `pendingRuntimeRequest` from the thread's v2 shell. An approval rejects with
-   `approval_pending`.
-3. A user-input request with exactly one single-part question takes the text as its answer.
-   Match it against the options with the v1 `matchUserInputAnswer`, then dispatch
-   `runtime-request.respond` with `answers`. Load the questions from the thread projection, because
-   the shell summary carries only the request id and kind. Any other request rejects with
-   `question_needs_client`.
-4. Without a pending request, dispatch `message.dispatch` with
-   `dispatchMode: { type: "queue_after_active" }` and a message id derived from `replyId`. It queues
-   behind a running turn and starts one when the thread is idle.
 
 ## Upstream maintenance
 

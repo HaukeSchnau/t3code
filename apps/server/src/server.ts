@@ -211,6 +211,9 @@ import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import { acceptsPrivateNetworkConnection, loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as ProjectHttp from "./project/http.ts";
+import * as CommandReceiptStoreV2 from "./orchestration-v2/CommandReceiptStore.ts";
+import * as ThreadControl from "./threadControl/ThreadControl.ts";
+import * as ThreadControlHttp from "./threadControl/http.ts";
 import * as ServerStatusHttp from "./status/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -760,6 +763,12 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(CloudHttp.layer),
       Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(
+        ThreadControlHttp.layer.pipe(
+          Layer.provide(ThreadControl.layer),
+          Layer.provide(CommandReceiptStoreV2.layerFromApplicationReceipts),
+        ),
+      ),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
       Layer.provide(ServerStatusHttp.layer),

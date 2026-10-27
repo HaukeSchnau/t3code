@@ -133,13 +133,7 @@ final class WatchBridge: NSObject, WCSessionDelegate, @unchecked Sendable {
       EnvironmentClient.request(
         connection,
         method: "POST",
-        path: ["api", "orchestration", "dispatch"],
-        body: [
-          "type": "thread.turn.interrupt",
-          "commandId": "watch-stop:\(UUID().uuidString)",
-          "threadId": threadId,
-          "createdAt": ISO8601DateFormatter().string(from: Date()),
-        ]
+        path: ["api", "orchestration", "threads", threadId, "stop"]
       ) { status, _ in
         guard let status, (200..<300).contains(status) else {
           return reply(Self.error(EnvironmentClient.failure(for: status).message))
