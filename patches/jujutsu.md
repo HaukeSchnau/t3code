@@ -21,8 +21,10 @@ handling, because the maintainer and their agents work in jj repositories.
   need jj's operation log.
 - Every turn ends in its own change (`jj/JjTurnService.ts`, called from
   `CheckpointCaptureService` before the checkpoint, failed runs included). A turn that committed
-  its own work leaves nothing to seal. Seals get a provisional message at once and the commit
-  writer's message later, so finalization never waits on a model.
+  its own work leaves nothing to seal. A `@` the agent described stays as it is, unrenamed,
+  unsplit and without a new change on top, because the agent may keep working in it. Seals get
+  a provisional message at once and the commit writer's message later, so finalization never
+  waits on a model.
 - Several threads may share a checkout. Files are attributed per turn from provider-reported paths
   and from time slices with one running turn (`jj/JjWorkingCopyState.ts`). Ambiguous files stay
   in `@` until assigned (`vcs.jj.assignPaths`).
