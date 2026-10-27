@@ -35,6 +35,16 @@ own provider scopes. Host cgroup metrics and limits must target
 projects run their launcher inside the scope (see
 [separate project environments](separate-project-environments.md)).
 
+The fork caps each session's scope (`agentMemoryLimits`) and runs it with `OOMPolicy=continue`.
+Upstream limits only the slice, so on srv-2 one runaway tool exhausted the host before the slice
+limit applied, and the global OOM killer took unrelated sessions. With the cap the kernel kills the
+largest process inside that session, the agent sees its tool killed and continues, and the thread
+reports the kill from the scope's `memory.events`. When the agent process itself is the one killed
+and its scope is gone before T3 reads it, the turn fails without the OOM label. `T3CODE_AGENT_MEMORY_HIGH`,
+`T3CODE_AGENT_MEMORY_MAX` and `T3CODE_AGENT_SESSION_MEMORY_MAX` let a host that runs other work set
+its own budget; infra sets them for srv-2. Drop this once upstream caps sessions and keeps them
+running after a tool's OOM kill.
+
 ## Upstream touch points
 
 - `apps/server/src/observability/Observability.ts`: the protobuf pin and the `RuntimeMetrics`
