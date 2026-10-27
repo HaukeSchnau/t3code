@@ -550,6 +550,19 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
+  it.effect("keeps a Nix store install manual-only", () =>
+    Effect.gen(function* () {
+      const capabilities = yield* resolveInstall({
+        definition: claudeUpdate,
+        resolved: "/etc/profiles/per-user/me/bin/claude",
+        real: "/nix/store/16am9dklw0ljfyfvfbpa84qx0bcig1jn-claude-code-2.1.304/bin/claude",
+        platform: "darwin",
+      });
+
+      expect(capabilities.update).toBeNull();
+    }),
+  );
+
   it.effect("proves Windows npm ownership from the package manifest beside the shim", () =>
     Effect.gen(function* () {
       const tempDir = yield* makeTempDir("t3-npm-windows-capabilities");

@@ -444,6 +444,10 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   ) {
     return manual;
   }
+  // The store is read-only, so a native updater installs a second copy that T3 never runs.
+  if (normalizeCommandPath(context.realCommandPath).startsWith("/nix/store/")) {
+    return manual;
+  }
 
   const nativeUpdate = definition.nativeUpdate;
   const native = nativeUpdate
