@@ -72,6 +72,8 @@ import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceR
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpToolDirectory from "./mcp/McpToolDirectory.ts";
+import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
 import * as AgentWatches from "./watches/AgentWatches.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -1113,6 +1115,9 @@ const layerMakeServer = Layer.unwrap(
 
     return layerServerApplication.pipe(
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
+      // One directory: `/mcp` records its tools into it and page tool calls read them.
+      Layer.provideMerge(HtmlRenderBridge.layer),
+      Layer.provideMerge(McpToolDirectory.layer),
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(
         McpSessionRegistry.layer.pipe(

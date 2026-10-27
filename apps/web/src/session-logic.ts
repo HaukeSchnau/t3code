@@ -24,10 +24,18 @@ import {
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
-import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
+import {
+  htmlRenderVersion,
+  type HtmlRenderReference,
+  type HtmlRenderVersionEntry,
+} from "@t3tools/shared/htmlRender";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
-import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
+import {
+  htmlRenderFromToolItem,
+  htmlRenderUpdateFromToolItem,
+  mcpAppFromToolItem,
+} from "@t3tools/shared/toolOutput";
 import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
@@ -143,7 +151,10 @@ export type TimelineEntry = (
       readonly kind: "html-render";
       readonly createdAt: string;
       readonly runId: RunId | null;
+      /** The first version; its attachment id is the render id. */
       readonly htmlRender: HtmlRenderReference;
+      /** Every loaded version, oldest first, starting with the first. */
+      readonly versions: ReadonlyArray<HtmlRenderVersionEntry>;
     }
   | {
       readonly id: string;
@@ -663,6 +674,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         : [],
     ),
   );
+  const renderEntryIndex = new Map<string, number>();
   for (const row of input.visibleTurnItems) {
     const { item } = row;
     if (turnItemIsWorkspacePreparation(item)) continue;
@@ -758,15 +770,37 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         ? htmlRenderFromToolItem(item)
         : undefined;
     if (htmlRender !== undefined) {
+      renderEntryIndex.set(htmlRender.attachmentId, entries.length);
       entries.push({
         id: item.id,
         kind: "html-render",
         createdAt,
         runId: item.runId,
         htmlRender,
+        versions: [{ itemId: item.id, htmlRender }],
         ...attemptMetadata,
       });
       continue;
+    }
+
+    // An update joins its render's row and still shows as ordinary tool activity below.
+    const update =
+      item.type === "dynamic_tool" && item.status === "completed"
+        ? htmlRenderUpdateFromToolItem(item)
+        : undefined;
+    const renderIndex = update === undefined ? undefined : renderEntryIndex.get(update.renderId);
+    const render = renderIndex === undefined ? undefined : entries[renderIndex];
+    if (update !== undefined && render?.kind === "html-render") {
+      entries[renderIndex!] = {
+        ...render,
+        versions: [
+          ...render.versions,
+          {
+            itemId: item.id,
+            htmlRender: htmlRenderVersion(render.versions.at(-1)!.htmlRender, update),
+          },
+        ],
+      };
     }
 
     const mcpApp =
@@ -988,13 +1022,15 @@ function reuseTimelineEntries(
   // Answer rows can replace a message already present in the retained prefix.
   if (
     appended &&
-    input.visibleTurnItems
-      .slice(before.visibleTurnItems.length)
-      .some(
-        ({ item }) =>
-          (item.type === "user_input_request" && item.questionAnswer !== undefined) ||
-          (item.type === "user_message" && item.messageId.startsWith("async-answer:")),
-      )
+    input.visibleTurnItems.slice(before.visibleTurnItems.length).some(
+      ({ item }) =>
+        (item.type === "user_input_request" && item.questionAnswer !== undefined) ||
+        (item.type === "user_message" && item.messageId.startsWith("async-answer:")) ||
+        // A new version joins a render row in the retained prefix.
+        (item.type === "dynamic_tool" &&
+          item.status === "completed" &&
+          htmlRenderUpdateFromToolItem(item) !== undefined),
+    )
   )
     return null;
   const replacements = new Map<

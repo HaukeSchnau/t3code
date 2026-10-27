@@ -127,6 +127,8 @@ export const GUEST_SHARE_PARAM = "share";
 export const guestSessionCookieName = (shareId: string) => `t3_guest_${shareId}`;
 /** Serves one HTML render in the shared thread: `?share=<share id>&item=<turn item id>`. */
 export const GUEST_RENDER_ROUTE = `${GUEST_ROUTE_PREFIX}/render`;
+/** The saved state of one HTML render, read-only for guests: `?share=<share id>&item=<turn item id>`. */
+export const GUEST_RENDER_STATE_ROUTE = `${GUEST_ROUTE_PREFIX}/render-state`;
 /** One item of the shared thread, as an expanded row loads it: `?share=<share id>&item=<id>`. */
 export const GUEST_ITEM_ROUTE = `${GUEST_ROUTE_PREFIX}/item`;
 /** Server-sent output frames of one command in the shared thread: `?share=<share id>&item=<id>`. */

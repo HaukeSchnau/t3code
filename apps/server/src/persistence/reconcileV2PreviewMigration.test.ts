@@ -34,6 +34,7 @@ describe("V2 preview upgrade on the fork ledger", () => {
         [92, "WebhookDedupe"],
         [93, "ShellStopRequestIndex"],
         [94, "ThreadMessageSearch"],
+        [95, "HtmlRenderState"],
       ]);
       assert.deepStrictEqual(yield* reconcileV2PreviewMigration(), []);
 

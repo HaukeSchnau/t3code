@@ -1815,3 +1815,50 @@ describe("streamed feed updates", () => {
     expect(showsDelegation(steps[3]!)).toBe(false);
   });
 });
+
+describe("buildThreadFeed html renders", () => {
+  const htmlRender = { attachmentId: "thread-1-render-html", title: "Quiz", height: 300 };
+  const render: OrchestrationV2TurnItem = {
+    ...base("render", "2026-06-20T00:00:01.000Z", 0),
+    type: "dynamic_tool",
+    toolName: "mcp__t3-code__html_render",
+    input: {},
+    output: { structuredContent: { htmlRender }, content: [] },
+  };
+  const update: OrchestrationV2TurnItem = {
+    ...base("update", "2026-06-20T00:00:02.000Z", 1),
+    type: "dynamic_tool",
+    toolName: "mcp__t3-code__html_render_update",
+    input: {},
+    output: {
+      structuredContent: {
+        htmlRenderUpdate: { renderId: htmlRender.attachmentId, attachmentId: "v2-html" },
+      },
+      content: [],
+    },
+  };
+  const versionsOf = (feed: ReturnType<typeof buildThreadFeed>) =>
+    feed.flatMap((entry) =>
+      entry.type === "html-render"
+        ? [(entry.versions ?? []).map((version) => version.htmlRender.attachmentId)]
+        : [],
+    );
+
+  it("adds a late update to a render row from a reused build", () => {
+    const cache = createThreadFeedCache();
+    const before = buildThreadFeed([projected(render, 0)], { cache });
+    expect(versionsOf(before)).toEqual([[]]);
+    const after = buildThreadFeed([projected(render, 0), projected(update, 1)], { cache });
+    expect(versionsOf(after)).toEqual([["thread-1-render-html", "v2-html"]]);
+    // The update still shows as tool activity of its own.
+    expect(after.some((entry) => entry.type === "activity-group")).toBe(true);
+  });
+
+  it("keeps the versioned row when nothing about it changed", () => {
+    const cache = createThreadFeedCache();
+    const rows = [projected(render, 0), projected(update, 1)];
+    const first = buildThreadFeed(rows, { cache }).find((entry) => entry.type === "html-render");
+    const second = buildThreadFeed(rows, { cache }).find((entry) => entry.type === "html-render");
+    expect(second).toBe(first);
+  });
+});

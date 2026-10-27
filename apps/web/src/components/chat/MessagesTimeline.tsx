@@ -3,7 +3,7 @@ import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock } from "./WorkLog";
-import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
+import type { OrchestrationMessageContext, WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { deriveTimelineMinimapItems } from "./timelineMinimapItems";
 import {
   type AssistantCitation,
@@ -236,7 +236,7 @@ interface MessagesTimelineProps {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-  onSendAppMessage?: (text: string) => Promise<void>;
+  onSendAppMessage?: (text: string, context?: OrchestrationMessageContext) => Promise<void>;
   onRunShellCommand?: (command: string) => void;
   inlineReplyStore?: InlineReplyDraftStore | null;
   isRevertingCheckpoint: boolean;

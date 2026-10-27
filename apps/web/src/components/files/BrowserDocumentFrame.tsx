@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  type HtmlRenderState,
   type KeybindingCommand,
   type KeybindingShortcut,
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
@@ -42,6 +43,7 @@ import { shortcutConflictKey } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
+import { type HtmlRenderPageBridge, useHtmlRenderHost } from "./useHtmlRenderHost";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 
 /**
@@ -147,10 +149,17 @@ export function HtmlRenderDocument(props: {
   readonly onContentHeight?: (height: number) => void;
   /** Reports fullscreen changes so virtualized rows can stay mounted. */
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
+  /** Lets the page send, call tools and save state; without it the page can only copy. */
+  readonly bridge?: HtmlRenderPageBridge | undefined;
+  /** The page's saved localStorage, read once when the frame loads. */
+  readonly state?: HtmlRenderState | undefined;
 }) {
   const theme = useHtmlRenderTheme();
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [src] = useState(() => `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme)}`);
+  const [src] = useState(
+    () => `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme, props.state)}`,
+  );
+  useHtmlRenderHost(frameRef, props.bridge);
   const [loaded, setLoaded] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const postTheme = () => {
@@ -315,7 +324,8 @@ export function HtmlRenderDocument(props: {
         src={src}
         title={props.title}
         // Never allow-same-origin: the opaque origin keeps the page out of the app's session.
-        sandbox="allow-scripts allow-forms"
+        sandbox="allow-scripts allow-forms allow-downloads"
+        allow="clipboard-write; fullscreen"
         loading="lazy"
         onLoad={() => {
           setLoaded(true);

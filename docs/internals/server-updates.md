@@ -71,7 +71,8 @@ opt-out. The
 [v2 recovery service](../../apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts)
 requires matching durable run, provider thread, session, and native resume identity.
 Queued runs never started, so recovery holds them and continues the run they wait
-behind. A settled run qualifies only when the restart cancels work the agent waits on
+behind. That continuation releases the hold, so they run after it; without a continuation
+they stay held until someone resumes the queue. A settled run qualifies only when the restart cancels work the agent waits on
 (a subagent, a background task, or a shell or monitor the agent marked with
 `t3_background_wait`) and its session was live, so stale records from an older crash
 never wake it. Its continuation prompt is the note of what will not report back. An

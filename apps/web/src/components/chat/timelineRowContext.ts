@@ -1,4 +1,4 @@
-import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
+import type { OrchestrationMessageContext, WorktreeSetupSnapshot } from "@t3tools/contracts";
 import {
   type EnvironmentId,
   type MessageId,
@@ -52,7 +52,9 @@ export interface TimelineRowSharedState {
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
-  onSendAppMessage: ((text: string) => Promise<void>) | undefined;
+  onSendAppMessage:
+    | ((text: string, context?: OrchestrationMessageContext) => Promise<void>)
+    | undefined;
   onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
   findActive: boolean;

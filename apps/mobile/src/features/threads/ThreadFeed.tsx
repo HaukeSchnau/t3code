@@ -232,7 +232,7 @@ import {
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
-import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
+import { htmlRenderFrameHeight, type HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
 import { assetEnvironment, useAssetUrl, useRefreshAssetUrl } from "../../state/assets";
@@ -1252,6 +1252,27 @@ function compactionLabel(label: string, title: string | undefined) {
     : label;
 }
 
+interface HtmlRenderViews {
+  /** By feed entry; a missing entry follows the newest version. */
+  readonly selected: ReadonlyMap<string, number>;
+  /** The page's reported content height, by version attachment id. */
+  readonly heights: ReadonlyMap<string, number>;
+}
+
+const EMPTY_HTML_RENDER_VIEWS: HtmlRenderViews = { selected: new Map(), heights: new Map() };
+
+function shownHtmlRenderVersion(
+  entry: Extract<ThreadFeedRow, { type: "html-render" }>,
+  views: HtmlRenderViews,
+): HtmlRenderReference {
+  const versions = entry.versions ?? [];
+  const selected = views.selected.get(entry.id);
+  const last = versions.length - 1;
+  return (
+    versions[selected === undefined ? last : Math.min(selected, last)]?.htmlRender ?? entry.render
+  );
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedRow; index: number },
   props: Pick<
@@ -1297,6 +1318,9 @@ function renderFeedEntry(
     readonly contentWidth: number;
     readonly threadTitle: string;
     readonly workflowOpening: WorkflowOpening | null;
+    readonly htmlRenderViews: HtmlRenderViews;
+    readonly onSelectHtmlRenderVersion: (entryId: string, index: number | undefined) => void;
+    readonly onHtmlRenderContentHeight: (attachmentId: string, height: number) => void;
   },
 ) {
   const entry = info.item;
@@ -1368,6 +1392,13 @@ function renderFeedEntry(
         environmentId={props.environmentId}
         threadId={props.threadId}
         render={entry.render}
+        versions={entry.versions ?? [{ itemId: entry.id, htmlRender: entry.render }]}
+        selected={props.htmlRenderViews.selected.get(entry.id)}
+        onSelect={(index) => props.onSelectHtmlRenderVersion(entry.id, index)}
+        contentHeight={props.htmlRenderViews.heights.get(
+          shownHtmlRenderVersion(entry, props.htmlRenderViews).attachmentId,
+        )}
+        onContentHeight={props.onHtmlRenderContentHeight}
         frameWidth={props.contentWidth}
         iconColor={iconSubtleColor}
       />
@@ -2210,6 +2241,21 @@ export const ThreadFeed = memo(function ThreadFeed({
     expandedTurnIds: new Set(),
   });
   const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  // Rows are sized here, so the version a render shows and its page's height live here too.
+  const [htmlRenderViews, setHtmlRenderViews] = useState<HtmlRenderViews>(EMPTY_HTML_RENDER_VIEWS);
+  const onSelectHtmlRenderVersion = (entryId: string, index: number | undefined) =>
+    setHtmlRenderViews((current) => {
+      const selected = new Map(current.selected);
+      if (index === undefined) selected.delete(entryId);
+      else selected.set(entryId, index);
+      return { ...current, selected };
+    });
+  const onHtmlRenderContentHeight = (attachmentId: string, height: number) =>
+    setHtmlRenderViews((current) =>
+      current.heights.get(attachmentId) === height
+        ? current
+        : { ...current, heights: new Map(current.heights).set(attachmentId, height) },
+    );
   // Folds find opened for its current match. They close when the match moves
   // on, and join the reader's own folds when find closes.
   const [findReveal, setFindReveal] = useState<Omit<ThreadFindReveal, "rowId"> | null>(null);
@@ -2700,6 +2746,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     contentWidth,
     skills: props.skills,
     workflowOpening,
+    htmlRenderViews,
   };
   const reportHeaderMaterialVisibility = (visible: boolean) => {
     if (headerMaterialVisibleRef.current === visible) {
@@ -3227,7 +3274,10 @@ export const ThreadFeed = memo(function ThreadFeed({
   const getFixedItemSize = (entry: ThreadFeedRow) => {
     if (entry.type === "guest-pending") return undefined;
     if (entry.type === "html-render") {
-      return htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
+      const shown = shownHtmlRenderVersion(entry, htmlRenderViews);
+      return htmlRenderRowHeight(
+        htmlRenderFrameHeight(shown, contentWidth, htmlRenderViews.heights.get(shown.attachmentId)),
+      );
     }
     if (workRowSizing.fixedRowHeight === undefined || entry.checkpointSummary) {
       return undefined;
@@ -3276,6 +3326,15 @@ export const ThreadFeed = memo(function ThreadFeed({
       listRef.current?.clearCaches({ mode: "sizes" });
     }
   }, [textSizeKey, contentWidth, hasHtmlRenders, beginReflow, listRef]);
+
+  // A page reporting its height or a reader paging versions resizes that row.
+  const previousHtmlRenderViews = useRef(htmlRenderViews);
+  // oxlint-disable-next-line t3code/react-effect-budget -- LegendList caches row sizes; drop them after the commit that changed a render row's height.
+  useLayoutEffect(() => {
+    if (previousHtmlRenderViews.current === htmlRenderViews) return;
+    previousHtmlRenderViews.current = htmlRenderViews;
+    listRef.current?.clearCaches({ mode: "sizes" });
+  }, [htmlRenderViews, listRef]);
 
   const renderItem = (info: { item: ThreadFeedRow; index: number }) => (
     <Animated.View
@@ -3330,6 +3389,9 @@ export const ThreadFeed = memo(function ThreadFeed({
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
             workflowOpening,
+            htmlRenderViews,
+            onSelectHtmlRenderVersion,
+            onHtmlRenderContentHeight,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />

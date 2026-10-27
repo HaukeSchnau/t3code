@@ -22,6 +22,7 @@ import {
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -65,7 +66,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
   const text = result.content[0];
   return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
 };
-import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+import { htmlRenderFromToolItem, htmlRenderUpdateFromToolItem } from "@t3tools/shared/toolOutput";
 
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
@@ -291,18 +292,45 @@ it("bounds public command rejections and redacts internal dispatch causes", () =
   });
 });
 
-it.effect("returns an HTML render reference that Codex and Claude tool rows both carry", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const result = yield* server
-      .callTool({
-        name: "html_render",
-        arguments: { html: "<p>Revenue</p>", title: "Revenue", height: 240 },
-      })
+const layerHtmlToolkit = McpHttpServer.layerHtmlToolkit.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provide(PreviewBrowser.layer),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
+  Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(
+    Layer.mock(ThreadManagement.ThreadManagementService)({
+      getThreadShell: () =>
+        Effect.succeed({
+          id: threadId,
+          deletedAt: null,
+          archivedAt: null,
+          activeRunId: RunId.make("mcp-core-run"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        } as OrchestrationV2ThreadShell),
+    }),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+const callHtmlTool = (name: string, args: Record<string, unknown>) =>
+  Effect.flatMap(McpServer.McpServer, (server) =>
+    server
+      .callTool({ name, arguments: args })
       .pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(McpSchema.McpServerClient, client),
-      );
+      ),
+  );
+
+it.effect("returns an HTML render reference that Codex and Claude tool rows both carry", () =>
+  Effect.gen(function* () {
+    const result = yield* callHtmlTool("html_render", {
+      html: "<p>Revenue</p>",
+      title: "Revenue",
+      height: 240,
+    });
     const reference = htmlRenderFromToolItem({
       toolName: "t3-code.html_render",
       output: result.structuredContent,
@@ -311,30 +339,68 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
     expect(
       htmlRenderFromToolItem({ toolName: "mcp__t3-code__html_render", output: result.content }),
     ).toEqual(reference);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerHtmlToolkit.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(McpProviderSessions.layer),
-        Layer.provide(PreviewBrowser.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
-        Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
-        Layer.provide(FetchHttpClient.layer),
-        Layer.provide(
-          Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: () =>
-              Effect.succeed({
-                id: threadId,
-                deletedAt: null,
-                archivedAt: null,
-                activeRunId: RunId.make("mcp-core-run"),
-                providerInstanceId: ProviderInstanceId.make("codex"),
-              } as OrchestrationV2ThreadShell),
-          }),
-        ),
-      ),
-    ),
-  ),
+  }).pipe(Effect.provide(layerHtmlToolkit)),
+);
+
+it.effect("publishes a page from a path, and needs exactly one of html and path", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-path-" });
+    const path = `${directory}/report.html`;
+    yield* fileSystem.writeFileString(path, "<p>Long report</p>");
+    const fromPath = yield* callHtmlTool("html_render", { path, title: "Report", height: 240 });
+    expect(
+      htmlRenderFromToolItem({
+        toolName: "t3-code.html_render",
+        output: fromPath.structuredContent,
+      }),
+    ).toMatchObject({ title: "Report" });
+
+    const both = yield* callHtmlTool("html_render", {
+      html: "<p>x</p>",
+      path,
+      title: "Report",
+      height: 240,
+    });
+    expect(declaredFailure(both)).toMatchObject({ code: "invalid_request" });
+    const relative = yield* callHtmlTool("html_render", {
+      path: "report.html",
+      title: "Report",
+      height: 240,
+    });
+    expect(declaredFailure(relative)).toMatchObject({ code: "invalid_request" });
+  }).pipe(Effect.provide(layerHtmlToolkit)),
+);
+
+it.effect("publishes a new version only of a page this thread showed", () =>
+  Effect.gen(function* () {
+    const first = yield* callHtmlTool("html_render", {
+      html: "<p>v1</p>",
+      title: "Quiz",
+      height: 240,
+    });
+    const renderId = htmlRenderFromToolItem({
+      toolName: "t3-code.html_render",
+      output: first.structuredContent,
+    })!.attachmentId;
+
+    const updated = yield* callHtmlTool("html_render_update", { renderId, html: "<p>v2</p>" });
+    const update = htmlRenderUpdateFromToolItem({
+      toolName: "mcp__t3-code__html_render_update",
+      output: updated.content,
+    });
+    expect(update?.renderId).toBe(renderId);
+    expect(update?.attachmentId).not.toBe(renderId);
+    // Clients keep the previous title and height when the update leaves them out.
+    expect(update?.title).toBeUndefined();
+    expect(update?.height).toBeUndefined();
+
+    const foreign = yield* callHtmlTool("html_render_update", {
+      renderId: renderId.replace(/^[^-]+/, "other"),
+      html: "<p>v2</p>",
+    });
+    expect(declaredFailure(foreign)).toMatchObject({ code: "invalid_request" });
+  }).pipe(Effect.provide(layerHtmlToolkit)),
 );
 
 it.effect("records only failed calls of tools that hand off no work", () => {
