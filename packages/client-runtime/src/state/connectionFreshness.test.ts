@@ -260,6 +260,22 @@ describe("connection freshness projection", () => {
     expect(projected.snapshot).not.toHaveProperty("sequence");
   });
 
+  it("projects the retry wait after a live session dropped without a failure", () => {
+    // The supervisor does not count a lost live session as a failed connection.
+    expect(
+      projectEnvironmentConnectionProgress(
+        connectionState({ phase: "backoff", stage: null, attempt: 1, retryAt: 10_000 }),
+      ),
+    ).toEqual({
+      phase: "reconnecting",
+      stage: "waiting-to-retry",
+      attempt: 1,
+      generation: 0,
+      retryAt: 10_000,
+      failure: null,
+    });
+  });
+
   it("rejects impossible nullable source combinations instead of publishing invalid unions", () => {
     expect(() =>
       projectEnvironmentConnectionProgress(

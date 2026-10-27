@@ -21,7 +21,9 @@ reachable server.
   live data without a transport.
 - The source types use nullable fields, so they can describe combinations their state machines
   never publish. The projection throws on those instead of emitting an invalid value, such as a
-  backoff without a failure or a live shell without a snapshot.
+  blocked connection without a failure or a live shell without a snapshot. A backoff after a lost
+  live session carries no failure, because upstream does not count a dropped session as a failed
+  connection.
 - `connection/supervisor.ts` (`normalizeDesiredIntent`) treats a browser `offline` report as
   `unknown` while the connection is desired: at startup, during automatic recovery, after a live
   session is replaced, and on an explicit retry. Connection attempts and their backoff decide
