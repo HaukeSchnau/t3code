@@ -1,5 +1,5 @@
 import { Files, Flake, Nix, Setup, Step, Task, cmd } from "@calder-ci/core";
-import { Project, Vitest } from "@calder-ci/std";
+import { Pnpm, Project, Vitest } from "@calder-ci/std";
 import { flake } from "./flake.ts";
 
 const shell = flake.devShells.ci;
@@ -565,6 +565,13 @@ export default Project.standard({
     forkLockfile,
     deployLock,
   ],
+  placement: {
+    shell,
+    setup: Pnpm.install({ shell, dir: "deploy", name: "deploy-install" }),
+    dir: "deploy",
+    env: "cloudflare",
+    secrets: { FLEET_TOKEN_FILE: "placement-token" },
+  },
   afterDeploy: apps,
   // Runs every check from scratch, which also shows whether a test file's key misses something it reads.
   nightly: "0 3 * * *",
