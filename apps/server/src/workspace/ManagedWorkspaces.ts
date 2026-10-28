@@ -169,9 +169,10 @@ const make = Effect.gen(function* () {
     const kind = findRepositoryMarker(projectRoot)?.kind ?? "directory";
     if (kind === "git") return kind;
     if (options?.isolated === true) return "isolated";
-    // A separate project's workspaces stay inside its environment, like its own threads.
+    // A separate project's workspaces stay inside its environment, like its own threads. An
+    // unreadable registry counts as separate, as ProjectExecution does, so nothing lands on the host.
     const separate =
-      launcherHost && (yield* isIsolated(projectRoot).pipe(Effect.orElseSucceed(() => false)));
+      launcherHost && (yield* isIsolated(projectRoot).pipe(Effect.orElseSucceed(() => true)));
     return separate ? "isolated" : kind;
   });
 

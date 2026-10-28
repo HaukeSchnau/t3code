@@ -42,7 +42,7 @@ This reduces accidental context discovery. It is not a security boundary.
 New isolated workspaces return through [Workspaces](workspaces.md). On a host with the
 launcher, a jj or directory workspace launched with `isolated: true` is an `agent-exec fork`
 registered here, so the routing above runs its providers, terminals and setup scripts inside it.
-Other new workspaces stay on the host. Git projects get upstream's worktrees; isolated workspaces
+Other new workspaces stay on the host, except in a project whose root is registered here. Git projects get upstream's worktrees; isolated workspaces
 that earlier versions created by default, including those forked from Git projects, keep their
 registrations, so their threads still run and the workspaces can still be deleted.
 

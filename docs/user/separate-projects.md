@@ -13,7 +13,8 @@ On these hosts, **New isolated workspace** in the composer's workspace control c
 separate environment for one task in a jj repository or a folder without Git, with its own
 checkout of the project's repositories. Use it for clean-room work, such as a rewrite that should
 not borrow from the code around it. **New workspace** stays an ordinary folder on the host, and Git
-projects get ordinary worktrees. The choice applies to the next task you send. Under **Clean room
+projects get ordinary worktrees. In a project that is itself a separate environment, every new
+workspace is one too. The choice applies to the next task you send. Under **Clean room
 setup**, **Familiar** keeps your global instructions and skills; **Minimal** starts with the
 project's own guidance. Agents opt in with `isolated: true` in a `workspace` launch. Deleting the
 workspace stops its environment and removes its files. This version can't create new separate
