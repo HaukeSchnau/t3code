@@ -33,7 +33,7 @@ import {
   ThreadId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import * as Option from "effect/Option";
 import * as Struct from "effect/Struct";
 import * as Schema from "effect/Schema";
@@ -344,7 +344,7 @@ function useOutboxEntries(): ReadonlyArray<DurableComposerEntry> {
 
 /** Starts delivery for the app session and reports rejections wherever the user is. */
 export function useDurableCommandOutbox(onRejected: (entry: DurableComposerEntry) => void): void {
-  // oxlint-disable-next-line t3code/react-effect-budget -- Delivery and the rejection listener live as long as the app shell.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Delivery and the rejection listener live as long as the app shell.
   useEffect(() => {
     durableCommandOutbox();
     rejectionListeners.add(onRejected);
@@ -368,7 +368,7 @@ export function useThreadDurableOutbox(
     threadKey === null
       ? EMPTY_ENTRIES
       : entries.filter((entry) => scopedThreadKey(entry.command) === threadKey);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Settles entries once the server shows them, which arrives from the thread subscription.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Settles entries once the server shows them, which arrives from the thread subscription.
   useEffect(() => {
     if (!threadEntries.some((entry) => serverMessageIds.has(entry.command.messageId))) return;
     void durableCommandOutbox().settle(
@@ -599,7 +599,7 @@ export function restoredComposerContent(entry: DurableComposerEntry): RestoredCo
   return {
     // Context chips cannot be rebuilt from wire records; spell them out instead.
     text: command.context
-      ? serializeLegacyContextMessage({ text: command.text, records: command.context.records })
+      ? projectComposerContextForProvider({ text: command.text, records: command.context.records })
       : command.text,
     images,
     files,

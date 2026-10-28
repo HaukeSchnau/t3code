@@ -64,8 +64,9 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   thread's runtime and interaction mode in line with derived command ids (`<id>:runtime-mode`,
   `<id>:interaction-mode`), then calls the shared `startThreadTurn` with the stored command id. That
   dispatches `message.dispatch` for an existing thread and `launchThread` for a new one.
-- Message context follows the environment's capability at each attempt. A receipt replay ignores the
-  payload, so a capability change between attempts cannot cause a second delivery.
+- Message context always travels as records, as upstream's direct send does since it dropped servers
+  without inline context. A message taken back into the composer spells its context out with
+  upstream's `projectComposerContextForProvider`, because chips cannot be rebuilt from wire records.
 - `useComposerSend` gives its direct send an explicit command id. When that send fails with a transport
   error or an interruption, `handOffUnconfirmedSend` stores it under the same id instead of restoring
   the composer. A failure the server decided keeps upstream's restore behavior.

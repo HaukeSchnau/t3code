@@ -35,7 +35,7 @@ export function JjThreadWorkDialogPopup(props: {
   const [state, setState] = useState<WorkState>({ kind: "loading" });
   const { environmentId, threadId } = props;
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- The dialog loads the thread's jj work once it opens.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The dialog loads the thread's jj work once it opens.
   useEffect(() => {
     let cancelled = false;
     void findWork({ environmentId, input: { threadId } }).then((result) => {

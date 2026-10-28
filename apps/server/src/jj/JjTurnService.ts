@@ -1082,7 +1082,9 @@ const make = Effect.gen(function* () {
     prepareRevert,
     revert,
     assignPaths,
-    readState: (root) => loadWorkingCopyState(io, root),
+    readState: Effect.fn("JjTurnService.readState")(function (root) {
+      return loadWorkingCopyState(io, root);
+    }),
     recordOperation: recordOperationFor,
     forgetOperation,
     rebaseline,

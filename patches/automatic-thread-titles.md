@@ -28,7 +28,7 @@ becomes clearer or changes, using the inexpensive text-generation model.
   and explicit generation.
 - Turning off **Automatic thread titles** (`refreshGeneratedThreadTitles`, default on) stops
   refreshes. First-message generation and explicit regeneration keep working. Web and desktop show
-  the switch in **Settings → General → Text generation**, mobile in **Settings → Thread behavior**.
+  the switch in **Settings → Threads → Text generation**, mobile in **Settings → Thread behavior**.
 - Threads without a title mode keep their titles until regenerated. These are v1 imports and v2
   threads created before this patch. Carrying the fork's v1 `title_mode` column over would need a
   hook in upstream's v1 importer; leaving imported titles alone until the user regenerates them is
@@ -64,7 +64,8 @@ Upstream-owned hooks:
   `automaticRefresh` flag and its stricter prompt rule.
 - `apps/web/src/components/settings/SettingsPanels.tsx` and `settingsSearch.ts`: the settings row,
   its search entry, dirty label, and reset.
-- `apps/mobile/src/features/settings/SettingsThreadsRouteScreen.tsx`: the mobile switch.
+- `apps/mobile/src/features/settings/ThreadSettingsSections.tsx`: the mobile switch, in the Threads
+  page's `AutoSettleSettingsRows`.
 
 ## Removal
 

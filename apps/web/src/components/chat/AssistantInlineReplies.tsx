@@ -114,7 +114,7 @@ function InlineReplyEditor({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- The textarea height is measured from the DOM after each edit.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The textarea height is measured from the DOM after each edit.
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -251,7 +251,7 @@ export function AssistantInlineReplies({
     getReplies,
   );
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Highlight ranges are DOM ranges over the rendered markdown.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Highlight ranges are DOM ranges over the rendered markdown.
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -267,7 +267,7 @@ export function AssistantInlineReplies({
     return () => store.clearHighlightRanges(messageId);
   }, [messageId, replies, store]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Scrolling anywhere dismisses the selection action, which needs a window listener.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Scrolling anywhere dismisses the selection action, which needs a window listener.
   useEffect(() => {
     if (!selectionAction) return;
     const dismissOnScroll = () => setSelectionAction(null);
@@ -364,7 +364,7 @@ export function AssistantInlineReplies({
     });
   };
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Text selection is document state with no React event.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Text selection is document state with no React event.
   useEffect(() => {
     document.addEventListener("selectionchange", updateSelectionAction);
     return () => document.removeEventListener("selectionchange", updateSelectionAction);

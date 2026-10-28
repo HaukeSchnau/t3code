@@ -72,7 +72,7 @@ export function TrainNetworkStatus({
   );
   const previouslyDegradedRef = useRef(false);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- The anti-flicker holds are timers that follow connection changes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The anti-flicker holds are timers that follow connection changes.
   useEffect(() => {
     if (immediate) {
       // oxlint-disable-next-line react/set-state-in-effect -- The hold timers follow connection changes the supervisor reports.
@@ -106,7 +106,7 @@ export function TrainNetworkStatus({
     return () => window.clearTimeout(timeout);
   }, [fullyRecovered, immediate, nextView]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- The retry countdown ticks with the wall clock.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The retry countdown ticks with the wall clock.
   useEffect(() => {
     if (nextView?.retryRemainingMs === null || nextView?.retryRemainingMs === undefined) return;
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);

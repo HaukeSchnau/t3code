@@ -59,8 +59,10 @@ handling, because the maintainer and their agents work in jj repositories.
 ## Upstream hooks
 
 - `vcs/VcsDriverRegistry.ts` (jj driver, `gitCompatible`), `git/GitWorkflowService.ts` and
-  `review/ReviewService.ts` (accept Git-compatible handles), `checkpointing/CheckpointStore.ts`
-  (`isCheckpointable`), `orchestration-v2/CheckpointService.ts`.
+  `review/ReviewService.ts` (accept Git-compatible handles). Upstream dropped the Git-only guards
+  in `GitWorkflowService.ts` because its registry only detects Git; the fork keeps them as
+  `gitCompatible` checks, so a jj repository without a Git worktree still fails cleanly.
+- `checkpointing/CheckpointStore.ts` (`isCheckpointable`), `orchestration-v2/CheckpointService.ts`.
 - `orchestration-v2/RunExecutionService.ts` (turn start hook; failed runs enqueue a capture),
   `CheckpointCaptureService.ts` (seal before capture; failed runs keep their status),
   `CheckpointRestoreSafety.ts`, `CheckpointRollbackService.ts`, and `Orchestrator.ts` (a fork's

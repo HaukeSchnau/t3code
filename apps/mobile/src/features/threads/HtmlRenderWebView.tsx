@@ -28,7 +28,7 @@ import {
 } from "@t3tools/shared/htmlRender";
 import * as Clipboard from "expo-clipboard";
 import * as Predicate from "effect/Predicate";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Platform, Pressable, View, type ColorValue } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
@@ -55,17 +55,13 @@ export function htmlRenderRowHeight(frameHeight: number) {
 function useHtmlRenderTheme() {
   const { themeId, themeAppearance, themeVariables, systemColorsActive } =
     useAppearancePreferences();
-  return useMemo(
-    () =>
-      mobileHtmlRenderTheme({
-        themeId,
-        appearance: themeAppearance,
-        variables: themeVariables,
-        systemColors: systemColorsActive,
-        platform: Platform.OS,
-      }),
-    [themeId, themeAppearance, themeVariables, systemColorsActive],
-  );
+  return mobileHtmlRenderTheme({
+    themeId,
+    appearance: themeAppearance,
+    variables: themeVariables,
+    systemColors: systemColorsActive,
+    platform: Platform.OS,
+  });
 }
 
 // Android exposes `ReactNativeWebView` to every frame, so the page could post to React Native
@@ -123,7 +119,7 @@ const savedKey = (target: HtmlRenderBridgeTarget) =>
 /** The render's saved state: this device's latest save, else a read when the view mounts. */
 export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefined) {
   const key = target === undefined ? undefined : savedKey(target);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Counts mounted views so the local save outlives none of them.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Counts mounted views so the local save outlives none of them.
   useEffect(() => {
     if (key === undefined) return;
     const entry = savedHere.get(key) ?? { state: undefined, views: 0 };
@@ -174,17 +170,14 @@ export function HtmlRenderWebView(props: {
   const host = useRef<HtmlRenderHost | null>(null);
   const crashes = useRef(0);
   const shownTheme = useRef<HtmlRenderTheme | null>(null);
-  const source = useMemo(
-    () => ({
-      html: relayDocument(props.uri + htmlRenderThemeFragment(initialTheme, initialState), secret),
-    }),
-    [props.uri, initialTheme, initialState, secret],
-  );
+  const source = {
+    html: relayDocument(props.uri + htmlRenderThemeFragment(initialTheme, initialState), secret),
+  };
   const post = (message: unknown) =>
     webView.current?.injectJavaScript(
       `window.__t3HtmlRenderReceive&&window.__t3HtmlRenderReceive(${JSON.stringify(message)});true;`,
     );
-  // oxlint-disable-next-line t3code/react-effect-budget -- Posts app theme changes into the loaded page.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- posts theme changes into the already loaded WebView
   useEffect(() => {
     if (shownTheme.current === null || shownTheme.current === theme) return;
     shownTheme.current = theme;
@@ -203,7 +196,7 @@ export function HtmlRenderWebView(props: {
     setState,
   }));
   const bridged = props.bridge !== undefined;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Each page document gets one host; it answers until the document goes away.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Each page document gets one host; it answers until the document goes away.
   useEffect(() => {
     const live = () => {
       const current = readLive();
@@ -329,7 +322,7 @@ export function HtmlRenderWebView(props: {
         style={{ flex: 1, backgroundColor: "transparent" }}
         originWhitelist={["*"]}
         allowsInlineMediaPlayback
-        automaticallyAdjustContentInsets={!props.nested}
+        contentInsetAdjustmentBehavior={props.nested ? "never" : "automatic"}
         bounces={!props.nested}
         // The frame fits the page in the feed; the page scrolls inside it when full screen.
         scrollEnabled={false}
@@ -383,16 +376,13 @@ export function ThreadHtmlRender(props: {
     renderId: props.render.attachmentId,
   };
   const savedState = useHtmlRenderSavedState(bridge);
-  const resource = useMemo(
-    () => ({
-      _tag: "attachment" as const,
-      attachmentId,
-      fileName,
-      mimeType: "text/html",
-      disposition: "inline" as const,
-    }),
-    [attachmentId, fileName],
-  );
+  const resource = {
+    _tag: "attachment" as const,
+    attachmentId,
+    fileName,
+    mimeType: "text/html",
+    disposition: "inline" as const,
+  };
   const asset = useAssetUrlState(props.environmentId, resource);
   const refresh = useRefreshAssetUrl(props.environmentId, resource);
   // Signed URLs are re-minted periodically; following them would reload the page.

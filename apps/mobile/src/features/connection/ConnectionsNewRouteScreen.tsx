@@ -12,8 +12,8 @@ import {
   type StaticScreenProps,
 } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
-import { useEffect, useRef, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { Linking, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Defs, RadialGradient, Rect, Stop } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -24,17 +24,22 @@ import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { AppText as Text, AppTextInput, type AppTextInputProps } from "../../components/ui/AppText";
 import { FrostedCutout } from "../../components/ui/FrostedCutout";
 import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
-import {
-  setPendingConnectionError,
-  useRemoteConnections,
-} from "../../state/use-remote-environment-registry";
+import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
 import { resolveConnectionPairingAutomation } from "./connectionPairingAutomation";
+import { autoConnectReport, devAutoConnectAttemptAtom } from "./devAutoConnect";
 import { splitEnvironmentSections } from "./environmentSections";
 import { leaveSettingsPage } from "../settings/settings-navigation";
 import { workspaceHasColumns } from "../workspace/workspace-selection-store";
+
+const DEVELOPMENT_PAIRING = __DEV__
+  ? resolveConnectionPairingAutomation({
+      developmentPairingUrl: process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL,
+      developmentAutoConnect: process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT,
+    })
+  : null;
 
 type ConnectionsNewRouteParams = {
   readonly mode?: string;
@@ -46,66 +51,75 @@ type ConnectionsNewRouteParams = {
 export function ConnectionsNewRouteScreen({
   route,
 }: StaticScreenProps<ConnectionsNewRouteParams | undefined>) {
-  const {
-    connectionPairingUrl,
-    onChangeConnectionPairingUrl,
-    onConnectPress,
-    pairingConnectionError,
-  } = useRemoteConnections();
+  const params = route.params ?? {};
+  // Dev-only prefill prevents production links from supplying an attacker-chosen host and token.
+  const linkedPairingUrl = __DEV__ ? (params.pairingUrl?.trim() ?? "") : "";
+  // A link wins over the development pairing URL baked into the bundle.
+  const developmentPairing = linkedPairingUrl.length === 0 ? DEVELOPMENT_PAIRING : null;
+  const routePairingUrl = linkedPairingUrl || developmentPairing?.pairingUrl || "";
+  // A new prefill link replaces whatever the form held.
+  return (
+    <PairingForm
+      key={routePairingUrl}
+      routePairingUrl={routePairingUrl}
+      routeFor={params.routeFor}
+      autoConnectDevelopmentPairing={developmentPairing?.autoConnect === true}
+    />
+  );
+}
+
+function PairingForm({
+  routePairingUrl,
+  routeFor,
+  autoConnectDevelopmentPairing,
+}: {
+  readonly routePairingUrl: string;
+  readonly routeFor: EnvironmentId | undefined;
+  readonly autoConnectDevelopmentPairing: boolean;
+}) {
+  const { connectionPairingUrl, onChangeConnectionPairingUrl, onConnectPress } =
+    useRemoteConnections();
   const navigation = useNavigation();
   const routeName = useRoute().name;
-  const params = route.params ?? {};
   const insets = useSafeAreaInsets();
-  const [hostInput, setHostInput] = useState("");
-  const [codeInput, setCodeInput] = useState("");
+  const [initialPairing] = useState(() => parsePairingUrl(routePairingUrl || connectionPairingUrl));
+  const [hostInput, setHostInput] = useState(initialPairing.host);
+  const [codeInput, setCodeInput] = useState(initialPairing.code);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  // The user's own edit or submit dismisses the dev auto-connect report.
+  const [ownAttempt, setOwnAttempt] = useState(false);
+  const autoConnect = autoConnectReport(
+    useAtomValue(devAutoConnectAttemptAtom),
+    routePairingUrl,
+    ownAttempt,
+  );
+  const connecting = isSubmitting || autoConnect.connecting;
+  const pairingConnectionError = submitError ?? autoConnect.error;
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const screenFocused = useIsFocused();
   const [scannerLocked, setScannerLocked] = useState(false);
   // A good scan parks the camera so it can't re-read the code over later edits.
   const [scanComplete, setScanComplete] = useState(false);
-  const consumedPairingUrlRef = useRef<string | null>(null);
-
-  const pairingAutomation = resolveConnectionPairingAutomation({
-    // Deep-link prefill exists for development automation only. A production
-    // link must not arrive with attacker-chosen host and token already filled.
-    routePairingUrl: __DEV__ ? params.pairingUrl : undefined,
-    routeAutoConnect: __DEV__ ? params.autoConnect : undefined,
-    developmentPairingUrl: __DEV__ ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL : undefined,
-    developmentAutoConnect: __DEV__
-      ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT
-      : undefined,
-  });
 
   const headerIconColor = useUniwindTheme()["--color-icon"];
 
-  const connectDisabled = isSubmitting || hostInput.trim().length === 0;
+  const connectDisabled = connecting || hostInput.trim().length === 0;
 
-  useEffect(() => {
-    const { host, code } = parsePairingUrl(connectionPairingUrl);
-    // oxlint-disable-next-line react/set-state-in-effect -- A new pairing URL reseeds the editable host and code fields.
-    setHostInput(host);
-    setCodeInput(code);
-  }, [connectionPairingUrl]);
-
-  useEffect(() => {
-    if (pairingConnectionError) {
-      // oxlint-disable-next-line react/set-state-in-effect -- A pairing failure reported by the connection runtime ends the submit.
-      setIsSubmitting(false);
-    }
-  }, [pairingConnectionError]);
+  const clearError = () => {
+    setSubmitError(null);
+    setOwnAttempt(true);
+  };
 
   const handleHostChange = (value: string) => {
     setHostInput(value);
-    setPendingConnectionError(null);
+    clearError();
   };
 
   const handleCodeChange = (value: string) => {
     setCodeInput(value);
-    setPendingConnectionError(null);
+    clearError();
   };
-
-  useEffect(() => () => setPendingConnectionError(null), []);
 
   const handleScanPress = async () => {
     const permission = await requestCameraPermission();
@@ -151,17 +165,21 @@ export function ConnectionsNewRouteScreen({
     }
   };
 
-  const connectAndClose = async (pairingUrl: string) => {
+  const handleSubmit = async () => {
+    const pairingUrl = buildPairingUrl(hostInput, codeInput);
+    setOwnAttempt(true);
+    setSubmitError(null);
     setIsSubmitting(true);
     onChangeConnectionPairingUrl(pairingUrl);
-    const result = await onConnectPress(pairingUrl, params.routeFor);
+    const outcome = await onConnectPress(pairingUrl, routeFor);
     setIsSubmitting(false);
+    setSubmitError(outcome.error);
     void Haptics.notificationAsync(
-      AsyncResult.isSuccess(result)
+      outcome.ok
         ? Haptics.NotificationFeedbackType.Success
         : Haptics.NotificationFeedbackType.Error,
     );
-    if (AsyncResult.isSuccess(result)) {
+    if (outcome.ok) {
       // Replacing with Home would nest it inside any sheet below; return to the opener.
       if (!navigation.canGoBack()) {
         navigation.dispatch(StackActions.replace("Home"));
@@ -172,29 +190,12 @@ export function ConnectionsNewRouteScreen({
     }
   };
 
-  const handleSubmit = async () => {
-    await connectAndClose(buildPairingUrl(hostInput, codeInput));
-  };
-
+  const submitDevelopmentPairing = useEffectEvent(() => void handleSubmit());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- dev builds pair EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL once when the form opens
   useEffect(() => {
-    if (
-      pairingAutomation === null ||
-      consumedPairingUrlRef.current === pairingAutomation.pairingUrl
-    ) {
-      return;
-    }
-
-    const { pairingUrl, autoConnect } = pairingAutomation;
-    consumedPairingUrlRef.current = pairingUrl;
-    const { host, code } = parsePairingUrl(pairingUrl);
-    setHostInput(host);
-    setCodeInput(code);
-    onChangeConnectionPairingUrl(pairingUrl);
-    if (autoConnect) {
-      // oxlint-disable-next-line react/set-state-in-effect -- development auto-connect submits the seeded pairing URL once
-      void connectAndClose(pairingUrl);
-    }
-  }, [connectAndClose, onChangeConnectionPairingUrl, pairingAutomation]);
+    // oxlint-disable-next-line react/set-state-in-effect -- the development pairing submits like a tap on Connect
+    if (autoConnectDevelopmentPairing) submitDevelopmentPairing();
+  }, [autoConnectDevelopmentPairing]);
 
   return (
     <SettingsScreen
@@ -202,8 +203,8 @@ export function ConnectionsNewRouteScreen({
       title="Add environment"
       actions={[
         {
-          accessibilityLabel: isSubmitting ? "Connecting" : "Add environment",
-          loading: isSubmitting,
+          accessibilityLabel: connecting ? "Connecting" : "Add environment",
+          loading: connecting,
           icon: "checkmark",
           tintColor: headerIconColor,
           disabled: connectDisabled,

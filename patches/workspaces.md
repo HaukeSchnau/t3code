@@ -104,7 +104,7 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 - mobile `Stack.tsx` (the `NewTaskWorkspace` root route), `layout/workspace-overlay-routes.ts`,
   `NewTaskDraftScreen.tsx`, `new-task-flow-provider.tsx`,
   `NewTaskContextPickerScreens.tsx` (exports `PickerSurface` and `ToggleRow`),
-  `lib/projectThreadStartTurn.ts`, `state/thread-outbox-model.ts`, `state/use-thread-outbox-drain.ts`,
+  `lib/projectThreadStartTurn.ts`, `state/thread-outbox-model.ts`, `state/threadOutboxDelivery.ts`,
   `settings/scheduledTaskDraft.ts`; fork-owned `NewTaskWorkspacePickerRouteScreen.tsx` and
   `managed-workspaces.ts`.
 - Test harnesses of `ThreadLaunchService` and `WorktreeMcpService` provide a mock layer.

@@ -329,10 +329,6 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
     expectedGeneration: number,
   ): Effect.fn.Return<void, unknown> {
     if (expectedGeneration !== deviceRegistrationGeneration) {
-      logRegistrationDebug("device registration cancelled before environment request", {
-        expectedGeneration,
-        currentGeneration: deviceRegistrationGeneration,
-      });
       return;
     }
     const transport = environmentTransport;
@@ -350,10 +346,6 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
     }).pipe(Effect.orElseSucceed(() => null));
     if (expectedGeneration !== deviceRegistrationGeneration) {
       // The paired environment set changed while the record loaded.
-      logRegistrationDebug("device registration cancelled after record lookup", {
-        expectedGeneration,
-        currentGeneration: deviceRegistrationGeneration,
-      });
       return;
     }
     const payload = body;
@@ -369,15 +361,9 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
       !needsAndroidReplay
     ) {
       setRegistrationStatus("registered");
-      logRegistrationDebug("device registration skipped; already registered with environment", {
-        expectedGeneration,
-      });
       return;
     }
 
-    logRegistrationDebug("environment device registration request started", {
-      expectedGeneration,
-    });
     const result = yield* Effect.tryPromise({
       try: () => transport.registerDevice(payload),
       catch: (cause) =>
@@ -391,13 +377,6 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
       return yield* new AgentAwarenessDeliveryUnavailableError({});
     }
     if (expectedGeneration !== deviceRegistrationGeneration) {
-      logRegistrationDebug(
-        "device registration completed after environment change; result discarded",
-        {
-          expectedGeneration,
-          currentGeneration: deviceRegistrationGeneration,
-        },
-      );
       return;
     }
     if (body.platform === "android") {
@@ -412,9 +391,6 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
         logRegistrationError("persist registration record failed", error);
       }),
     );
-    logRegistrationDebug("environment device registration request completed", {
-      expectedGeneration,
-    });
   },
 );
 
@@ -434,9 +410,6 @@ export function armAgentAwarenessLiveActivityForLocalWork(input: {
     return;
   }
   if (!environmentPublishesAgentActivity(input.environmentId)) {
-    logRegistrationDebug("live activity arming skipped; environment does not publish", {
-      environmentId: input.environmentId,
-    });
     return;
   }
   void loadPreferences()
@@ -480,9 +453,6 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     updateAgentActivityWidgetSnapshot(props);
     const activity = startAgentLiveActivity(props, liveActivityStaleDate());
     if (!activity) return;
-    logRegistrationDebug("live activity card armed for local work", {
-      threadTitle: input.threadTitle,
-    });
     runRegistrationInBackground(
       registerLiveActivityPushToken({ activity }).pipe(Effect.asVoid),
       "live activity arming after local task start failed",
@@ -505,9 +475,6 @@ function idleAgentActivityWidgetProps(): AgentActivityProps {
 function updateAgentActivityWidgetSnapshot(props: AgentActivityProps): void {
   try {
     AgentActivityWidget.updateSnapshot(props);
-    logRegistrationDebug("agent activity widget snapshot updated", {
-      activeCount: props.activeCount,
-    });
   } catch (error) {
     logRegistrationError("agent activity widget snapshot update failed", error);
   }
@@ -565,13 +532,6 @@ function logRegistrationError(context: string, error: unknown): void {
   });
 }
 
-function logRegistrationDebug(context: string, details?: unknown): void {
-  if (!__DEV__) {
-    return;
-  }
-  console.log(`[agent-awareness] ${context}`, details ?? "");
-}
-
 function runRegistrationInBackground(
   operation: Effect.Effect<unknown, unknown>,
   context: string,
@@ -609,10 +569,6 @@ function startPendingDeviceRegistration(): void {
   const next = pendingDeviceRegistration;
   pendingDeviceRegistration = null;
   const generation = deviceRegistrationGeneration;
-  logRegistrationDebug("device registration started", {
-    generation,
-    hasObservedPushToken: next.input.observedPushToken !== undefined,
-  });
   if (registrationStatus !== "registered") {
     setRegistrationStatus("pending");
   }
@@ -632,7 +588,6 @@ function startPendingDeviceRegistration(): void {
       }
       logRegistrationError(next.context, squashAtomCommandFailure(result));
     }
-    logRegistrationDebug("device registration finished", { generation });
     if (activeDeviceRegistration === registration) {
       activeDeviceRegistration = null;
     }
@@ -645,17 +600,9 @@ function enqueueDeviceRegistration(input: DeviceRegistrationInput, context: stri
     activeDeviceRegistration &&
     !registrationAddsInformation(activeDeviceRegistration.input, input)
   ) {
-    logRegistrationDebug("device registration coalesced with active request", {
-      generation: deviceRegistrationGeneration,
-    });
     return;
   }
 
-  logRegistrationDebug("device registration enqueued", {
-    generation: deviceRegistrationGeneration,
-    hasActiveRegistration: activeDeviceRegistration !== null,
-    hasPendingRegistration: pendingDeviceRegistration !== null,
-  });
   pendingDeviceRegistration = pendingDeviceRegistration
     ? {
         input: mergeDeviceRegistrationInput(pendingDeviceRegistration.input, input),
@@ -670,16 +617,13 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
   expectedGeneration = deviceRegistrationGeneration,
 ): Effect.fn.Return<void, unknown> {
   if (!canRegisterPushNotifications()) {
-    logRegistrationDebug("device registration skipped; platform does not support it");
     return;
   }
   if (!environmentTransport) {
     setRegistrationStatus("unknown");
-    logRegistrationDebug("device registration skipped; no paired environment is available");
     return;
   }
 
-  logRegistrationDebug("device registration loading local state", { expectedGeneration });
   const [deviceId, storedPreferences] = yield* Effect.all([
     Effect.tryPromise({
       try: () => loadOrCreateAgentAwarenessDeviceId(),
@@ -712,10 +656,6 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
     );
   }
   const pushTokenRegistration = yield* nativePushTokenRegistration(input?.observedPushToken);
-  logRegistrationDebug("device registration local state ready", {
-    expectedGeneration,
-    notificationsEnabled: pushTokenRegistration.notificationsEnabled,
-  });
   const bundleId =
     Platform.OS === "android"
       ? Constants.expoConfig?.android?.package?.trim()
@@ -891,10 +831,6 @@ export const registerLiveActivityPushToken = Effect.fn(
           }),
       });
       if (!activityPushToken) {
-        logRegistrationDebug(
-          "live activity push token not available yet; waiting for token event",
-          { hasEnvironmentTransport: environmentTransport !== null },
-        );
         return false;
       }
 
@@ -914,9 +850,6 @@ function observeLiveActivityPushTokens(
   activityPushTokenLocks.set(activityId, lock);
   activity.addPushTokenListener((event) => {
     if (!event.pushToken) return;
-    logRegistrationDebug("live activity push token event received", {
-      tokenSuffix: event.pushToken.slice(-8),
-    });
     runRegistrationInBackground(
       lock.withPermit(registerLiveActivityPushTokenValue({ activityPushToken: event.pushToken })),
       "live activity token listener registration failed",
@@ -946,9 +879,6 @@ const registerLiveActivityPushTokenValue = Effect.fn(
   });
   if (registered) {
     registeredActivityPushTokens.set(input.activityPushToken, Date.now());
-    logRegistrationDebug("live activity push token registered", {
-      tokenSuffix: input.activityPushToken.slice(-8),
-    });
   }
   return registered;
 });
@@ -992,7 +922,7 @@ function scheduleActiveLiveActivityRegistrationRetry(): void {
   }, REMOTE_ACTIVITY_REGISTRATION_RETRY_MS);
 }
 
-export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
+const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
   "remoteRegistration.refreshActiveLiveActivityRemoteRegistration",
 )(function* (): Effect.fn.Return<void, never> {
   if (!canRegisterRemoteLiveActivities() || !environmentTransport) {
@@ -1086,9 +1016,6 @@ export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
           ),
         );
         if (primed) {
-          logRegistrationDebug("live activity card primed", {
-            activeCount: aggregate.activeCount,
-          });
           activities = [primed];
         }
       }

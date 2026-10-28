@@ -18,9 +18,9 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   where `/bin/ps` exists.
 - `apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts`: the registry fixture also lists
   `linux-aarch64`.
-- `apps/server/src/preview/ServerBrowserPage.test.ts`: the tests launch `T3CODE_BROWSER_TEST_CHROMIUM` when
-  it is set. `packages/shared/src/testing/providerEnv.ts` keeps that variable on its `KEPT_ENV` list,
-  because the test reads it after setup has scrubbed every other `T3CODE_*` variable.
+- `apps/server/src/preview/ServerBrowserPage.test.ts` and `apps/web/scripts/verify-built-boot.ts`: they launch
+  `T3CODE_BROWSER_TEST_CHROMIUM` when it is set. `packages/shared/src/testing/providerEnv.ts` keeps that variable on its `KEPT_ENV` list,
+  because the server test reads it after setup has scrubbed every other `T3CODE_*` variable.
 - `apps/server/src/vcs/VcsProcess.ts`: Git subprocesses run with `LC_ALL=C`. Lock errors combine
   translated Git and libc messages, and transient-exit classification matches the English text.
 - `apps/server/src/entrypoint.ts`: `isEntrypoint` resolves both the module path and `argv[1]`, because

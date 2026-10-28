@@ -24,3 +24,9 @@ Remove this patch when upstream provides an equivalent configurable web settings
 The fork also gives upstream's `composer.increaseEffort` command a default binding,
 `mod+shift+.` with `when: "!terminalFocus"`, in `packages/shared/src/keybindings.ts`. Upstream ships
 the command without a default. Drop the fork default if upstream adds one.
+
+## Sidebar toggle in the terminal
+
+The fork scopes upstream's `sidebar.toggle` default (`mod+b`) to `!terminalFocus` in
+`packages/shared/src/keybindings.ts`, so Ctrl+B reaches tmux and readline in a focused terminal.
+Drop it if upstream scopes the default the same way.

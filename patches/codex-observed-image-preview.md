@@ -45,7 +45,7 @@ Upstream-owned files with hooks:
 - `apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts` handles `imageView` in its
   `item/completed` handler.
 - `apps/server/src/orchestration-v2/ProjectionStore.ts` adds `observedImage` ids to
-  `getThreadAttachmentIds` in the SQLite and in-memory stores. Thread deletion's
+  `getThreadAttachmentIds`. Thread deletion's
   `attachment.cleanup` effect then removes them.
 - `packages/client-runtime/src/work-log/presentation.ts` adds `workEntryObservedImage`.
   `resolveViewedImageAsset` uses the copy when there is one.

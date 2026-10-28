@@ -24,35 +24,36 @@ import * as HtmlRenderState from "./HtmlRenderState.ts";
 
 /**
  * The T3 tools a page may call. Whether one needs the reader's confirmation comes from its
- * `Tool.Readonly` annotation, not from this list.
+ * `Tool.Readonly` annotation, or from `PAGE_READ_CALLS` for action tools, not from this list.
  */
 export const HTML_RENDER_PAGE_TOOLS: ReadonlySet<string> = new Set([
   "t3_thread_list",
   "t3_thread_read",
   "t3_thread_search",
-  "t3_thread_configuration",
+  "t3_thread_configure",
   "t3_project_list",
   "t3_project_read",
-  "t3_queue_list",
-  "t3_queue_read",
+  "t3_queue",
   "t3_worktree_list",
   "list_scheduled_tasks",
   "list_thread_pull_requests",
   "t3_environment_read",
-  "t3_pending_request_list",
+  "t3_pending_request",
   "t3_thread_send",
   "t3_thread_launch",
   "t3_thread_update",
   "t3_thread_organize",
   "t3_thread_interrupt",
   "schedule_task",
-  "update_scheduled_task",
   "run_scheduled_task_now",
-  "t3_queue_edit",
-  "t3_queue_cancel",
-  "t3_queue_reorder",
-  "t3_pending_request_respond",
 ]);
+
+/** Calls of action tools that only read, so they run without the reader's confirmation. */
+const PAGE_READ_CALLS: Readonly<Record<string, (args: Record<string, unknown>) => boolean>> = {
+  t3_queue: (args) => args.action === "list" || args.action === "read",
+  t3_pending_request: (args) => args.action === "list" || args.action === "read",
+  t3_thread_configure: (args) => args.modelSelection === undefined,
+};
 
 const RATE_LIMIT_CALLS = 30;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -162,7 +163,8 @@ const make = Effect.gen(function* () {
       ? Option.getOrUndefined(yield* directory.find(input.name))
       : undefined;
     if (entry === undefined) return yield* fail(input.threadId, "tool-not-allowed");
-    if (!entry.readOnly && input.confirmed !== true) {
+    const readOnly = entry.readOnly || PAGE_READ_CALLS[input.name]?.(input.arguments) === true;
+    if (!readOnly && input.confirmed !== true) {
       return {
         _tag: "ConfirmationRequired",
         title: entry.tool.title ?? entry.tool.annotations?.title ?? input.name,
@@ -188,7 +190,7 @@ const make = Effect.gen(function* () {
         sessionId: viewer.sessionId,
         label: "HTML page",
         access: shell.runtimeMode,
-        interactionMode: shell.interactionMode,
+        narrowedTo: { runtimeMode: shell.runtimeMode, interactionMode: shell.interactionMode },
       },
     };
     const outcome = yield* entry

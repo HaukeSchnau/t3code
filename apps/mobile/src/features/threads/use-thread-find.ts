@@ -137,7 +137,7 @@ export function useThreadFind(input: {
   // Reopening searches again from where the reader is now.
   const { readStart } = input;
   const wasOpen = useRef(input.open);
-  // oxlint-disable-next-line t3code/react-effect-budget -- the reader's place lives in the native list, readable only once find has opened
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the reader's place lives in the native list, readable only once find has opened
   useEffect(() => {
     const opened = input.open && !wasOpen.current;
     wasOpen.current = input.open;
@@ -168,7 +168,7 @@ export function useThreadFind(input: {
     }));
   });
   const lastContent = useRef(input.content);
-  // oxlint-disable-next-line t3code/react-effect-budget -- recounts once streamed content settles, on a timer the next change cancels
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- recounts once streamed content settles, on a timer the next change cancels
   useEffect(() => {
     if (lastContent.current === input.content) return;
     lastContent.current = input.content;

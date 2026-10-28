@@ -12,14 +12,17 @@ export const layer = Layer.effect(
     const threadLayer = yield* JjThreadLayer;
     return {
       forThread: threadLayer.environmentFor,
-      forOpenCodeServer: (threadId, environment) =>
-        threadLayer
-          .environmentFor(threadId)
-          .pipe(
-            Effect.map((threadEnvironment) =>
-              withOpenCodeSkillPacks(threadId, { ...environment, ...threadEnvironment }),
-            ),
-          ),
+      forOpenCodeServer: Effect.fn("ProviderThreadEnvironment.forOpenCodeServer")(
+        function (threadId, environment) {
+          return threadLayer
+            .environmentFor(threadId)
+            .pipe(
+              Effect.map((threadEnvironment) =>
+                withOpenCodeSkillPacks(threadId, { ...environment, ...threadEnvironment }),
+              ),
+            );
+        },
+      ),
     };
   }),
 );

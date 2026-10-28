@@ -75,7 +75,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   const [actionError, setActionError] = useState<string | null>(null);
   const countingDown = views.some((view) => view.retryAt !== null);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- The retry countdown ticks with the wall clock.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The retry countdown ticks with the wall clock.
   useEffect(() => {
     if (!countingDown) return;
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);

@@ -79,9 +79,6 @@ function layerCloudClient() {
     Layer.succeed(
       MobileStorage.MobileStorage,
       MobileStorage.MobileStorage.of({
-        loadSavedConnections: Effect.succeed([]),
-        saveConnection: () => Effect.void,
-        clearSavedConnection: () => Effect.void,
         loadOrCreateAgentAwarenessDeviceId: Effect.succeed("device-1"),
         loadAgentAwarenessDeviceId: Effect.succeed("device-1"),
         loadAgentAwarenessRegistrationRecord: Effect.succeed(null),

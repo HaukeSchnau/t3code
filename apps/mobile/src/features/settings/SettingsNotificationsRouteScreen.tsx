@@ -4,8 +4,8 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Notifications from "expo-notifications";
 import * as Effect from "effect/Effect";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { AppState, Linking, Platform } from "react-native";
+import { useRef, useState, useSyncExternalStore } from "react";
+import { Linking, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
@@ -27,6 +27,7 @@ import {
   refreshAgentAwarenessRegistration,
   subscribeAgentAwarenessRegistrationStatus,
 } from "../agent-awareness/remoteRegistration";
+import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import { runtime } from "../../lib/runtime";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -38,6 +39,28 @@ import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "updating";
+
+const notificationStatusAtom = makePermissionStatusAtom<NotificationStatus>({
+  label: "mobile:notification-permission",
+  initial: "checking",
+  read: async () => {
+    if (Platform.OS !== "ios" && Platform.OS !== "android") return "unsupported";
+    const result = await settlePromise(() => Notifications.getPermissionsAsync());
+    if (result._tag === "Failure") {
+      reportAtomCommandResult(result, { label: "notification permission refresh" });
+      return "disabled";
+    }
+    return result.value.granted ? "enabled" : "disabled";
+  },
+});
+
+function liveActivityStatusFrom(
+  preferencesResult: AsyncResult.AsyncResult<{ readonly liveActivitiesEnabled?: boolean }, unknown>,
+): LiveActivityStatus {
+  if (AsyncResult.isFailure(preferencesResult)) return "enabled";
+  if (!AsyncResult.isSuccess(preferencesResult)) return "checking";
+  return preferencesResult.value.liveActivitiesEnabled === false ? "disabled" : "enabled";
+}
 
 function useDeviceRegistered(): boolean {
   const status = useSyncExternalStore(
@@ -59,8 +82,20 @@ export function SettingsNotificationsRouteScreen() {
       : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>("checking");
-  const [liveActivityStatus, setLiveActivityStatus] = useState<LiveActivityStatus>("checking");
+  const notificationStatus = useAtomValue(notificationStatusAtom);
+  const setNotificationStatus = useAtomSet(notificationStatusAtom);
+  // A write in progress or a failed one shows its own status until the preference state it was
+  // based on changes.
+  const [liveActivityOverride, setLiveActivityOverride] = useState<{
+    readonly status: LiveActivityStatus;
+    readonly preferencesResult: unknown;
+  } | null>(null);
+  const liveActivityStatus =
+    liveActivityOverride !== null && liveActivityOverride.preferencesResult === preferencesResult
+      ? liveActivityOverride.status
+      : liveActivityStatusFrom(preferencesResult);
+  const setLiveActivityStatus = (status: LiveActivityStatus) =>
+    setLiveActivityOverride({ status, preferencesResult });
   const deviceRegistered = useDeviceRegistered();
   const liveActivityWriteInFlight = useRef(false);
   const liveActivitiesPreferenceEnabled = AsyncResult.isSuccess(preferencesResult)
@@ -71,45 +106,6 @@ export function SettingsNotificationsRouteScreen() {
     (connection) => connection.relayManaged !== true,
   ).length;
   const hasPairedEnvironment = environmentCount > 0;
-
-  const refreshNotifications = async () => {
-    if (Platform.OS !== "ios" && Platform.OS !== "android") {
-      setNotificationStatus("unsupported");
-      return;
-    }
-    const result = await settlePromise(() => Notifications.getPermissionsAsync());
-    if (result._tag === "Failure") {
-      reportAtomCommandResult(result, { label: "notification permission refresh" });
-      setNotificationStatus("disabled");
-      return;
-    }
-    setNotificationStatus(result.value.granted ? "enabled" : "disabled");
-  };
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- Reads native notification permission on mount and on every foreground.
-    void refreshNotifications();
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refreshNotifications();
-    });
-    return () => subscription.remove();
-  }, [refreshNotifications]);
-
-  useEffect(() => {
-    if (!AsyncResult.isSuccess(preferencesResult)) {
-      if (AsyncResult.isFailure(preferencesResult)) {
-        reportAtomCommandResult(preferencesResult, { label: "live activity preference load" });
-        // oxlint-disable-next-line react/set-state-in-effect -- the toggle follows the stored preference once it loads
-        setLiveActivityStatus("enabled");
-      } else {
-        setLiveActivityStatus("checking");
-      }
-      return;
-    }
-    setLiveActivityStatus(
-      preferencesResult.value.liveActivitiesEnabled === false ? "disabled" : "enabled",
-    );
-  }, [preferencesResult]);
 
   const requestNotifications = async () => {
     if (!hasPairedEnvironment) {

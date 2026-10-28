@@ -46,7 +46,7 @@ export function useHtmlRenderHost(
   const setState = useAtomCommand(htmlRenderEnvironment.setState, { reportFailure: false });
   const readLive = useEffectEvent(() => ({ bridge, callTool, setState }));
   const bridged = bridge !== undefined;
-  // oxlint-disable-next-line t3code/react-effect-budget -- The page posts to this window; listen while the frame is mounted.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The page posts to this window; listen while the frame is mounted.
   useEffect(() => {
     const target = () => frameRef.current?.contentWindow ?? null;
     const live = () => {

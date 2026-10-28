@@ -6,10 +6,7 @@ import {
 } from "@t3tools/contracts";
 
 export function isBufferedProviderNotification(
-  message: Pick<
-    OrchestrationV2ConversationMessage,
-    "createdBy" | "creationSource" | "notification" | "delegatedCompletion"
-  >,
+  message: OrchestrationV2ConversationMessage,
 ): boolean {
   return (
     message.createdBy === "agent" &&

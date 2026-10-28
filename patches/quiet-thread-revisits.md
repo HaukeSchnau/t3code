@@ -17,12 +17,12 @@ in `ThreadDetailScreen.tsx`.
   no syncing phase.
 - Offline, reconnecting, unavailable, and failed connection states stay visible over cached content
   through the [connection freshness](connection-freshness-projection.md) banner.
-- Both sidebars (`Sidebar.tsx` and `LegacySidebar.tsx`) mount the shared
-  `SidebarThreadDetailPrewarmer` with their final rendered thread-key order. Upstream prewarms
-  only in its legacy sidebar, through a local prewarmer that `useLegacySidebarThreads` feeds; the
-  fork drops that one for the shared prewarmer. The prewarmer keeps the first two thread details mounted
-  (`SIDEBAR_THREAD_PREWARM_LIMIT` in `Sidebar.logic.ts`, three upstream). The limit applies before
-  key parsing, so its cost does not grow with sidebar length.
+- `Sidebar.tsx` mounts the fork's `SidebarThreadDetailPrewarmer` with its final rendered
+  thread-key order. Upstream prewarmed only in its legacy sidebar and deleted that sidebar along
+  with `getSidebarThreadIdsToPrewarm`, so the fork keeps that helper and its limit in
+  `Sidebar.logic.ts`. The prewarmer keeps the first two thread details mounted
+  (`SIDEBAR_THREAD_PREWARM_LIMIT`, three when upstream had it). The limit applies before key
+  parsing, so its cost does not grow with sidebar length.
 - Two warmups leave one of the three [thread catch-up permits](bounded-thread-reconnect.md) for a
   cold foreground navigation.
 - The chat view and the prewarmer share the keyed thread atom through `useEnvironmentThreadMount`

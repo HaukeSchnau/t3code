@@ -94,7 +94,7 @@ function useSkillPackSession(input: {
 
 export function useThreadSkillPacksSession(input: {
   readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly threadId: ThreadId;
   readonly providerDriver: string | null;
 }): SkillPacksSheetSession | null {
