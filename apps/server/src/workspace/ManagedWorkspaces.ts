@@ -18,6 +18,7 @@ import {
   type VcsRemoveWorktreeInput,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,6 +36,8 @@ import {
   createIsolatedWorkspace,
   deleteIsolatedWorkspace,
   findIsolatedWorkspace,
+  isolatedWorkspacesAvailable,
+  isRegistered,
 } from "./IsolatedWorkspaces.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import { createJjWorkspace, deleteJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
@@ -91,7 +94,7 @@ export class ManagedWorkspaces extends Context.Service<
       projectRoot: string,
       options?: { readonly isolated?: boolean | undefined },
     ) => Effect.Effect<WorkspaceBackend>;
-    /** Whether `path` lies inside a registered isolated workspace. */
+    /** Whether `path` lies inside an agent-exec registration (isolated workspace or separate project). */
     readonly isIsolated: (path: string) => Effect.Effect<boolean, ManagedWorkspaceError>;
     /**
      * New workspaces on jj and directory projects become `workspace` launches;
@@ -148,22 +151,29 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration.TextGeneration;
   const sql = yield* SqlClient.SqlClient;
   const context = yield* Effect.context<ProcessRunner.ProcessRunner>();
+  const launcherHost = isolatedWorkspacesAvailable(
+    yield* HostProcess.Platform,
+    yield* HostProcess.Environment,
+  );
   const workspacesRoot = NodePath.join(config.baseDir, "workspaces");
 
   const fail = (operation: string, detail: string, cause?: unknown) =>
     new ManagedWorkspaceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 
-  const backendFor: ManagedWorkspaces["Service"]["backendFor"] = (projectRoot, options) =>
-    Effect.sync(() => {
-      const kind = findRepositoryMarker(projectRoot)?.kind ?? "directory";
-      return kind !== "git" && options?.isolated === true ? "isolated" : kind;
-    });
-
   const isIsolated: ManagedWorkspaces["Service"]["isIsolated"] = (path) =>
-    findIsolatedWorkspace(path).pipe(
-      Effect.map((root) => root !== null),
-      Effect.provide(context),
-    );
+    isRegistered(path).pipe(Effect.provide(context));
+
+  const backendFor: ManagedWorkspaces["Service"]["backendFor"] = Effect.fn(
+    "ManagedWorkspaces.backendFor",
+  )(function* (projectRoot, options) {
+    const kind = findRepositoryMarker(projectRoot)?.kind ?? "directory";
+    if (kind === "git") return kind;
+    if (options?.isolated === true) return "isolated";
+    // A separate project's workspaces stay inside its environment, like its own threads.
+    const separate =
+      launcherHost && (yield* isIsolated(projectRoot).pipe(Effect.orElseSucceed(() => false)));
+    return separate ? "isolated" : kind;
+  });
 
   const resolveLaunchStrategy: ManagedWorkspaces["Service"]["resolveLaunchStrategy"] = Effect.fn(
     "ManagedWorkspaces.resolveLaunchStrategy",

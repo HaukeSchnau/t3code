@@ -1481,6 +1481,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     if (failure !== null) {
+      if (managedWorkspace?.isolated) setIsolatedWorkspaceChoice(true);
       if (isLocalDraftThread && draftId && draftThread) {
         restoreFailedDraftThread(
           draftId,

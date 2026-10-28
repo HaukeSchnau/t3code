@@ -27,7 +27,9 @@ The server picks the backend from the project and the launch (`workspace/Managed
    needs a Linux host with the launcher and forks through `agent-exec fork`, with Familiar as the
    default profile. Deletion retires the runtime with `--remove-checkout`, which also removes the
    workspace's private home and state. It exists for clean-room experiments, where the agent
-   should not see other projects; agents and users choose it explicitly.
+   should not see other projects; agents and users choose it explicitly. A project whose root is
+   itself registered with agent-exec (a separate project) keeps every new workspace isolated, as
+   its own threads are.
 3. A jj workspace (`jj workspace add`, shared store) when the marker is `.jj`. Colocated
    repositories count as jj and get colocated workspaces (`--colocate`), so jj creates the Git
    worktree; T3 never runs `git worktree` there.

@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -378,6 +379,17 @@ if (args[0] === "fork") {
       const plain = yield* create(project, "thread:host");
       assert.equal(plain.backend, "directory");
       assert.isFalse(yield* workspaces.isIsolated(plain.worktreePath));
+      // A separate project's registration has no workspace record; its workspaces stay isolated.
+      const separate = jjProject();
+      const separateRecord = NodePath.join(
+        state,
+        "projects",
+        `${NodeCrypto.createHash("sha256").update(separate).digest("hex").slice(0, 20)}.json`,
+      );
+      NodeFS.mkdirSync(NodePath.dirname(separateRecord), { recursive: true });
+      NodeFS.writeFileSync(separateRecord, JSON.stringify({ version: 1, root: separate }));
+      assert.equal(yield* workspaces.backendFor(separate), "isolated");
+      assert.isTrue(yield* workspaces.isIsolated(separate));
 
       // Git projects keep upstream's worktrees even where the launcher exists.
       const gitProject = tempDir("t3-git-project-");

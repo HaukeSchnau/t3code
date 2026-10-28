@@ -241,7 +241,7 @@ def publish_directory(record):
 def argument_fd(arguments):
     """An inheritable memfd holding arguments for bwrap's --args, which keeps them out of /proc/*/cmdline."""
     fd = os.memfd_create("agent-exec-arguments", 0)
-    data = b"".join(argument.encode() + b"\0" for argument in arguments)
+    data = b"".join(os.fsencode(argument) + b"\0" for argument in arguments)
     while data:
         data = data[os.write(fd, data):]
     os.lseek(fd, 0, os.SEEK_SET)
