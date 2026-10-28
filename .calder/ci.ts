@@ -1,4 +1,4 @@
-import { Files, Flake, Nix, Setup, Step, Task, cmd } from "@calder-ci/core";
+import { Files, Flake, Nix, Secret, Setup, Step, Task, cmd } from "@calder-ci/core";
 import { Project, Vitest } from "@calder-ci/std";
 import { flake } from "./flake.ts";
 
@@ -533,6 +533,11 @@ const apps = (promote: Step.Any) => {
   const testflight = Task.make("testflight", {
     platform: "aarch64-darwin",
     setup: appleInstall,
+    env: {
+      APP_STORE_CONNECT_API_KEY_ID: "85N8Y9CZC4",
+      APP_STORE_CONNECT_API_ISSUER_ID: "e4b59e5f-0f40-4b1b-996e-b7a01664676a",
+    },
+    secrets: { APP_STORE_CONNECT_API_KEY_PATH: Secret.file("app-store-connect") },
     run: cmd`node scripts/mobile-testflight.ts --updates-url ${updatesUrl} --runtime-version-file ${mobileUpdate.outputs.runtime}`,
   }).pipe(Step.timeout("120 minutes"));
   return [desktopPublish, testflight];

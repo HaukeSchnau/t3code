@@ -26,8 +26,9 @@ fork-only behavior such as accountless connections and native agent awareness.
   and upstream's `T3CODE_MOBILE_UPDATES_ENABLED=0` still turns them off. Local and dev builds keep
   running only their embedded bundle.
 - App Store Connect: app "T3 Code Schnau" (`dev.schnau.t3code`, team `2243J9RD68`) with the
-  internal TestFlight group "Hauke", which receives every build. Calder's agent on m1 provides the
-  team's API key through `APP_STORE_CONNECT_API_KEY_*`. Xcode manages signing through that key.
+  internal TestFlight group "Hauke", which receives every build. Calder's `testflight` step gets the
+  team's API key through `APP_STORE_CONNECT_API_KEY_*`, the key file as the project's secret
+  `app-store-connect`. Xcode manages signing through that key.
 - Force a new binary by running `scripts/mobile-testflight.ts --force` on m1.
 
 ## Maintenance
