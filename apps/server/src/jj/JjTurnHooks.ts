@@ -54,6 +54,7 @@ export const layer = Layer.effect(
           const source = yield* workingCopyOf(input.sourceThreadId);
           if (source === null || !(yield* turns.isJjWorkingCopy(source.cwd))) return null;
           if ((yield* workspaces.backendFor(source.projectRoot)) !== "jj") return null;
+          if (yield* workspaces.isIsolated(source.cwd)) return null;
           const base = yield* turns.forkBase(source.cwd);
           if (base === null) return null;
           const created = yield* workspaces.create({

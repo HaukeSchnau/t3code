@@ -31,8 +31,8 @@ repositories and a copy for other folders. A copy over 5 GiB needs a file system
 There, to continue where other threads already work, pick their workspace from the list. Settled
 and archived threads keep their workspaces; search or **Show settled** finds them. Settling never
 deletes files. When you delete a workspace's last thread, T3 Code asks whether to delete the
-workspace too, and refuses while an active or running thread still uses it. Hosts with separate
-environments create each of these new workspaces as one; see
+workspace too, and refuses while an active or running thread still uses it. On hosts with
+separate environments, **New isolated workspace** creates a clean room instead; see
 [Separate project environments](./separate-projects.md).
 
 ### Start without a project

@@ -321,7 +321,7 @@ describe("ManagedWorkspaces", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
-  it.effect("forks and retires isolated workspaces through the launcher", () => {
+  it.effect("isolates only launches that opt in, through the launcher", () => {
     const state = tempDir("t3-agent-exec-state-");
     const log = NodePath.join(state, "calls.log");
     const launcher = NodePath.join(state, "agent-exec");
@@ -358,21 +358,50 @@ if (args[0] === "fork") {
     return Effect.gen(function* () {
       const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const project = directoryProject();
-      assert.equal(yield* workspaces.backendFor(project), "isolated");
+      assert.equal(yield* workspaces.backendFor(project), "directory");
+      assert.equal(yield* workspaces.backendFor(jjProject()), "jj");
+      assert.equal(yield* workspaces.backendFor(project, { isolated: true }), "isolated");
+      assert.deepEqual(
+        yield* workspaces.resolveLaunchStrategy({
+          projectRoot: project,
+          strategy: { type: "workspace", profile: "minimal" },
+        }),
+        { type: "workspace", baseRef: undefined },
+      );
+      assert.deepEqual(
+        yield* workspaces.resolveLaunchStrategy({
+          projectRoot: project,
+          strategy: { type: "workspace", isolated: true, profile: "minimal" },
+        }),
+        { type: "workspace", baseRef: undefined, isolated: true, profile: "minimal" },
+      );
+      const plain = yield* create(project, "thread:host");
+      assert.equal(plain.backend, "directory");
+      assert.isFalse(yield* workspaces.isIsolated(plain.worktreePath));
+
       // Git projects keep upstream's worktrees even where the launcher exists.
       const gitProject = tempDir("t3-git-project-");
       run("git", ["init", "-q"], gitProject);
-      assert.equal(yield* workspaces.backendFor(gitProject), "git");
+      assert.equal(yield* workspaces.backendFor(gitProject, { isolated: true }), "git");
       const worktree = { type: "worktree", baseRef: "main" } as const;
       assert.equal(
         yield* workspaces.resolveLaunchStrategy({ projectRoot: gitProject, strategy: worktree }),
         worktree,
       );
+      const refused = yield* Effect.flip(
+        workspaces.resolveLaunchStrategy({
+          projectRoot: gitProject,
+          strategy: { type: "workspace", isolated: true },
+        }),
+      );
+      assert.include(refused.message, "Git projects get worktrees");
+
       const created = yield* workspaces.create({
         projectId,
         projectRoot: project,
         threadId: ThreadId.make("thread:isolated"),
         title: "Draft the release notes",
+        isolated: true,
         profile: "minimal",
       });
       const destination = NodePath.join(
@@ -382,6 +411,7 @@ if (args[0] === "fork") {
         "draft-the-release-notes",
       );
       assert.deepEqual(created, { worktreePath: destination, backend: "isolated" });
+      assert.isTrue(yield* workspaces.isIsolated(NodePath.join(destination, "drafts")));
 
       yield* workspaces.removeWorktree({ cwd: project, path: destination });
       assert.isFalse(NodeFS.existsSync(destination));

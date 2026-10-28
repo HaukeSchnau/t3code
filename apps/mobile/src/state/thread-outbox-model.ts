@@ -47,7 +47,12 @@ const QueuedThreadCreationSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
   // A new server-managed workspace (patches/workspaces.md).
-  managedWorkspace: Schema.optional(Schema.Struct({ profile: Schema.optional(WorkspaceProfile) })),
+  managedWorkspace: Schema.optional(
+    Schema.Struct({
+      isolated: Schema.optional(Schema.Boolean),
+      profile: Schema.optional(WorkspaceProfile),
+    }),
+  ),
   // patches/skill-packs.md. Absent follows the project default.
   skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
 });
@@ -81,7 +86,10 @@ export interface QueuedThreadCreation {
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
   readonly pullRequestReference?: string;
-  readonly managedWorkspace?: { readonly profile?: WorkspaceProfileType };
+  readonly managedWorkspace?: {
+    readonly isolated?: boolean;
+    readonly profile?: WorkspaceProfileType;
+  };
   readonly skillPackIds?: ReadonlyArray<SkillPackId>;
 }
 

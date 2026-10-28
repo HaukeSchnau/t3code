@@ -505,6 +505,7 @@ const make = Effect.gen(function* () {
                 }),
             baseRef: input.workspaceStrategy.baseRef,
             startFromOrigin: input.workspaceStrategy.startFromOrigin,
+            isolated: input.workspaceStrategy.isolated,
             profile: input.workspaceStrategy.profile,
           })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));

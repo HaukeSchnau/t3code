@@ -22,7 +22,7 @@ export function managedWorkspacesCapability(
   return { isolated: isolatedWorkspacesAvailable(platform, environment) };
 }
 
-export function isolatedWorkspacesAvailable(
+function isolatedWorkspacesAvailable(
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv,
 ): boolean {

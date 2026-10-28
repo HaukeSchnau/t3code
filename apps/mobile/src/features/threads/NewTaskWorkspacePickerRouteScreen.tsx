@@ -13,7 +13,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { useThreadShells } from "../../state/entities";
 import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
 import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
-import { workspaceProfileAtom } from "./managed-workspaces";
+import { workspaceIsolatedAtom, workspaceProfileAtom } from "./managed-workspaces";
 import { SelectionRow } from "../../components/ui/SelectionRow";
 import { PickerSurface, ToggleRow } from "./NewTaskContextPickerScreens";
 import { useNewTaskFlow } from "./new-task-flow-provider";
@@ -32,6 +32,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
   const project = flow.selectedProject;
   const managed = flow.managedWorkspaces;
   const profile = useAtomValue(workspaceProfileAtom);
+  const isolated = useAtomValue(workspaceIsolatedAtom) && managed?.isolated === true;
   const [query, setQuery] = useState("");
   const [showSettled, setShowSettled] = useState(false);
   const [advanced, setAdvanced] = useState(false);
@@ -59,6 +60,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
   );
 
   const selectWorkspace = (path: string, branch: string | null) => {
+    appAtomRegistry.set(workspaceIsolatedAtom, false);
     if (flow.draftKey !== null) {
       updateComposerDraftSettings(flow.draftKey, {
         workspaceSelection: {
@@ -93,21 +95,31 @@ export function NewTaskWorkspacePickerRouteScreen() {
         <PickerSurface>
           <SelectionRow
             title="New workspace"
-            subtitle={
-              managed?.isolated
-                ? "Separate files, tools and services"
-                : "A separate copy for this task"
-            }
-            selected={isNew}
+            subtitle="A separate copy for this task"
+            selected={isNew && !isolated}
             onPress={() => {
+              appAtomRegistry.set(workspaceIsolatedAtom, false);
               flow.setWorkspaceMode("worktree");
               navigation.goBack();
             }}
           />
+          {managed?.isolated ? (
+            <SelectionRow
+              title="New isolated workspace"
+              subtitle="A clean room that can't see your other projects"
+              selected={isNew && isolated}
+              onPress={() => {
+                appAtomRegistry.set(workspaceIsolatedAtom, true);
+                flow.setWorkspaceMode("worktree");
+                navigation.goBack();
+              }}
+            />
+          ) : null}
           <SelectionRow
             title="Project checkout"
             selected={!isNew && flow.selectedWorktreePath === null}
             onPress={() => {
+              appAtomRegistry.set(workspaceIsolatedAtom, false);
               if (flow.draftKey !== null) {
                 updateComposerDraftSettings(flow.draftKey, {
                   workspaceSelection: {
@@ -160,7 +172,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
         <PickerSurface>
           <ToggleRow title="Show settled" value={showSettled} onValueChange={setShowSettled} />
         </PickerSurface>
-        {managed?.isolated ? (
+        {isNew && isolated ? (
           <>
             <Pressable
               accessibilityRole="button"
@@ -168,7 +180,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
               className="px-4 py-2"
             >
               <Text className="text-sm text-foreground-muted">
-                {advanced ? "Hide advanced" : "Advanced"}
+                {advanced ? "Hide clean room setup" : "Clean room setup"}
               </Text>
             </Pressable>
             {advanced ? (

@@ -97,7 +97,7 @@ import {
 import { usePlanFollowUpSend } from "./useProposedPlanSend";
 import { formatInlineReplyPrompt, type InlineReplyDraftStore } from "./inlineReplies";
 import { draftSkillPackBootstrap } from "./SkillPacksControl";
-import { managedWorkspaceBootstrap } from "../../lib/managedWorkspaces";
+import { managedWorkspaceBootstrap, setIsolatedWorkspaceChoice } from "../../lib/managedWorkspaces";
 import {
   enqueueComposerSend,
   handOffUnconfirmedSend,
@@ -967,6 +967,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendInFlightRef.current = false;
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
+      if (managedWorkspace?.isolated) setIsolatedWorkspaceChoice(false);
       inlineReplyStore.clear();
       composerRef.current?.resetCursorState();
       return;
@@ -1270,6 +1271,7 @@ export function useComposerSend(input: ComposerSendInput) {
     if (sentDraftThreadRef) markPromotedDraftThreadByRef(sentDraftThreadRef);
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
+    if (managedWorkspace?.isolated) setIsolatedWorkspaceChoice(false);
     inlineReplyStore.clear();
     composerRef.current?.resetCursorState();
 

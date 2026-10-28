@@ -85,7 +85,7 @@ import {
 } from "../keyboard/hardwareKeyboardCommands";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
-import { managedWorkspaceDisplayLabel } from "./managed-workspaces";
+import { managedWorkspaceDisplayLabel, workspaceIsolatedAtom } from "./managed-workspaces";
 import {
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
@@ -247,6 +247,7 @@ export function NewTaskDraftScreen(props: {
     }
   };
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
+  const isolatedWorkspace = useAtomValue(workspaceIsolatedAtom);
   const attachmentBlockReason = selectedProject
     ? composerAttachmentUploadBlockReason({
         environmentId: selectedProject.environmentId,
@@ -537,12 +538,17 @@ export function NewTaskDraftScreen(props: {
     workspaceMode: flow.workspaceMode,
     pullRequestReference: flow.pullRequestReference,
   });
-  const workspaceLabel = (
-    managedWorkspaces === null ? resolveNewTaskWorkspaceLabel : managedWorkspaceDisplayLabel
-  )({
-    workspaceMode: flow.workspaceMode,
-    worktreePath: flow.selectedWorktreePath,
-  });
+  const workspaceLabel =
+    managedWorkspaces === null
+      ? resolveNewTaskWorkspaceLabel({
+          workspaceMode: flow.workspaceMode,
+          worktreePath: flow.selectedWorktreePath,
+        })
+      : managedWorkspaceDisplayLabel({
+          workspaceMode: flow.workspaceMode,
+          worktreePath: flow.selectedWorktreePath,
+          isolated: managedWorkspaces.isolated && isolatedWorkspace,
+        });
   const showBranchLoading =
     environmentConnected && flow.branchesLoading && flow.availableBranches.length === 0;
 
@@ -681,6 +687,7 @@ export function NewTaskDraftScreen(props: {
       clearWorkspaceSelection: true,
       deferAttachmentCleanup: true,
     });
+    appAtomRegistry.set(workspaceIsolatedAtom, false);
     scheduleUnusedComposerAttachmentCleanup(draftSnapshot.attachments);
     return message.messageId;
   }

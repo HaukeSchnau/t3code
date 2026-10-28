@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- workspace kinds are recognised from on-disk markers.
 /**
  * The fork's workspaces next to upstream's Git worktrees (patches/workspaces.md). The project
- * picks the backend: plain Git projects keep upstream's worktrees; jj repositories and plain
- * directories get an isolated agent-exec runtime on Linux hosts with the launcher, else a jj
- * workspace or a guarded copy.
+ * picks the backend: plain Git projects keep upstream's worktrees; jj repositories get a jj
+ * workspace and plain directories a guarded copy. A launch can opt a jj or directory project
+ * into an isolated agent-exec runtime on Linux hosts with the launcher.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -17,7 +17,6 @@ import {
   type ThreadId,
   type VcsRemoveWorktreeInput,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -36,7 +35,6 @@ import {
   createIsolatedWorkspace,
   deleteIsolatedWorkspace,
   findIsolatedWorkspace,
-  isolatedWorkspacesAvailable,
 } from "./IsolatedWorkspaces.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import { createJjWorkspace, deleteJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
@@ -82,13 +80,19 @@ export interface CreateManagedWorkspaceInput {
   };
   readonly baseRef?: string | undefined;
   readonly startFromOrigin?: boolean | undefined;
+  readonly isolated?: boolean | undefined;
   readonly profile?: ManagedWorkspaceLaunchStrategy["profile"];
 }
 
 export class ManagedWorkspaces extends Context.Service<
   ManagedWorkspaces,
   {
-    readonly backendFor: (projectRoot: string) => Effect.Effect<WorkspaceBackend>;
+    readonly backendFor: (
+      projectRoot: string,
+      options?: { readonly isolated?: boolean | undefined },
+    ) => Effect.Effect<WorkspaceBackend>;
+    /** Whether `path` lies inside a registered isolated workspace. */
+    readonly isIsolated: (path: string) => Effect.Effect<boolean, ManagedWorkspaceError>;
     /**
      * New workspaces on jj and directory projects become `workspace` launches;
      * a `workspace` launch on a plain Git project becomes upstream's `worktree`
@@ -144,27 +148,30 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration.TextGeneration;
   const sql = yield* SqlClient.SqlClient;
   const context = yield* Effect.context<ProcessRunner.ProcessRunner>();
-  const isolated = isolatedWorkspacesAvailable(
-    yield* HostProcess.Platform,
-    yield* HostProcess.Environment,
-  );
   const workspacesRoot = NodePath.join(config.baseDir, "workspaces");
 
   const fail = (operation: string, detail: string, cause?: unknown) =>
     new ManagedWorkspaceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 
-  const backendFor: ManagedWorkspaces["Service"]["backendFor"] = (projectRoot) =>
+  const backendFor: ManagedWorkspaces["Service"]["backendFor"] = (projectRoot, options) =>
     Effect.sync(() => {
       const kind = findRepositoryMarker(projectRoot)?.kind ?? "directory";
-      return kind !== "git" && isolated ? "isolated" : kind;
+      return kind !== "git" && options?.isolated === true ? "isolated" : kind;
     });
+
+  const isIsolated: ManagedWorkspaces["Service"]["isIsolated"] = (path) =>
+    findIsolatedWorkspace(path).pipe(
+      Effect.map((root) => root !== null),
+      Effect.provide(context),
+    );
 
   const resolveLaunchStrategy: ManagedWorkspaces["Service"]["resolveLaunchStrategy"] = Effect.fn(
     "ManagedWorkspaces.resolveLaunchStrategy",
   )(function* (input) {
     const strategy: LaunchWorkspaceStrategy = input.strategy;
     if (strategy.type !== "worktree" && strategy.type !== "workspace") return input.strategy;
-    const backend = yield* backendFor(input.projectRoot);
+    const isolated = strategy.type === "workspace" && strategy.isolated === true;
+    const backend = yield* backendFor(input.projectRoot, { isolated });
     if (backend !== "git") {
       return {
         type: "workspace" as const,
@@ -172,10 +179,15 @@ const make = Effect.gen(function* () {
         ...(strategy.startFromOrigin === undefined
           ? {}
           : { startFromOrigin: strategy.startFromOrigin }),
-        ...(strategy.type === "workspace" && strategy.profile !== undefined
-          ? { profile: strategy.profile }
-          : {}),
+        ...(isolated ? { isolated: true } : {}),
+        ...(isolated && strategy.profile !== undefined ? { profile: strategy.profile } : {}),
       } satisfies ManagedWorkspaceStrategy;
+    }
+    if (isolated) {
+      return yield* fail(
+        "ManagedWorkspaces.resolveLaunchStrategy",
+        "Isolated workspaces are for jj and non-Git projects. Git projects get worktrees.",
+      );
     }
     if (strategy.type === "worktree") return input.strategy;
     const baseRef =
@@ -274,7 +286,7 @@ const make = Effect.gen(function* () {
 
   const create: ManagedWorkspaces["Service"]["create"] = Effect.fn("ManagedWorkspaces.create")(
     function* (input) {
-      const backend = yield* backendFor(input.projectRoot);
+      const backend = yield* backendFor(input.projectRoot, { isolated: input.isolated });
       if (backend === "git") {
         return yield* fail("ManagedWorkspaces.create", "Git projects use worktrees.");
       }
@@ -401,6 +413,7 @@ const make = Effect.gen(function* () {
 
   return ManagedWorkspaces.of({
     backendFor,
+    isIsolated,
     resolveLaunchStrategy,
     create,
     discard,
