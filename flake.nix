@@ -66,9 +66,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-794uwh6tOc4SYfTfLWLN5lr68/iu7nBEgn2whuFipgw=";
-            server = "sha256-0g4+b3vrUy3m2ZxhOO1Wr8qfnyXJCZdCUlvF7FbejxM=";
-            runtime = "sha256-0g4+b3vrUy3m2ZxhOO1Wr8qfnyXJCZdCUlvF7FbejxM=";
+            web = "sha256-iqt8PdotRV0WQtxKL/smYQEqn0H0jsWWIEYSAaBt9iE=";
+            server = "sha256-NMO1/b2oHzfpShhqNWai8YjlwIhIU8jK0yi7xXFvGOA=";
+            runtime = "sha256-NMO1/b2oHzfpShhqNWai8YjlwIhIU8jK0yi7xXFvGOA=";
           },
         }:
         let
@@ -128,6 +128,7 @@
               ./third-party-licenses.config.json
               ./apps/desktop/package.json
               ./apps/server/src/device/deviceToolVersions.json
+              ./assets/prod/t3-black-web-apple-touch-180.png
               ./native/libghostty-vt/LICENSE
               ./apps/mobile/modules/t3-source-text/LICENSE
               ./apps/mobile/modules/t3-composer-editor/LICENSE

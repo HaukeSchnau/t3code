@@ -142,7 +142,7 @@ it.layer(layerBridge)("HtmlRenderBridge", (it) => {
       expect(call?.scope.client).toMatchObject({
         sessionId: viewer.sessionId,
         access: "approval-required",
-        interactionMode: "plan",
+        narrowedTo: { runtimeMode: "approval-required", interactionMode: "plan" },
       });
     }),
   );
@@ -168,17 +168,18 @@ it.layer(layerBridge)("HtmlRenderBridge", (it) => {
   it.effect("limits how often one render calls tools", () =>
     Effect.gen(function* () {
       yield* recordTool({
-        name: "t3_queue_list",
-        readOnly: true,
-        handle: () => Effect.succeed(okResult({ queue: [] })),
+        name: "t3_queue",
+        readOnly: false,
+        handle: () => Effect.succeed(okResult({ items: [], nextCursor: null })),
       });
       const bridge = yield* HtmlRenderBridge.HtmlRenderBridge;
+      // A listing action reads, so it runs without confirmation.
       const call = bridge.callTool(
         {
           threadId,
           renderId: createAttachmentId(threadId, "html")!,
-          name: "t3_queue_list",
-          arguments: {},
+          name: "t3_queue",
+          arguments: { action: "list" },
         },
         viewer,
       );

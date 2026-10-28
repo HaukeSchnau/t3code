@@ -7,7 +7,6 @@ import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { RotatingFileSinkError } from "@t3tools/shared/logging";
-import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -15,11 +14,22 @@ import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
-  makeEventNdjsonLogger,
+  type EventNdjsonLogStoreOptions,
+  type EventNdjsonStream,
   makeEventNdjsonLogStore,
   type PendingRecord,
   writeBatchedMessages,
 } from "./EventNdjsonLogger.ts";
+
+const makeLogger = (
+  filePath: string,
+  stream: EventNdjsonStream,
+  options: EventNdjsonLogStoreOptions = {},
+) =>
+  Effect.map(makeEventNdjsonLogStore(filePath, options), (store) => ({
+    ...store.logger(stream),
+    close: store.close,
+  }));
 
 function parsePayload(line: string): Record<string, unknown> {
   const match = /^\[[^\]]+\] [A-Z]+: (.+)$/.exec(line);
@@ -46,9 +56,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const secret = "secret-provider-output";
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, { stream: "native" });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "native");
 
         yield* logger.write(
           {
@@ -92,9 +100,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       circular.self = circular;
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, { stream: "canonical" });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "canonical");
         yield* logger.write(
           { type: "item.completed", eventId: "evt-giant", payload: circular },
           ThreadId.make("thread-giant"),
@@ -119,12 +125,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const filePath = NodePath.join(tempDir, "native.log");
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 0,
-        });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "native", { batchWindowMs: 0 });
         for (let index = 0; index < 9_200; index += 1) {
           yield* logger.write(
             { event: { type: "message.updated", payload: { text: `chunk-${index}` } } },
@@ -189,12 +190,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const escaped = "\u0000".repeat(128);
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 0,
-        });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "native", { batchWindowMs: 0 });
         yield* logger.write(
           {
             event: {
@@ -235,12 +231,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const filePath = NodePath.join(tempDir, "canonical.log");
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "canonical",
-          batchWindowMs: 0,
-        });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "canonical", { batchWindowMs: 0 });
         yield* Effect.all(
           [
             logger.write({ id: "evt-concurrent-1" }, null),
@@ -269,12 +260,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const threadId = ThreadId.make("thread-tool-lifecycle");
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 0,
-        });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "native", { batchWindowMs: 0 });
         for (const state of ["pending", "running", "completed", "error", "unknown"] as const) {
           yield* logger.write(
             {
@@ -313,12 +299,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       );
       const filePath = NodePath.join(tempDir, "canonical.log");
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "canonical",
-          batchWindowMs: 0,
-        });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "canonical", { batchWindowMs: 0 });
         for (let index = 0; index < 300; index += 1) {
           yield* logger.write(
             { type: "turn.completed", eventId: `completed-${index}`, payload: {} },
@@ -341,21 +322,16 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const nativePath = NodePath.join(tempDir, "native.log");
       const canonicalPath = NodePath.join(tempDir, "canonical.log");
       try {
-        const native = yield* makeEventNdjsonLogger(nativePath, {
-          stream: "native",
+        const native = yield* makeLogger(nativePath, "native", {
           maxBytes: 500,
           maxFiles: 2,
           batchWindowMs: 0,
         });
-        const canonical = yield* makeEventNdjsonLogger(canonicalPath, {
-          stream: "canonical",
+        const canonical = yield* makeLogger(canonicalPath, "canonical", {
           maxBytes: 500,
           maxFiles: 2,
           batchWindowMs: 0,
         });
-        assert.exists(native);
-        assert.exists(canonical);
-        if (!native || !canonical) return;
 
         for (let index = 0; index < 50; index += 1) {
           yield* native.write(
@@ -427,12 +403,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const threadId = ThreadId.make("thread-interrupted");
 
       try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 1_000,
-        });
-        assert.exists(logger);
-        if (!logger) return;
+        const logger = yield* makeLogger(filePath, "native", { batchWindowMs: 1_000 });
         const interruptedWrite = yield* logger
           .write({ id: "possibly-interrupted" }, threadId)
           .pipe(Effect.forkChild);
@@ -444,90 +415,6 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
         yield* logger.close();
 
         assert.include(readEventIds(filePath), "accepted");
-      } finally {
-        NodeFS.rmSync(tempDir, { recursive: true, force: true });
-      }
-    }),
-  );
-
-  it.effect("enforces aggregate age and byte retention on startup", () =>
-    Effect.gen(function* () {
-      const tempDir = NodeFS.realpathSync(
-        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
-      );
-      const filePath = NodePath.join(tempDir, "native.log");
-      const expiredPath = `${filePath}.3`;
-      const oldPath = `${filePath}.2`;
-      const newPath = `${filePath}.1`;
-      // Thread-scoped files from before the global streams are recognized by their line header.
-      const legacyLogPath = NodePath.join(tempDir, "events.thread-1.log");
-      const unrelatedLogPath = NodePath.join(tempDir, "unrelated.log");
-      const ignoredPath = NodePath.join(tempDir, "ignored.txt");
-
-      try {
-        yield* TestClock.setTime(1_800_000_000_000);
-        const now = yield* Clock.currentTimeMillis;
-        for (const path of [expiredPath, oldPath, newPath, unrelatedLogPath, ignoredPath]) {
-          NodeFS.writeFileSync(path, "x".repeat(40));
-        }
-        NodeFS.writeFileSync(legacyLogPath, "[2026-01-01T00:00:00.000Z] NTIVE: {}\n");
-        for (const [path, ageMs] of [
-          [expiredPath, 20_000],
-          [legacyLogPath, 20_000],
-          [oldPath, 5_000],
-          [newPath, 0],
-        ] as const) {
-          NodeFS.utimesSync(path, (now - ageMs) / 1_000, (now - ageMs) / 1_000);
-        }
-
-        // A roomy byte budget isolates age retention.
-        const ageStore = yield* makeEventNdjsonLogStore(filePath, { maxAgeMs: 10_000 });
-        yield* ageStore.close();
-        assert.isFalse(NodeFS.existsSync(expiredPath));
-        assert.isFalse(NodeFS.existsSync(legacyLogPath));
-        assert.isTrue(NodeFS.existsSync(oldPath));
-        assert.isTrue(NodeFS.existsSync(newPath));
-
-        // The byte budget then removes the oldest remaining provider files first.
-        const byteStore = yield* makeEventNdjsonLogStore(filePath, {
-          maxAgeMs: 10_000,
-          maxTotalBytes: 60,
-        });
-        yield* byteStore.close();
-        assert.isFalse(NodeFS.existsSync(oldPath));
-        assert.isTrue(NodeFS.existsSync(newPath));
-        assert.isTrue(NodeFS.existsSync(unrelatedLogPath));
-        assert.isTrue(NodeFS.existsSync(ignoredPath));
-      } finally {
-        NodeFS.rmSync(tempDir, { recursive: true, force: true });
-      }
-    }),
-  );
-
-  it.effect("does not prune the active stream file during a later flush", () =>
-    Effect.gen(function* () {
-      const tempDir = NodeFS.realpathSync(
-        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
-      );
-      const filePath = NodePath.join(tempDir, "native.log");
-
-      try {
-        const logger = yield* makeEventNdjsonLogger(filePath, {
-          stream: "native",
-          batchWindowMs: 0,
-          maxAgeMs: 1,
-          retentionCheckIntervalMs: 1,
-        });
-        assert.exists(logger);
-        if (!logger) return;
-
-        yield* logger.write({ id: "active-before-retention" }, ThreadId.make("active"));
-        // Age the file far past maxAgeMs so only active-file protection can keep it.
-        yield* TestClock.setTime(NodeFS.statSync(filePath).mtimeMs + 24 * 60 * 60 * 1_000);
-        yield* logger.write({ id: "retention-trigger" }, ThreadId.make("other"));
-
-        assert.deepEqual(readEventIds(filePath), ["active-before-retention", "retention-trigger"]);
-        yield* logger.close();
       } finally {
         NodeFS.rmSync(tempDir, { recursive: true, force: true });
       }

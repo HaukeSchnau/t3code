@@ -13,14 +13,15 @@ model whether a batch was worth a wake-up, is gone on purpose.
 
 ## Behavior
 
-- The `t3-code` MCP server exposes `t3_watch`, `t3_watch_list` and `t3_watch_cancel`. They need the
-  `orchestration` capability and an agent inside a T3 thread; a client signed in from outside a
-  thread gets `thread_credential_required`. Creating and cancelling are declared
-  `McpToolAccess.writes`, so they also need a live calling run and refuse read-only clients, like
-  the other mutating thread tools. A watch belongs to the thread that created it.
+- The `t3-code` MCP server exposes one action tool, `t3_watch`, with the actions `create`, `list` and
+  `cancel`, the shape upstream gave `t3_queue`. It needs the `orchestration` capability and an agent
+  inside a T3 thread; a client signed in from outside a thread gets `thread_credential_required`.
+  `create` and `cancel` are declared `McpToolAccess.writes` through `McpToolAccess.either`, so they
+  also need a live calling run and refuse read-only clients, like the other mutating thread tools. A
+  watch belongs to the thread that created it.
 - A thread source fires once when a run ends as completed, failed, interrupted, cancelled or rolled
   back. Without a `runId` it follows the active run, then the next queued run, then the latest run,
-  then the thread's first run. A run that already ended fires during `t3_watch`, which covers a
+  then the thread's first run. A run that already ended fires during `create`, which covers a
   thread launched with `t3_thread_launch` that finished before the watch arrived. The target may be
   in any project, so lookups use the unscoped `ThreadManagementService` methods. Deleting the target
   fires the watch too.
@@ -83,7 +84,7 @@ same for every provider with access to the `t3-code` MCP server.
 - `apps/server/src/persistence/Migrations.ts`: imports and registers migration 80.
 - `apps/server/src/mcp/McpHttpServer.ts`: registers `WatchToolkit` with
   `toolkitRegistration(WatchToolkit, WatchHandlers.layer)` (`layerWatchToolkit`) and merges it into
-  the MCP layer.
+  `layerTools`, the set the MCP layer serves.
 - `apps/server/src/server.ts`: provides `AgentWatches.layer` to the runtime.
 - `apps/server/scripts/migrate-dev-db.ts`: clears `agent_watches`. Startup respawns command watches
   and wakes their threads, so a dev database copied from real data must not carry the developer's

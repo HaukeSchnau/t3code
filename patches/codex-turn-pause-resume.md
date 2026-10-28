@@ -8,8 +8,11 @@ transcript. Upstream's Resume sends a visible "Continue where you left off." mes
 web and desktop.
 
 Codex can also end a turn with `codexErrorInfo: "serverOverloaded"` and `willRetry: false` when the
-model is at capacity. Upstream shows it as an ordinary provider error. The fork retries it up to
-five times, about 5, 10, 20, 40 and 80 seconds apart, across server restarts.
+model is at capacity. The fork retries it up to five times, about 5, 10, 20, 40 and 80 seconds
+apart, across server restarts. Upstream (#25611) now retries root turns inside `CodexAdapterV2` up
+to five times, 2 to 30 seconds apart, within the same run and server process. Its retry row ends
+`interrupted`, not `failed`, so the fork's worker and retry notices no longer see those runs. The
+fork's retry now only covers overloads upstream does not retry, such as a `/compact` turn.
 
 ## Implementation
 
@@ -54,8 +57,11 @@ five times, about 5, 10, 20, 40 and 80 seconds apart, across server restarts.
 ## Removal
 
 Drop the empty-message branches, the Orchestrator user-item skip, and the Pause controls when
-upstream resumes Codex without a message on every client. Drop the worker and the overload clause
-when upstream retries `serverOverloaded`. The adapter test documents the dependency on App Server
+upstream resumes Codex without a message on every client. Upstream's in-process retry now covers
+root overloads, so the worker, the overload clause and the retry notices in
+`packages/shared/src/codexTurnContinuation.ts`, web `ChatView.tsx` and mobile
+`CodexOverloadRetryCard.tsx` are due for removal together; the 2026-10-28 sync kept them because
+removing them spans four areas. The adapter test documents the dependency on App Server
 accepting an empty `turn/start` input.
 
 ## Verification
@@ -67,6 +73,7 @@ accepting an empty `turn/start` input.
   message.
 - `CodexOverloadRetryWorker.test.ts`: the retry fires on schedule and after a restart, and other
   provider errors are left alone.
-- `CodexAdapterV2.test.ts`: `turn/start` with `input: []` and the `serverOverloaded` failure code.
+- `CodexAdapterV2.test.ts`: `turn/start` with `input: []` for a message-free turn. Upstream's
+  capacity test covers its own overload retries.
 - After a sync, pause and resume a live Codex turn on web and on a phone, and check that no message
   appears.

@@ -168,7 +168,9 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
                         scriptName: result.scriptName,
                         terminalId: result.terminalId,
                       }
-                    : { status: "no-script" },
+                    : result.status === "skipped-for-link"
+                      ? { status: "skipped" }
+                      : { status: "no-script" },
                 ),
                 Effect.catchCause((cause) =>
                   Effect.succeed<WorktreeMcpSetupScriptStatus>({

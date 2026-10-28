@@ -98,6 +98,9 @@ import Migration0092 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0093 from "./Migrations/068_ShellStopRequestIndex.ts";
 import Migration0094 from "./Migrations/069_ThreadMessageSearch.ts";
 import Migration0095 from "./Migrations/095_HtmlRenderState.ts";
+import Migration0096 from "./Migrations/070_PeerLinks.ts";
+import Migration0097 from "./Migrations/071_PeerLinkFence.ts";
+import Migration0098 from "./Migrations/072_WaitingLinkRequestIndex.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -199,6 +202,10 @@ const migrationEntries = [
   [93, "ShellStopRequestIndex", Migration0093],
   [94, "ThreadMessageSearch", Migration0094],
   [95, "HtmlRenderState", Migration0095],
+  // Upstream ids 70-72.
+  [96, "PeerLinks", Migration0096],
+  [97, "PeerLinkFence", Migration0097],
+  [98, "WaitingLinkRequestIndex", Migration0098],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

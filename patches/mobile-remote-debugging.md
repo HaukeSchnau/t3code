@@ -31,10 +31,12 @@ repeatable through `agent-device` and a one-time pairing URL.
 - Keep shared requirements and release policy in `project.nix`, consumed independently by the
   production flake. Generate development metadata from native devenv annotations.
 - In dev builds, let the Add Environment screen prefill and optionally auto-connect from
-  `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`. Upstream's
-  dev-only `pairingUrl` and `autoConnect` route params already let external automation deep-link
-  into the same flow; they win over the environment variables. Drop the environment fallback once
-  upstream reads a development pairing URL at build time.
+  `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`
+  (`just mobile-dev-server <url>`). Upstream's dev-only `pairingUrl` and `autoConnect` link params
+  (`devAutoConnect.ts`) already let external automation deep-link into the same flow; a link wins
+  over the environment variables. The fallback feeds the form's `routePairingUrl` and, with
+  auto-connect, submits once when the form opens. Drop it once upstream reads a development pairing
+  URL at build time.
 - Prefer snapshots and Metro logs as primary physical-device verification. `agent-device network
   dump` can be empty unless log capture has been explicitly started.
 

@@ -40,8 +40,12 @@ export const layer = Layer.effect(
       turnStarted: turns.turnStarted,
       sealTurn: turns.sealTurn,
       ownsFileRevert: turns.isJjWorkingCopy,
-      prepareFileRevert: (input) => turns.prepareRevert(input).pipe(Effect.mapError(toHookError)),
-      revertFiles: (input) => turns.revert(input).pipe(Effect.mapError(toHookError)),
+      prepareFileRevert: Effect.fn("VcsTurnHooks.prepareFileRevert")(function (input) {
+        return turns.prepareRevert(input).pipe(Effect.mapError(toHookError));
+      }),
+      revertFiles: Effect.fn("VcsTurnHooks.revertFiles")(function (input) {
+        return turns.revert(input).pipe(Effect.mapError(toHookError));
+      }),
       // A fork of a jj thread starts in its own workspace below the parent's
       // working copy. Isolated runtimes are separate clones, so forks there
       // keep sharing the parent's directory.

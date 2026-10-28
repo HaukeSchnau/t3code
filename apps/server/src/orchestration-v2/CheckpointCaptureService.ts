@@ -248,14 +248,15 @@ export const layer: Layer.Layer<
     });
 
     return CheckpointCaptureServiceV2.of({
-      execute: (input) =>
-        execute(input).pipe(
+      execute: Effect.fn("CheckpointCaptureServiceV2.execute")(function (input) {
+        return execute(input).pipe(
           Effect.mapError((cause) =>
             isCheckpointCaptureExecutionError(cause)
               ? cause
               : new CheckpointCaptureExecutionError({ ...input, cause }),
           ),
-        ),
+        );
+      }),
     });
   }),
 );

@@ -65,7 +65,7 @@ export function ThreadFindBar(props: {
   // Only an explicit open request focuses and selects; typing must not reselect
   // the query, and a thread search hit leaves the keyboard down.
   const queryLength = session.query.length;
-  // oxlint-disable-next-line t3code/react-effect-budget -- focusing the native input once the open request has rendered it is imperative.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focusing the native input once the open request has rendered it is imperative.
   useEffect(() => {
     if (props.focusRequest === null) return;
     const frame = requestAnimationFrame(() => {

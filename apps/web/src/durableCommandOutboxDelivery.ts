@@ -24,7 +24,6 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
-import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 
 import { readFileAsDataUrl } from "./components/ChatView.logic";
 import { fileAttachmentCapabilityBlockReason } from "./components/chat/composerAttachmentFiles";
@@ -239,7 +238,6 @@ export async function deliverDurableComposerCommand(
     command.attachments.map(({ attachment }) => attachment),
     wireIds,
   );
-  const inlineContext = capabilities.inlineMessageContext === true;
   const input: StartThreadTurnInput = {
     commandId: command.commandId,
     threadId: command.threadId,
@@ -247,12 +245,9 @@ export async function deliverDurableComposerCommand(
     message: {
       messageId: command.messageId,
       role: "user",
-      text:
-        context && !inlineContext
-          ? serializeLegacyContextMessage({ text: command.text, records: context.records })
-          : command.text,
+      text: command.text,
       attachments: wireAttachments,
-      ...(context && inlineContext ? { context } : {}),
+      ...(context ? { context } : {}),
     },
     modelSelection: command.modelSelection,
     titleSeed: command.titleSeed,

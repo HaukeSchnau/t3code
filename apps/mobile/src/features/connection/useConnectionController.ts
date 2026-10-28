@@ -9,7 +9,7 @@ import type {
   RelayEnvironmentStatusResponse,
 } from "@t3tools/contracts/relay";
 import * as Option from "effect/Option";
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
 import {
@@ -75,58 +75,41 @@ export function useConnectionController() {
     [registeredIds, relayEnvironments],
   );
 
-  const connectPairingUrl = useCallback(
-    (pairingUrl: string, expectedEnvironmentId?: EnvironmentId) =>
-      connectPairingUrlMutation({
-        pairingUrl,
-        ...(expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId }),
-      }),
-    [connectPairingUrlMutation],
-  );
-  const connectRelayEnvironment = useCallback(
-    (environment: RelayClientEnvironmentRecord) =>
-      registerEnvironment(
-        new RelayConnectionRegistration({
-          target: new RelayConnectionTarget({
-            environmentId: environment.environmentId,
-            label: environment.label,
-          }),
+  const connectPairingUrl = (pairingUrl: string, expectedEnvironmentId?: EnvironmentId) =>
+    connectPairingUrlMutation({
+      pairingUrl,
+      ...(expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId }),
+    });
+  const connectRelayEnvironment = (environment: RelayClientEnvironmentRecord) =>
+    registerEnvironment(
+      new RelayConnectionRegistration({
+        target: new RelayConnectionTarget({
+          environmentId: environment.environmentId,
+          label: environment.label,
         }),
-      ),
-    [registerEnvironment],
-  );
-  const removeEnvironment = useCallback(
-    async (environmentId: EnvironmentId) => {
-      // A removed server must stop pushing notifications and Live Activity updates here.
-      await unregisterAgentAwarenessDeviceFromEnvironment(async (deviceId) => {
-        const result = await unregisterAgentAwareness({ environmentId, input: { deviceId } });
-        if (result._tag === "Failure") throw commandFailure(result);
-      });
-      return removeEnvironmentMutation(environmentId);
-    },
-    [removeEnvironmentMutation, unregisterAgentAwareness],
-  );
-  const retryEnvironment = useCallback(
-    (environmentId: EnvironmentId) => retryEnvironmentMutation(environmentId),
-    [retryEnvironmentMutation],
-  );
-  const setEnvironmentEnabled = useCallback(
-    (environmentId: EnvironmentId, enabled: boolean) =>
-      setEnvironmentEnabledMutation({ environmentId, enabled }),
-    [setEnvironmentEnabledMutation],
-  );
-  const updateEnvironment = useCallback(
-    (
-      environmentId: EnvironmentId,
-      updates: { readonly label: string; readonly displayUrl: string },
-    ) =>
-      updateBearer({
-        environmentId,
-        label: updates.label,
-        httpBaseUrl: updates.displayUrl,
       }),
-    [updateBearer],
-  );
+    );
+  const removeEnvironment = async (environmentId: EnvironmentId) => {
+    // A removed server must stop pushing notifications and Live Activity updates here.
+    await unregisterAgentAwarenessDeviceFromEnvironment(async (deviceId) => {
+      const result = await unregisterAgentAwareness({ environmentId, input: { deviceId } });
+      if (result._tag === "Failure") throw commandFailure(result);
+    });
+    return removeEnvironmentMutation(environmentId);
+  };
+  const retryEnvironment = (environmentId: EnvironmentId) =>
+    retryEnvironmentMutation(environmentId);
+  const setEnvironmentEnabled = (environmentId: EnvironmentId, enabled: boolean) =>
+    setEnvironmentEnabledMutation({ environmentId, enabled });
+  const updateEnvironment = (
+    environmentId: EnvironmentId,
+    updates: { readonly label: string; readonly displayUrl: string },
+  ) =>
+    updateBearer({
+      environmentId,
+      label: updates.label,
+      httpBaseUrl: updates.displayUrl,
+    });
 
   return {
     connectedEnvironments,

@@ -21,9 +21,11 @@ a provider session.
   to the render's row with a version switcher. `html_render`, `html_render_update` and
   `html_preview` accept `path` instead of `html`.
 - `t3.callTool` runs only the tools in `HTML_RENDER_PAGE_TOOLS`, through the handlers `/mcp`
-  registered. Tools without `Tool.Readonly` need the reader's confirmation first. The page acts
-  as a client caller capped at the thread's runtime and interaction mode, so `McpToolAccess`
-  applies the same checks as for an OAuth MCP client. A thread caller would need a live run for
+  registered. Tools without `Tool.Readonly` need the reader's confirmation first, except the
+  reading actions of upstream's action tools (`t3_queue` and `t3_pending_request` list and read,
+  `t3_thread_configure` without `modelSelection`), listed in `PAGE_READ_CALLS`. The page acts as
+  a client caller whose `narrowedTo` (upstream's `T3-Mode-Limit` field) is the thread's runtime
+  and interaction mode, so `McpToolAccess` applies the same checks as for an OAuth MCP client. A thread caller would need a live run for
   every write, and pages are used after the agent stops.
 - Mobile loads the page in a sandboxed frame behind a relay document, like MCP apps, so the bridge
   and reported heights work there too.
@@ -36,7 +38,7 @@ a provider session.
 - Page side: `HTML_RENDER_BRIDGE_SCRIPT` in `packages/shared/src/htmlRender.ts`, injected at
   publish, so pages published before this patch keep the old bootstrap.
 - Clients: `packages/client-runtime/src/htmlRender/host.ts`, web `useHtmlRenderHost.ts`, mobile
-  `HtmlRenderWebView.tsx`.
+  `HtmlRenderWebView.tsx` (full-screen pages through `features/files/AttachmentDocumentBody.tsx`).
 
 ## Removing it
 

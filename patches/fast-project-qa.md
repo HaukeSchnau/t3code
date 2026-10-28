@@ -42,7 +42,7 @@ plus the fork lockfile checks.
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `.calder/ci.ts` runs the QA tools directly, one step each: `vp check` for formatting and linting,
   `knip:check`, the generated GraphQL drift checks (`graphql`), `build:desktop` with the preload
-  verifier (`desktop-build`), `cargo fmt --check` and `cargo test` of the three Rust crates upstream
+  verifier and upstream's built web client boot check (`desktop-build`), `cargo fmt --check` and `cargo test` of the three Rust crates upstream
   checks (`rust`), `lint:mobile`, the `.github/scripts` tests, upstream's PR-asset rejection, seven
   typecheck groups, a test step for each package with a sizeable suite, one for the small packages,
   one for the repository scripts, the release smoke, and the fork and deploy lockfile checks.
@@ -84,7 +84,7 @@ plus the fork lockfile checks.
   `check:changed`) whose projects share a group but not a worker count, and `fileParallelism: false`
   gives it one worker.
 - A test that reads repository files its imports don't show has a `// calder: always` comment line and
-  runs every time: `apps/server/src/cli/triagePrompt.test.ts` reads the triage playbook,
+  runs every time: `apps/server/src/triage/triagePrompt.test.ts` reads the triage playbook,
   `apps/mobile/src/dependency-graph.test.ts` the whole source tree, and the web and mobile
   `reactCompilerCoverage.test.ts` compile every source file. Keep the comments when upstream changes
   those files, and add one to a test that starts reading files by path.
@@ -93,8 +93,8 @@ plus the fork lockfile checks.
   `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)). It runs as
   its own step, `test-web-browser`: beside the unit projects, one job outgrew a Calder worker's
   4.5 GB.
-- The small packages' suites (contracts, effect-acp, effect-codex-app-server, ssh, tailscale, relay,
-  task-cache and the oxlint plugin) run together when their directories or anything their tests import
+- The small packages' suites (evals, contracts, effect-acp, effect-codex-app-server, ssh, tailscale,
+  relay, task-cache and the oxlint plugin) run together when their directories or anything their tests import
   changed. The provider and source-control packages run the same way in `test-integrations`, a
   step of their own because together they ran past 20 minutes. Upstream adds a package per
   provider and per source-control host; add new ones to `integrationPackages` in `.calder/ci.ts`.
@@ -104,8 +104,8 @@ plus the fork lockfile checks.
   they run.
 - Typecheck groups are keyed by what their tsconfigs include and everything it imports, types
   included. Each group checks its packages one at a time with Vite+'s task cache. The server checks
-  alone and with `--checkers 1`, which only the Calder step passes: a cold tsc-rs check of the server
-  peaked at 4.7 GB with the default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
+  with `--checkers 1`, which only the Calder step passes. `evals` imports server sources, so it
+  shares that group and limit. A cold tsc-rs check of the server peaked at 4.7 GB with the default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
   It also checks incrementally: its `tsconfig.json` sets `incremental`, and Calder keeps
   `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 a cold check with one checker took about
   110 s and an unchanged one 8 s. Vite+ never caches it because it rewrites the build info it read.

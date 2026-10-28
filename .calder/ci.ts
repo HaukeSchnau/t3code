@@ -74,9 +74,9 @@ const graphql = Task.make("graphql", {
 }).pipe(Step.timeout("10 minutes"));
 
 /**
- * The web, server and desktop bundles build, and the preload bundle exposes the desktop bridge under
- * Electron's sandbox. Linux builds the same bundles as macOS; packaging and signing stay with
- * `desktop-package`.
+ * The web, server and desktop bundles build, the preload bundle exposes the desktop bridge under
+ * Electron's sandbox, and the built web client boots in Chromium. Linux builds the same bundles as
+ * macOS; packaging and signing stay with `desktop-package`.
  */
 const desktopBuild = Task.make("desktop-build", {
   shell,
@@ -92,7 +92,8 @@ const desktopBuild = Task.make("desktop-build", {
     ),
   ),
   run: withSpdxNotices(
-    "vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs",
+    "vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs && " +
+      "node apps/web/scripts/verify-built-boot.ts",
   ),
 }).pipe(Step.timeout("30 minutes"));
 
@@ -282,6 +283,7 @@ const integrationPackages = [
   "packages/provider-acp-registry",
   "packages/provider-core",
   "packages/provider-cursor",
+  "packages/provider-fx",
   "packages/provider-grok",
   "packages/provider-muse",
   "packages/provider-opencode",
@@ -312,6 +314,7 @@ const packageSuites = (name: string, dirs: ReadonlyArray<string>) =>
   }).pipe(Step.timeout("20 minutes"));
 
 const testPackages = packageSuites("test-packages", [
+  "evals",
   "packages/contracts",
   "packages/effect-acp",
   "packages/effect-codex-app-server",
@@ -380,12 +383,13 @@ const typechecks = [
   // default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
   typecheck(
     "server",
-    ["apps/server"],
+    ["apps/server", "evals"],
     [
       "apps/server/src/**/*.ts",
       "apps/server/scripts/**/*.ts",
       "apps/server/integration/**/*.ts",
       "apps/server/vite.config.ts",
+      "evals/**/*.ts",
       "scripts/lib/**/*.ts",
     ],
     ["--checkers", "1"],

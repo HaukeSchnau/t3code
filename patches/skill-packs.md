@@ -42,9 +42,9 @@ How it works is in [docs/internals/skill-packs.md](../docs/internals/skill-packs
   `ChatView.tsx` (control), `chat/useComposerSend.ts` and `chat/useMultipleModelSend.ts` (draft
   bootstrap),
   `ProjectSettingsPanel.tsx` (Skills row).
-- Mobile: `ThreadSettingsSheet.tsx` (Skills row and page), `ThreadComposer.tsx`,
-  `new-task-flow-provider.tsx`, `use-composer-drafts.ts`, `thread-outbox-model.ts`,
-  `use-thread-outbox-drain.ts`, `projectThreadStartTurn.ts`.
+- Mobile: `ThreadSettingsSheet.tsx` (Skills row and page; `ExistingThreadSettingsRouteScreen`
+  builds the thread's session), `new-task-flow-provider.tsx`, `use-composer-drafts.ts`,
+  `thread-outbox-model.ts`, `threadOutboxDelivery.ts`, `projectThreadStartTurn.ts`.
 
 ## Not carried after the v2 merge
 

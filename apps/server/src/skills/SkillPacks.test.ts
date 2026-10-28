@@ -106,7 +106,7 @@ const withSkillPacks = <A, E>(
 
     const detached: Array<ThreadId> = [];
     const dependencies = Layer.mergeAll(
-      ProjectionStore.layerMemory,
+      ProjectionStore.layer,
       ServerConfig.layerTest(baseDir, baseDir),
       Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistryV2,

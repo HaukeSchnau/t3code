@@ -46,33 +46,46 @@ const callingThreadId = Effect.gen(function* () {
   return thread.threadId;
 });
 
+const required = <A>(value: A | undefined, name: string) =>
+  value === undefined
+    ? Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: `This action needs \`${name}\`.`,
+        }),
+      )
+    : Effect.succeed(value);
+
 const handlers = {
-  t3_watch: McpToolAccess.writes((input) =>
-    Effect.gen(function* () {
-      const watcherThreadId = yield* callingThreadId;
-      const watches = yield* AgentWatches.AgentWatches;
-      return yield* watches.create({ watcherThreadId, ...input }).pipe(Effect.mapError(toFailure));
-    }),
-  ),
-  t3_watch_list: McpToolAccess.reads((input) =>
-    Effect.gen(function* () {
-      const watcherThreadId = yield* callingThreadId;
-      const watches = yield* AgentWatches.AgentWatches;
-      return {
-        watches: yield* watches
-          .list({ watcherThreadId, includeClosed: input.includeClosed === true })
-          .pipe(Effect.mapError(toFailure)),
-      };
-    }),
-  ),
-  t3_watch_cancel: McpToolAccess.writes((input) =>
-    Effect.gen(function* () {
-      const watcherThreadId = yield* callingThreadId;
-      const watches = yield* AgentWatches.AgentWatches;
-      return yield* watches
-        .cancel({ watcherThreadId, watchId: input.watchId })
-        .pipe(Effect.mapError(toFailure));
-    }),
+  t3_watch: McpToolAccess.either(
+    (input) => input.action === "list",
+    McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const watcherThreadId = yield* callingThreadId;
+        const watches = yield* AgentWatches.AgentWatches;
+        return {
+          watches: yield* watches
+            .list({ watcherThreadId, includeClosed: input.includeClosed === true })
+            .pipe(Effect.mapError(toFailure)),
+        };
+      }),
+    ),
+    McpToolAccess.writes((input) =>
+      Effect.gen(function* () {
+        const watcherThreadId = yield* callingThreadId;
+        const watches = yield* AgentWatches.AgentWatches;
+        if (input.action === "cancel") {
+          const watchId = yield* required(input.watchId, "watchId");
+          return yield* watches
+            .cancel({ watcherThreadId, watchId })
+            .pipe(Effect.mapError(toFailure));
+        }
+        const source = yield* required(input.source, "source");
+        return yield* watches
+          .create({ watcherThreadId, source, label: input.label, deadline: input.deadline })
+          .pipe(Effect.mapError(toFailure));
+      }),
+    ),
   ),
 } satisfies McpToolAccess.Handlers<typeof WatchToolkit.tools>;
 

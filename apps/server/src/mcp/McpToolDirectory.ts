@@ -26,14 +26,17 @@ export class McpToolDirectory extends Context.Service<
 export const layer = Layer.sync(McpToolDirectory, () => {
   const tools = new Map<string, McpToolEntry>();
   return McpToolDirectory.of({
-    record: (registration) =>
-      Effect.sync(() => {
+    record: Effect.fn("McpToolDirectory.record")(function (registration) {
+      return Effect.sync(() => {
         tools.set(registration.tool.name, {
           tool: registration.tool,
           readOnly: Context.get(registration.annotations, Tool.Readonly),
           handle: registration.handle,
         });
-      }),
-    find: (name) => Effect.sync(() => Option.fromNullishOr(tools.get(name))),
+      });
+    }),
+    find: Effect.fn("McpToolDirectory.find")(function (name) {
+      return Effect.sync(() => Option.fromNullishOr(tools.get(name)));
+    }),
   });
 });
