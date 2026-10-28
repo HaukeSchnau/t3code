@@ -38,7 +38,9 @@ export interface ProjectThreadStartTurnSpec {
   readonly startFromOrigin: boolean;
   readonly worktreeBranchName: string;
   /** Fork: a new server-managed workspace instead of a Git worktree (patches/workspaces.md). */
-  readonly managedWorkspace?: { readonly profile?: WorkspaceProfile } | undefined;
+  readonly managedWorkspace?:
+    | { readonly isolated?: boolean; readonly profile?: WorkspaceProfile }
+    | undefined;
   /** Fork: the task's skill packs; absent follows the project default. */
   readonly skillPackIds?: ReadonlyArray<SkillPackId>;
 }

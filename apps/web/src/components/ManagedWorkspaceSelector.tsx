@@ -4,6 +4,7 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   CheckIcon,
   ChevronDownIcon,
+  FlaskConicalIcon,
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
@@ -11,7 +12,11 @@ import {
 import { memo, type ReactNode, useState } from "react";
 
 import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
-import { useWorkspaceProfile } from "../lib/managedWorkspaces";
+import {
+  setIsolatedWorkspaceChoice,
+  useIsolatedWorkspaceChoice,
+  useWorkspaceProfile,
+} from "../lib/managedWorkspaces";
 import { useThreadShellsForProjectRefs } from "../state/entities";
 import type { EnvMode } from "./BranchToolbar.logic";
 import { ComposerContextLabel } from "./ComposerContextLabel";
@@ -77,6 +82,7 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
   const [query, setQuery] = useState("");
   const [showSettled, setShowSettled] = useState(false);
   const [profile, setProfile] = useWorkspaceProfile();
+  const isolatedChoice = useIsolatedWorkspaceChoice() && props.isolated;
   const projectRefs = open ? [scopeProjectRef(props.environmentId, props.projectId)] : [];
   const threads = useThreadShellsForProjectRefs(projectRefs);
   const archiveEnvironmentIds =
@@ -98,9 +104,17 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
     : props.activeWorktreePath
       ? workspaceLabel(props.activeWorktreePath)
       : isNew
-        ? "New workspace"
+        ? isolatedChoice
+          ? "New isolated workspace"
+          : "New workspace"
         : "Project checkout";
-  const Icon = props.activeWorktreePath ? FolderGitIcon : isNew ? FolderGit2Icon : FolderIcon;
+  const Icon = props.activeWorktreePath
+    ? FolderGitIcon
+    : isNew
+      ? isolatedChoice
+        ? FlaskConicalIcon
+        : FolderGit2Icon
+      : FolderIcon;
   const content = (
     <>
       <Icon className="size-3 shrink-0" />
@@ -119,7 +133,8 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
     );
   }
 
-  const choose = (action: () => void) => {
+  const choose = (action: () => void, isolated = false) => {
+    setIsolatedWorkspaceChoice(isolated);
     action();
     setOpen(false);
   };
@@ -146,12 +161,19 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
         <Row
           icon={<FolderGit2Icon className="size-4 shrink-0" />}
           title="New workspace"
-          detail={
-            props.isolated ? "Separate files, tools and services" : "A separate copy for this task"
-          }
-          selected={isNew}
+          detail="A separate copy for this task"
+          selected={isNew && !isolatedChoice}
           onSelect={() => choose(() => props.onEnvModeChange("worktree"))}
         />
+        {props.isolated ? (
+          <Row
+            icon={<FlaskConicalIcon className="size-4 shrink-0" />}
+            title="New isolated workspace"
+            detail="A clean room that can't see your other projects"
+            selected={isNew && isolatedChoice}
+            onSelect={() => choose(() => props.onEnvModeChange("worktree"), true)}
+          />
+        ) : null}
         <Row
           icon={<FolderIcon className="size-4 shrink-0" />}
           title="Project checkout"
@@ -214,9 +236,9 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
             </label>
           </>
         ) : null}
-        {props.isolated && isNew ? (
+        {isolatedChoice && isNew ? (
           <details className="mt-1 border-t px-2 pt-1.5 text-xs">
-            <summary className="cursor-pointer text-muted-foreground">Advanced</summary>
+            <summary className="cursor-pointer text-muted-foreground">Clean room setup</summary>
             <div className="py-2">
               <RadioGroup
                 aria-label="Agent setup"

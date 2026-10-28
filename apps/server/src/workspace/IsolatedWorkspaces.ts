@@ -8,7 +8,11 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { projectProviderView, readSeparateProject } from "../project/SeparateProjectRegistry.ts";
+import {
+  isSeparateProject,
+  projectProviderView,
+  readSeparateProject,
+} from "../project/SeparateProjectRegistry.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import { resolveJjStartRevision } from "./JjWorkspaces.ts";
 import { slug } from "./WorkspaceNaming.ts";
@@ -135,6 +139,20 @@ export const findIsolatedWorkspace = Effect.fn("IsolatedWorkspaces.find")(functi
       fail("IsolatedWorkspaces.find", "Could not inspect the workspace environment.", cause),
   });
   return record?.workspace === undefined ? null : record.root;
+});
+
+/** Whether `path` lies inside any registration: an isolated workspace or a separate project. */
+export const isRegistered = Effect.fn("IsolatedWorkspaces.isRegistered")(function* (path: string) {
+  const environment = yield* HostProcess.Environment;
+  return yield* Effect.tryPromise({
+    try: () => isSeparateProject(path, environment.AGENT_EXEC_STATE),
+    catch: (cause) =>
+      fail(
+        "IsolatedWorkspaces.isRegistered",
+        "Could not inspect the workspace environment.",
+        cause,
+      ),
+  });
 });
 
 /** Retires the runtime and removes the checkout; the launcher checks source dependencies. */

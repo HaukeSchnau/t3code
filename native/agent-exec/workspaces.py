@@ -499,7 +499,7 @@ def network(runtime, record):
         (state / "network-pid").unlink(missing_ok=True)
 
 
-def run_scope(command, unit, namespace_fds):
+def run_scope(command, unit, pass_fds):
     """Reap command descendants on exit, even though workspace PIDs are shared."""
     child = None
     interrupted = None
@@ -513,7 +513,7 @@ def run_scope(command, unit, namespace_fds):
     previous = {signum: signal.signal(signum, stop)
                 for signum in [signal.SIGTERM, signal.SIGINT]}
     try:
-        child = subprocess.Popen(command, pass_fds=namespace_fds)
+        child = subprocess.Popen(command, pass_fds=pass_fds)
         if interrupted:
             child.send_signal(interrupted)
         code = child.wait()
@@ -522,7 +522,7 @@ def run_scope(command, unit, namespace_fds):
         if unit is not None:
             subprocess.run(["systemctl", "--user", "stop", unit],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-        for fd in namespace_fds:
+        for fd in pass_fds:
             os.close(fd)
         for signum, handler in previous.items():
             signal.signal(signum, handler)

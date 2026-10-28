@@ -1,10 +1,10 @@
 # Workspaces
 
 Upstream creates new workspaces only as Git worktrees. This fork also creates them for jj
-repositories and plain directories, as isolated agent-exec runtimes on Linux hosts that set
-`T3CODE_EXECUTION_LAUNCHER`. Upstream would run `git worktree add` inside a colocated jj
-repository, cannot start a new workspace for a project without Git, and has no notion of an
-isolated runtime.
+repositories and plain directories, as folders on the host. A launch can opt into an isolated
+agent-exec runtime instead, on Linux hosts that set `T3CODE_EXECUTION_LAUNCHER`. Upstream would
+run `git worktree add` inside a colocated jj repository, cannot start a new workspace for a
+project without Git, and has no notion of an isolated runtime.
 
 Plain Git projects follow upstream on every host and client: upstream's run-context and env-mode
 selectors (including the previous worktree), the "Select a base branch" guard, and upstream's
@@ -19,20 +19,27 @@ directory and the agent-exec registration when they are needed. Migration 35's
 `projection_thread_workspace_roots` stays only so new names never reuse a path an old workspace
 held.
 
-The server picks the backend from the project (`workspace/ManagedWorkspaces.ts`):
+The server picks the backend from the project and the launch (`workspace/ManagedWorkspaces.ts`):
 
-1. Upstream's Git worktree when the nearest repository marker is `.git`, on every host.
-2. An isolated runtime for jj and directory projects when the host is Linux and the launcher is
-   configured. They fork through `agent-exec fork`, with Familiar as the default profile and
-   Minimal under Advanced. Deletion retires the runtime with `--remove-checkout`, which also
-   removes the workspace's private home and state. Isolated workspaces that earlier versions
-   forked from Git projects keep their registrations and are still found and deleted this way.
+1. Upstream's Git worktree when the nearest repository marker is `.git`, on every host. A Git
+   launch that asks for isolation fails instead of silently getting a worktree.
+2. An isolated runtime for a jj or directory project when the launch sets `isolated: true`. It
+   needs a Linux host with the launcher and forks through `agent-exec fork`, with Familiar as the
+   default profile. Deletion retires the runtime with `--remove-checkout`, which also removes the
+   workspace's private home and state. It exists for clean-room experiments, where the agent
+   should not see other projects; agents and users choose it explicitly. A project whose root is
+   itself registered with agent-exec (a separate project) keeps every new workspace isolated, as
+   its own threads are.
 3. A jj workspace (`jj workspace add`, shared store) when the marker is `.jj`. Colocated
    repositories count as jj and get colocated workspaces (`--colocate`), so jj creates the Git
    worktree; T3 never runs `git worktree` there.
 4. A guarded directory copy otherwise. It keeps the old size limit
    (`T3CODE_DIRECTORY_COPY_MAX_BYTES`, 5 GiB), free-space and sensitive-root checks, bounded
    APFS and BTRFS clones, and refuses a full-copy fallback the full-copy checks would reject.
+
+Earlier versions isolated every new jj and directory workspace on launcher hosts, and before that
+Git projects too. Those workspaces keep their registrations, so their threads still run inside
+them and deletion still retires them.
 
 Managed workspaces live under `<baseDir>/workspaces/<project>/<name>`, the same layout as before
 the v2 merge, so threads imported from v1 keep working and their workspaces appear in the pickers.
@@ -60,12 +67,15 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 ## Contract
 
 - `OrchestrationV2ThreadLaunchWorkspaceStrategy` gains `{ type: "workspace", baseRef?,
-  startFromOrigin?, profile? }` (`packages/contracts/src/workspace.ts`). The server also routes a
+  startFromOrigin?, isolated?, profile? }` (`packages/contracts/src/workspace.ts`). `profile`
+  applies only with `isolated`; clients before the opt-in always sent it, so it cannot imply
+  isolation. The server also routes a
   plain `worktree` launch on a jj or directory project to the same backends, so upstream clients
   and agents never create Git worktrees there. A `workspace` launch on a Git project becomes
   upstream's `worktree` launch from the given or current branch.
 - `ExecutionEnvironmentCapabilities.managedWorkspaces = { isolated }` tells clients to offer
-  managed workspaces and to show the profile choice. The capability is per server; clients apply
+  managed workspaces, and whether to offer **New isolated workspace** with its profile choice.
+  Web and mobile keep that choice in memory for the next send only. The capability is per server; clients apply
   it per project through `managedWorkspacesForProject` (client-runtime `state/workspaces.ts`),
   which offers them only once the status confirms a jj checkout (`kind: "jj"`) or no repository
   (`isRepo: false`). While the status is unknown (cold start, offline), clients use upstream's
@@ -90,7 +100,9 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
   `workspace` sentences in `mcp/toolkits/project/tools.ts` and `mcp/toolkits/worktree/tools.ts`
   describe it to agents.
 - `packages/provider-core/src/server/orchestrationInstructions.ts`: one sentence in the
-  `t3_thread_launch` bullet points agents at `{"type":"workspace"}`.
+  `t3_thread_launch` bullet points agents at `{"type":"workspace"}` and at `isolated:true` for
+  clean rooms the user asks for.
+- `jj/JjTurnHooks.ts`: a fork gets its own jj workspace unless its source is an isolated one.
 - client-runtime `operations/commands.ts`: `bootstrap.prepareWorkspace` and the conversation-only
   revert. `state/workspaces.ts` is fork-owned.
 - web `ChatView.tsx` computes the per-project capability once and passes it to `BranchToolbar`
@@ -115,9 +127,11 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
   `--worktree`, which the server turns into a managed workspace where it would for an agent.
 - jj workspaces no thread ever used are not listed in the pickers.
 - Mobile keeps the profile choice for the app session only.
+- Isolation through `t3_worktree_handoff`, multi-model sends, and `delegate_task`. They create
+  host workspaces; `delegate_task`'s `isolation: "worktree"` names a Git checkout, not a clean
+  room.
 - Multi-model sends always request Git worktrees, as upstream. On jj projects the server routes
-  them into managed workspaces, isolated ones with the Familiar profile where the host has the
-  launcher.
+  them into managed workspaces.
 - Isolated workspaces for Git projects. Git projects get upstream's worktrees on every host, so
   their agents run on the host like upstream's.
 - Upstream's retried preparation reuses a Git worktree the first attempt recorded. A managed

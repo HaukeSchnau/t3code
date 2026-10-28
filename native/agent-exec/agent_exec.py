@@ -238,6 +238,16 @@ def publish_directory(record):
     return directory
 
 
+def argument_fd(arguments):
+    """An inheritable memfd holding arguments for bwrap's --args, which keeps them out of /proc/*/cmdline."""
+    fd = os.memfd_create("agent-exec-arguments", 0)
+    data = b"".join(os.fsencode(argument) + b"\0" for argument in arguments)
+    while data:
+        data = data[os.write(fd, data):]
+    os.lseek(fd, 0, os.SEEK_SET)
+    return fd
+
+
 def launch(record, cwd, command, *, project=None):
     project_files.ensure(sys.modules[__name__], record)
     project_files.isolate_devenv_cwd(sys.modules[__name__], record, cwd)
@@ -255,6 +265,8 @@ def launch(record, cwd, command, *, project=None):
     )
     runtime_directory = "/tmp/runtime"
     namespace_fds = []
+    # Every --setenv goes to bwrap through argument_fd: a command line is world-readable.
+    environment = []
     if workspace:
         namespace = workspaces.ensure_process_namespace(sys.modules[__name__], record)
         runtime_directory = namespace["runtime"]
@@ -296,9 +308,9 @@ def launch(record, cwd, command, *, project=None):
                 "AGENT_EXEC_ENVIRONMENT",
                 "AGENT_EXEC_SETUP_TIMEOUT",
             } or key.startswith(("T3CODE_", "T3_", "CODEX_", "OPENAI_", "ANTHROPIC_")):
-                args += ["--setenv", key, value]
+                environment += ["--setenv", key, value]
             elif project and (key.startswith("PROJECT_") or key == "NOTIFY_SOCKET"):
-                args += ["--setenv", key, value]
+                environment += ["--setenv", key, value]
     # Nix store content and the OS are shared. User repositories and host process state are not.
     for path in [
         "/nix",
@@ -344,18 +356,18 @@ def launch(record, cwd, command, *, project=None):
         shared_tools = STATE / "tool-environments" / identity(tool_project)
         shared_tools.mkdir(parents=True, exist_ok=True)
         bind(args, shared_tools, writable=True)
-        args += ["--setenv", "AGENT_EXEC_SHARED_TOOL_CACHE", str(shared_tools)]
+        environment += ["--setenv", "AGENT_EXEC_SHARED_TOOL_CACHE", str(shared_tools)]
         if workspace.get("stableRuntimePath"):
-            args += ["--setenv", "AGENT_EXEC_SHARED_DEVENV_CACHE", str(shared_tools / "devenv-eval")]
+            environment += ["--setenv", "AGENT_EXEC_SHARED_DEVENV_CACHE", str(shared_tools / "devenv-eval")]
         if workspace.get("sharedPackageStore"):
             # Share downloaded packages within one project, never node_modules.
             # Older workspaces retain their original store location.
             package_store = shared_tools / "pnpm-store"
             package_store.mkdir(exist_ok=True)
             for prefix in ["pnpm_config_", "npm_config_"]:
-                args += ["--setenv", prefix + "store_dir", str(package_store)]
+                environment += ["--setenv", prefix + "store_dir", str(package_store)]
                 # Avoid hardlinks: dependency edits must not mutate shared content.
-                args += ["--setenv", prefix + "package_import_method", "clone-or-copy"]
+                environment += ["--setenv", prefix + "package_import_method", "clone-or-copy"]
     for name in ["tmp/runtime", "attachments"]:
         (state / name).mkdir(parents=True, exist_ok=True)
     bind(args, state / "tmp", "/tmp", writable=True)
@@ -393,7 +405,7 @@ def launch(record, cwd, command, *, project=None):
         notify = os.environ.get("NOTIFY_SOCKET")
         if notify and not notify.startswith("@"):
             bind(args, notify, writable=True)
-        args += ["--setenv", "PROJECT_WORKSPACE_ENTERED", "1"]
+        environment += ["--setenv", "PROJECT_WORKSPACE_ENTERED", "1"]
     bind(args, host_home / ".cache/ms-playwright")
     profile = host_home / ".nix-profile"
     if not workspace:
@@ -653,7 +665,7 @@ def launch(record, cwd, command, *, project=None):
         ("credential.https://gist.github.com.helper", ""),
         ("credential.https://gist.github.com.helper", "!gh auth git-credential"),
     ]:
-        args += [
+        environment += [
             "--setenv",
             f"GIT_CONFIG_KEY_{config_count}",
             key,
@@ -662,7 +674,7 @@ def launch(record, cwd, command, *, project=None):
             value,
         ]
         config_count += 1
-    args += ["--setenv", "GIT_CONFIG_COUNT", str(config_count)]
+    environment += ["--setenv", "GIT_CONFIG_COUNT", str(config_count)]
     ssh_socket = os.environ.get("SSH_AUTH_SOCK")
     bind_ssh_configs(args, state, host_home)
     if ssh_socket and Path(ssh_socket).exists():
@@ -674,14 +686,14 @@ def launch(record, cwd, command, *, project=None):
             context_bin = str(Path(project["executable"]).parent) if project else project_environment["PROJECT_CONTEXT_BIN"]
             path = context_bin + ":" + path
             for key, value in project_environment.items():
-                args += ["--setenv", key, value]
+                environment += ["--setenv", key, value]
         if project:
             for key, value in {
                 "PROJECT_RUNTIME_FILE": project["paths"]["runtime"] + "/runtime.json",
                 "PROJECT_SECRETS_DIR": project["paths"]["runtime"] + "/workspace-secrets",
             }.items():
-                args += ["--setenv", key, value]
-        args += [
+                environment += ["--setenv", key, value]
+        environment += [
             "--setenv",
             "AGENT_EXEC_BASE_PATH",
             path,
@@ -705,7 +717,7 @@ def launch(record, cwd, command, *, project=None):
         ]
         if not project:
             command = [LAUNCHER, "activate", "--", *command]
-    args += [
+    environment += [
         "--setenv",
         "AGENT_EXEC_WORKSPACE_LAYOUT",
         workspace.get("layout", "") if workspace else "",
@@ -738,6 +750,11 @@ def launch(record, cwd, command, *, project=None):
         "--setenv",
         "XDG_RUNTIME_DIR",
         runtime_directory,
+    ]
+    environment_fd = argument_fd(environment)
+    args += [
+        "--args",
+        str(environment_fd),
         "--unsetenv",
         "DBUS_SESSION_BUS_ADDRESS",
         "--chdir",
@@ -749,7 +766,7 @@ def launch(record, cwd, command, *, project=None):
     if project and os.environ.get("PROJECT_EXECUTION_ACTION") == "manager":
         # Project's service already belongs to the workspace slice. Its native
         # readiness notification must come from that service's own cgroup.
-        return workspaces.run_scope(args, None, namespace_fds)
+        return workspaces.run_scope(args, None, [*namespace_fds, environment_fd])
     if workspace:
         scope = "agent-command-" + uuid.uuid4().hex + ".scope"
         args = [
@@ -768,7 +785,8 @@ def launch(record, cwd, command, *, project=None):
             ),
             *args,
         ]
-        return workspaces.run_scope(args, scope, namespace_fds)
+        return workspaces.run_scope(args, scope, [*namespace_fds, environment_fd])
+    os.set_inheritable(environment_fd, True)
     os.execvp(args[0], args)
 
 

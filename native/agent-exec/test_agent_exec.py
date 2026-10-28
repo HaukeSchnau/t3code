@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -208,6 +209,44 @@ class ProjectEnvironmentTests(unittest.TestCase):
         )
         self.assertIn(str(private / "home/.claude/projects"), args)
         self.assertEqual((claude / ".credentials.json").read_text(), "test-credential")
+
+    def test_workspace_secrets_stay_out_of_the_command_line(self):
+        record = runtime.create(self.base / "project")
+        record["home"] = str(self.base / "home")
+        record["workspace"] = {
+            "profile": "familiar",
+            "baseProfile": str(self.base / "baseline"),
+            "sourceRoot": str(self.base / "source"),
+            "visibleRoot": str(self.base / "home/project"),
+        }
+        launched = {}
+
+        def run_scope(args, unit, fds):
+            environment_fd = int(args[args.index("--args") + 1])
+            self.assertIn(environment_fd, fds)
+            launched["args"] = args
+            launched["environment"] = os.read(environment_fd, 1 << 20).decode().split("\0")
+            return 0
+
+        secret = "sk-ant-test-secret"
+        with (
+            patch.dict(runtime.os.environ, {
+                "ANTHROPIC_AUTH_TOKEN": secret,
+                "AGENT_EXEC_DEVENV": "/bin/true",
+            }),
+            patch.object(runtime.workspaces, "ensure_network", return_value=[]),
+            patch.object(runtime.workspaces, "ensure_process_namespace",
+                         return_value={"pid": os.getpid(), "runtime": "/tmp/runtime"}),
+            patch.object(runtime.workspaces, "provider_config"),
+            patch.object(runtime.workspaces, "run_scope", side_effect=run_scope),
+        ):
+            runtime.launch(record, record["root"], ["true"])
+        self.assertNotIn(secret, " ".join(launched["args"]))
+        environment = launched["environment"]
+        token = environment.index("ANTHROPIC_AUTH_TOKEN")
+        self.assertEqual(environment[token - 1 : token + 2], ["--setenv", "ANTHROPIC_AUTH_TOKEN", secret])
+        # bwrap applies --clearenv before the descriptor's --setenv arguments.
+        self.assertLess(launched["args"].index("--clearenv"), launched["args"].index("--args"))
 
     def test_ssh_config_includes_are_owned_and_cycles_terminate(self):
         home = self.base / "home"

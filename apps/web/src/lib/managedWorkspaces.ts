@@ -1,10 +1,10 @@
 /**
  * Server-managed workspaces in the composer (patches/workspaces.md).
- * For jj and directory projects, servers that advertise them create jj workspaces, guarded
- * directory copies or isolated runtimes, so a new workspace needs neither Git nor a base branch.
- * Plain Git projects keep upstream's worktree flow.
+ * jj and directory projects get jj workspaces or copies without Git or a base branch, and an
+ * isolated runtime only when chosen. Plain Git projects keep upstream's worktree flow.
  */
 import { useAtomValue } from "@effect/atom-react";
+import { useSyncExternalStore } from "react";
 import { managedWorkspacesForProject } from "@t3tools/client-runtime/state/workspaces";
 import {
   type EnvironmentId,
@@ -32,7 +32,27 @@ export function useManagedWorkspaces(
   });
 }
 
-/** Familiar unless the user chose Minimal under Advanced; only isolated workspaces use it. */
+// In memory, not stored: isolation stays a choice per launch, cleared by the send that uses it.
+let isolatedNext = false;
+const isolationListeners = new Set<() => void>();
+
+export function setIsolatedWorkspaceChoice(isolated: boolean) {
+  if (isolatedNext === isolated) return;
+  isolatedNext = isolated;
+  for (const listener of isolationListeners) listener();
+}
+
+export function useIsolatedWorkspaceChoice(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      isolationListeners.add(listener);
+      return () => isolationListeners.delete(listener);
+    },
+    () => isolatedNext,
+  );
+}
+
+/** Familiar unless the user chose Minimal; only isolated workspaces use it. */
 export function useWorkspaceProfile() {
   return useLocalStorage<WorkspaceProfile, WorkspaceProfile>(
     WORKSPACE_PROFILE_STORAGE_KEY,
@@ -60,6 +80,8 @@ export function managedWorkspaceBootstrap(input: {
   return {
     ...(input.baseBranch === null ? {} : { baseRef: input.baseBranch }),
     ...(input.startFromOrigin ? { startFromOrigin: true } : {}),
-    ...(capability.isolated ? { profile: readWorkspaceProfile() } : {}),
+    ...(capability.isolated && isolatedNext
+      ? { isolated: true, profile: readWorkspaceProfile() }
+      : {}),
   };
 }

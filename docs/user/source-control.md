@@ -349,7 +349,6 @@ Changes T3 Code cannot attribute to the thread, such as a branch the agent merge
 Forking a thread in a jj repository gives the fork a workspace of its own, starting below the
 thread's working copy. If the working copy holds uncommitted files at that moment, the fork shares
 the original thread's checkout instead. Merging the fork back moves its changes into the original thread's stack,
-below its working copy, as long as no turn is running there. On servers that run threads in
-isolated workspaces, forks share the original thread's checkout instead, so their changes are
-already in its stack. **Work in other repositories** in the stack lists this thread's changes in
+below its working copy, as long as no turn is running there. Forks of a thread in an isolated
+workspace share the original thread's checkout instead, so their changes are already in its stack. **Work in other repositories** in the stack lists this thread's changes in
 every repository on the environment.
