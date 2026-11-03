@@ -1,0 +1,4 @@
+# Alchemy's tools; the stack doesn't need workerd.
+allowBuilds:
+  esbuild: true
+  workerd: false
