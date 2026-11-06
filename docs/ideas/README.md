@@ -10,3 +10,4 @@ fork-specific implementation that needs maintenance notes.
 ## Index
 
 - [Threaded Replies as Forks](./threaded-replies-as-forks.md)
+- [Focus filters switch environment modes](./focus-filter-environment-modes.md)

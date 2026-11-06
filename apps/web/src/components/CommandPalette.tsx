@@ -50,8 +50,11 @@ import {
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import { environmentModeLabel } from "@t3tools/client-runtime/connection";
+import { applyEnvironmentMode, useEnvironmentModes } from "~/connection/environmentModes";
 import {
   ArrowLeftIcon,
+  BriefcaseIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -465,6 +468,7 @@ function OpenCommandPaletteDialog(props: {
   };
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const environmentModes = useEnvironmentModes();
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
   const currentView = viewStack.at(-1)?.view ?? null;
@@ -1518,6 +1522,28 @@ function OpenCommandPaletteDialog(props: {
         queueWorkspaceFocusFromPalette(direction);
       },
     });
+  }
+
+  if (environmentModes.modes.length > 0) {
+    for (const mode of [...environmentModes.modes, null]) {
+      const id = mode?.id ?? null;
+      const title = `Mode: ${environmentModeLabel(environmentModes.modes, id)}`;
+      actionItems.push({
+        kind: "action",
+        value: `action:environment-mode:${id ?? "all"}`,
+        searchTerms: [title, "environment", "mode", "switch", "focus", "work", "personal"],
+        title,
+        icon:
+          environmentModes.active === id ? (
+            <CheckIcon className={ITEM_ICON_CLASS} />
+          ) : (
+            <BriefcaseIcon className={ITEM_ICON_CLASS} />
+          ),
+        run: async () => {
+          await applyEnvironmentMode(id);
+        },
+      });
+    }
   }
 
   actionItems.push({
