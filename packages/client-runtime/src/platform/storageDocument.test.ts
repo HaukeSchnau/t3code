@@ -287,7 +287,7 @@ describe("ConnectionCatalogDocument", () => {
     expect(putRemoteDpopTokenInCatalog(otherRelay, REMOTE_TOKEN)).toBe(otherRelay);
   });
 
-  it("decodes a document written before the disabled list existed", () => {
+  it("decodes a document written before the disabled list and modes existed", () => {
     const decoded = decodeCatalogDocument({
       schemaVersion: 1,
       targets: [],
@@ -297,6 +297,7 @@ describe("ConnectionCatalogDocument", () => {
     });
 
     expect(decoded.disabledEnvironmentIds).toEqual([]);
+    expect(decoded.environmentModes).toEqual([]);
   });
 
   it("switches a saved environment off and back on without touching its records", () => {

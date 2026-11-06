@@ -143,6 +143,23 @@ on that machine. Existing threads stay where they started. If resource checks ar
 unavailable or all eligible machines are full, choose a machine manually to continue.
 Mobile keeps its manual environment selection.
 
+### Switch groups of machines with modes
+
+Modes switch several saved environments on or off at once, for example **Work** for an
+employer's machine and **Personal** for your own. Create them in **Settings → Environments →
+Environment modes** on web and desktop, or **Settings → Environments → Modes** on mobile, and
+pick the environments each mode includes.
+
+Choosing a mode switches on its environments and switches off environments that only other
+modes include. **All environments** switches on everything any mode includes. Environments you
+leave out of every mode keep their own switch. A switched-off environment disconnects and hides
+its threads; its agents keep running on that machine.
+
+Switch modes from the menu at the bottom of the sidebar, from the command palette, or with
+`mod+alt+e`, which cycles through your modes and then **All environments**. On mobile, use the
+mode pill above the thread list, or the thread list menu on Android. Modes are saved separately
+on each device. The desktop app's own local environment isn't part of modes.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale

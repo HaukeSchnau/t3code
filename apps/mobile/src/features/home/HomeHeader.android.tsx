@@ -2,6 +2,7 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { ThreadListToolbar } from "./ThreadListToolbar";
 import type { HomeHeaderProps } from "./HomeHeader.types";
+import { useEnvironmentModeMenu } from "../connection/environmentModes";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
@@ -12,7 +13,21 @@ function checkedMenuState(checked: boolean) {
 export function HomeHeader(props: HomeHeaderProps) {
   const hasCustomListOptions =
     props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+  const modeMenu = useEnvironmentModeMenu();
   const menuActions: MenuAction[] = [
+    ...(modeMenu.visible
+      ? [
+          {
+            id: "mode",
+            title: `Mode: ${modeMenu.label}`,
+            subactions: modeMenu.actions.map((action) => ({
+              id: `mode:${action.id}`,
+              title: action.title,
+              state: checkedMenuState(action.state === "on"),
+            })),
+          },
+        ]
+      : []),
     {
       id: "environment",
       title: "Environment",
@@ -52,6 +67,10 @@ export function HomeHeader(props: HomeHeaderProps) {
   ];
   const handleMenuAction = (event: { nativeEvent: { event: string } }) => {
     const id = event.nativeEvent.event;
+    if (id.startsWith("mode:")) {
+      modeMenu.select(id.slice("mode:".length));
+      return;
+    }
     if (id === "environment:all") {
       props.onEnvironmentChange(null);
       return;

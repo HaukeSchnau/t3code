@@ -9,6 +9,13 @@ import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
+  EnvironmentModes,
+  environmentModeTargets,
+  nextEnvironmentMode,
+  type EnvironmentMode,
+  type EnvironmentModeSelection,
+} from "../connection/environmentModes.ts";
+import {
   PullRequestRoutingPermissions,
   type PullRequestRoutingPermission,
   type StoredPullRequestRoutingPermission,
@@ -91,6 +98,43 @@ export function createEnvironmentCatalogAtoms<R, E>(
       const permissions = yield* PullRequestRoutingPermissions;
       yield* permissions.set(entry, input.permission);
     }),
+  });
+
+  const modesAtom = runtime.atom(
+    Stream.unwrap(EnvironmentModes.pipe(Effect.map((modes) => modes.changes))),
+    { initialValue: [] as ReadonlyArray<EnvironmentMode> },
+  );
+  const modesValueAtom = Atom.make((get) => AsyncResult.getOrElse(get(modesAtom), () => [])).pipe(
+    Atom.withLabel("environment-modes"),
+  );
+  const setModes = createRuntimeCommand(runtime, {
+    label: "environment-catalog:set-modes",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (
+      transform: (modes: ReadonlyArray<EnvironmentMode>) => ReadonlyArray<EnvironmentMode>,
+    ) => EnvironmentModes.pipe(Effect.flatMap((store) => store.update(transform))),
+  });
+  const applyModeEffect = Effect.fn("EnvironmentCatalog.applyMode")(function* (
+    selection: EnvironmentModeSelection | "next",
+  ) {
+    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+    const modes = yield* (yield* EnvironmentModes).get;
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    const applied = selection === "next" ? nextEnvironmentMode(modes, entries) : selection;
+    for (const [environmentId, enabled] of environmentModeTargets(modes, applied, entries)) {
+      if (entries.get(environmentId)?.enabled !== enabled) {
+        yield* registry.setEnabled(environmentId, enabled);
+      }
+    }
+    return applied;
+  });
+  /** Applies a mode, or with `"next"` the one after the active mode. Returns the applied mode. */
+  const applyMode = createRuntimeCommand(runtime, {
+    label: "environment-catalog:apply-mode",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: applyModeEffect,
   });
 
   const networkStatusAtom = runtime.atom(
@@ -208,5 +252,8 @@ export function createEnvironmentCatalogAtoms<R, E>(
     removeRelayEnvironments,
     retryNow,
     setEnabled,
+    modesValueAtom,
+    setModes,
+    applyMode,
   };
 }

@@ -1,6 +1,7 @@
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { useEnvironmentModeMenu } from "../connection/environmentModes";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export function ThreadListFilters(
@@ -23,6 +24,7 @@ export function ThreadListFilters(
   const selectedProject = props.projects.find(
     (project) => project.key === props.selectedProjectKey,
   );
+  const modeMenu = useEnvironmentModeMenu();
   return (
     <ScrollView
       horizontal
@@ -30,6 +32,14 @@ export function ThreadListFilters(
       style={{ marginHorizontal: -props.gutter }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
+      {modeMenu.visible ? (
+        <ListFilterMenu
+          label={modeMenu.label}
+          accessibilityLabel="Environment mode"
+          actions={modeMenu.actions}
+          onSelect={modeMenu.select}
+        />
+      ) : null}
       <ListFilterMenu
         label={selectedEnvironment?.label ?? "All environments"}
         accessibilityLabel="Filter threads by environment"

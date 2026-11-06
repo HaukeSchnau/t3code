@@ -13,7 +13,9 @@ import {
   ConnectionTransientError,
   CredentialStore,
   ProfileStore,
+  EnvironmentModes,
   PullRequestRoutingPermissions,
+  makeEnvironmentModes,
   makePullRequestRoutingPermissions,
 } from "@t3tools/client-runtime/connection";
 import * as Context from "effect/Context";
@@ -46,6 +48,11 @@ export const layer = Layer.effectContext(
       read: catalog.read.pipe(Effect.map((document) => document.githubRoutingPermissions ?? [])),
       write: (githubRoutingPermissions) =>
         catalog.update((document) => ({ ...document, githubRoutingPermissions })),
+    });
+    const environmentModes = yield* makeEnvironmentModes({
+      read: catalog.read.pipe(Effect.map((document) => document.environmentModes)),
+      write: (environmentModes) =>
+        catalog.update((document) => ({ ...document, environmentModes })),
     });
 
     const targetStore = Persistence.ConnectionTargetStore.of({
@@ -151,6 +158,7 @@ export const layer = Layer.effectContext(
     });
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
       Context.add(PullRequestRoutingPermissions, githubRoutingPermissions),
+      Context.add(EnvironmentModes, environmentModes),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),

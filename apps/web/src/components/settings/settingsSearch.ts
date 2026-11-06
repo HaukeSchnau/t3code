@@ -1126,6 +1126,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "environment-modes",
+    title: "Environment modes",
+    to: "/settings/connections",
+    searchTerms: ["environment modes work personal focus switch group enable disable shortcut"],
+  },
+  {
     id: "pull-request-routing",
     title: "Pull request sharing",
     to: "/settings/connections",
