@@ -1,14 +1,25 @@
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { expect, it } from "@effect/vitest";
-import { ScheduledTaskUpsertInput } from "@t3tools/contracts";
+import { assert, expect, it } from "@effect/vitest";
+import {
+  type OrchestrationV2ServerCommand,
+  type ScheduledTask,
+  ScheduledTaskUpsertInput,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import type * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -259,5 +270,182 @@ it.effect("refuses to save a task whose runs could not get their own workspace",
       expect(failure.message).toContain("174.1 GiB");
       expect((yield* service.list()).tasks).toEqual([]);
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+type LaunchOutcome = "setup-fails" | "setup-succeeds" | "launch-fails";
+type ThreadShell = Effect.Success<
+  ReturnType<ThreadManagementService.ThreadManagementService["Service"]["getThreadShell"]>
+>;
+
+const failureTrackingLayer = (input: {
+  readonly outcome: Ref.Ref<LaunchOutcome>;
+  readonly notices: Queue.Queue<OrchestrationV2ServerCommand>;
+  readonly deletedThreads?: ReadonlyArray<string>;
+}) =>
+  ScheduledTaskService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeCrypto.layer,
+        Scheduler.layer,
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+          launch: (launch) =>
+            Effect.gen(function* () {
+              const outcome = yield* Ref.get(input.outcome);
+              if (outcome === "launch-fails") return yield* Effect.die("project is gone");
+              if (launch.preparation !== undefined) {
+                yield* outcome === "setup-fails"
+                  ? Deferred.fail(launch.preparation, "Workspace preparation failed: disk full")
+                  : Deferred.succeed(launch.preparation, undefined);
+              }
+              return {
+                threadId: ThreadId.make("thread-run"),
+              } as unknown as ThreadLaunchService.ThreadLaunchResult;
+            }),
+        }),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          sendToThread: () => Effect.die("thread is gone"),
+          getThreadShell: (threadId) =>
+            Effect.succeed({
+              id: threadId,
+              archivedAt: null,
+              deletedAt: input.deletedThreads?.includes(threadId)
+                ? "2026-11-03T04:00:00.000Z"
+                : null,
+            } as unknown as ThreadShell),
+          dispatch: (command) =>
+            Queue.offer(input.notices, command).pipe(
+              Effect.as({} as Orchestrator.OrchestratorV2DispatchResult),
+            ),
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+      ),
+    ),
+  );
+
+const failingTaskInput = (threadId: string | null) =>
+  decodeUpsertInput({
+    title: "Forwarder check",
+    prompt: "Check the forwarder logs.",
+    enabled: true,
+    schedule: { type: "interval", everyMs: 3_600_000 },
+    projectId: "project-forwarder",
+    threadId,
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+  });
+
+it.effect("counts runs whose workspace preparation fails and pauses the task after three", () =>
+  Effect.gen(function* () {
+    const outcome = yield* Ref.make<LaunchOutcome>("setup-fails");
+    const notices = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert(yield* failingTaskInput(null), {
+        creatorThreadId: ThreadId.make("thread-creator"),
+      });
+      // A run counts as launched first; its preparation settles the record afterwards.
+      const settled = (expected: Partial<ScheduledTask>) =>
+        service.subscribeList().pipe(
+          Stream.map((list) => list.tasks[0]),
+          Stream.filter(
+            (current) =>
+              current !== undefined &&
+              Object.entries(expected).every(
+                ([key, value]) => current[key as keyof ScheduledTask] === value,
+              ),
+          ),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+      const runAndSettle = (expected: Partial<ScheduledTask>) =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 minute");
+          yield* service.runNow({ id: task.id });
+          return yield* settled(expected);
+        });
+
+      for (const failures of [1, 2]) {
+        yield* runAndSettle({ lastRunStatus: "failed", consecutiveFailures: failures });
+        const notice = yield* Queue.take(notices);
+        assert(notice.type === "message.dispatch");
+        expect(notice.threadId).toBe("thread-creator");
+        expect(notice.dispatchMode).toEqual({ type: "queue_after_active" });
+        expect(notice.notification?.source).toEqual({ kind: "system" });
+        expect(notice.text).toContain(task.id);
+        expect(notice.text).toContain("Workspace preparation failed: disk full");
+        expect(notice.text).toContain(`Failed runs in a row: ${failures}.`);
+      }
+      const paused = yield* runAndSettle({ consecutiveFailures: 3, enabled: false });
+      expect(paused).toMatchObject({
+        lastRunStatus: "failed",
+        lastRunError: "Workspace preparation failed: disk full",
+        nextRunAt: null,
+      });
+      const pausedNotice = yield* Queue.take(notices);
+      assert(pausedNotice.type === "message.dispatch");
+      expect(pausedNotice.text).toContain("It failed 3 times in a row, so T3 Code paused it.");
+
+      expect((yield* service.setEnabled({ id: task.id, enabled: true })).task).toMatchObject({
+        enabled: true,
+        consecutiveFailures: 0,
+      });
+      yield* runAndSettle({ lastRunStatus: "failed", consecutiveFailures: 1 });
+      yield* Queue.take(notices);
+      yield* Ref.set(outcome, "setup-succeeds");
+      yield* runAndSettle({ lastRunStatus: "succeeded", consecutiveFailures: 0 });
+      expect(yield* Queue.size(notices)).toBe(0);
+    }).pipe(Effect.provide(failureTrackingLayer({ outcome, notices })));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("tells only a live creator thread that is not the bound thread about failed runs", () =>
+  Effect.gen(function* () {
+    const outcome = yield* Ref.make<LaunchOutcome>("launch-fails");
+    const notices = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const cases = [
+        { name: "created in Settings", boundThreadId: null, creatorThreadId: undefined },
+        { name: "creator was deleted", boundThreadId: null, creatorThreadId: "thread-deleted" },
+        {
+          name: "bound to its creator",
+          boundThreadId: "thread-bound",
+          creatorThreadId: "thread-bound",
+        },
+        {
+          name: "bound elsewhere",
+          boundThreadId: "thread-bound",
+          creatorThreadId: "thread-creator",
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const { task } = yield* service.upsert(
+          { ...(yield* failingTaskInput(testCase.boundThreadId)), title: testCase.name },
+          testCase.creatorThreadId === undefined
+            ? {}
+            : { creatorThreadId: ThreadId.make(testCase.creatorThreadId) },
+        );
+        const ran = yield* service.runNow({ id: task.id });
+        expect(ran.task, testCase.name).toMatchObject({
+          lastRunStatus: "failed",
+          consecutiveFailures: 1,
+        });
+      }
+      const notice = yield* Queue.take(notices);
+      assert(notice.type === "message.dispatch");
+      expect(notice.text).toContain('"bound elsewhere"');
+      expect(yield* Queue.size(notices)).toBe(0);
+    }).pipe(
+      Effect.provide(
+        failureTrackingLayer({ outcome, notices, deletedThreads: ["thread-deleted"] }),
+      ),
+    );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

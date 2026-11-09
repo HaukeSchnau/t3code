@@ -23,6 +23,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -106,11 +107,16 @@ export interface ThreadLaunchInput {
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
+  /**
+   * Completed when the launch's background workspace preparation ends: fails with its error,
+   * interrupted when cancelled, and succeeds at once when nothing is left to prepare.
+   */
+  readonly preparation?: Deferred.Deferred<void, string>;
 }
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "title" | "workspaceStrategy" | "initialMessage"
+  "commandId" | "projectId" | "title" | "workspaceStrategy" | "initialMessage" | "preparation"
 > & {
   readonly reusedWorktree?: { readonly baseRef: string };
 };
@@ -884,6 +890,15 @@ const make = Effect.gen(function* () {
           Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
         ),
       ),
+      Effect.onExit((exit) =>
+        input.preparation === undefined
+          ? Effect.void
+          : Exit.isSuccess(exit)
+            ? Deferred.succeed(input.preparation, undefined)
+            : Cause.hasInterruptsOnly(exit.cause)
+              ? Deferred.interrupt(input.preparation)
+              : Deferred.fail(input.preparation, failureDetail(Cause.squash(exit.cause))),
+      ),
       Effect.ignoreCause,
       Effect.ensuring(releasePreparation(input.commandId)),
       Effect.forkIn(preparationScope),
@@ -1102,6 +1117,7 @@ const make = Effect.gen(function* () {
                 branch: workspaceStrategy.branch,
               }
             : workspaceStrategy;
+        let preparationScheduled = false;
         if (shouldSchedule) {
           const ownsPreparation = yield* reservePreparation(input.commandId);
           if (ownsPreparation) {
@@ -1116,6 +1132,7 @@ const make = Effect.gen(function* () {
                       Effect.mapError(mapError(input, "update-thread", threadId)),
                     );
               if (preparationStillRequired) {
+                preparationScheduled = true;
                 yield* schedulePreparation(
                   { ...input, workspaceStrategy: preparationStrategy },
                   threadId,
@@ -1128,6 +1145,9 @@ const make = Effect.gen(function* () {
           }
         }
 
+        if (!preparationScheduled && input.preparation !== undefined) {
+          yield* Deferred.succeed(input.preparation, undefined);
+        }
         return {
           threadId,
           projection,

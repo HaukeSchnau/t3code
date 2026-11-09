@@ -23,6 +23,8 @@ const TimeOfDay = TrimmedNonEmptyString.check(
 ).annotate({ description: "Local time as HH:MM, such as 09:30." });
 
 export const MIN_SCHEDULED_TASK_INTERVAL_MS = 60_000;
+/** A task pauses itself after this many failed runs in a row. */
+export const SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES = 3;
 
 const ScheduledTaskIntervalMs = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -225,9 +227,19 @@ export const ScheduledTask = Schema.Struct({
   lastRunStatus: ScheduledTaskRunStatus,
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** Failed runs since the last success or resume. Older servers omit it. */
+  consecutiveFailures: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
+
+/** The label for a paused task: says when its own failures paused it. */
+export function scheduledTaskPausedLabel(task: Pick<ScheduledTask, "consecutiveFailures">): string {
+  const failures = task.consecutiveFailures ?? 0;
+  return failures >= SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES
+    ? `Paused after ${failures} failed runs in a row`
+    : "Paused";
+}
 
 export const ScheduledTaskListInput = Schema.Struct({});
 export type ScheduledTaskListInput = typeof ScheduledTaskListInput.Type;

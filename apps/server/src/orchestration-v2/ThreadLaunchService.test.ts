@@ -1173,20 +1173,17 @@ it.effect("shows the fetch diagnosis when preparing a worktree from origin fails
   return Effect.gen(function* () {
     const launches = yield* ThreadLaunch.ThreadLaunchService;
     const threads = yield* ThreadManagement.ThreadManagementService;
-    const launched = yield* launches.launch(
-      launchInput({
+    const preparation = yield* Deferred.make<void, string>();
+    const launched = yield* launches.launch({
+      ...launchInput({
         command: "command:launch:fetch-failure",
         thread: "thread:launch:fetch-failure",
         message: "Start from origin",
         workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
       }),
-    );
-    yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
-      Stream.filter(
-        (stored) => stored.event.type === "run.updated" && stored.event.payload.status === "failed",
-      ),
-      Stream.runHead,
-    );
+      preparation,
+    });
+    assert.include(yield* Deferred.await(preparation).pipe(Effect.flip), detail);
     const projection = yield* threads.getThreadProjection(launched.threadId);
     assert.equal(projection.messages[0]?.text, "Start from origin");
     assert.equal(projection.runs[0]?.status, "failed");

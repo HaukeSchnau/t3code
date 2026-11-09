@@ -15,6 +15,7 @@ import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MAX_WEBHOOK_FILTERS,
   resolveEnvironmentMachineKind,
+  scheduledTaskPausedLabel,
 } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
@@ -1449,7 +1450,7 @@ function EnvironmentTasks({
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
                 {describeSchedule(task)}
                 {!task.enabled
-                  ? " · Paused"
+                  ? ` · ${scheduledTaskPausedLabel(task)}`
                   : task.nextRunAt
                     ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
                     : ""}

@@ -21,6 +21,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import {
+  SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES,
   ScheduledTaskRunStatus,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
@@ -682,6 +683,10 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
+  lastRunError: Schema.optional(Schema.String),
+  consecutiveFailures: Schema.optional(Schema.Int).annotate({
+    description: `Failed runs in a row. At ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES} the task pauses itself.`,
+  }),
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:
       "Public URL for the sender. Absent: no T3 Connect tunnel. The user must enable T3 Connect remote access.",

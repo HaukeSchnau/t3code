@@ -271,6 +271,8 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    ...(task.lastRunError === null ? {} : { lastRunError: task.lastRunError }),
+    ...(task.consecutiveFailures ? { consecutiveFailures: task.consecutiveFailures } : {}),
     ...(task.webhook?.url == null || !mayRun ? {} : { webhookUrl: task.webhook.url }),
     ...(task.webhook === undefined
       ? {}
@@ -1878,7 +1880,7 @@ const make = Effect.gen(function* () {
             }),
       };
       const { task } = yield* scheduledTasks
-        .upsert(upsertInput)
+        .upsert(upsertInput, parent === undefined ? {} : { creatorThreadId: parent.thread.id })
         .pipe(
           Effect.mapError((error) =>
             failure("orchestration_error", `Could not schedule task: ${error.message}`),

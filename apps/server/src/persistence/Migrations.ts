@@ -101,6 +101,7 @@ import Migration0095 from "./Migrations/095_HtmlRenderState.ts";
 import Migration0096 from "./Migrations/070_PeerLinks.ts";
 import Migration0097 from "./Migrations/071_PeerLinkFence.ts";
 import Migration0098 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import Migration0099 from "./Migrations/099_ScheduledTaskFailureTracking.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -206,6 +207,7 @@ const migrationEntries = [
   [96, "PeerLinks", Migration0096],
   [97, "PeerLinkFence", Migration0097],
   [98, "WaitingLinkRequestIndex", Migration0098],
+  [99, "ScheduledTaskFailureTracking", Migration0099],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

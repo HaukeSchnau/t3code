@@ -73,6 +73,10 @@ Deleting a thread also deletes tasks that post into that thread. Tasks that star
 a new thread on each run survive deletion of their previous threads.
 
 You can edit, pause, resume, run immediately, or delete a task from the list.
+A run fails when its thread cannot start or cannot set up its workspace. After three
+failed runs in a row the task pauses itself and keeps the last error in the list.
+Resume it once you have fixed the cause. If an agent created the task, that agent's
+thread hears about each failed run so it can fix the task itself.
 Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.

@@ -38,6 +38,7 @@ import {
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
+  scheduledTaskPausedLabel,
 } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -736,7 +737,7 @@ function ScheduledTaskRow({
           <span>
             {scheduleLabel(task.schedule)} ·{" "}
             {!task.enabled ? (
-              "Paused"
+              scheduledTaskPausedLabel(task)
             ) : isWebhook ? (
               "Listening"
             ) : task.nextRunAt ? (
