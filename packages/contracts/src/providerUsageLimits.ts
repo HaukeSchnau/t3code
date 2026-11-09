@@ -67,6 +67,8 @@ export const UsageLimitSourceAccount = Schema.Struct({
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
   usageLimits: ServerProviderUsageLimits,
+  /** The provider rejected the hub's credentials, so the account needs a new login on the hub. */
+  signInRequired: Schema.optional(Schema.Boolean),
 });
 export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
 

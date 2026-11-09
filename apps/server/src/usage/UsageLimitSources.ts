@@ -94,7 +94,8 @@ export const make = Effect.gen(function* () {
       ...base,
       accounts: accounts.success.map((account) => {
         const last = published?.find((candidate) => candidate.id === account.id);
-        if (!last) return account;
+        // An account that cannot sign in contributes no usable quota, so its last reading goes.
+        if (!last || account.signInRequired) return account;
         const usageLimits = resolveUsageLimitsAfterProbe({
           published: last.usageLimits,
           probed: account.usageLimits,
