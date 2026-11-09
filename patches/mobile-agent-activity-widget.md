@@ -20,6 +20,10 @@ update state through different APIs.
   snapshot when the snapshot request itself fails.
 - Seed the widget immediately when local agent work begins. Removing the last paired environment
   currently leaves the last snapshot in place.
+- Only iOS may load `widgets/AgentActivity.tsx`. It creates its Live Activity factory on load, and
+  since SDK 58 Android gets `expo-widgets`' native module, which has no `LiveActivityFactory`, so
+  loading it there crashes the app at startup. `remoteRegistration.ts` updates the widget through
+  `widgets/agentActivityWidgetSnapshot.ios.ts`; the `.ts` fallback does nothing.
 - Keep the serialized widget render function self-contained; Expo serializes it into the extension
   bundle and cannot resolve module-local rendering helpers.
 - Enable the `remote-notification` background mode so ActivityKit and notification updates can be
