@@ -151,6 +151,14 @@ describe("editing scheduled task branch settings", () => {
   });
 });
 
+it("edits a one-time task in local time without moving its instant", () => {
+  const at = "2026-11-03T04:30:00.000Z";
+  const draft = taskToDraft({ ...legacyTask, schedule: { type: "once", at } });
+  expect(draft.scheduleMode).toBe("once");
+  expect(scheduleFromDraft(draft)).toEqual({ type: "once", at });
+  expect(scheduleFromDraft({ ...draft, onceAt: "" })).toEqual({ type: "once", at: "" });
+});
+
 describe("webhook scheduled tasks", () => {
   const signature = { header: "x-signature", encoding: "base64", prefix: "" } as const;
   const webhookTask: ScheduledTask = {

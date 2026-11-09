@@ -44,6 +44,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
+import type { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -180,6 +181,10 @@ export class ThreadLaunchService extends Context.Service<
     readonly checkWorktreeBase: (
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
     ) => Effect.Effect<void, ThreadLaunchBaseRefError>;
+    /** Check before a scheduled launch that a directory project can be copied; nobody watches that launch. */
+    readonly checkWorkspaceCopy: (
+      input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
+    ) => Effect.Effect<void, ManagedWorkspaceError>;
     readonly retryPreparation: (
       input: ThreadLaunchPreparationInput,
     ) => Effect.Effect<
@@ -291,6 +296,20 @@ const make = Effect.gen(function* () {
         workspaceRoot: unresolved.workspaceRoot,
         baseRef,
       });
+  });
+
+  const checkWorkspaceCopy: ThreadLaunchService["Service"]["checkWorkspaceCopy"] = Effect.fn(
+    "ThreadLaunchService.checkWorkspaceCopy",
+  )(function* (input) {
+    if (yield* managedFolders.isScratchProject(input.projectId)) return;
+    const project = Option.getOrUndefined(
+      yield* projects.getById(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+    );
+    if (project === undefined) return;
+    yield* managedWorkspaces.checkCopy({
+      projectRoot: project.workspaceRoot,
+      strategy: input.workspaceStrategy,
+    });
   });
 
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
@@ -1196,7 +1215,13 @@ const make = Effect.gen(function* () {
     );
   };
 
-  return ThreadLaunchService.of({ launch, checkWorktreeBase, retryPreparation, prepareRun });
+  return ThreadLaunchService.of({
+    launch,
+    checkWorktreeBase,
+    checkWorkspaceCopy,
+    retryPreparation,
+    prepareRun,
+  });
 });
 
 export const layer = Layer.effect(ThreadLaunchService, make);

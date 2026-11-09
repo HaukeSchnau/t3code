@@ -220,6 +220,7 @@ function makeHarness(options: HarnessOptions = {}) {
     ProviderRegistryMock.layer(options.providers),
     Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({
       resolveLaunchStrategy: (input) => Effect.succeed(input.strategy),
+      checkCopy: () => Effect.void,
       ...options.managedWorkspaces,
     }),
     options.managedFolders ??
@@ -1930,6 +1931,7 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
             ),
           ),
         checkWorktreeBase: launches.checkWorktreeBase,
+        checkWorkspaceCopy: launches.checkWorkspaceCopy,
         retryPreparation: launches.retryPreparation,
         prepareRun: launches.prepareRun,
       }),

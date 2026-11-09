@@ -73,6 +73,7 @@ import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-en
 import {
   editDraft,
   scheduledTaskDefaultModel,
+  isPastOneTimeRun,
   scheduleFromDraft,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
@@ -108,6 +109,7 @@ const DAYS = [
 
 function describeSchedule(task: ScheduledTask): string {
   if (task.schedule.type === "webhook") return "On webhook";
+  if (task.schedule.type === "once") return `Once, ${formatInstant(task.schedule.at)}`;
   if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
   const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
   return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
@@ -119,6 +121,22 @@ function formatTime(value: string): string {
   const time = new Date();
   time.setHours(hours ?? 9, minutes ?? 0, 0, 0);
   return time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatInstant(value: string): string {
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function tomorrowAtNine(): string {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(9, 0, 0, 0);
+  return date.toISOString();
 }
 
 function timePickerValue(value: string): Date {
@@ -677,6 +695,7 @@ function TaskForm({
   });
   const submissionPending = useRef(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [oncePicker, setOncePicker] = useState<"date" | "time" | null>(null);
   const taskMissing =
     draft.task !== null &&
     tasks.data !== null &&
@@ -728,6 +747,10 @@ function TaskForm({
         "Invalid webhook settings",
         "Each dedupe key must contain a valid request placeholder. The coalesce window must be whole seconds from 10 to 3600, or blank.",
       );
+      return;
+    }
+    if (schedule !== null && isPastOneTimeRun(schedule)) {
+      Dialog.alert("Pick a future time", "A one-time task needs a date and time ahead of now.");
       return;
     }
     if (
@@ -954,19 +977,28 @@ function TaskForm({
               variant="card"
               options={[
                 { value: "fixed_time", label: "At a time" },
+                { value: "once", label: "Once" },
                 { value: "interval", label: "Interval" },
                 { value: "webhook", label: "On webhook" },
               ]}
               selected={draft.schedule.mode}
               onSelect={(mode) => {
                 setTimePickerOpen(false);
+                setOncePicker(null);
                 setDraft({
                   ...draft,
                   prompt:
                     mode === "webhook" && !draft.prompt.trim()
                       ? DEFAULT_WEBHOOK_PROMPT
                       : draft.prompt,
-                  schedule: { ...draft.schedule, mode },
+                  schedule: {
+                    ...draft.schedule,
+                    mode,
+                    onceAt:
+                      mode === "once" && !draft.schedule.onceAt
+                        ? tomorrowAtNine()
+                        : draft.schedule.onceAt,
+                  },
                 });
               }}
             />
@@ -1047,6 +1079,71 @@ function TaskForm({
                   setDraft({ ...draft, schedule: { ...draft.schedule, weekdays } });
                 }}
               />
+            </>
+          ) : draft.schedule.mode === "once" ? (
+            <>
+              {(["date", "time"] as const).map((part) => {
+                const at = new Date(draft.schedule.onceAt);
+                const label = part === "date" ? "Date" : "Time";
+                const value =
+                  part === "date"
+                    ? at.toLocaleDateString([], {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                      })
+                    : at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+                return (
+                  <View key={part}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${label}, ${value}`}
+                      onPress={() => setOncePicker((open) => (open === part ? null : part))}
+                      className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3 active:opacity-70"
+                    >
+                      <Text textRole="body" className="text-foreground">
+                        {label}
+                      </Text>
+                      <Text
+                        textRole="footnote"
+                        className="min-w-0 flex-1 text-right text-foreground-muted"
+                      >
+                        {value}
+                      </Text>
+                      <SymbolView
+                        name="chevron.right"
+                        size={14}
+                        tintColorClassName="accent-chevron"
+                        type="monochrome"
+                      />
+                    </Pressable>
+                    {oncePicker === part ? (
+                      <DateTimePicker
+                        value={at}
+                        mode={part}
+                        display={Platform.OS === "ios" ? "spinner" : "default"}
+                        onDismiss={() => setOncePicker(null)}
+                        onValueChange={(_, selected) => {
+                          const next = new Date(at);
+                          if (part === "date") {
+                            next.setFullYear(
+                              selected.getFullYear(),
+                              selected.getMonth(),
+                              selected.getDate(),
+                            );
+                          } else {
+                            next.setHours(selected.getHours(), selected.getMinutes(), 0, 0);
+                          }
+                          setDraft({
+                            ...draft,
+                            schedule: { ...draft.schedule, onceAt: next.toISOString() },
+                          });
+                        }}
+                      />
+                    ) : null}
+                  </View>
+                );
+              })}
             </>
           ) : draft.schedule.mode === "webhook" ? (
             <>

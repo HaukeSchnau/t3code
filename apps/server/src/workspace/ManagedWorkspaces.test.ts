@@ -216,8 +216,14 @@ describe("ManagedWorkspaces", () => {
         sourceFileSystem: Number(NodeFS.statfsSync(project).type) >>> 0,
         destinationFileSystem: Number(NodeFS.statfsSync(test.baseDir).type) >>> 0,
       });
+      const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
+      const check = (strategy: Parameters<typeof workspaces.checkCopy>[0]["strategy"]) =>
+        Effect.exit(workspaces.checkCopy({ projectRoot: project, strategy }));
+      const expected = clone === null ? "Failure" : "Success";
+      assert.equal((yield* check({ type: "worktree", baseRef: "main" }))._tag, expected);
+      assert.equal((yield* check({ type: "root" }))._tag, "Success");
       const result = yield* Effect.exit(create(project, "thread:copy-limit"));
-      assert.equal(result._tag, clone === null ? "Failure" : "Success");
+      assert.equal(result._tag, expected);
     }).pipe(Effect.provide(test.layer));
   });
 

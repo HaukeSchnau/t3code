@@ -13,6 +13,8 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { ServerActivation } from "../serverActivation.ts";
+import { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
@@ -164,6 +166,98 @@ it.effect("keeps the task list order when a toggle or edit rewrites updated_at",
       const edit = { ...input(older.task.id), requireExisting: true, title: "Edited" };
       yield* service.upsert(yield* decodeUpsertInput({ ...edit, enabled: false }));
       expect(yield* listedIds).toEqual(order);
+    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("runs a one-time task once, then pauses it and refuses past times", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-03T04:00:00.000Z"));
+    const layerDependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Scheduler.layer,
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        launch: () => Effect.die("workspace preparation failed"),
+      }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+      }),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const input = yield* decodeUpsertInput({
+        title: "Forwarder run check",
+        prompt: "Check the 04:00Z forwarder run.",
+        enabled: true,
+        schedule: { type: "once", at: "2026-11-03T04:30:00Z" },
+        projectId: "project-once",
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      const created = yield* service.upsert(input);
+      expect(created.task.nextRunAt).toBe("2026-11-03T04:30:00.000Z");
+
+      yield* TestClock.setTime(Date.parse("2026-11-03T04:31:00.000Z"));
+      const ran = yield* service.runNow({ id: created.task.id });
+      expect(ran.task).toMatchObject({ enabled: false, nextRunAt: null, runCount: 1 });
+      expect((yield* service.list()).tasks[0]).toMatchObject({ enabled: false, nextRunAt: null });
+
+      const pastTime = "The one-time run is in the past. Pick a future time.";
+      const resumed = yield* service
+        .setEnabled({ id: created.task.id, enabled: true })
+        .pipe(Effect.flip);
+      expect(resumed.message).toBe(pastTime);
+      const recreated = yield* service.upsert({ ...input, id: created.task.id }).pipe(Effect.flip);
+      expect(recreated.message).toBe(pastTime);
+    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+  }).pipe(
+    Effect.provideService(ServerActivation, Effect.never),
+    Effect.provide(SqlitePersistence.layerMemory),
+  ),
+);
+
+it.effect("refuses to save a task whose runs could not get their own workspace", () =>
+  Effect.gen(function* () {
+    const layerDependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Scheduler.layer,
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        checkWorkspaceCopy: () =>
+          Effect.fail(
+            new ManagedWorkspaceError({
+              operation: "DirectoryCopyWorkspaces.checkSize",
+              detail: "The project is 174.1 GiB, more than the 5.0 GiB a workspace copy may use.",
+            }),
+          ),
+      }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+      }),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const input = yield* decodeUpsertInput({
+        title: "Daily check",
+        prompt: "Check the forwarder.",
+        enabled: true,
+        schedule: { type: "fixed_time", timeOfDay: "07:00" },
+        projectId: "project-too-big",
+        workspaceStrategy: { type: "worktree", baseRef: "main", startFromOrigin: true },
+        modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      const failure = yield* service.upsert(input).pipe(Effect.flip);
+      expect(failure.message).toContain("174.1 GiB");
+      expect((yield* service.list()).tasks).toEqual([]);
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

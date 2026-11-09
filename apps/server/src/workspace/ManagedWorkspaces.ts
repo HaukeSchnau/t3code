@@ -31,7 +31,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
-import { createDirectoryCopy } from "./DirectoryCopyWorkspaces.ts";
+import { checkDirectoryCopy, createDirectoryCopy } from "./DirectoryCopyWorkspaces.ts";
 import {
   createIsolatedWorkspace,
   deleteIsolatedWorkspace,
@@ -110,6 +110,11 @@ export class ManagedWorkspaces extends Context.Service<
       | ManagedWorkspaceStrategy,
       ManagedWorkspaceError
     >;
+    /** Fails now when `strategy` would need a directory copy that `create` would refuse. */
+    readonly checkCopy: (input: {
+      readonly projectRoot: string;
+      readonly strategy: LaunchWorkspaceStrategy;
+    }) => Effect.Effect<void, ManagedWorkspaceError>;
     readonly create: (
       input: CreateManagedWorkspaceInput,
     ) => Effect.Effect<
@@ -295,6 +300,21 @@ const make = Effect.gen(function* () {
     return generatedTitle.length > 0 && generatedTitle !== "New thread" ? generatedTitle : title;
   });
 
+  const workspaceParent = (projectRoot: string) =>
+    NodePath.join(workspacesRoot, slug(NodePath.basename(projectRoot)));
+
+  const checkCopy: ManagedWorkspaces["Service"]["checkCopy"] = Effect.fn(
+    "ManagedWorkspaces.checkCopy",
+  )(function* ({ projectRoot, strategy }) {
+    if (strategy.type !== "worktree" && strategy.type !== "workspace") return;
+    const isolated = strategy.type === "workspace" && strategy.isolated === true;
+    if ((yield* backendFor(projectRoot, { isolated })) !== "directory") return;
+    yield* checkDirectoryCopy({
+      source: projectRoot,
+      destinationParent: workspaceParent(projectRoot),
+    });
+  }, Effect.provide(context));
+
   const create: ManagedWorkspaces["Service"]["create"] = Effect.fn("ManagedWorkspaces.create")(
     function* (input) {
       const backend = yield* backendFor(input.projectRoot, { isolated: input.isolated });
@@ -309,7 +329,7 @@ const make = Effect.gen(function* () {
           : new Set<string>();
       const worktreePath = yield* withWorkspaceReservation(
         {
-          parentPath: NodePath.join(workspacesRoot, slug(NodePath.basename(input.projectRoot))),
+          parentPath: workspaceParent(input.projectRoot),
           seed,
           fallbackSeed: fallbackWorkspaceSeed(input.threadId),
           unavailableNames,
@@ -426,6 +446,7 @@ const make = Effect.gen(function* () {
     backendFor,
     isIsolated,
     resolveLaunchStrategy,
+    checkCopy,
     create,
     discard,
     removeWorktree,

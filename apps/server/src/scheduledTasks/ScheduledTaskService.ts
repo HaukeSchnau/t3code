@@ -1,6 +1,7 @@
 import {
   CommandId,
   MessageId,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ScheduledTask,
   ScheduledTaskError,
@@ -289,6 +290,15 @@ function nextRunAt(
   } catch {
     return null;
   }
+}
+
+const sameWorkspaceStrategy = Schema.toEquivalence(OrchestrationV2ThreadLaunchWorkspaceStrategy);
+
+const PAST_ONE_TIME_RUN = "The one-time run is in the past. Pick a future time.";
+
+/** A one-time task with no run left pauses, so Settings shows it as done. */
+function keepsEnabled(task: Pick<ScheduledTask, "schedule">, next: string | null): boolean {
+  return task.schedule.type !== "once" || next !== null;
 }
 
 function errorMessage(error: unknown): string {
@@ -658,6 +668,7 @@ export const layer = Layer.effect(
       readonly id: ScheduledTaskId;
       readonly completedAtIso: string;
       readonly nextRunAtIso: string | null;
+      readonly keepEnabled: boolean;
       readonly status: "succeeded" | "failed";
       readonly error: string | null;
       readonly startedAtIso: string;
@@ -666,6 +677,7 @@ export const layer = Layer.effect(
         UPDATE scheduled_tasks
         SET updated_at = ${input.completedAtIso},
             next_run_at = ${input.nextRunAtIso},
+            enabled = enabled AND ${input.keepEnabled ? 1 : 0},
             last_run_status = ${input.status},
             last_run_error = ${input.error},
             run_count = run_count + 1
@@ -687,11 +699,13 @@ export const layer = Layer.effect(
         const reread = yield* Effect.result(findTask(task.id));
         if (Result.isSuccess(reread) && reread.success === null) return;
         const source = Result.isSuccess(reread) && reread.success !== null ? reread.success : task;
+        const next = nextRunAt(source, now);
         yield* sql`
           UPDATE scheduled_tasks
           SET last_run_status = 'failed',
               last_run_error = ${message},
-              next_run_at = ${nextRunAt(source, now)},
+              next_run_at = ${next},
+              enabled = enabled AND ${keepsEnabled(source, next) ? 1 : 0},
               updated_at = ${iso(now)},
               run_count = run_count + CASE WHEN EXISTS (
                 SELECT 1 FROM scheduled_task_webhook_pending
@@ -859,11 +873,13 @@ export const layer = Layer.effect(
         const threadId = runSucceeded ? result.value : null;
         const current = yield* findTask(task.id);
         const scheduleSource = current ?? task;
+        const completedNextRunAt = nextRunAt(scheduleSource, completedAt);
         const completed: ScheduledTask = {
           ...scheduleSource,
+          enabled: scheduleSource.enabled && keepsEnabled(scheduleSource, completedNextRunAt),
           updatedAt: iso(completedAt),
           lastRunAt: startedAtIso,
-          nextRunAt: nextRunAt(scheduleSource, completedAt),
+          nextRunAt: completedNextRunAt,
           lastRunStatus,
           lastRunError,
           runCount: scheduleSource.runCount + 1,
@@ -876,6 +892,7 @@ export const layer = Layer.effect(
             id: task.id,
             completedAtIso: completed.updatedAt,
             nextRunAtIso: completed.nextRunAt,
+            keepEnabled: keepsEnabled(scheduleSource, completed.nextRunAt),
             status: lastRunStatus,
             error: lastRunError,
             startedAtIso,
@@ -975,11 +992,13 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const decoded = yield* Effect.result(decodeRow(row));
             if (Result.isSuccess(decoded)) {
+              const next = nextRunAt(decoded.success, now);
               yield* sql`
                 UPDATE scheduled_tasks
                 SET last_run_status = 'failed',
                     last_run_error = 'Run was interrupted by a server restart.',
-                    next_run_at = ${nextRunAt(decoded.success, now)},
+                    next_run_at = ${next},
+                    enabled = enabled AND ${keepsEnabled(decoded.success, next) ? 1 : 0},
                     updated_at = ${iso(now)},
                     run_count = run_count + CASE WHEN EXISTS (
                       SELECT 1 FROM scheduled_task_webhook_pending
@@ -1132,10 +1151,34 @@ export const layer = Layer.effect(
         (yield* managedFolders.isScratchProject(input.projectId))
           ? { type: "root" }
           : input.workspaceStrategy;
+      // A run launches unattended, so a workspace it could never get fails here instead of on every run.
+      const needsCopyCheck =
+        (workspaceStrategy.type === "worktree" || workspaceStrategy.type === "workspace") &&
+        (existingTask === null ||
+          existingTask.projectId !== input.projectId ||
+          !sameWorkspaceStrategy(existingTask.workspaceStrategy, workspaceStrategy));
+      if (needsCopyCheck) {
+        yield* threadLaunch
+          .checkWorkspaceCopy({ projectId: input.projectId, workspaceStrategy })
+          .pipe(
+            Effect.mapError((error) =>
+              taskError(
+                `${error.detail} Each run would need its own copy of the project. Run it in the project folder or in an existing thread instead.`,
+                { taskId: id },
+              ),
+            ),
+          );
+      }
       const scheduleUnchanged =
         existingTask !== null &&
         existingTask.enabled === input.enabled &&
         isSameSchedule(existingTask.schedule, schedule);
+      const taskNextRunAt = scheduleUnchanged
+        ? existingTask.nextRunAt
+        : nextRunAt({ enabled: input.enabled, schedule }, now);
+      if (input.enabled && !keepsEnabled({ schedule }, taskNextRunAt)) {
+        return yield* taskError(PAST_ONE_TIME_RUN, { taskId: id });
+      }
       const task: ScheduledTask = {
         id,
         title: input.title,
@@ -1152,9 +1195,7 @@ export const layer = Layer.effect(
         creationSource: input.creationSource ?? "web",
         createdAt: existingTask?.createdAt ?? iso(now),
         updatedAt: iso(now),
-        nextRunAt: scheduleUnchanged
-          ? existingTask.nextRunAt
-          : nextRunAt({ enabled: input.enabled, schedule }, now),
+        nextRunAt: taskNextRunAt,
         lastRunAt: existingTask?.lastRunAt ?? null,
         lastRunStatus: existingTask?.lastRunStatus ?? "never",
         lastRunError: existingTask?.lastRunError ?? null,
@@ -1172,6 +1213,9 @@ export const layer = Layer.effect(
       if (existing.enabled === input.enabled) return { task: existing };
       const now = yield* localNow;
       const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
+      if (input.enabled && !keepsEnabled(existing, next)) {
+        return yield* taskError(PAST_ONE_TIME_RUN, { taskId: input.id });
+      }
       // RETURNING so a task deleted between the load and this UPDATE is a
       // visible not-found error, not a false success.
       const updated = yield* sql<{ task_id: string }>`

@@ -78,6 +78,7 @@ import {
   webhookDraftErrors,
   webhookDeliveryLabel,
   matchesScheduledTaskScope,
+  localDateTimeInputValue,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
   taskToDraft,
@@ -125,6 +126,13 @@ const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   existing_worktree: "Use a specific checkout",
 };
 
+function tomorrowAtNine(): Date {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(9, 0, 0, 0);
+  return date;
+}
+
 const EMPTY_DRAFT: DraftState = {
   editingId: null,
   title: "",
@@ -133,6 +141,7 @@ const EMPTY_DRAFT: DraftState = {
   scheduleMode: "fixed",
   intervalMinutes: "15",
   timeOfDay: "09:00",
+  onceAt: "",
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
@@ -283,6 +292,9 @@ function splitModelKey(value: string): ModelSelection | null {
 
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
+  if (schedule.type === "once") {
+    return `Once, ${new Date(schedule.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+  }
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)
@@ -1216,6 +1228,10 @@ function ScheduledTaskEditorForm({
       reportFailure("Signing secret is required", "Enter the signature header and secret.");
       return;
     }
+    if (schedule.type === "once" && !(Date.parse(schedule.at) > Date.now())) {
+      reportFailure("Pick a future time", "A one-time task needs a date and time ahead of now.");
+      return;
+    }
     if (
       schedule.type === "interval" &&
       (!Number.isSafeInteger(schedule.everyMs) || schedule.everyMs < MIN_SCHEDULED_TASK_INTERVAL_MS)
@@ -1500,10 +1516,19 @@ function ScheduledTaskEditorForm({
                 value={[draft.scheduleMode]}
                 onValueChange={(values) => {
                   const mode = values[0] as ScheduleMode | undefined;
-                  if (mode === "fixed" || mode === "interval" || mode === "webhook")
+                  if (
+                    mode === "fixed" ||
+                    mode === "once" ||
+                    mode === "interval" ||
+                    mode === "webhook"
+                  )
                     setDraft((current) => ({
                       ...current,
                       scheduleMode: mode,
+                      onceAt:
+                        mode === "once" && !current.onceAt
+                          ? localDateTimeInputValue(tomorrowAtNine())
+                          : current.onceAt,
                       prompt:
                         mode === "webhook" && !current.prompt.trim()
                           ? DEFAULT_WEBHOOK_PROMPT
@@ -1512,6 +1537,7 @@ function ScheduledTaskEditorForm({
                 }}
               >
                 <Toggle value="fixed">At a time</Toggle>
+                <Toggle value="once">Once</Toggle>
                 <Toggle value="interval">Every interval</Toggle>
                 <Toggle value="webhook">On webhook</Toggle>
               </ToggleGroup>
@@ -1686,6 +1712,20 @@ function ScheduledTaskEditorForm({
                     </Field>
                   </div>
                 ) : null}
+              </div>
+            ) : draft.scheduleMode === "once" ? (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="scheduled-task-once">Run once at</Label>
+                <Input
+                  type="datetime-local"
+                  id="scheduled-task-once"
+                  nativeInput
+                  className="w-56"
+                  value={draft.onceAt}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, onceAt: event.target.value }))
+                  }
+                />
               </div>
             ) : draft.scheduleMode === "fixed" ? (
               <div className="flex flex-wrap items-center gap-3">
