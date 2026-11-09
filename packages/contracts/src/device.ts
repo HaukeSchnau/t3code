@@ -26,6 +26,11 @@ export const SshDeviceHostConfig = Schema.Struct({
   target: TrimmedNonEmptyString.check(Schema.isPattern(/^[^\s-][^\s]*$/)),
   identityFile: Schema.optional(TrimmedNonEmptyString),
   port: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+  /**
+   * Command and arguments the server runs before connecting to a host that sleeps when idle.
+   * It exits once the host answers SSH, or fails with the reason on stderr.
+   */
+  wakeCommand: Schema.optional(Schema.NonEmptyArray(TrimmedNonEmptyString)),
 });
 export type SshDeviceHostConfig = typeof SshDeviceHostConfig.Type;
 
@@ -450,7 +455,8 @@ export class DeviceHostUnavailableError extends Schema.TaggedError<DeviceHostUna
     /** The host's name in Settings, which the message shows instead of its id. */
     hostLabel: Schema.optional(Schema.String),
     reason: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
+    // Nested causes can carry command output such as a wake command's stderr; `reason` is the client text.
+    cause: Schema.optional(Schema.Defect({ excludeCause: true })),
   },
 ) {
   override get message(): string {

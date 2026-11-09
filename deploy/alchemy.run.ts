@@ -1,6 +1,6 @@
 import * as Fleet from "@schnau/fleet";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -12,7 +12,9 @@ export default Alchemy.Stack(
   "T3Code",
   {
     providers: Layer.mergeAll(Fleet.providers(), Cloudflare.providers()),
-    state: Cloudflare.state(),
+    // The fleet's state store. Only Alchemy beta.85 or newer may use it:
+    // older versions can replace its key.
+    state: Cloudflare.state({ workerName: "alchemy-state-store-fleet" }),
   },
   Effect.gen(function* () {
     const placement = yield* Fleet.Placement("Release", {
