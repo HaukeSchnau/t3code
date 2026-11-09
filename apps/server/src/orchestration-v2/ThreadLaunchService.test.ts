@@ -32,6 +32,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -133,6 +134,8 @@ interface HarnessOptions {
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
   /** Runs before the background preparation reads the run's status. */
   readonly beforePreparationCheck?: () => Effect.Effect<void>;
+  /** Runs before the launch reads whether its run still needs preparation. */
+  readonly beforeLaunchCheck?: () => Effect.Effect<void>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -232,9 +235,10 @@ function makeHarness(options: HarnessOptions = {}) {
         folderForThread: () => Effect.succeedNone,
       }),
   );
-  const beforePreparationCheck = options.beforePreparationCheck;
+  const beforePreparationCheck = options.beforePreparationCheck ?? (() => Effect.void);
+  const beforeLaunchCheck = options.beforeLaunchCheck ?? (() => Effect.void);
   const layerLaunchThreads =
-    beforePreparationCheck === undefined
+    options.beforePreparationCheck === undefined && options.beforeLaunchCheck === undefined
       ? layerThreadManagement
       : Layer.effect(
           ThreadManagement.ThreadManagementService,
@@ -246,6 +250,8 @@ function makeHarness(options: HarnessOptions = {}) {
                 beforePreparationCheck().pipe(
                   Effect.andThen(threads.getThreadEventSequence(threadId)),
                 ),
+              getThreadRecords: (...args: Parameters<typeof threads.getThreadRecords>) =>
+                beforeLaunchCheck().pipe(Effect.andThen(threads.getThreadRecords(...args))),
             };
           }),
         ).pipe(Layer.provide(layerThreadManagement));
@@ -1300,135 +1306,136 @@ it.effect.each(["fails", "is interrupted"] as const)(
     }),
 );
 
-it.effect.each(["failed", "interrupted", "interrupted before it started"] as const)(
-  "holds a message queued during setup that arrives after the setup %s",
-  (ending) => {
-    let fetchEntered: Deferred.Deferred<void> | null = null;
-    let allowCheck: Deferred.Deferred<void> | null = null;
-    const early = ending === "interrupted before it started";
-    const status = ending === "failed" ? "failed" : "interrupted";
-    const key = ending.replaceAll(" ", "-");
-    const harness = makeHarness({
-      ...(early
-        ? {
-            beforePreparationCheck: () =>
-              Deferred.succeed(fetchEntered!, undefined).pipe(
-                Effect.andThen(Deferred.await(allowCheck!)),
-              ),
-          }
-        : {}),
-      fetchWorktreeBaseCommit: () =>
-        ending === "interrupted"
-          ? Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Effect.never))
-          : Effect.fail(
-              new GitCommandError({
-                operation: "GitVcsDriver.fetchRemote",
-                command: "git",
-                cwd: project.workspaceRoot,
-                detail: "Git could not reach the remote.",
-                exitCode: 128,
-              }),
-            ),
-    });
-    return Effect.gen(function* () {
-      fetchEntered = yield* Deferred.make<void>();
-      allowCheck = yield* Deferred.make<void>();
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const threads = yield* ThreadManagement.ThreadManagementService;
-      const preparation = yield* Deferred.make<void, string>();
-      const launched = yield* launches.launch({
+it.effect.each([
+  "failed",
+  "interrupted",
+  "interrupted before it started",
+  "interrupted while launching",
+] as const)("holds a message queued during setup that arrives after the setup %s", (ending) => {
+  let fetchEntered: Deferred.Deferred<void> | null = null;
+  let allowCheck: Deferred.Deferred<void> | null = null;
+  const status = ending === "failed" ? "failed" : "interrupted";
+  const key = ending.replaceAll(" ", "-");
+  const pause = () =>
+    Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Deferred.await(allowCheck!)));
+  const harness = makeHarness({
+    ...(ending === "interrupted before it started" ? { beforePreparationCheck: pause } : {}),
+    ...(ending === "interrupted while launching" ? { beforeLaunchCheck: pause } : {}),
+    fetchWorktreeBaseCommit: () =>
+      ending === "interrupted"
+        ? Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Effect.never))
+        : Effect.fail(
+            new GitCommandError({
+              operation: "GitVcsDriver.fetchRemote",
+              command: "git",
+              cwd: project.workspaceRoot,
+              detail: "Git could not reach the remote.",
+              exitCode: 128,
+            }),
+          ),
+  });
+  return Effect.gen(function* () {
+    fetchEntered = yield* Deferred.make<void>();
+    allowCheck = yield* Deferred.make<void>();
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const preparation = yield* Deferred.make<void, string>();
+    const threadId = ThreadId.make(`thread:launch:late-queued-follow-up-${key}`);
+    const launching = yield* Effect.forkChild(
+      launches.launch({
         ...launchInput({
           command: `command:launch:late-queued-follow-up-${key}`,
-          thread: `thread:launch:late-queued-follow-up-${key}`,
+          thread: threadId,
           message: "First message",
           workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
         }),
         preparation,
-      });
-      if (status === "interrupted") {
-        yield* Deferred.await(fetchEntered);
-        yield* threads.dispatch({
-          type: "run.interrupt",
-          commandId: CommandId.make("command:launch:late-queued-follow-up:interrupt"),
-          threadId: launched.threadId,
-          runId: launched.projection.runs[0]!.id,
-        });
-        yield* Deferred.succeed(allowCheck, undefined);
-      }
-      yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
-        Stream.filter(
-          (stored) => stored.event.type === "run.updated" && stored.event.payload.status === status,
-        ),
-        Stream.runHead,
-      );
-      assert.include(
-        yield* Deferred.await(preparation).pipe(Effect.flip),
-        status === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
-      );
-
-      const queued = yield* threads.sendToThread({
-        projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:send`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:send`),
-        text: "Sent during setup",
-        attachments: [],
-        mode: "queue",
-        createdBy: "user",
-        creationSource: "web",
-      });
-      assert.equal(queued.delivery, "queued");
-      const projection = yield* threads.getThreadProjection(launched.threadId);
-      const held = projection.runs.at(-1)!;
-      assert.equal(held.status, "queued");
-      assert.equal(held.queueHeld, true);
-
-      // A message the user starts does not release it: the held message would
-      // run after it in the project checkout.
-      yield* threads.sendToThread({
-        projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:start`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:start`),
-        text: "Sent after setup",
-        attachments: [],
-        mode: "auto",
-        createdBy: "user",
-        creationSource: "web",
-      });
+      }),
+    );
+    if (status === "interrupted") {
+      yield* Deferred.await(fetchEntered);
       yield* threads.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:wake`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:wake`),
-        text: "Background task completed.",
-        attachments: [],
-        dispatchMode: { type: "queue_after_active" },
-        createdBy: "agent",
-        creationSource: "provider",
+        type: "run.interrupt",
+        commandId: CommandId.make("command:launch:late-queued-follow-up:interrupt"),
+        threadId,
+        runId: (yield* threads.getThreadProjection(threadId)).runs[0]!.id,
       });
-      const wake = (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)!;
-      assert.equal(wake.status, "queued");
-      assert.isTrue(wake.queueHeld);
+      yield* Deferred.succeed(allowCheck, undefined);
+    }
+    const launched = yield* Fiber.join(launching);
+    yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+      Stream.filter(
+        (stored) => stored.event.type === "run.updated" && stored.event.payload.status === status,
+      ),
+      Stream.runHead,
+    );
+    assert.include(
+      yield* Deferred.await(preparation).pipe(Effect.flip),
+      status === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
+    );
 
-      // Nor does the next one, though the run that message started is now the
-      // latest and carries no workspace preparation.
-      yield* threads.sendToThread({
-        projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:again`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:again`),
-        text: "Sent after that",
-        attachments: [],
-        mode: "auto",
-        createdBy: "user",
-        creationSource: "web",
-      });
-      const after = yield* threads.getThreadProjection(launched.threadId);
-      assert.isTrue(after.runs.find((run) => run.id === held.id)?.queueHeld);
-    }).pipe(Effect.provide(harness.layer));
-  },
-);
+    const queued = yield* threads.sendToThread({
+      projectId,
+      commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:send`),
+      threadId: launched.threadId,
+      messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:send`),
+      text: "Sent during setup",
+      attachments: [],
+      mode: "queue",
+      createdBy: "user",
+      creationSource: "web",
+    });
+    assert.equal(queued.delivery, "queued");
+    const projection = yield* threads.getThreadProjection(launched.threadId);
+    const held = projection.runs.at(-1)!;
+    assert.equal(held.status, "queued");
+    assert.equal(held.queueHeld, true);
+
+    // A message the user starts does not release it: the held message would
+    // run after it in the project checkout.
+    yield* threads.sendToThread({
+      projectId,
+      commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:start`),
+      threadId: launched.threadId,
+      messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:start`),
+      text: "Sent after setup",
+      attachments: [],
+      mode: "auto",
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* threads.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:wake`),
+      threadId: launched.threadId,
+      messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:wake`),
+      text: "Background task completed.",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "agent",
+      creationSource: "provider",
+    });
+    const wake = (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)!;
+    assert.equal(wake.status, "queued");
+    assert.isTrue(wake.queueHeld);
+
+    // Nor does the next one, though the run that message started is now the
+    // latest and carries no workspace preparation.
+    yield* threads.sendToThread({
+      projectId,
+      commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:again`),
+      threadId: launched.threadId,
+      messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:again`),
+      text: "Sent after that",
+      attachments: [],
+      mode: "auto",
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const after = yield* threads.getThreadProjection(launched.threadId);
+    assert.isTrue(after.runs.find((run) => run.id === held.id)?.queueHeld);
+  }).pipe(Effect.provide(harness.layer));
+});
 
 it.effect("replays a server-allocated launch", () =>
   Effect.gen(function* () {

@@ -1107,9 +1107,8 @@ const make = Effect.gen(function* () {
         const projection = yield* threads
           .getThreadProjection(threadId)
           .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
-        const runIsPreparing =
-          runId !== null &&
-          projection.runs.some((run) => run.id === runId && run.status === "preparing");
+        let runStatus = projection.runs.find((run) => run.id === runId)?.status;
+        const runIsPreparing = runId !== null && runStatus === "preparing";
         const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
         const boundWorktreePath = projection.thread.worktreePath;
         const preparationStrategy: ThreadLaunchWorkspaceStrategy =
@@ -1131,9 +1130,10 @@ const make = Effect.gen(function* () {
                 runId === null
                   ? true
                   : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
-                      Effect.map((current) =>
-                        current.runs.some((run) => run.id === runId && run.status === "preparing"),
-                      ),
+                      Effect.map((current) => {
+                        runStatus = current.runs.find((run) => run.id === runId)?.status;
+                        return runStatus === "preparing";
+                      }),
                       Effect.mapError(mapError(input, "update-thread", threadId)),
                     );
               if (preparationStillRequired) {
@@ -1151,7 +1151,9 @@ const make = Effect.gen(function* () {
         }
 
         if (!preparationScheduled && input.preparation !== undefined) {
-          yield* Deferred.succeed(input.preparation, undefined);
+          yield* runStatus === "interrupted" || runStatus === "cancelled"
+            ? Deferred.fail(input.preparation, "Worktree setup cancelled.")
+            : Deferred.succeed(input.preparation, undefined);
         }
         return {
           threadId,

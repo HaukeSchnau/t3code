@@ -1368,7 +1368,7 @@ export const layer = Layer.effect(
             Effect.mapError((error) =>
               taskError(
                 `${error.detail} Each run would need its own copy of the project. Run it in the project folder or in an existing thread instead.`,
-                { taskId: id },
+                { taskId: id, cause: error },
               ),
             ),
           );
