@@ -1076,12 +1076,17 @@ it.effect("reconciles SSH host settings without publishing no-op changes", () =>
     const added = yield* update([host]);
     expect(added.hosts.map((entry) => entry.id)).toEqual([LOCAL_DEVICE_HOST_ID, host.id]);
     expect(yield* update([{ ...host }])).toEqual(added);
+    expect(removedFiles).toHaveLength(0);
+
+    // A new wake command replaces the host, which removes its old config file.
+    yield* update([{ ...host, wakeCommand: ["fleet-wake", "remote"] }]);
+    expect(removedFiles).toHaveLength(1);
 
     yield* service.setHostStatus(host.id, { status: "failed", detail: "stale" });
     const removed = yield* update([]);
     expect(removed.hosts.map((entry) => entry.id)).toEqual([LOCAL_DEVICE_HOST_ID]);
     expect(removed.hostStatuses[host.id]).toBeUndefined();
-    expect(removedFiles).toHaveLength(1);
+    expect(removedFiles).toHaveLength(2);
   }).pipe(
     Effect.scoped,
     Effect.provide(Layer.mergeAll(ServerSettings.layerTest(), NodeServices.layer)),

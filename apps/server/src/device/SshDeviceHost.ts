@@ -130,6 +130,17 @@ export const waitForUnhealthyDeviceHost = Effect.fn("SshDeviceHost.waitForUnheal
   },
 );
 
+const WAKE_STDERR_TAIL_CHARS = 4096;
+
+/** `summary` is safe to show to clients; the stderr tail stays in the message for logs. */
+export class WakeCommandError extends Error {
+  readonly summary: string;
+  constructor(summary: string, stderrTail: string) {
+    super(stderrTail ? `${summary} ${stderrTail}` : summary);
+    this.summary = summary;
+  }
+}
+
 export const make = Effect.fn("SshDeviceHost.make")(function* (
   config: SshDeviceHostConfig,
   onReady: (
@@ -434,11 +445,54 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
     }
   });
 
+  const wakeFailed = (summary: string, detail = "") =>
+    new DeviceHost.DeviceHostError({
+      hostId: config.id,
+      step: "waking host",
+      cause: new WakeCommandError(summary, detail),
+    });
+  const wake = Effect.fn("SshDeviceHost.wake")(
+    function* ([command, ...args]: readonly [string, ...string[]]) {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command, args, { stdin: "ignore", stdout: "ignore", stderr: "pipe" }),
+      );
+      const [stderr, exitCode] = yield* Effect.all(
+        [
+          child.stderr.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (tail, chunk) => (tail + chunk).slice(-WAKE_STDERR_TAIL_CHARS),
+            ),
+          ),
+          child.exitCode,
+        ],
+        { concurrency: "unbounded" },
+      );
+      if (exitCode !== 0)
+        return yield* wakeFailed(`The wake command exited with ${exitCode}.`, stderr.trim());
+    },
+    Effect.scoped,
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        Effect.fail(wakeFailed("The wake command could not start.", String(cause))),
+    }),
+    Effect.timeoutOrElse({
+      duration: "3 minutes",
+      orElse: () => Effect.fail(wakeFailed("The wake command did not finish within 3 minutes.")),
+    }),
+  );
+
+  // Only explicit requests wake the host; the reconnect loop above leaves a sleeping host asleep.
   const ensureReady: DeviceHost.DeviceHost["Service"]["ensureReady"] = (onPhase) =>
     lock.withPermit(
       Effect.gen(function* () {
         stopped = false;
         if (ready) return ready;
+        if (config.wakeCommand) {
+          yield* onPhase("starting", "Waking device host…");
+          yield* wake(config.wakeCommand);
+        }
         summary = yield* provide(probe(config, owner));
         yield* onPhase(
           summary.hubInstalled ? "starting" : "installing",
