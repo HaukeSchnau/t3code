@@ -28,7 +28,6 @@ const activityMocks = vi.hoisted(() => ({
   dismissEnded: vi.fn(),
   getInstances: vi.fn(() => []),
   start: vi.fn(() => ({})),
-  updateSnapshot: vi.fn(),
 }));
 const environmentConfigsMock = vi.hoisted(() => ({
   configs: new Map<
@@ -82,14 +81,6 @@ vi.mock("./androidNotifications", () => ({
   configureAndroidAgentNotifications: vi.fn(),
   clearAndroidAgentNotifications: vi.fn(),
   supportsAndroidAgentNotifications: vi.fn(() => true),
-}));
-
-vi.mock("../../widgets/AgentActivity", () => ({
-  default: {
-    getInstances: activityMocks.getInstances,
-    start: activityMocks.start,
-  },
-  AgentActivityWidget: { updateSnapshot: activityMocks.updateSnapshot },
 }));
 
 vi.mock("../../state/atom-registry", () => ({
@@ -368,5 +359,16 @@ describe("removing a paired environment", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("loading outside iOS", () => {
+  it("does not load the Live Activity module, which Android's expo-widgets cannot construct", async () => {
+    vi.resetModules();
+    vi.doMock("../../widgets/AgentActivity", () => {
+      throw new TypeError("undefined cannot be used as a constructor.");
+    });
+
+    await expect(import("./remoteRegistration")).resolves.toBeDefined();
   });
 });

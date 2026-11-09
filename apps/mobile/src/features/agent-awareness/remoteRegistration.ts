@@ -34,7 +34,8 @@ import {
   loadPreferences,
   saveAgentAwarenessRegistrationRecord,
 } from "../../persistence/imperative";
-import { AgentActivityWidget, type AgentActivityProps } from "../../widgets/AgentActivity";
+import type { AgentActivityProps } from "../../widgets/AgentActivity";
+import { setAgentActivityWidgetSnapshot } from "../../widgets/agentActivityWidgetSnapshot";
 import {
   dismissEndedAgentLiveActivities,
   getAgentLiveActivities,
@@ -474,7 +475,7 @@ function idleAgentActivityWidgetProps(): AgentActivityProps {
 
 function updateAgentActivityWidgetSnapshot(props: AgentActivityProps): void {
   try {
-    AgentActivityWidget.updateSnapshot(props);
+    setAgentActivityWidgetSnapshot(props);
   } catch (error) {
     logRegistrationError("agent activity widget snapshot update failed", error);
   }
