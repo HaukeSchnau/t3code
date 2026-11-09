@@ -23,6 +23,7 @@ import {
 import { CLAUDE_USAGE_URL } from "../provider/claudeResetCredits.ts";
 import { ClaudeOauthUsage, claudeOauthUsageToLimits } from "../provider/claudeUsageLimits.ts";
 import {
+  makeUnavailableUsageLimits,
   UsageLimitsReadError,
   usageLimitsReadFailure,
   usageLimitsStatusError,
@@ -34,6 +35,7 @@ const AuthFile = Schema.Struct({
   provider: Schema.String,
   email: Schema.optional(Schema.String),
   disabled: Schema.optional(Schema.Boolean),
+  modtime: Schema.optional(Schema.String),
   id_token: Schema.optional(
     Schema.Struct({
       chatgpt_account_id: Schema.optional(Schema.String),
@@ -134,9 +136,38 @@ const creditRedeemRequestId = Effect.fn("CliproxyApi.creditRedeemRequestId")(fun
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 });
 
+const accountBase = (account: typeof AuthFile.Type) => ({
+  id: account.id,
+  driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),
+  ...(account.email ? { email: account.email } : {}),
+  ...(account.id_token?.chatgpt_account_id?.trim()
+    ? { workspaceId: account.id_token.chatgpt_account_id.trim() }
+    : {}),
+});
+
+const signInRequiredAccount = (
+  account: typeof AuthFile.Type,
+  checkedAt: string,
+): UsageLimitSourceAccount => ({
+  ...accountBase(account),
+  signInRequired: true,
+  usageLimits: makeUnavailableUsageLimits({
+    checkedAt,
+    reason: "probeFailed",
+    message: "The provider rejected this account's sign-in. Sign in to it again on the hub.",
+  }),
+});
+
 export const makeCliproxyApi = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
+  // The auth file version each rejected account was rejected with, by hub URL and account.
+  // Anthropic throttles an account's quota reads for an hour after repeated 401s, so a
+  // rejected account is read again only once the hub rewrites its auth file, which a token
+  // refresh or a new login does.
+  const rejectedVersions = new Map<string, string>();
+  const rejectionKey = (config: UsageLimitSourceConfig, account: typeof AuthFile.Type) =>
+    `${config.url}\0${account.id}`;
 
   const management = Effect.fn("CliproxyApi.management")(function* (
     config: UsageLimitSourceConfig,
@@ -234,14 +265,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
     account: typeof AuthFile.Type,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const base = {
-      id: account.id,
-      driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),
-      ...(account.email ? { email: account.email } : {}),
-      ...(account.id_token?.chatgpt_account_id?.trim()
-        ? { workspaceId: account.id_token.chatgpt_account_id.trim() }
-        : {}),
-    };
+    const base = accountBase(account);
     const read = Effect.gen(function* () {
       if (account.provider === "claude") {
         const usage = yield* decodeClaudeUsage(yield* apiCall(config, account, CLAUDE_USAGE_URL));
@@ -289,6 +313,11 @@ export const makeCliproxyApi = Effect.gen(function* () {
             detail: error.detail,
             ...(error.retryAt ? { retryAt: error.retryAt } : {}),
           });
+          if (error.status === 401) {
+            if (account.modtime)
+              rejectedVersions.set(rejectionKey(config, account), account.modtime);
+            return signInRequiredAccount(account, checkedAt);
+          }
           return { ...base, usageLimits: usageLimitsReadFailure(error, checkedAt) };
         }),
       ),
@@ -313,6 +342,14 @@ export const makeCliproxyApi = Effect.gen(function* () {
           !account.disabled && (account.provider === "codex" || account.provider === "claude"),
       ),
       (account) => {
+        if (
+          account.modtime !== undefined &&
+          rejectedVersions.get(rejectionKey(config, account)) === account.modtime
+        ) {
+          return DateTime.now.pipe(
+            Effect.map((now) => signInRequiredAccount(account, DateTime.formatIso(now))),
+          );
+        }
         const kept = reuse(account.id);
         return kept ? Effect.succeed(kept) : readAccount(config, account);
       },

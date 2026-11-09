@@ -140,6 +140,8 @@ export class UsageLimitsReadError extends Schema.TaggedError<UsageLimitsReadErro
   {
     detail: Schema.String,
     retryAt: Schema.optional(Schema.String),
+    /** The HTTP status the provider answered with. */
+    status: Schema.optional(Schema.Number),
   },
 ) {}
 
@@ -167,9 +169,11 @@ export function usageLimitsStatusError(input: {
     ? new UsageLimitsReadError({
         detail: `${input.provider} is rate-limiting usage reads.`,
         retryAt: rateLimitRetryAt(input.retryAfter, input.nowMs),
+        status: input.status,
       })
     : new UsageLimitsReadError({
         detail: `${input.provider} refused the usage request (HTTP ${input.status}).`,
+        status: input.status,
       });
 }
 
