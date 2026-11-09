@@ -1308,14 +1308,16 @@ it.effect.each(["failed", "interrupted"] as const)(
       fetchEntered = yield* Deferred.make<void>();
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const threads = yield* ThreadManagement.ThreadManagementService;
-      const launched = yield* launches.launch(
-        launchInput({
+      const preparation = yield* Deferred.make<void, string>();
+      const launched = yield* launches.launch({
+        ...launchInput({
           command: `command:launch:late-queued-follow-up-${ending}`,
           thread: `thread:launch:late-queued-follow-up-${ending}`,
           message: "First message",
           workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
         }),
-      );
+        preparation,
+      });
       if (ending === "interrupted") {
         yield* Deferred.await(fetchEntered);
         yield* threads.dispatch({
@@ -1330,6 +1332,10 @@ it.effect.each(["failed", "interrupted"] as const)(
           (stored) => stored.event.type === "run.updated" && stored.event.payload.status === ending,
         ),
         Stream.runHead,
+      );
+      assert.include(
+        yield* Deferred.await(preparation).pipe(Effect.flip),
+        ending === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
       );
 
       const queued = yield* threads.sendToThread({

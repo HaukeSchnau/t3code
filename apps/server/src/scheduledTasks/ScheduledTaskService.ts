@@ -1108,6 +1108,7 @@ export const layer = Layer.effect(
         if (!runSucceeded) {
           yield* wakeCreator(task, startedAtIso, recorded, lastRunError ?? "Unknown error.");
         } else if (preparation !== undefined) {
+          // Shutdown closes this scope before ThreadLaunchService's, so only a user's cancel records as one.
           yield* Deferred.await(preparation).pipe(
             Effect.matchEffect({
               onSuccess: () => recordPreparation(task, startedAtIso, null),

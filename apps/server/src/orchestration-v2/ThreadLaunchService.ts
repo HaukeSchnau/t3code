@@ -108,8 +108,8 @@ export interface ThreadLaunchInput {
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
   /**
-   * Completed when the launch's background workspace preparation ends: fails with its error,
-   * interrupted when cancelled, and succeeds at once when nothing is left to prepare.
+   * Completed when the launch's background workspace preparation ends: fails with its error or
+   * its cancellation, and succeeds at once when nothing is left to prepare.
    */
   readonly preparation?: Deferred.Deferred<void, string>;
 }
@@ -895,9 +895,12 @@ const make = Effect.gen(function* () {
           ? Effect.void
           : Exit.isSuccess(exit)
             ? Deferred.succeed(input.preparation, undefined)
-            : Cause.hasInterruptsOnly(exit.cause)
-              ? Deferred.interrupt(input.preparation)
-              : Deferred.fail(input.preparation, failureDetail(Cause.squash(exit.cause))),
+            : Deferred.fail(
+                input.preparation,
+                Cause.hasInterruptsOnly(exit.cause)
+                  ? "Worktree setup cancelled."
+                  : failureDetail(Cause.squash(exit.cause)),
+              ),
       ),
       Effect.ignoreCause,
       Effect.ensuring(releasePreparation(input.commandId)),

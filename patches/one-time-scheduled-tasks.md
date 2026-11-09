@@ -25,7 +25,7 @@ tells the agent thread that created a task when its runs fail.
 - A run that launches a new thread is recorded as succeeded at launch, because due tasks run one
   at a time and preparation can take minutes. `ThreadLaunchInput.preparation` is a `Deferred` that
   `ThreadLaunchService` completes when the background preparation ends. The scheduler watches it in
-  its own scope. A failed preparation always counts toward the failure count, even when a later
+  its own scope. A cancelled preparation fails it too. A failed preparation always counts toward the failure count, even when a later
   run has started since; it rewrites the run's record to failed only while that run is the latest. Preparation
   that resumes after a server restart has no `Deferred`, so its outcome is not recorded.
 - `scheduled_tasks.consecutive_failures` (fork migration 99) counts failed runs. A launch or send
