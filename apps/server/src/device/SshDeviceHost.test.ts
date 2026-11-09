@@ -234,7 +234,10 @@ it.effect("wakes a sleeping host before connecting and reports why waking failed
           pid: ChildProcessSpawner.ProcessId(123),
           stdout: Stream.empty,
           stderr: wakeFails
-            ? Stream.make(new TextEncoder().encode("tower did not answer within 120s\n"))
+            ? Stream.make(
+                new TextEncoder().encode("x".repeat(10_000)),
+                new TextEncoder().encode("tower did not answer within 120s\n"),
+              )
             : Stream.empty,
           all: Stream.empty,
           // The SSH probe fails, so the test ends right after the step that follows the wake.
@@ -267,7 +270,13 @@ it.effect("wakes a sleeping host before connecting and reports why waking failed
 
     const failedWake = yield* host.ensureReady(() => Effect.void).pipe(Effect.flip);
     expect(failedWake).toMatchObject({ step: "waking host" });
+    expect(failedWake.cause).toBeInstanceOf(SshDeviceHost.WakeCommandError);
+    expect((failedWake.cause as SshDeviceHost.WakeCommandError).summary).toBe(
+      "The wake command exited with 255.",
+    );
+    // Clients see only the summary; logs keep a bounded tail of stderr.
     expect(String(failedWake.cause)).toContain("tower did not answer within 120s");
+    expect(String(failedWake.cause).length).toBeLessThan(4_200);
     expect(commands).toEqual(["fleet-wake"]);
 
     const failedProbe = yield* host.ensureReady(() => Effect.void).pipe(Effect.flip);

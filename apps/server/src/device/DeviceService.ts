@@ -68,7 +68,9 @@ export const DEVICE_HUB_ROUTE_PREFIX = "/api/device-hub";
 const sshHostFailureMessage = (error: DeviceHost.DeviceHostError): string | undefined => {
   const cause = error.cause;
   if (error.step === "waking host")
-    return `Could not wake this host: ${cause instanceof Error ? cause.message : String(cause)}`;
+    return `Could not wake this host. ${
+      cause instanceof SshDeviceHost.WakeCommandError ? cause.summary : "The wake command failed."
+    }`;
   if (error.step !== "probe") return undefined;
   if (
     !(cause instanceof SshCommandError) ||
@@ -1000,7 +1002,7 @@ export const make = Effect.gen(function* () {
         current.target === previous.target &&
         current.port === previous.port &&
         current.identityFile === previous.identityFile &&
-        current.wakeCommand?.join("\0") === previous.wakeCommand?.join("\0")
+        JSON.stringify(current.wakeCommand) === JSON.stringify(previous.wakeCommand)
       : JSON.stringify(current) === JSON.stringify(previous);
   const reconcile = Effect.fn("DeviceService.reconcile")(function* (
     configuredHosts: ReadonlyArray<DeviceHostConfig>,

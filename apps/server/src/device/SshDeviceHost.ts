@@ -130,6 +130,17 @@ export const waitForUnhealthyDeviceHost = Effect.fn("SshDeviceHost.waitForUnheal
   },
 );
 
+const WAKE_STDERR_TAIL_CHARS = 4096;
+
+/** `summary` is safe to show to clients; the stderr tail stays in the message for logs. */
+export class WakeCommandError extends Error {
+  readonly summary: string;
+  constructor(summary: string, stderrTail: string) {
+    super(stderrTail ? `${summary} ${stderrTail}` : summary);
+    this.summary = summary;
+  }
+}
+
 export const make = Effect.fn("SshDeviceHost.make")(function* (
   config: SshDeviceHostConfig,
   onReady: (
@@ -434,26 +445,41 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
     }
   });
 
-  const wakeFailed = (cause: unknown) =>
-    new DeviceHost.DeviceHostError({ hostId: config.id, step: "waking host", cause });
+  const wakeFailed = (summary: string, detail = "") =>
+    new DeviceHost.DeviceHostError({
+      hostId: config.id,
+      step: "waking host",
+      cause: new WakeCommandError(summary, detail),
+    });
   const wake = Effect.fn("SshDeviceHost.wake")(
     function* ([command, ...args]: readonly [string, ...string[]]) {
       const child = yield* spawner.spawn(
         ChildProcess.make(command, args, { stdin: "ignore", stdout: "ignore", stderr: "pipe" }),
       );
       const [stderr, exitCode] = yield* Effect.all(
-        [child.stderr.pipe(Stream.decodeText(), Stream.mkString), child.exitCode],
+        [
+          child.stderr.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (tail, chunk) => (tail + chunk).slice(-WAKE_STDERR_TAIL_CHARS),
+            ),
+          ),
+          child.exitCode,
+        ],
         { concurrency: "unbounded" },
       );
       if (exitCode !== 0)
-        return yield* wakeFailed(new Error(stderr.trim() || `${command} exited with ${exitCode}.`));
+        return yield* wakeFailed(`The wake command exited with ${exitCode}.`, stderr.trim());
     },
     Effect.scoped,
-    Effect.catchTags({ PlatformError: (cause) => Effect.fail(wakeFailed(cause)) }),
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        Effect.fail(wakeFailed("The wake command could not start.", String(cause))),
+    }),
     Effect.timeoutOrElse({
       duration: "3 minutes",
-      orElse: () =>
-        Effect.fail(wakeFailed(new Error("The wake command did not finish within 3 minutes."))),
+      orElse: () => Effect.fail(wakeFailed("The wake command did not finish within 3 minutes.")),
     }),
   );
 
