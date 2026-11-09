@@ -18,6 +18,9 @@ import { Argument, Command, Flag } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { developmentClientId } from "./lib/mobile-app-ids.ts";
+import { loadRepoEnv } from "./lib/public-config.ts";
+
 export type NativePlatform = "ios" | "android";
 const NativeClientRecord = Schema.Struct({ fingerprint: Schema.String, binary: Schema.String });
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(NativeClientRecord));
@@ -134,7 +137,7 @@ export const hashBundle = Effect.fn("hashBundle")(function* (root: string) {
 });
 type FileSystemError = import("effect/PlatformError").PlatformError;
 
-const bundleId = "com.t3tools.t3code.dev";
+const bundleId = (platform: NativePlatform) => developmentClientId(platform, loadRepoEnv());
 const roots = Effect.gen(function* () {
   const path = yield* Path.Path;
   const repo = yield* path.fromFileUrl(new URL("../", import.meta.url));
@@ -342,16 +345,17 @@ export const installedBinary = Effect.fn("installedBinary")(function* (
   device: string,
   run: typeof command = command,
 ) {
+  const id = bundleId(platform);
   if (platform === "ios") {
     const apps = yield* run("xcrun", ["simctl", "listapps", device]);
-    if (!apps.includes(`"${bundleId}"`)) return null;
+    if (!apps.includes(`"${id}"`)) return null;
     return yield* hashBundle(
-      yield* run("xcrun", ["simctl", "get_app_container", device, bundleId, "app"]),
+      yield* run("xcrun", ["simctl", "get_app_container", device, id, "app"]),
     );
   }
-  const installed = yield* run("adb", ["-s", device, "shell", "pm", "list", "packages", bundleId]);
-  if (!installed.split("\n").some((line) => line.trim() === `package:${bundleId}`)) return null;
-  const packages = yield* run("adb", ["-s", device, "shell", "pm", "path", bundleId]);
+  const installed = yield* run("adb", ["-s", device, "shell", "pm", "list", "packages", id]);
+  if (!installed.split("\n").some((line) => line.trim() === `package:${id}`)) return null;
+  const packages = yield* run("adb", ["-s", device, "shell", "pm", "path", id]);
   const apks = packages
     .split("\n")
     .filter((line) => line.startsWith("package:"))
@@ -738,7 +742,13 @@ const build = Effect.fn("nativeClient.build")(function* (
       const android = path.join(mobile, "android");
       yield* command(
         path.join(android, (yield* HostProcess.Platform) === "win32" ? "gradlew.bat" : "gradlew"),
-        ["app:assembleDebug", `-PreactNativeArchitectures=${abi}`],
+        [
+          "app:assembleDebug",
+          `-PreactNativeArchitectures=${abi}`,
+          // A one-off build leaves no Gradle or Kotlin daemon holding gigabytes on a shared builder.
+          "--no-daemon",
+          "-Pkotlin.compiler.execution.strategy=in-process",
+        ],
         true,
         android,
       );
@@ -865,7 +875,7 @@ const install = Effect.fn("nativeClient.install")(function* (
         Effect.fail(
           error.message.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE")
             ? new NativeClientError({
-                message: `The installed client has a different signature. Remove it with adb -s ${device} uninstall ${bundleId} (this clears its pairings), then run ensure again.`,
+                message: `The installed client has a different signature. Remove it with adb -s ${device} uninstall ${bundleId("android")} (this clears its pairings), then run ensure again.`,
               })
             : error,
         ),
@@ -981,7 +991,7 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
         yield* Console.error(`Installing into agent-device session ${session}...`);
         yield* command(
           node,
-          [agentDevice, "install", bundleId, local.file, "--session", session],
+          [agentDevice, "install", bundleId(platform), local.file, "--session", session],
           true,
           workspace,
         );
@@ -994,7 +1004,7 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
       [
         agentDevice,
         "open",
-        bundleId,
+        bundleId(platform),
         `t3code-dev://expo-development-client/?url=${url}&disableOnboarding=1&disableFab=1&disableAutoLaunch=1`,
         "--session",
         session,

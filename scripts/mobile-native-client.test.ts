@@ -4,7 +4,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { NativeClientError, prebuildAndroid } from "./mobile-native-client.ts";
+import { developmentClientId } from "./lib/mobile-app-ids.ts";
+import { loadRepoEnv } from "./lib/public-config.ts";
+import { NativeClientError, installedBinary, prebuildAndroid } from "./mobile-native-client.ts";
 
 const caches = [".gradle/history", "app/.cxx/object"];
 
@@ -58,6 +60,25 @@ it.layer(NodeServices.layer)("prebuildAndroid", (it) => {
 
       assert.strictEqual(error, failure);
       yield* assertCachesRestored;
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("installedBinary", (it) => {
+  it.effect("finds the iOS dev client under the fork's bundle id", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const app = yield* fs.makeTempDirectoryScoped({ prefix: "T3CodeDev.app-" });
+      yield* fs.writeFileString(path.join(app, "Info.plist"), "plist");
+      const run = (_command: string, args: ReadonlyArray<string>) =>
+        Effect.succeed(
+          args[1] === "listapps" ? `"${developmentClientId("ios", loadRepoEnv())}" = {};` : app,
+        );
+
+      const binary = yield* installedBinary("ios", "simulator", run);
+
+      assert.match(binary ?? "", /^[a-f0-9]{64}$/);
     }),
   );
 });
