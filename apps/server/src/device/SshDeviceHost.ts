@@ -434,11 +434,39 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
     }
   });
 
+  const wakeFailed = (cause: unknown) =>
+    new DeviceHost.DeviceHostError({ hostId: config.id, step: "waking host", cause });
+  const wake = Effect.fn("SshDeviceHost.wake")(
+    function* ([command, ...args]: readonly [string, ...string[]]) {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command, args, { stdin: "ignore", stdout: "ignore", stderr: "pipe" }),
+      );
+      const [stderr, exitCode] = yield* Effect.all(
+        [child.stderr.pipe(Stream.decodeText(), Stream.mkString), child.exitCode],
+        { concurrency: "unbounded" },
+      );
+      if (exitCode !== 0)
+        return yield* wakeFailed(new Error(stderr.trim() || `${command} exited with ${exitCode}.`));
+    },
+    Effect.scoped,
+    Effect.catchTags({ PlatformError: (cause) => Effect.fail(wakeFailed(cause)) }),
+    Effect.timeoutOrElse({
+      duration: "3 minutes",
+      orElse: () =>
+        Effect.fail(wakeFailed(new Error("The wake command did not finish within 3 minutes."))),
+    }),
+  );
+
+  // Only explicit requests wake the host; the reconnect loop above leaves a sleeping host asleep.
   const ensureReady: DeviceHost.DeviceHost["Service"]["ensureReady"] = (onPhase) =>
     lock.withPermit(
       Effect.gen(function* () {
         stopped = false;
         if (ready) return ready;
+        if (config.wakeCommand) {
+          yield* onPhase("starting", "Waking device host…");
+          yield* wake(config.wakeCommand);
+        }
         summary = yield* provide(probe(config, owner));
         yield* onPhase(
           summary.hubInstalled ? "starting" : "installing",

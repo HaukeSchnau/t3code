@@ -26,6 +26,11 @@ export const SshDeviceHostConfig = Schema.Struct({
   target: TrimmedNonEmptyString.check(Schema.isPattern(/^[^\s-][^\s]*$/)),
   identityFile: Schema.optional(TrimmedNonEmptyString),
   port: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+  /**
+   * Command and arguments the server runs before connecting to a host that sleeps when idle.
+   * It exits once the host answers SSH, or fails with the reason on stderr.
+   */
+  wakeCommand: Schema.optional(Schema.NonEmptyArray(TrimmedNonEmptyString)),
 });
 export type SshDeviceHostConfig = typeof SshDeviceHostConfig.Type;
 
