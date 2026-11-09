@@ -775,14 +775,13 @@ export const layer = Layer.effect(
       function* (task: ScheduledTask, startedAtIso: string, error: string | null) {
         const now = iso(yield* localNow);
         // Preparation can outlast the interval, so a later run may have started meanwhile.
-        // A failure always counts; only the latest run's own record changes.
+        // The count follows the order preparations end in; only the latest run's own record changes.
         const recorded =
           error === null
             ? yield* sql<RecordedRun>`
                 UPDATE scheduled_tasks
                 SET consecutive_failures = 0
-                WHERE task_id = ${task.id} AND last_run_at = ${startedAtIso}
-                  AND last_run_status = 'succeeded'
+                WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
                 RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
               `
             : yield* sql<RecordedRun>`
@@ -802,7 +801,7 @@ export const layer = Layer.effect(
                     END,
                     enabled = enabled AND consecutive_failures + 1 < ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES},
                     consecutive_failures = consecutive_failures + 1
-                WHERE task_id = ${task.id}
+                WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
                 RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
               `;
         const row = recorded[0];

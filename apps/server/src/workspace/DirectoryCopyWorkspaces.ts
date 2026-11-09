@@ -258,7 +258,15 @@ const checkSource = Effect.fn("DirectoryCopyWorkspaces.checkSource")(function* (
   readonly workspacesRoot: string;
 }) {
   const platform = yield* HostProcess.Platform;
-  if (!NodeFS.statSync(input.source, { throwIfNoEntry: false })?.isDirectory()) {
+  const stat = yield* Effect.try({
+    try: () => NodeFS.statSync(input.source, { throwIfNoEntry: false }),
+    catch: (cause) =>
+      fail(
+        `Could not read the project '${input.source}': ${cause instanceof Error ? cause.message : String(cause)}`,
+        cause,
+      ),
+  });
+  if (!stat?.isDirectory()) {
     return yield* fail(`The project '${input.source}' is not a directory.`);
   }
   const unsafe = sensitiveSourceReason({

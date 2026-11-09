@@ -17,6 +17,15 @@ export function realpathOrResolve(path: string): string {
   }
 }
 
+/** Like `existsSync`, an unreadable path counts as absent. */
+function isDirectory(path: string): boolean {
+  try {
+    return NodeFS.statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The nearest repository boundary at or above `path`. A colocated repository
  * (`.jj` next to `.git`) is a jj repository.
@@ -25,7 +34,7 @@ export function findRepositoryMarker(path: string): RepositoryMarker | null {
   let current = realpathOrResolve(path);
   while (true) {
     const hasGit = NodeFS.existsSync(NodePath.join(current, ".git"));
-    if (NodeFS.statSync(NodePath.join(current, ".jj"), { throwIfNoEntry: false })?.isDirectory()) {
+    if (isDirectory(NodePath.join(current, ".jj"))) {
       return { kind: "jj", root: current, colocated: hasGit };
     }
     if (hasGit) return { kind: "git", root: current, colocated: false };

@@ -206,10 +206,18 @@ describe("ManagedWorkspaces", () => {
       // A scheduled task saves only when its runs could get a workspace.
       const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const strategy = { type: "worktree", baseRef: "main" } as const;
-      for (const projectRoot of [test.baseDir, NodePath.join(project, "missing")]) {
-        const unusable = yield* Effect.flip(workspaces.checkCopy({ projectRoot, strategy }));
-        assert.equal(unusable._tag, "ManagedWorkspaceError");
-      }
+      const locked = tempDir("t3-dir-locked-");
+      NodeFS.chmodSync(locked, 0o000);
+      yield* Effect.gen(function* () {
+        for (const projectRoot of [
+          test.baseDir,
+          NodePath.join(project, "missing"),
+          NodePath.join(locked, "notes"),
+        ]) {
+          const unusable = yield* Effect.flip(workspaces.checkCopy({ projectRoot, strategy }));
+          assert.equal(unusable._tag, "ManagedWorkspaceError");
+        }
+      }).pipe(Effect.ensuring(Effect.sync(() => NodeFS.chmodSync(locked, 0o700))));
     }).pipe(Effect.provide(test.layer));
   });
 

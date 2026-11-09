@@ -2,6 +2,7 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, expect, it } from "@effect/vitest";
 import {
+  CommandId,
   type OrchestrationV2ServerCommand,
   type ScheduledTask,
   ScheduledTaskUpsertInput,
@@ -422,7 +423,8 @@ it.effect("counts a failed preparation that ends after the next run started", ()
     const pendingPreparations = yield* Queue.unbounded<Deferred.Deferred<void, string>>();
     yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
-      const { task } = yield* service.upsert(yield* failingTaskInput(null), {
+      const input = { ...(yield* failingTaskInput(null)), commandId: CommandId.make("overlap") };
+      const { task } = yield* service.upsert(input, {
         creatorThreadId: ThreadId.make("thread-creator"),
       });
       const settled = (expected: Partial<ScheduledTask>) => settledTask(service, expected);
@@ -444,6 +446,53 @@ it.effect("counts a failed preparation that ends after the next run started", ()
       yield* Deferred.fail(second, "Workspace preparation failed: disk full");
       yield* settled({ lastRunStatus: "failed", consecutiveFailures: 2 });
       yield* Queue.take(notices);
+
+      // A task recreated under the same id does not inherit the old task's late failure.
+      const stale = yield* launchRun;
+      yield* service.delete({ id: task.id });
+      yield* TestClock.adjust("1 minute");
+      const { task: recreated } = yield* service.upsert(input, {
+        creatorThreadId: ThreadId.make("thread-creator"),
+      });
+      expect(recreated.id).toBe(task.id);
+      const fresh = yield* launchRun;
+      yield* Deferred.fail(stale, "Workspace preparation failed: disk full");
+      yield* Deferred.fail(fresh, "Workspace preparation failed: disk full");
+      yield* settled({ lastRunStatus: "failed", consecutiveFailures: 1 });
+      const freshNotice = yield* Queue.take(notices);
+      assert(freshNotice.type === "message.dispatch");
+      expect(freshNotice.text).toContain("Failed runs in a row: 1.");
+      expect(yield* Queue.size(notices)).toBe(0);
+    }).pipe(Effect.provide(failureTrackingLayer({ outcome, notices, pendingPreparations })));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("resets the count when a successful preparation ends after the next run started", () =>
+  Effect.gen(function* () {
+    const outcome = yield* Ref.make<LaunchOutcome>("setup-pending");
+    const notices = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+    const pendingPreparations = yield* Queue.unbounded<Deferred.Deferred<void, string>>();
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert(yield* failingTaskInput(null), {
+        creatorThreadId: ThreadId.make("thread-creator"),
+      });
+      const settled = (expected: Partial<ScheduledTask>) => settledTask(service, expected);
+      const launchRun = Effect.gen(function* () {
+        yield* TestClock.adjust("1 minute");
+        yield* service.runNow({ id: task.id });
+        return yield* Queue.take(pendingPreparations);
+      });
+      yield* Deferred.fail(yield* launchRun, "Workspace preparation failed: disk full");
+      yield* settled({ lastRunStatus: "failed", consecutiveFailures: 1 });
+      yield* Queue.take(notices);
+
+      const first = yield* launchRun;
+      const second = yield* launchRun;
+      yield* Deferred.succeed(first, undefined);
+      yield* settled({ lastRunStatus: "succeeded", consecutiveFailures: 0 });
+      yield* Deferred.fail(second, "Workspace preparation failed: disk full");
+      yield* settled({ lastRunStatus: "failed", consecutiveFailures: 1 });
     }).pipe(Effect.provide(failureTrackingLayer({ outcome, notices, pendingPreparations })));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
