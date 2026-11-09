@@ -1252,6 +1252,11 @@ function TaskForm({
           <Text className="px-2 text-sm text-foreground-muted">
             Time uses the environment's time zone, which may differ from your phone's.
           </Text>
+        ) : draft.schedule.mode === "once" ? (
+          <Text className="px-2 text-sm text-foreground-muted">
+            Time uses your phone's time zone ({new Intl.DateTimeFormat().resolvedOptions().timeZone}
+            ).
+          </Text>
         ) : null}
       </View>
       <Button

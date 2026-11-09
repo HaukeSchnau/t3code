@@ -294,6 +294,7 @@ function makeHarness(options: HarnessOptions = {}) {
       layerTitleRegeneration,
       layerOutbox,
       layerDatabase,
+      layerReceipts,
       layerExternalServices,
     ),
     createWorktree,
@@ -1373,6 +1374,13 @@ it.effect.each([
       yield* Deferred.await(preparation).pipe(Effect.flip),
       status === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
     );
+    if (ending !== "failed" && ending !== "interrupted") {
+      // The run is already terminal, so the orchestrator would reject a failure dispatch.
+      const failReceipt = yield* (yield* CommandReceiptStore.CommandReceiptStoreV2).getByCommandId(
+        CommandId.make(`command:launch:late-queued-follow-up-${key}:fail`),
+      );
+      assert.isTrue(Option.isNone(failReceipt));
+    }
 
     const queued = yield* threads.sendToThread({
       projectId,

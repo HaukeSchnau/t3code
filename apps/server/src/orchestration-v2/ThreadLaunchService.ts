@@ -866,7 +866,13 @@ const make = Effect.gen(function* () {
       const afterSequence = yield* threads.getThreadEventSequence(threadId);
       const projection = yield* threads.getThreadRecords(threadId, ["runs"]);
       const status = projection.runs.find((run) => run.id === runId)?.status;
-      if (status === "interrupted" || status === "cancelled") return yield* Effect.interrupt;
+      if (status === "interrupted" || status === "cancelled") {
+        // The run is terminal, so skip prepared-run.fail; the Deferred keeps this first result.
+        if (input.preparation !== undefined) {
+          yield* Deferred.fail(input.preparation, "Worktree setup cancelled.");
+        }
+        return;
+      }
       if (status !== "preparing") return;
       const interruption = threads
         .streamStoredEventsFrom({ threadId, afterSequence, eventType: "run.updated" })

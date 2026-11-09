@@ -65,6 +65,8 @@ export interface DraftState {
   readonly timeOfDay: string;
   /** `datetime-local` value in the browser's zone. */
   readonly onceAt: string;
+  /** The stored one-time `at`, sent back unchanged while `onceAt` still shows it. */
+  readonly savedOnceAt: string;
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
   readonly threadId: string;
@@ -190,6 +192,12 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
     };
   }
   if (draft.scheduleMode === "once") {
+    if (
+      draft.savedOnceAt &&
+      draft.onceAt === localDateTimeInputValue(new Date(draft.savedOnceAt))
+    ) {
+      return { type: "once", at: draft.savedOnceAt };
+    }
     const at = new Date(draft.onceAt);
     return Number.isNaN(at.getTime()) ? null : { type: "once", at: at.toISOString() };
   }
@@ -222,6 +230,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
       schedule.type === "interval" ? String(Math.max(1, schedule.everyMs / 60_000)) : "15",
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",
     onceAt: schedule.type === "once" ? localDateTimeInputValue(new Date(schedule.at)) : "",
+    savedOnceAt: schedule.type === "once" ? schedule.at : "",
     weekdays,
     projectId: task.projectId,
     threadId: task.threadId ?? "",

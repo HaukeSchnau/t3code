@@ -143,6 +143,7 @@ const EMPTY_DRAFT: DraftState = {
   intervalMinutes: "15",
   timeOfDay: "09:00",
   onceAt: "",
+  savedOnceAt: "",
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
@@ -1726,6 +1727,9 @@ function ScheduledTaskEditorForm({
                     setDraft((current) => ({ ...current, onceAt: event.target.value }))
                   }
                 />
+                <span className="text-xs text-muted-foreground">
+                  Your time zone ({new Intl.DateTimeFormat().resolvedOptions().timeZone})
+                </span>
               </div>
             ) : draft.scheduleMode === "fixed" ? (
               <div className="flex flex-wrap items-center gap-3">
