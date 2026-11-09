@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Schema } from "effect";
 import {
+  DeviceHostUnavailableError,
   DeviceServiceState,
   EasDeviceHostConfig,
   EasDeviceHostConfigs,
@@ -11,6 +12,7 @@ import { secretSettingsFields } from "./settings.ts";
 const decodeSshHosts = Schema.decodeUnknownSync(SshDeviceHostConfigs);
 const decodeEas = Schema.decodeUnknownSync(EasDeviceHostConfigs);
 const encodeState = Schema.encodeSync(DeviceServiceState);
+const encodeHostUnavailable = Schema.encodeSync(DeviceHostUnavailableError);
 const decodeState = Schema.decodeUnknownSync(DeviceServiceState);
 // The host summary as clients decoded it before EAS hosts existed.
 const decodeOlderState = Schema.decodeUnknownSync(
@@ -77,5 +79,18 @@ describe("device state for clients from before EAS hosts", () => {
     const wire = encodeState(state);
     expect(decodeOlderState(wire).hosts.map((host) => host.id)).toEqual(["local"]);
     expect(decodeState(wire).hosts).toEqual(state.hosts);
+  });
+});
+
+describe("device host errors sent to clients", () => {
+  it("keeps nested causes, such as a wake command's stderr, off the wire", () => {
+    const error = new DeviceHostUnavailableError({
+      hostId: "tower",
+      reason: "Could not wake this host.",
+      cause: new Error("Device host tower failed", { cause: new Error("SECRET STDERR") }),
+    });
+    const wire = JSON.stringify(encodeHostUnavailable(error));
+    expect(wire).toContain("Could not wake this host.");
+    expect(wire).not.toContain("SECRET STDERR");
   });
 });

@@ -113,7 +113,9 @@ Claude keeps its login in the Keychain, Claude's limits update with its regular 
 instead. Opening or refreshing Limits checks every provider and hub on the selected environments
 right away. A check within 30 seconds of the last one reuses that reading. When a provider
 rate-limits these reads, the account keeps its last reading and Limits says when the next read
-happens.
+happens. When a provider rejects a hub account's login, Limits leaves that account out of the bars
+and asks for a new sign-in on the hub. T3 Code reads the account again once the hub has a new
+login for it.
 
 Pick `/usage-limits` from the composer's command menu, or send it as a message, to check the
 current model's limits without leaving the conversation. The result opens above the composer and

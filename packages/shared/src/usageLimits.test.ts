@@ -933,6 +933,37 @@ describe("collectLimitNotices", () => {
     expect(notices).toEqual(["hub: Could not read 1 account.", "pool: Could not read 2 accounts."]);
   });
 
+  it("asks for a new hub sign-in instead of counting a rejected account as unread", () => {
+    const unread = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
+    const notices = collectLimitNotices(
+      new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            ...laptop,
+            serverConfig: {
+              providers: [],
+              usageLimitSources: [
+                {
+                  ...hub,
+                  accounts: [
+                    { id: "rejected", driver: claude, signInRequired: true, usageLimits: unread },
+                    { id: "failed", driver: claude, usageLimits: unread },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      ]),
+      now,
+    );
+    expect(notices).toEqual([
+      "hub: 1 account needs a new sign-in on the hub.",
+      "hub: Could not read 1 account.",
+    ]);
+  });
+
   it("says when throttled reads resume, counting hub accounts without naming them", () => {
     const rateLimitedUntil = "2026-09-03T11:04:30.000Z";
     const throttled = provider({

@@ -217,3 +217,72 @@ it.effect("does not tear down uploads on health deadlines, but detects definite 
     expect(yield* SshDeviceHost.deviceHealthProbe(Effect.succeed(false))).toBe(false);
   }),
 );
+
+it.effect("wakes a sleeping host before connecting and reports why waking failed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped();
+    const commands: string[] = [];
+    let wakes = 0;
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.sync(() => {
+        if (command._tag !== "StandardCommand") throw new Error("Unexpected command");
+        commands.push(command.command);
+        const waking = command.command === "fleet-wake";
+        const wakeFails = waking && wakes++ === 0;
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(123),
+          stdout: Stream.empty,
+          stderr: wakeFails
+            ? Stream.make(
+                new TextEncoder().encode("x".repeat(10_000)),
+                new TextEncoder().encode("tower did not answer within 120s\n"),
+              )
+            : Stream.empty,
+          all: Stream.empty,
+          // The SSH probe fails, so the test ends right after the step that follows the wake.
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(waking && !wakeFails ? 0 : 255)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          stdin: Sink.drain,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        });
+      }),
+    );
+    const host = yield* SshDeviceHost.make({
+      kind: "ssh",
+      id: "tower",
+      label: "Tower",
+      target: "tower",
+      wakeCommand: ["fleet-wake", "tower"],
+    }).pipe(
+      Effect.provide(Layer.mergeAll(ServerConfig.layerTest(home, home), Net.layer)),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+        ),
+      ),
+    );
+
+    const failedWake = yield* host.ensureReady(() => Effect.void).pipe(Effect.flip);
+    expect(failedWake).toMatchObject({ step: "waking host" });
+    expect(failedWake.cause).toBeInstanceOf(SshDeviceHost.WakeCommandError);
+    expect((failedWake.cause as SshDeviceHost.WakeCommandError).summary).toBe(
+      "The wake command exited with 255.",
+    );
+    // Clients see only the summary; logs keep a bounded tail of stderr.
+    expect(String(failedWake.cause)).toContain("tower did not answer within 120s");
+    expect(String(failedWake.cause).length).toBeLessThan(4_200);
+    expect(commands).toEqual(["fleet-wake"]);
+
+    const failedProbe = yield* host.ensureReady(() => Effect.void).pipe(Effect.flip);
+    expect(failedProbe).toMatchObject({ step: "probe" });
+    expect(commands.slice(1, 2)).toEqual(["fleet-wake"]);
+    expect(commands.length).toBeGreaterThan(2);
+    expect(commands.slice(2)).not.toContain("fleet-wake");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
