@@ -1216,6 +1216,9 @@ function ScheduledTaskEditorForm({
     }
     const schedule = scheduleFromDraft(draft);
     if (schedule === null) {
+      if (draft.scheduleMode === "once") {
+        reportFailure("Pick a date and time", "A one-time task needs a date and time to run.");
+      }
       for (const error of webhookDraftErrors(draft)) reportFailure(error.title, error.description);
       return;
     }
@@ -1227,10 +1230,6 @@ function ScheduledTaskEditorForm({
           !(liveTask?.schedule.type === "webhook" && liveTask.webhook?.hasSecret)))
     ) {
       reportFailure("Signing secret is required", "Enter the signature header and secret.");
-      return;
-    }
-    if (draft.enabled && schedule.type === "once" && !(Date.parse(schedule.at) > Date.now())) {
-      reportFailure("Pick a future time", "A one-time task needs a date and time ahead of now.");
       return;
     }
     if (

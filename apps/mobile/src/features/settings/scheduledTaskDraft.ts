@@ -121,10 +121,6 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
   }
 }
 
-export function isPastOneTimeRun(schedule: ScheduledTaskUpsertSchedule): boolean {
-  return schedule.type === "once" && !(Date.parse(schedule.at) > Date.now());
-}
-
 export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSchedule | null {
   if (draft.mode === "webhook") {
     const maxDeliveryAgeMinutes = parseMaxDeliveryAge(draft.maxDeliveryAgeMinutes);

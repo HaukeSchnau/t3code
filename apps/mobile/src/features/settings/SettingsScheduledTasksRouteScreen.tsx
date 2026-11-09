@@ -74,7 +74,6 @@ import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-en
 import {
   editDraft,
   scheduledTaskDefaultModel,
-  isPastOneTimeRun,
   scheduleFromDraft,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
@@ -750,8 +749,8 @@ function TaskForm({
       );
       return;
     }
-    if (draft.enabled && schedule !== null && isPastOneTimeRun(schedule)) {
-      Dialog.alert("Pick a future time", "A one-time task needs a date and time ahead of now.");
+    if (draft.schedule.mode === "once" && schedule === null) {
+      Dialog.alert("Pick a date and time", "A one-time task needs a date and time to run.");
       return;
     }
     if (

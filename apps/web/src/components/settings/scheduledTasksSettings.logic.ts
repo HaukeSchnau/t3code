@@ -191,7 +191,7 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
   }
   if (draft.scheduleMode === "once") {
     const at = new Date(draft.onceAt);
-    return { type: "once", at: Number.isNaN(at.getTime()) ? "" : at.toISOString() };
+    return Number.isNaN(at.getTime()) ? null : { type: "once", at: at.toISOString() };
   }
   if (draft.scheduleMode === "interval") {
     const everyMs = Math.round(Number(draft.intervalMinutes) * 60_000);

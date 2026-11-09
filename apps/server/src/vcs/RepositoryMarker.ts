@@ -17,12 +17,15 @@ export function realpathOrResolve(path: string): string {
   }
 }
 
-/** Like `existsSync`, an unreadable path counts as absent. */
+const ABSENT_CODES = new Set(["ENOENT", "ENOTDIR", "EACCES", "EPERM"]);
+
+/** A missing or unreadable path counts as absent; any other error is rethrown. */
 function isDirectory(path: string): boolean {
   try {
     return NodeFS.statSync(path).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (ABSENT_CODES.has((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
   }
 }
 

@@ -14,7 +14,8 @@ tells the agent thread that created a task when its runs fail.
 - Scheduled tasks gain a `{type: "once", at}` trigger. `nextScheduledRunAt` returns `at` only while
   it is in the future. Completion, stuck-run release and restart recovery pause a `once` task that
   has no next run, so Settings shows it as done. Saving an enabled `once` task, or switching one
-  on, fails when `at` is in the past. Web and mobile Settings offer a "Once" schedule. Mobile uses
+  on, fails when `at` is in the past. Settings leaves that check to the server, whose clock can
+  differ from the client's. Web and mobile Settings offer a "Once" schedule. Mobile uses
   separate date and time pickers because Android's picker has no combined mode.
 - Saving a task whose runs launch into a `worktree` or `workspace` fails when the project is a
   plain directory that is missing or unreadable, too big to copy, or one a workspace may not copy, such as the

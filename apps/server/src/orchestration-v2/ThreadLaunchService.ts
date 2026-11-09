@@ -865,7 +865,9 @@ const make = Effect.gen(function* () {
       }
       const afterSequence = yield* threads.getThreadEventSequence(threadId);
       const projection = yield* threads.getThreadRecords(threadId, ["runs"]);
-      if (projection.runs.find((run) => run.id === runId)?.status !== "preparing") return;
+      const status = projection.runs.find((run) => run.id === runId)?.status;
+      if (status === "interrupted" || status === "cancelled") return yield* Effect.interrupt;
+      if (status !== "preparing") return;
       const interruption = threads
         .streamStoredEventsFrom({ threadId, afterSequence, eventType: "run.updated" })
         .pipe(

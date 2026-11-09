@@ -223,11 +223,7 @@ const checkCopySize = Effect.fn("DirectoryCopyWorkspaces.checkSize")(function* (
         destination: NodeFS.statSync(destinationParent).dev,
       };
     },
-    catch: (cause) =>
-      fail(
-        `Could not prepare '${destinationParent}' for a workspace copy: ${cause instanceof Error ? cause.message : String(cause)}`,
-        cause,
-      ),
+    catch: (cause) => fail(`Could not prepare '${destinationParent}' for a workspace copy.`, cause),
   });
   const clone = copyOnWriteKind({
     platform,
@@ -260,11 +256,7 @@ const checkSource = Effect.fn("DirectoryCopyWorkspaces.checkSource")(function* (
   const platform = yield* HostProcess.Platform;
   const stat = yield* Effect.try({
     try: () => NodeFS.statSync(input.source, { throwIfNoEntry: false }),
-    catch: (cause) =>
-      fail(
-        `Could not read the project '${input.source}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        cause,
-      ),
+    catch: (cause) => fail(`Could not read the project '${input.source}'.`, cause),
   });
   if (!stat?.isDirectory()) {
     return yield* fail(`The project '${input.source}' is not a directory.`);

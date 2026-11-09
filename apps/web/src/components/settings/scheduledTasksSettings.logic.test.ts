@@ -156,7 +156,7 @@ it("edits a one-time task in local time without moving its instant", () => {
   const draft = taskToDraft({ ...legacyTask, schedule: { type: "once", at } });
   expect(draft.scheduleMode).toBe("once");
   expect(scheduleFromDraft(draft)).toEqual({ type: "once", at });
-  expect(scheduleFromDraft({ ...draft, onceAt: "" })).toEqual({ type: "once", at: "" });
+  expect(scheduleFromDraft({ ...draft, onceAt: "" })).toBeNull();
 });
 
 describe("webhook scheduled tasks", () => {

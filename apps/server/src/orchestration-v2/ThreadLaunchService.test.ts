@@ -131,6 +131,8 @@ interface HarnessOptions {
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly managedWorkspaces?: Partial<ManagedWorkspaces.ManagedWorkspaces["Service"]>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
+  /** Runs before the background preparation reads the run's status. */
+  readonly beforePreparationCheck?: () => Effect.Effect<void>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -230,14 +232,26 @@ function makeHarness(options: HarnessOptions = {}) {
         folderForThread: () => Effect.succeedNone,
       }),
   );
+  const beforePreparationCheck = options.beforePreparationCheck;
+  const layerLaunchThreads =
+    beforePreparationCheck === undefined
+      ? layerThreadManagement
+      : Layer.effect(
+          ThreadManagement.ThreadManagementService,
+          Effect.gen(function* () {
+            const threads = yield* ThreadManagement.ThreadManagementService;
+            return {
+              ...threads,
+              getThreadEventSequence: (threadId: ThreadId) =>
+                beforePreparationCheck().pipe(
+                  Effect.andThen(threads.getThreadEventSequence(threadId)),
+                ),
+            };
+          }),
+        ).pipe(Layer.provide(layerThreadManagement));
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(
-        layerExternalServices,
-        layerThreadManagement,
-        layerReceipts,
-        IdAllocator.layer,
-      ),
+      Layer.mergeAll(layerExternalServices, layerLaunchThreads, layerReceipts, IdAllocator.layer),
     ),
   );
   const layerProjectedProjects = Layer.mock(ProjectStore.ProjectStoreV2)({
@@ -1286,11 +1300,23 @@ it.effect.each(["fails", "is interrupted"] as const)(
     }),
 );
 
-it.effect.each(["failed", "interrupted"] as const)(
+it.effect.each(["failed", "interrupted", "interrupted before it started"] as const)(
   "holds a message queued during setup that arrives after the setup %s",
   (ending) => {
     let fetchEntered: Deferred.Deferred<void> | null = null;
+    let allowCheck: Deferred.Deferred<void> | null = null;
+    const early = ending === "interrupted before it started";
+    const status = ending === "failed" ? "failed" : "interrupted";
+    const key = ending.replaceAll(" ", "-");
     const harness = makeHarness({
+      ...(early
+        ? {
+            beforePreparationCheck: () =>
+              Deferred.succeed(fetchEntered!, undefined).pipe(
+                Effect.andThen(Deferred.await(allowCheck!)),
+              ),
+          }
+        : {}),
       fetchWorktreeBaseCommit: () =>
         ending === "interrupted"
           ? Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Effect.never))
@@ -1306,19 +1332,20 @@ it.effect.each(["failed", "interrupted"] as const)(
     });
     return Effect.gen(function* () {
       fetchEntered = yield* Deferred.make<void>();
+      allowCheck = yield* Deferred.make<void>();
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const threads = yield* ThreadManagement.ThreadManagementService;
       const preparation = yield* Deferred.make<void, string>();
       const launched = yield* launches.launch({
         ...launchInput({
-          command: `command:launch:late-queued-follow-up-${ending}`,
-          thread: `thread:launch:late-queued-follow-up-${ending}`,
+          command: `command:launch:late-queued-follow-up-${key}`,
+          thread: `thread:launch:late-queued-follow-up-${key}`,
           message: "First message",
           workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
         }),
         preparation,
       });
-      if (ending === "interrupted") {
+      if (status === "interrupted") {
         yield* Deferred.await(fetchEntered);
         yield* threads.dispatch({
           type: "run.interrupt",
@@ -1326,23 +1353,24 @@ it.effect.each(["failed", "interrupted"] as const)(
           threadId: launched.threadId,
           runId: launched.projection.runs[0]!.id,
         });
+        yield* Deferred.succeed(allowCheck, undefined);
       }
       yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
         Stream.filter(
-          (stored) => stored.event.type === "run.updated" && stored.event.payload.status === ending,
+          (stored) => stored.event.type === "run.updated" && stored.event.payload.status === status,
         ),
         Stream.runHead,
       );
       assert.include(
         yield* Deferred.await(preparation).pipe(Effect.flip),
-        ending === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
+        status === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
       );
 
       const queued = yield* threads.sendToThread({
         projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:send`),
+        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:send`),
         threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:send`),
+        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:send`),
         text: "Sent during setup",
         attachments: [],
         mode: "queue",
@@ -1359,9 +1387,9 @@ it.effect.each(["failed", "interrupted"] as const)(
       // run after it in the project checkout.
       yield* threads.sendToThread({
         projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:start`),
+        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:start`),
         threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:start`),
+        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:start`),
         text: "Sent after setup",
         attachments: [],
         mode: "auto",
@@ -1370,9 +1398,9 @@ it.effect.each(["failed", "interrupted"] as const)(
       });
       yield* threads.dispatch({
         type: "message.dispatch",
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:wake`),
+        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:wake`),
         threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:wake`),
+        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:wake`),
         text: "Background task completed.",
         attachments: [],
         dispatchMode: { type: "queue_after_active" },
@@ -1387,9 +1415,9 @@ it.effect.each(["failed", "interrupted"] as const)(
       // latest and carries no workspace preparation.
       yield* threads.sendToThread({
         projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:again`),
+        commandId: CommandId.make(`command:launch:late-queued-follow-up-${key}:again`),
         threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:again`),
+        messageId: MessageId.make(`message:launch:late-queued-follow-up-${key}:again`),
         text: "Sent after that",
         attachments: [],
         mode: "auto",
