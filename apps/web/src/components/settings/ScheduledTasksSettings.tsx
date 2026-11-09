@@ -1715,7 +1715,7 @@ function ScheduledTaskEditorForm({
                 ) : null}
               </div>
             ) : draft.scheduleMode === "once" ? (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Label htmlFor="scheduled-task-once">Run once at</Label>
                 <Input
                   type="datetime-local"

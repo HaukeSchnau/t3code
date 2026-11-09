@@ -1374,6 +1374,20 @@ it.effect.each([
       yield* Deferred.await(preparation).pipe(Effect.flip),
       status === "interrupted" ? "Worktree setup cancelled." : "Git could not reach the remote.",
     );
+    if (ending === "interrupted while launching") {
+      // A replay cannot tell whether the run stopped during setup or long after it.
+      const replayedPreparation = yield* Deferred.make<void, string>();
+      yield* launches.launch({
+        ...launchInput({
+          command: `command:launch:late-queued-follow-up-${key}`,
+          thread: threadId,
+          message: "First message",
+          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+        }),
+        preparation: replayedPreparation,
+      });
+      yield* Deferred.await(replayedPreparation);
+    }
     if (ending !== "failed" && ending !== "interrupted") {
       // The run is already terminal, so the orchestrator would reject a failure dispatch.
       const failReceipt = yield* (yield* CommandReceiptStore.CommandReceiptStoreV2).getByCommandId(

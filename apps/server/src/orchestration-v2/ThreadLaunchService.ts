@@ -1157,7 +1157,8 @@ const make = Effect.gen(function* () {
         }
 
         if (!preparationScheduled && input.preparation !== undefined) {
-          yield* runStatus === "interrupted" || runStatus === "cancelled"
+          yield* !messageWasAlreadyAccepted &&
+          (runStatus === "interrupted" || runStatus === "cancelled")
             ? Deferred.fail(input.preparation, "Worktree setup cancelled.")
             : Deferred.succeed(input.preparation, undefined);
         }
