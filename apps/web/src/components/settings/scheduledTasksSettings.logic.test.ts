@@ -17,6 +17,7 @@ import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope"
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
+  localDateTimeInputValue,
   scheduledTaskDefaultModel,
   matchesScheduledTaskScope,
   scheduleFromDraft,
@@ -149,6 +150,19 @@ describe("editing scheduled task branch settings", () => {
     expect(draft.baseRef).toBe("release");
     expect(draft.startFromOrigin).toBe(false);
   });
+});
+
+it("edits a one-time task in local time without moving its instant", () => {
+  const at = "2026-11-03T04:30:15.250Z";
+  const draft = taskToDraft({ ...legacyTask, schedule: { type: "once", at } });
+  expect(draft.scheduleMode).toBe("once");
+  expect(scheduleFromDraft(draft)).toEqual({ type: "once", at });
+  const edited = "2026-11-03T05:00:00.000Z";
+  expect(
+    scheduleFromDraft({ ...draft, onceAt: localDateTimeInputValue(new Date(edited)) }),
+  ).toEqual({ type: "once", at: edited });
+  expect(scheduleFromDraft({ ...draft, onceAt: "" })).toBeNull();
+  expect(scheduleFromDraft({ ...draft, enabled: false, onceAt: "" })).toBeNull();
 });
 
 describe("webhook scheduled tasks", () => {

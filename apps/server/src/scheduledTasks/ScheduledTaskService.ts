@@ -1,7 +1,9 @@
 import {
   CommandId,
   MessageId,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -28,6 +30,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Exit from "effect/Exit";
@@ -204,6 +207,7 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
+  readonly consecutive_failures: number;
 }
 
 interface WebhookDeliveryRow {
@@ -231,6 +235,10 @@ export class ScheduledTaskService extends Context.Service<
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
     readonly upsert: (
       input: ScheduledTaskUpsertInput,
+      options?: {
+        /** The agent thread that asked for the task; it hears about failed runs. Kept on edits. */
+        readonly creatorThreadId?: ThreadId;
+      },
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly setEnabled: (
       input: ScheduledTaskSetEnabledInput,
@@ -291,6 +299,60 @@ function nextRunAt(
   }
 }
 
+const sameWorkspaceStrategy = Schema.toEquivalence(OrchestrationV2ThreadLaunchWorkspaceStrategy);
+
+const PAST_ONE_TIME_RUN = "The one-time run is in the past. Pick a future time.";
+
+/** A one-time task with no run left pauses, so Settings shows it as done. */
+function keepsEnabled(task: Pick<ScheduledTask, "schedule">, next: string | null): boolean {
+  return task.schedule.type !== "once" || next !== null;
+}
+
+interface RecordedRun {
+  readonly title: string;
+  readonly thread_id: string | null;
+  readonly creator_thread_id: string | null;
+  readonly consecutive_failures: number;
+  readonly enabled: number;
+  readonly next_run_at: string | null;
+}
+
+const NOTICE_ERROR_LIMIT = 2_000;
+
+function scheduledRunFailureNotice(
+  task: Pick<ScheduledTask, "id" | "schedule">,
+  run: Pick<RecordedRun, "title" | "consecutive_failures" | "enabled">,
+  error: string,
+): { readonly summary: string; readonly text: string } {
+  // Resuming a past one-time run fails, so it needs a new time instead.
+  const resume =
+    run.enabled === 1
+      ? ""
+      : task.schedule.type === "once"
+        ? " and schedule {type:'once',at:<a future time>} to run it again"
+        : " and enabled=true to resume it";
+  const failures = run.consecutive_failures;
+  const pausedForFailures =
+    run.enabled === 0 && failures >= SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES;
+  const state = pausedForFailures
+    ? `It failed ${failures} times in a row, so T3 Code paused it.`
+    : run.enabled === 0
+      ? `Failed runs in a row: ${failures}. The task is paused.`
+      : `Failed runs in a row: ${failures}. T3 Code pauses it after ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES}.`;
+  const shownError =
+    error.length > NOTICE_ERROR_LIMIT ? `${error.slice(0, NOTICE_ERROR_LIMIT)}…` : error;
+  return {
+    summary: `Scheduled task "${run.title}" failed${pausedForFailures ? " and was paused" : ""}`,
+    text: [
+      `Your scheduled task "${run.title}" (${task.id}) failed:`,
+      shownError,
+      "",
+      state,
+      `Fix it with schedule_task and this scheduledTaskId, for example bindToCurrentThread=true to run it in this thread${resume}, or remove it with delete_scheduled_task.`,
+    ].join("\n"),
+  };
+}
+
 function errorMessage(error: unknown): string {
   if (Cause.isCause(error)) return Cause.pretty(error);
   if (error instanceof Error) return error.message;
@@ -342,6 +404,7 @@ const decodeRow = Effect.fnUntraced(
       lastRunStatus: row.last_run_status,
       lastRunError: row.last_run_error,
       runCount: row.run_count,
+      consecutiveFailures: row.consecutive_failures,
       ...(webhook === undefined ? {} : { webhook }),
     });
   },
@@ -418,6 +481,7 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    const runWatchScope = yield* Effect.scope;
     // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const notifyChanged = PubSub.publish(changesPubSub, undefined).pipe(Effect.asVoid);
@@ -446,7 +510,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        consecutive_failures
       FROM scheduled_tasks
       -- Not updated_at: toggles, runs and edits rewrite it, and clients render
       -- this order as-is, so rows would move under the pointer.
@@ -483,7 +548,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        consecutive_failures
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `.pipe(NodeSqliteClient.readOnly);
@@ -528,6 +594,7 @@ export const layer = Layer.effect(
     // Check existence in the write so edits cannot undo concurrent deletion.
     const saveTask = (
       task: ScheduledTask,
+      creatorThreadId: ThreadId | null,
       requireExisting: boolean,
       webhook: {
         readonly token: string | null;
@@ -558,7 +625,8 @@ export const layer = Layer.effect(
           last_run_error,
           run_count,
           webhook_token,
-          webhook_secret
+          webhook_secret,
+          creator_thread_id
         )
         SELECT
           ${task.id},
@@ -582,7 +650,8 @@ export const layer = Layer.effect(
           ${task.lastRunError},
           ${task.runCount},
           ${webhook.token},
-          ${webhook.secret}
+          ${webhook.secret},
+          ${creatorThreadId}
         WHERE ${requireExisting ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
@@ -600,6 +669,11 @@ export const layer = Layer.effect(
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           next_run_at = excluded.next_run_at,
+          -- Resuming a paused task gives it a fresh run of failures before the next auto-pause.
+          consecutive_failures = CASE
+            WHEN excluded.enabled = 1 AND scheduled_tasks.enabled = 0 THEN 0
+            ELSE scheduled_tasks.consecutive_failures
+          END,
           -- Only rotate changes a live token, so a save racing a rotation
           -- cannot bring the old URL back.
           webhook_token = CASE
@@ -654,29 +728,139 @@ export const layer = Layer.effect(
         ),
       );
 
+    // "keep" leaves the count to a launched thread's workspace preparation, which ends later.
     const markCompleted = (input: {
       readonly id: ScheduledTaskId;
       readonly completedAtIso: string;
       readonly nextRunAtIso: string | null;
+      readonly keepEnabled: boolean;
       readonly status: "succeeded" | "failed";
       readonly error: string | null;
       readonly startedAtIso: string;
-    }) =>
-      sql`
+      readonly failures: "increment" | "reset" | "keep";
+    }) => {
+      const pauses = input.failures === "increment" ? 1 : 0;
+      return sql<RecordedRun>`
         UPDATE scheduled_tasks
         SET updated_at = ${input.completedAtIso},
-            next_run_at = ${input.nextRunAtIso},
+            next_run_at = CASE
+              WHEN ${pauses} = 1 AND consecutive_failures + 1 >= ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES} THEN NULL
+              ELSE ${input.nextRunAtIso}
+            END,
+            enabled = enabled AND ${input.keepEnabled ? 1 : 0} AND NOT (
+              ${pauses} = 1 AND consecutive_failures + 1 >= ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES}
+            ),
             last_run_status = ${input.status},
             last_run_error = ${input.error},
-            run_count = run_count + 1
+            run_count = run_count + 1,
+            consecutive_failures = CASE ${input.failures}
+              WHEN 'increment' THEN consecutive_failures + 1
+              WHEN 'reset' THEN 0
+              ELSE consecutive_failures
+            END
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
           AND last_run_at = ${input.startedAtIso}
+        RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
       `.pipe(
         Effect.mapError((cause) =>
           taskError("Could not record schedule task run.", { taskId: input.id, cause }),
         ),
+        Effect.map((rows) => rows[0]),
       );
+    };
+
+    /** Settles a launched run once its thread's workspace preparation ends. */
+    const recordPreparation = Effect.fn("ScheduledTaskService.recordPreparation")(
+      function* (task: ScheduledTask, startedAtIso: string, error: string | null) {
+        const now = iso(yield* localNow);
+        // Preparation can outlast the interval, so a later run may have started meanwhile.
+        // The count follows the order preparations end in; only the latest run's own record changes.
+        const recorded =
+          error === null
+            ? yield* sql<RecordedRun>`
+                UPDATE scheduled_tasks
+                SET consecutive_failures = 0
+                WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
+                RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
+              `
+            : yield* sql<RecordedRun>`
+                UPDATE scheduled_tasks
+                SET last_run_status = CASE
+                      WHEN last_run_at = ${startedAtIso} AND last_run_status = 'succeeded' THEN 'failed'
+                      ELSE last_run_status
+                    END,
+                    last_run_error = CASE
+                      WHEN last_run_at = ${startedAtIso} AND last_run_status = 'succeeded' THEN ${error}
+                      ELSE last_run_error
+                    END,
+                    updated_at = ${now},
+                    next_run_at = CASE
+                      WHEN consecutive_failures + 1 >= ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES} THEN NULL
+                      ELSE next_run_at
+                    END,
+                    enabled = enabled AND consecutive_failures + 1 < ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES},
+                    consecutive_failures = consecutive_failures + 1
+                WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
+                RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
+              `;
+        const row = recorded[0];
+        if (row === undefined) return;
+        if (error !== null) yield* wakeCreator(task, startedAtIso, row, error);
+        yield* notifyChanged;
+      },
+      (effect, task) =>
+        effect.pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not record a scheduled run's workspace preparation", {
+              taskId: task.id,
+              cause,
+            }),
+          ),
+        ),
+    );
+
+    /** Tells the agent thread that created a task about its failed run, so it can fix the task. */
+    const wakeCreator = Effect.fn("ScheduledTaskService.wakeCreator")(
+      function* (task: ScheduledTask, startedAtIso: string, run: RecordedRun, error: string) {
+        const creator = run.creator_thread_id;
+        // A bound run's failure already shows in its thread.
+        if (creator === null || creator === run.thread_id) return;
+        const creatorThreadId = ThreadId.make(creator);
+        const shell = yield* threadManagement.getThreadShell(creatorThreadId);
+        if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
+        const notice = scheduledRunFailureNotice(task, run, error);
+        const id = `scheduled-task-failure:${task.id}:${startedAtIso}`;
+        yield* threadManagement.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(id),
+          threadId: creatorThreadId,
+          messageId: MessageId.make(id),
+          text: notice.text,
+          attachments: [],
+          notification: {
+            source: { kind: "system" },
+            outcome: "failed",
+            summary: notice.summary,
+            detail: notice.text,
+          },
+          // The orchestrator accepts notifications only as queued dispatches.
+          // This starts an idle thread and waits behind an active turn.
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      },
+      (effect, task) =>
+        effect.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not tell a scheduled task's creator about a failed run", {
+              taskId: task.id,
+              cause,
+            }),
+          ),
+        ),
+    );
 
     // A failure between markRunning and markCompleted must still write a terminal record:
     // runDueTasks skips 'running' rows forever, and the dispatch may already have gone out,
@@ -687,11 +871,13 @@ export const layer = Layer.effect(
         const reread = yield* Effect.result(findTask(task.id));
         if (Result.isSuccess(reread) && reread.success === null) return;
         const source = Result.isSuccess(reread) && reread.success !== null ? reread.success : task;
+        const next = nextRunAt(source, now);
         yield* sql`
           UPDATE scheduled_tasks
           SET last_run_status = 'failed',
               last_run_error = ${message},
-              next_run_at = ${nextRunAt(source, now)},
+              next_run_at = ${next},
+              enabled = enabled AND ${keepsEnabled(source, next) ? 1 : 0},
               updated_at = ${iso(now)},
               run_count = run_count + CASE WHEN EXISTS (
                 SELECT 1 FROM scheduled_task_webhook_pending
@@ -808,6 +994,8 @@ export const layer = Layer.effect(
         // A webhook prompt was rendered from the row when the request arrived.
         const prompt = webhook?.prompt ?? active.prompt;
 
+        const preparation =
+          active.threadId === null ? yield* Deferred.make<void, string>() : undefined;
         // Capture defects and interrupts too so dispatch failures still reach markCompleted.
         const result =
           active.threadId === null
@@ -829,6 +1017,7 @@ export const layer = Layer.effect(
                     },
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
+                    ...(preparation === undefined ? {} : { preparation }),
                   })
                   .pipe(Effect.map((launched) => launched.threadId)),
               )
@@ -859,15 +1048,18 @@ export const layer = Layer.effect(
         const threadId = runSucceeded ? result.value : null;
         const current = yield* findTask(task.id);
         const scheduleSource = current ?? task;
+        const completedNextRunAt = nextRunAt(scheduleSource, completedAt);
         const completed: ScheduledTask = {
           ...scheduleSource,
+          enabled: scheduleSource.enabled && keepsEnabled(scheduleSource, completedNextRunAt),
           updatedAt: iso(completedAt),
           lastRunAt: startedAtIso,
-          nextRunAt: nextRunAt(scheduleSource, completedAt),
+          nextRunAt: completedNextRunAt,
           lastRunStatus,
           lastRunError,
           runCount: scheduleSource.runCount + 1,
         };
+        let recorded: RecordedRun | undefined;
         if (current !== null) {
           // startedAtIso in the guard ensures this writes only to the row this
           // run marked as running — a task deleted mid-run and recreated with
@@ -876,10 +1068,18 @@ export const layer = Layer.effect(
             id: task.id,
             completedAtIso: completed.updatedAt,
             nextRunAtIso: completed.nextRunAt,
+            keepEnabled: keepsEnabled(scheduleSource, completed.nextRunAt),
             status: lastRunStatus,
             error: lastRunError,
             startedAtIso,
-          });
+            failures: !runSucceeded ? "increment" : preparation === undefined ? "reset" : "keep",
+          }).pipe(
+            Effect.tap((row) =>
+              Effect.sync(() => {
+                recorded = row;
+              }),
+            ),
+          );
           if (webhook === undefined) yield* completion;
           else
             yield* sql
@@ -903,7 +1103,28 @@ export const layer = Layer.effect(
               );
           yield* notifyChanged;
         }
-        return { task: completed, threadId };
+        if (recorded === undefined) return { task: completed, threadId };
+        if (!runSucceeded) {
+          yield* wakeCreator(task, startedAtIso, recorded, lastRunError ?? "Unknown error.");
+        } else if (preparation !== undefined) {
+          // Shutdown closes this scope before ThreadLaunchService's, so only a user's cancel records as one.
+          yield* Deferred.await(preparation).pipe(
+            Effect.matchEffect({
+              onSuccess: () => recordPreparation(task, startedAtIso, null),
+              onFailure: (error) => recordPreparation(task, startedAtIso, error),
+            }),
+            Effect.forkIn(runWatchScope),
+          );
+        }
+        return {
+          task: {
+            ...completed,
+            enabled: recorded.enabled === 1,
+            nextRunAt: recorded.next_run_at,
+            consecutiveFailures: recorded.consecutive_failures,
+          },
+          threadId,
+        };
       }).pipe(
         Effect.onError((cause) => releaseStuckRun(task, errorMessage(cause), webhook?.deliveryId)),
         Effect.ensuring(
@@ -975,11 +1196,13 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const decoded = yield* Effect.result(decodeRow(row));
             if (Result.isSuccess(decoded)) {
+              const next = nextRunAt(decoded.success, now);
               yield* sql`
                 UPDATE scheduled_tasks
                 SET last_run_status = 'failed',
                     last_run_error = 'Run was interrupted by a server restart.',
-                    next_run_at = ${nextRunAt(decoded.success, now)},
+                    next_run_at = ${next},
+                    enabled = enabled AND ${keepsEnabled(decoded.success, next) ? 1 : 0},
                     updated_at = ${iso(now)},
                     run_count = run_count + CASE WHEN EXISTS (
                       SELECT 1 FROM scheduled_task_webhook_pending
@@ -1038,7 +1261,7 @@ export const layer = Layer.effect(
 
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
-    )(function* (input) {
+    )(function* (input, options) {
       const now = yield* localNow;
       const uuid =
         input.commandId === undefined
@@ -1132,10 +1355,34 @@ export const layer = Layer.effect(
         (yield* managedFolders.isScratchProject(input.projectId))
           ? { type: "root" }
           : input.workspaceStrategy;
+      // A run launches unattended, so a workspace it could never get fails here instead of on every run.
+      const needsCopyCheck =
+        (workspaceStrategy.type === "worktree" || workspaceStrategy.type === "workspace") &&
+        (existingTask === null ||
+          existingTask.projectId !== input.projectId ||
+          !sameWorkspaceStrategy(existingTask.workspaceStrategy, workspaceStrategy));
+      if (needsCopyCheck) {
+        yield* threadLaunch
+          .checkWorkspaceCopy({ projectId: input.projectId, workspaceStrategy })
+          .pipe(
+            Effect.mapError((error) =>
+              taskError(
+                `${error.detail} Each run would need its own copy of the project. Run it in the project folder or in an existing thread instead.`,
+                { taskId: id, cause: error },
+              ),
+            ),
+          );
+      }
       const scheduleUnchanged =
         existingTask !== null &&
         existingTask.enabled === input.enabled &&
         isSameSchedule(existingTask.schedule, schedule);
+      const taskNextRunAt = scheduleUnchanged
+        ? existingTask.nextRunAt
+        : nextRunAt({ enabled: input.enabled, schedule }, now);
+      if (input.enabled && !keepsEnabled({ schedule }, taskNextRunAt)) {
+        return yield* taskError(PAST_ONE_TIME_RUN, { taskId: id });
+      }
       const task: ScheduledTask = {
         id,
         title: input.title,
@@ -1152,15 +1399,18 @@ export const layer = Layer.effect(
         creationSource: input.creationSource ?? "web",
         createdAt: existingTask?.createdAt ?? iso(now),
         updatedAt: iso(now),
-        nextRunAt: scheduleUnchanged
-          ? existingTask.nextRunAt
-          : nextRunAt({ enabled: input.enabled, schedule }, now),
+        nextRunAt: taskNextRunAt,
         lastRunAt: existingTask?.lastRunAt ?? null,
         lastRunStatus: existingTask?.lastRunStatus ?? "never",
         lastRunError: existingTask?.lastRunError ?? null,
         runCount: existingTask?.runCount ?? 0,
       };
-      yield* saveTask(task, input.requireExisting === true, webhook);
+      yield* saveTask(
+        task,
+        options?.creatorThreadId ?? null,
+        input.requireExisting === true,
+        webhook,
+      );
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
     });
@@ -1172,12 +1422,16 @@ export const layer = Layer.effect(
       if (existing.enabled === input.enabled) return { task: existing };
       const now = yield* localNow;
       const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
+      if (input.enabled && !keepsEnabled(existing, next)) {
+        return yield* taskError(PAST_ONE_TIME_RUN, { taskId: input.id });
+      }
       // RETURNING so a task deleted between the load and this UPDATE is a
       // visible not-found error, not a false success.
       const updated = yield* sql<{ task_id: string }>`
           UPDATE scheduled_tasks
           SET enabled = ${input.enabled ? 1 : 0},
               next_run_at = ${next},
+              consecutive_failures = CASE WHEN ${input.enabled ? 1 : 0} = 1 THEN 0 ELSE consecutive_failures END,
               updated_at = ${iso(now)}
           WHERE task_id = ${input.id}
           RETURNING task_id
@@ -1191,7 +1445,13 @@ export const layer = Layer.effect(
       }
       yield* notifyChanged;
       return {
-        task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
+        task: {
+          ...existing,
+          enabled: input.enabled,
+          nextRunAt: next,
+          updatedAt: iso(now),
+          ...(input.enabled ? { consecutiveFailures: 0 } : {}),
+        },
       };
     });
 

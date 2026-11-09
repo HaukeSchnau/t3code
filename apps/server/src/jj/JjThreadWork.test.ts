@@ -58,8 +58,10 @@ it.layer(TestLayer)("JjThreadWork", (it) => {
       yield* jj(lib, ["commit", "-m", "feat: lib\n\nT3-Thread: thread-x\nT3-Turn: 2\n"]);
       yield* fileSystem.writeFileString(path.join(app, "app.ts"), "app\n");
       yield* jj(app, ["commit", "-m", "feat: unrelated"]);
+      const looping = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-jj-loop-" });
+      yield* fileSystem.symlink(path.join(looping, ".jj"), path.join(looping, ".jj"));
       roots.projects = [app];
-      roots.threads = [lib];
+      roots.threads = [looping, lib];
 
       const work = yield* JjThreadWork.JjThreadWork;
       const found = yield* work.find(ThreadId.make("thread-x"));
