@@ -208,38 +208,27 @@ const copy = (command: string, args: ReadonlyArray<string>) =>
     maxOutputBytes: 256 * 1024,
   });
 
-/** Copies `source` to the new directory `destination`, which must not exist yet. */
-export const createDirectoryCopy = Effect.fn("DirectoryCopyWorkspaces.create")(function* (input: {
-  readonly source: string;
-  readonly destination: string;
-  readonly baseDir: string;
-  readonly workspacesRoot: string;
-}) {
+/** Fails when a full copy of `source` into `destinationParent` would exceed the size limit. */
+const checkCopySize = Effect.fn("DirectoryCopyWorkspaces.checkSize")(function* (
+  source: string,
+  destinationParent: string,
+) {
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
-  const source = realpathOrResolve(input.source);
-  if (!NodeFS.statSync(source, { throwIfNoEntry: false })?.isDirectory()) {
-    return yield* fail(`The project '${source}' is not a directory.`);
-  }
-  const unsafe = sensitiveSourceReason({
-    source,
-    destination: realpathForNewPath(input.destination),
-    baseDir: input.baseDir,
-    workspacesRoot: input.workspacesRoot,
-    homeDir: NodeOS.homedir(),
-    platform,
+  const devices = yield* Effect.try({
+    try: () => {
+      NodeFS.mkdirSync(destinationParent, { recursive: true });
+      return {
+        source: NodeFS.statSync(source).dev,
+        destination: NodeFS.statSync(destinationParent).dev,
+      };
+    },
+    catch: (cause) => fail(`Could not prepare '${destinationParent}' for a workspace copy.`, cause),
   });
-  if (unsafe !== null) return yield* fail(unsafe);
-  if (NodeFS.existsSync(input.destination)) {
-    return yield* fail(`The workspace '${input.destination}' already exists.`);
-  }
-
-  const destinationParent = NodePath.dirname(input.destination);
-  NodeFS.mkdirSync(destinationParent, { recursive: true });
   const clone = copyOnWriteKind({
     platform,
-    sourceDevice: NodeFS.statSync(source).dev,
-    destinationDevice: NodeFS.statSync(destinationParent).dev,
+    sourceDevice: devices.source,
+    destinationDevice: devices.destination,
     sourceFileSystem: fileSystemType(source),
     destinationFileSystem: fileSystemType(destinationParent),
   });
@@ -254,6 +243,62 @@ export const createDirectoryCopy = Effect.fn("DirectoryCopyWorkspaces.create")(f
       `The project is ${formatBytes(sourceBytes)}, more than the ${formatBytes(maxSourceBytes)} a workspace copy may use.`,
     );
   }
+  return { clone, sourceBytes, maxSourceBytes };
+});
+
+/** Fails when `source` is not a directory or must not be copied to `destination`. */
+const checkSource = Effect.fn("DirectoryCopyWorkspaces.checkSource")(function* (input: {
+  readonly source: string;
+  readonly destination: string;
+  readonly baseDir: string;
+  readonly workspacesRoot: string;
+}) {
+  const platform = yield* HostProcess.Platform;
+  const stat = yield* Effect.try({
+    try: () => NodeFS.statSync(input.source, { throwIfNoEntry: false }),
+    catch: (cause) => fail(`Could not read the project '${input.source}'.`, cause),
+  });
+  if (!stat?.isDirectory()) {
+    return yield* fail(`The project '${input.source}' is not a directory.`);
+  }
+  const unsafe = sensitiveSourceReason({
+    source: input.source,
+    destination: realpathForNewPath(input.destination),
+    baseDir: input.baseDir,
+    workspacesRoot: input.workspacesRoot,
+    homeDir: NodeOS.homedir(),
+    platform,
+  });
+  if (unsafe !== null) return yield* fail(unsafe);
+});
+
+/** Checks before launch that `source` can be copied into a new directory in `destinationParent`. */
+export const checkDirectoryCopy = Effect.fn("DirectoryCopyWorkspaces.check")(function* (input: {
+  readonly source: string;
+  readonly destinationParent: string;
+  readonly baseDir: string;
+  readonly workspacesRoot: string;
+}) {
+  const source = realpathOrResolve(input.source);
+  yield* checkSource({ ...input, source, destination: input.destinationParent });
+  yield* checkCopySize(source, input.destinationParent);
+});
+
+/** Copies `source` to the new directory `destination`, which must not exist yet. */
+export const createDirectoryCopy = Effect.fn("DirectoryCopyWorkspaces.create")(function* (input: {
+  readonly source: string;
+  readonly destination: string;
+  readonly baseDir: string;
+  readonly workspacesRoot: string;
+}) {
+  const source = realpathOrResolve(input.source);
+  yield* checkSource({ ...input, source });
+  if (NodeFS.existsSync(input.destination)) {
+    return yield* fail(`The workspace '${input.destination}' already exists.`);
+  }
+
+  const destinationParent = NodePath.dirname(input.destination);
+  const { clone, sourceBytes, maxSourceBytes } = yield* checkCopySize(source, destinationParent);
   const available = availableBytes(destinationParent);
   const required =
     clone === null

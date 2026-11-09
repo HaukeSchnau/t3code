@@ -23,6 +23,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -44,6 +45,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
+import type { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -105,11 +107,16 @@ export interface ThreadLaunchInput {
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
+  /**
+   * Completed when the launch's background workspace preparation ends: fails with its error or
+   * its cancellation, and succeeds at once when nothing is left to prepare.
+   */
+  readonly preparation?: Deferred.Deferred<void, string>;
 }
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "title" | "workspaceStrategy" | "initialMessage"
+  "commandId" | "projectId" | "title" | "workspaceStrategy" | "initialMessage" | "preparation"
 > & {
   readonly reusedWorktree?: { readonly baseRef: string };
 };
@@ -180,6 +187,10 @@ export class ThreadLaunchService extends Context.Service<
     readonly checkWorktreeBase: (
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
     ) => Effect.Effect<void, ThreadLaunchBaseRefError>;
+    /** Check before a scheduled launch that a directory project can be copied; nobody watches that launch. */
+    readonly checkWorkspaceCopy: (
+      input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
+    ) => Effect.Effect<void, ManagedWorkspaceError>;
     readonly retryPreparation: (
       input: ThreadLaunchPreparationInput,
     ) => Effect.Effect<
@@ -291,6 +302,20 @@ const make = Effect.gen(function* () {
         workspaceRoot: unresolved.workspaceRoot,
         baseRef,
       });
+  });
+
+  const checkWorkspaceCopy: ThreadLaunchService["Service"]["checkWorkspaceCopy"] = Effect.fn(
+    "ThreadLaunchService.checkWorkspaceCopy",
+  )(function* (input) {
+    if (yield* managedFolders.isScratchProject(input.projectId)) return;
+    const project = Option.getOrUndefined(
+      yield* projects.getById(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+    );
+    if (project === undefined) return;
+    yield* managedWorkspaces.checkCopy({
+      projectRoot: project.workspaceRoot,
+      strategy: input.workspaceStrategy,
+    });
   });
 
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
@@ -840,7 +865,15 @@ const make = Effect.gen(function* () {
       }
       const afterSequence = yield* threads.getThreadEventSequence(threadId);
       const projection = yield* threads.getThreadRecords(threadId, ["runs"]);
-      if (projection.runs.find((run) => run.id === runId)?.status !== "preparing") return;
+      const status = projection.runs.find((run) => run.id === runId)?.status;
+      if (status === "interrupted" || status === "cancelled") {
+        // The run is terminal, so skip prepared-run.fail; the Deferred keeps this first result.
+        if (input.preparation !== undefined) {
+          yield* Deferred.fail(input.preparation, "Worktree setup cancelled.");
+        }
+        return;
+      }
+      if (status !== "preparing") return;
       const interruption = threads
         .streamStoredEventsFrom({ threadId, afterSequence, eventType: "run.updated" })
         .pipe(
@@ -864,6 +897,18 @@ const make = Effect.gen(function* () {
           runId,
           Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
         ),
+      ),
+      Effect.onExit((exit) =>
+        input.preparation === undefined
+          ? Effect.void
+          : Exit.isSuccess(exit)
+            ? Deferred.succeed(input.preparation, undefined)
+            : Deferred.fail(
+                input.preparation,
+                Cause.hasInterruptsOnly(exit.cause)
+                  ? "Worktree setup cancelled."
+                  : failureDetail(Cause.squash(exit.cause)),
+              ),
       ),
       Effect.ignoreCause,
       Effect.ensuring(releasePreparation(input.commandId)),
@@ -1068,9 +1113,8 @@ const make = Effect.gen(function* () {
         const projection = yield* threads
           .getThreadProjection(threadId)
           .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
-        const runIsPreparing =
-          runId !== null &&
-          projection.runs.some((run) => run.id === runId && run.status === "preparing");
+        let runStatus = projection.runs.find((run) => run.id === runId)?.status;
+        const runIsPreparing = runId !== null && runStatus === "preparing";
         const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
         const boundWorktreePath = projection.thread.worktreePath;
         const preparationStrategy: ThreadLaunchWorkspaceStrategy =
@@ -1083,6 +1127,7 @@ const make = Effect.gen(function* () {
                 branch: workspaceStrategy.branch,
               }
             : workspaceStrategy;
+        let preparationScheduled = false;
         if (shouldSchedule) {
           const ownsPreparation = yield* reservePreparation(input.commandId);
           if (ownsPreparation) {
@@ -1091,12 +1136,14 @@ const make = Effect.gen(function* () {
                 runId === null
                   ? true
                   : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
-                      Effect.map((current) =>
-                        current.runs.some((run) => run.id === runId && run.status === "preparing"),
-                      ),
+                      Effect.map((current) => {
+                        runStatus = current.runs.find((run) => run.id === runId)?.status;
+                        return runStatus === "preparing";
+                      }),
                       Effect.mapError(mapError(input, "update-thread", threadId)),
                     );
               if (preparationStillRequired) {
+                preparationScheduled = true;
                 yield* schedulePreparation(
                   { ...input, workspaceStrategy: preparationStrategy },
                   threadId,
@@ -1109,6 +1156,12 @@ const make = Effect.gen(function* () {
           }
         }
 
+        if (!preparationScheduled && input.preparation !== undefined) {
+          yield* !messageWasAlreadyAccepted &&
+          (runStatus === "interrupted" || runStatus === "cancelled")
+            ? Deferred.fail(input.preparation, "Worktree setup cancelled.")
+            : Deferred.succeed(input.preparation, undefined);
+        }
         return {
           threadId,
           projection,
@@ -1196,7 +1249,13 @@ const make = Effect.gen(function* () {
     );
   };
 
-  return ThreadLaunchService.of({ launch, checkWorktreeBase, retryPreparation, prepareRun });
+  return ThreadLaunchService.of({
+    launch,
+    checkWorktreeBase,
+    checkWorkspaceCopy,
+    retryPreparation,
+    prepareRun,
+  });
 });
 
 export const layer = Layer.effect(ThreadLaunchService, make);

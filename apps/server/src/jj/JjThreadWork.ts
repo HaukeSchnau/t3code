@@ -50,7 +50,17 @@ const make = Effect.gen(function* () {
     );
     const byRepository = new Map<string, string>();
     for (const candidate of new Set([...projectRoots, ...threadRoots])) {
-      const marker = findRepositoryMarker(candidate);
+      const marker = yield* Effect.try({
+        try: () => findRepositoryMarker(candidate),
+        catch: (error) => (error as NodeJS.ErrnoException).code ?? "unknown",
+      }).pipe(
+        Effect.catch((code) =>
+          Effect.logWarning("Skipping a directory whose repository probe failed", {
+            candidate,
+            code,
+          }).pipe(Effect.as(null)),
+        ),
+      );
       if (marker?.kind !== "jj") continue;
       const repository = yield* jj
         .repositoryDirectory(marker.root)

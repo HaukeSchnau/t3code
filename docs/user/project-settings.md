@@ -66,12 +66,17 @@ Open **Settings → Scheduled tasks** to create recurring tasks or manage existi
 ones across your connected environments. Use the settings filter to narrow the
 list by environment or project. Each task runs on the environment you choose,
 using its project, model, and workspace settings. Fixed-time schedules use that
-environment's time zone, which may differ from your phone's.
+environment's time zone, which may differ from your phone's. Choose **Once** for a
+single run at a date and time; the task pauses after it runs.
 
 Deleting a thread also deletes tasks that post into that thread. Tasks that start
 a new thread on each run survive deletion of their previous threads.
 
 You can edit, pause, resume, run immediately, or delete a task from the list.
+A run fails when its thread cannot start or cannot set up its workspace. After three
+failed runs in a row the task pauses itself and keeps the last error in the list.
+Resume it once you have fixed the cause. If an agent created the task, that agent's
+thread hears about each failed run so it can fix the task itself.
 Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.

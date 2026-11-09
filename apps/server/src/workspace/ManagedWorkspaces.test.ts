@@ -202,6 +202,22 @@ describe("ManagedWorkspaces", () => {
           NodePath.join(test.baseDir, "workspaces", NodePath.basename(test.baseDir)),
         ),
       );
+
+      // A scheduled task saves only when its runs could get a workspace.
+      const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
+      const strategy = { type: "worktree", baseRef: "main" } as const;
+      const locked = tempDir("t3-dir-locked-");
+      NodeFS.chmodSync(locked, 0o000);
+      yield* Effect.gen(function* () {
+        for (const projectRoot of [
+          test.baseDir,
+          NodePath.join(project, "missing"),
+          NodePath.join(locked, "notes"),
+        ]) {
+          const unusable = yield* Effect.flip(workspaces.checkCopy({ projectRoot, strategy }));
+          assert.equal(unusable._tag, "ManagedWorkspaceError");
+        }
+      }).pipe(Effect.ensuring(Effect.sync(() => NodeFS.chmodSync(locked, 0o700))));
     }).pipe(Effect.provide(test.layer));
   });
 
@@ -216,8 +232,14 @@ describe("ManagedWorkspaces", () => {
         sourceFileSystem: Number(NodeFS.statfsSync(project).type) >>> 0,
         destinationFileSystem: Number(NodeFS.statfsSync(test.baseDir).type) >>> 0,
       });
+      const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
+      const check = (strategy: Parameters<typeof workspaces.checkCopy>[0]["strategy"]) =>
+        Effect.exit(workspaces.checkCopy({ projectRoot: project, strategy }));
+      const expected = clone === null ? "Failure" : "Success";
+      assert.equal((yield* check({ type: "worktree", baseRef: "main" }))._tag, expected);
+      assert.equal((yield* check({ type: "root" }))._tag, "Success");
       const result = yield* Effect.exit(create(project, "thread:copy-limit"));
-      assert.equal(result._tag, clone === null ? "Failure" : "Success");
+      assert.equal(result._tag, expected);
     }).pipe(Effect.provide(test.layer));
   });
 
