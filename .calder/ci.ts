@@ -500,6 +500,22 @@ const appleInstall = Setup.make("apple-install", {
 });
 
 /**
+ * Development clients for main's native fingerprint, built into m1's own client cache so
+ * `vp run mobile:install` there installs in seconds. Fork hosts can't write upstream's shared cache.
+ */
+const nativeClients = Task.make("native-clients", {
+  platform: "aarch64-darwin",
+  setup: appleInstall,
+  inputs: Files.union(
+    Files.glob("apps/mobile/**", "!apps/mobile/src/**"),
+    Files.imports(["scripts/mobile-native-client.ts", "apps/mobile/app.config.ts"]),
+  ),
+  run: sh(
+    "node scripts/mobile-native-client.ts ensure ios --prepare && node scripts/mobile-native-client.ts ensure android --prepare --abi arm64-v8a",
+  ),
+}).pipe(Step.timeout("60 minutes"));
+
+/**
  * The desktop and iOS apps ship from every deployed commit. Packaging, signing and TestFlight run on
  * the Apple builder (m1) in Hauke's GUI session, where Xcode and the signing keychain work; the
  * update feed lives on srv-2. A desktop or mobile failure never holds up the deploy.
@@ -540,7 +556,7 @@ const apps = (promote: Step.Any) => {
     secrets: { APP_STORE_CONNECT_API_KEY_PATH: Secret.file("app-store-connect") },
     run: cmd`node scripts/mobile-testflight.ts --updates-url ${updatesUrl} --runtime-version-file ${mobileUpdate.outputs.runtime}`,
   }).pipe(Step.timeout("120 minutes"));
-  return [desktopPublish, testflight];
+  return [desktopPublish, testflight, nativeClients];
 };
 
 export default Project.standard({
