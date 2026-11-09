@@ -455,7 +455,8 @@ export class DeviceHostUnavailableError extends Schema.TaggedError<DeviceHostUna
     /** The host's name in Settings, which the message shows instead of its id. */
     hostLabel: Schema.optional(Schema.String),
     reason: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
+    // Nested causes can carry command output such as a wake command's stderr; `reason` is the client text.
+    cause: Schema.optional(Schema.Defect({ excludeCause: true })),
   },
 ) {
   override get message(): string {
