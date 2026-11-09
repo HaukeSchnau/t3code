@@ -3,6 +3,7 @@
 import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
+import { iosBundleIdentifierBase } from "../../scripts/lib/mobile-app-ids.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 type AppVariant = "development" | "preview" | "production";
@@ -487,8 +488,7 @@ const config: ExpoConfig = {
 export default config;
 
 function resolveIosBundleIdentifier(defaultBundleIdentifier: string, appVariant: AppVariant) {
-  const baseBundleIdentifier =
-    repoEnv.T3CODE_IOS_BUNDLE_IDENTIFIER_BASE?.trim() || "dev.schnau.t3code";
+  const baseBundleIdentifier = iosBundleIdentifierBase(repoEnv);
 
   if (!baseBundleIdentifier) {
     return defaultBundleIdentifier;
