@@ -750,7 +750,7 @@ function TaskForm({
       );
       return;
     }
-    if (schedule !== null && isPastOneTimeRun(schedule)) {
+    if (draft.enabled && schedule !== null && isPastOneTimeRun(schedule)) {
       Dialog.alert("Pick a future time", "A one-time task needs a date and time ahead of now.");
       return;
     }

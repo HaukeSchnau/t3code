@@ -273,7 +273,7 @@ it.effect("refuses to save a task whose runs could not get their own workspace",
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-type LaunchOutcome = "setup-fails" | "setup-succeeds" | "launch-fails";
+type LaunchOutcome = "setup-fails" | "setup-succeeds" | "setup-pending" | "launch-fails";
 type ThreadShell = Effect.Success<
   ReturnType<ThreadManagementService.ThreadManagementService["Service"]["getThreadShell"]>
 >;
@@ -282,6 +282,7 @@ const failureTrackingLayer = (input: {
   readonly outcome: Ref.Ref<LaunchOutcome>;
   readonly notices: Queue.Queue<OrchestrationV2ServerCommand>;
   readonly deletedThreads?: ReadonlyArray<string>;
+  readonly pendingPreparations?: Queue.Queue<Deferred.Deferred<void, string>>;
 }) =>
   ScheduledTaskService.layer.pipe(
     Layer.provide(
@@ -293,7 +294,11 @@ const failureTrackingLayer = (input: {
             Effect.gen(function* () {
               const outcome = yield* Ref.get(input.outcome);
               if (outcome === "launch-fails") return yield* Effect.die("project is gone");
-              if (launch.preparation !== undefined) {
+              if (outcome === "setup-pending" && input.pendingPreparations !== undefined) {
+                if (launch.preparation !== undefined) {
+                  yield* Queue.offer(input.pendingPreparations, launch.preparation);
+                }
+              } else if (launch.preparation !== undefined) {
                 yield* outcome === "setup-fails"
                   ? Deferred.fail(launch.preparation, "Workspace preparation failed: disk full")
                   : Deferred.succeed(launch.preparation, undefined);
@@ -327,6 +332,23 @@ const failureTrackingLayer = (input: {
     ),
   );
 
+const settledTask = (
+  service: ScheduledTaskService.ScheduledTaskService["Service"],
+  expected: Partial<ScheduledTask>,
+) =>
+  service.subscribeList().pipe(
+    Stream.map((list) => list.tasks[0]),
+    Stream.filter(
+      (current) =>
+        current !== undefined &&
+        Object.entries(expected).every(
+          ([key, value]) => current[key as keyof ScheduledTask] === value,
+        ),
+    ),
+    Stream.runHead,
+    Effect.map(Option.getOrThrow),
+  );
+
 const failingTaskInput = (threadId: string | null) =>
   decodeUpsertInput({
     title: "Forwarder check",
@@ -351,19 +373,7 @@ it.effect("counts runs whose workspace preparation fails and pauses the task aft
         creatorThreadId: ThreadId.make("thread-creator"),
       });
       // A run counts as launched first; its preparation settles the record afterwards.
-      const settled = (expected: Partial<ScheduledTask>) =>
-        service.subscribeList().pipe(
-          Stream.map((list) => list.tasks[0]),
-          Stream.filter(
-            (current) =>
-              current !== undefined &&
-              Object.entries(expected).every(
-                ([key, value]) => current[key as keyof ScheduledTask] === value,
-              ),
-          ),
-          Stream.runHead,
-          Effect.map(Option.getOrThrow),
-        );
+      const settled = (expected: Partial<ScheduledTask>) => settledTask(service, expected);
       const runAndSettle = (expected: Partial<ScheduledTask>) =>
         Effect.gen(function* () {
           yield* TestClock.adjust("1 minute");
@@ -405,6 +415,39 @@ it.effect("counts runs whose workspace preparation fails and pauses the task aft
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
+it.effect("counts a failed preparation that ends after the next run started", () =>
+  Effect.gen(function* () {
+    const outcome = yield* Ref.make<LaunchOutcome>("setup-pending");
+    const notices = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+    const pendingPreparations = yield* Queue.unbounded<Deferred.Deferred<void, string>>();
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert(yield* failingTaskInput(null), {
+        creatorThreadId: ThreadId.make("thread-creator"),
+      });
+      const settled = (expected: Partial<ScheduledTask>) => settledTask(service, expected);
+      const launchRun = Effect.gen(function* () {
+        yield* TestClock.adjust("1 minute");
+        yield* service.runNow({ id: task.id });
+        return yield* Queue.take(pendingPreparations);
+      });
+      const first = yield* launchRun;
+      const second = yield* launchRun;
+
+      yield* Deferred.fail(first, "Workspace preparation failed: disk full");
+      // The second run's record stays as it is, but the first run's failure counts.
+      yield* settled({ lastRunStatus: "succeeded", consecutiveFailures: 1 });
+      const notice = yield* Queue.take(notices);
+      assert(notice.type === "message.dispatch");
+      expect(notice.text).toContain("Failed runs in a row: 1.");
+
+      yield* Deferred.fail(second, "Workspace preparation failed: disk full");
+      yield* settled({ lastRunStatus: "failed", consecutiveFailures: 2 });
+      yield* Queue.take(notices);
+    }).pipe(Effect.provide(failureTrackingLayer({ outcome, notices, pendingPreparations })));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
 it.effect("tells only a live creator thread that is not the bound thread about failed runs", () =>
   Effect.gen(function* () {
     const outcome = yield* Ref.make<LaunchOutcome>("launch-fails");
@@ -442,6 +485,22 @@ it.effect("tells only a live creator thread that is not the bound thread about f
       assert(notice.type === "message.dispatch");
       expect(notice.text).toContain('"bound elsewhere"');
       expect(yield* Queue.size(notices)).toBe(0);
+
+      const { task: oneTime } = yield* service.upsert(
+        {
+          ...(yield* failingTaskInput(null)),
+          title: "one-time",
+          schedule: { type: "once", at: "1970-01-01T00:01:00Z" },
+        },
+        { creatorThreadId: ThreadId.make("thread-creator") },
+      );
+      yield* TestClock.adjust("2 minutes");
+      yield* service.runNow({ id: oneTime.id });
+      const oneTimeNotice = yield* Queue.take(notices);
+      assert(oneTimeNotice.type === "message.dispatch");
+      // Resuming would fail because the time has passed.
+      expect(oneTimeNotice.text).toContain("schedule {type:'once',at:<a future time>}");
+      expect(oneTimeNotice.text).not.toContain("enabled=true");
     }).pipe(
       Effect.provide(
         failureTrackingLayer({ outcome, notices, deletedThreads: ["thread-deleted"] }),

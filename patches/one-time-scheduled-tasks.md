@@ -17,14 +17,16 @@ tells the agent thread that created a task when its runs fail.
   on, fails when `at` is in the past. Web and mobile Settings offer a "Once" schedule. Mobile uses
   separate date and time pickers because Android's picker has no combined mode.
 - Saving a task whose runs launch into a `worktree` or `workspace` fails when the project is a
-  plain directory too big to copy. The MCP `schedule_task` tool hard-codes `worktree` for tasks not
+  plain directory that is missing, too big to copy, or one a workspace may not copy, such as the
+  home directory. The MCP `schedule_task` tool hard-codes `worktree` for tasks not
   bound to a thread, so the error tells the caller to run the task in the project folder or an
   existing thread. The check runs only when the task is new or its project or workspace strategy
   changed, because `du` over a large project is slow.
 - A run that launches a new thread is recorded as succeeded at launch, because due tasks run one
   at a time and preparation can take minutes. `ThreadLaunchInput.preparation` is a `Deferred` that
   `ThreadLaunchService` completes when the background preparation ends. The scheduler watches it in
-  its own scope and rewrites that run's record to failed with the preparation error. Preparation
+  its own scope. A failed preparation always counts toward the failure count, even when a later
+  run has started since; it rewrites the run's record to failed only while that run is the latest. Preparation
   that resumes after a server restart has no `Deferred`, so its outcome is not recorded.
 - `scheduled_tasks.consecutive_failures` (fork migration 99) counts failed runs. A launch or send
   failure, or a failed preparation, adds one; a bound run's send or a launched run's finished

@@ -1229,7 +1229,7 @@ function ScheduledTaskEditorForm({
       reportFailure("Signing secret is required", "Enter the signature header and secret.");
       return;
     }
-    if (schedule.type === "once" && !(Date.parse(schedule.at) > Date.now())) {
+    if (draft.enabled && schedule.type === "once" && !(Date.parse(schedule.at) > Date.now())) {
       reportFailure("Pick a future time", "A one-time task needs a date and time ahead of now.");
       return;
     }

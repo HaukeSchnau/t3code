@@ -312,6 +312,8 @@ const make = Effect.gen(function* () {
     yield* checkDirectoryCopy({
       source: projectRoot,
       destinationParent: workspaceParent(projectRoot),
+      baseDir: config.baseDir,
+      workspacesRoot,
     });
   }, Effect.provide(context));
 

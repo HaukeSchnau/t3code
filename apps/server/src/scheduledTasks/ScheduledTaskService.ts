@@ -320,10 +320,17 @@ interface RecordedRun {
 const NOTICE_ERROR_LIMIT = 2_000;
 
 function scheduledRunFailureNotice(
-  taskId: ScheduledTaskId,
+  task: Pick<ScheduledTask, "id" | "schedule">,
   run: Pick<RecordedRun, "title" | "consecutive_failures" | "enabled">,
   error: string,
 ): { readonly summary: string; readonly text: string } {
+  // Resuming a past one-time run fails, so it needs a new time instead.
+  const resume =
+    run.enabled === 1
+      ? ""
+      : task.schedule.type === "once"
+        ? " and schedule {type:'once',at:<a future time>} to run it again"
+        : " and enabled=true to resume it";
   const failures = run.consecutive_failures;
   const pausedForFailures =
     run.enabled === 0 && failures >= SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES;
@@ -337,11 +344,11 @@ function scheduledRunFailureNotice(
   return {
     summary: `Scheduled task "${run.title}" failed${pausedForFailures ? " and was paused" : ""}`,
     text: [
-      `Your scheduled task "${run.title}" (${taskId}) failed:`,
+      `Your scheduled task "${run.title}" (${task.id}) failed:`,
       shownError,
       "",
       state,
-      `Fix it with schedule_task and this scheduledTaskId, for example bindToCurrentThread=true to run it in this thread${run.enabled === 0 ? " and enabled=true to resume it" : ""}, or remove it with delete_scheduled_task.`,
+      `Fix it with schedule_task and this scheduledTaskId, for example bindToCurrentThread=true to run it in this thread${resume}, or remove it with delete_scheduled_task.`,
     ].join("\n"),
   };
 }
@@ -765,22 +772,29 @@ export const layer = Layer.effect(
 
     /** Settles a launched run once its thread's workspace preparation ends. */
     const recordPreparation = Effect.fn("ScheduledTaskService.recordPreparation")(
-      function* (taskId: ScheduledTaskId, startedAtIso: string, error: string | null) {
+      function* (task: ScheduledTask, startedAtIso: string, error: string | null) {
         const now = iso(yield* localNow);
-        // The run already counted as launched; only its own record may change.
+        // Preparation can outlast the interval, so a later run may have started meanwhile.
+        // A failure always counts; only the latest run's own record changes.
         const recorded =
           error === null
             ? yield* sql<RecordedRun>`
                 UPDATE scheduled_tasks
                 SET consecutive_failures = 0
-                WHERE task_id = ${taskId} AND last_run_at = ${startedAtIso}
+                WHERE task_id = ${task.id} AND last_run_at = ${startedAtIso}
                   AND last_run_status = 'succeeded'
                 RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
               `
             : yield* sql<RecordedRun>`
                 UPDATE scheduled_tasks
-                SET last_run_status = 'failed',
-                    last_run_error = ${error},
+                SET last_run_status = CASE
+                      WHEN last_run_at = ${startedAtIso} AND last_run_status = 'succeeded' THEN 'failed'
+                      ELSE last_run_status
+                    END,
+                    last_run_error = CASE
+                      WHEN last_run_at = ${startedAtIso} AND last_run_status = 'succeeded' THEN ${error}
+                      ELSE last_run_error
+                    END,
                     updated_at = ${now},
                     next_run_at = CASE
                       WHEN consecutive_failures + 1 >= ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES} THEN NULL
@@ -788,20 +802,19 @@ export const layer = Layer.effect(
                     END,
                     enabled = enabled AND consecutive_failures + 1 < ${SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES},
                     consecutive_failures = consecutive_failures + 1
-                WHERE task_id = ${taskId} AND last_run_at = ${startedAtIso}
-                  AND last_run_status = 'succeeded'
+                WHERE task_id = ${task.id}
                 RETURNING title, thread_id, creator_thread_id, consecutive_failures, enabled, next_run_at
               `;
         const row = recorded[0];
         if (row === undefined) return;
-        if (error !== null) yield* wakeCreator(taskId, startedAtIso, row, error);
+        if (error !== null) yield* wakeCreator(task, startedAtIso, row, error);
         yield* notifyChanged;
       },
-      (effect, taskId) =>
+      (effect, task) =>
         effect.pipe(
           Effect.catch((cause) =>
             Effect.logWarning("Could not record a scheduled run's workspace preparation", {
-              taskId,
+              taskId: task.id,
               cause,
             }),
           ),
@@ -810,15 +823,15 @@ export const layer = Layer.effect(
 
     /** Tells the agent thread that created a task about its failed run, so it can fix the task. */
     const wakeCreator = Effect.fn("ScheduledTaskService.wakeCreator")(
-      function* (taskId: ScheduledTaskId, startedAtIso: string, run: RecordedRun, error: string) {
+      function* (task: ScheduledTask, startedAtIso: string, run: RecordedRun, error: string) {
         const creator = run.creator_thread_id;
         // A bound run's failure already shows in its thread.
         if (creator === null || creator === run.thread_id) return;
         const creatorThreadId = ThreadId.make(creator);
         const shell = yield* threadManagement.getThreadShell(creatorThreadId);
         if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
-        const notice = scheduledRunFailureNotice(taskId, run, error);
-        const id = `scheduled-task-failure:${taskId}:${startedAtIso}`;
+        const notice = scheduledRunFailureNotice(task, run, error);
+        const id = `scheduled-task-failure:${task.id}:${startedAtIso}`;
         yield* threadManagement.dispatch({
           type: "message.dispatch",
           commandId: CommandId.make(id),
@@ -839,11 +852,11 @@ export const layer = Layer.effect(
           creationSource: "server",
         });
       },
-      (effect, taskId) =>
+      (effect, task) =>
         effect.pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Could not tell a scheduled task's creator about a failed run", {
-              taskId,
+              taskId: task.id,
               cause,
             }),
           ),
@@ -1093,12 +1106,12 @@ export const layer = Layer.effect(
         }
         if (recorded === undefined) return { task: completed, threadId };
         if (!runSucceeded) {
-          yield* wakeCreator(task.id, startedAtIso, recorded, lastRunError ?? "Unknown error.");
+          yield* wakeCreator(task, startedAtIso, recorded, lastRunError ?? "Unknown error.");
         } else if (preparation !== undefined) {
           yield* Deferred.await(preparation).pipe(
             Effect.matchEffect({
-              onSuccess: () => recordPreparation(task.id, startedAtIso, null),
-              onFailure: (error) => recordPreparation(task.id, startedAtIso, error),
+              onSuccess: () => recordPreparation(task, startedAtIso, null),
+              onFailure: (error) => recordPreparation(task, startedAtIso, error),
             }),
             Effect.forkIn(runWatchScope),
           );
