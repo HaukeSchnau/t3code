@@ -84,15 +84,29 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
   ),
 );
 
-/** A hub with one Claude account whose quota reads answer with `statuses` in turn. */
-function hubLayer(statuses: Array<{ status: number; retryAfter?: string }>) {
+/**
+ * A hub with one Claude account whose quota reads answer with `statuses` in turn. Tests change
+ * `authFile` to stand for the hub rewriting the account's auth file.
+ */
+function hubLayer(
+  statuses: Array<{ status: number; retryAfter?: string }>,
+  authFile: { modtime?: string } = {},
+) {
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
       if (request.url.endsWith("/auth-files")) {
         return HttpClientResponse.fromWeb(
           request,
           Response.json({
-            files: [{ id: "work.json", auth_index: "w", provider: "claude", email: "w@x.test" }],
+            files: [
+              {
+                id: "work.json",
+                auth_index: "w",
+                provider: "claude",
+                email: "w@x.test",
+                ...authFile,
+              },
+            ],
           }),
         );
       }
@@ -172,4 +186,36 @@ it.effect("reuses a hub read from the last 30 seconds", () => {
     yield* sources.refresh;
     expect(statuses).toEqual([]);
   }).pipe(Effect.provide(hubLayer(statuses)));
+});
+
+it.effect("stops reading a rejected account until the hub rewrites its auth file", () => {
+  const statuses = [{ status: 200 }, { status: 401 }, { status: 200 }];
+  const authFile = { modtime: "2026-11-08T17:46:20Z" };
+  return Effect.gen(function* () {
+    const sources = yield* UsageLimitSources.UsageLimitSources;
+    yield* firstSnapshot;
+
+    yield* TestClock.adjust("31 seconds");
+    yield* sources.refresh;
+    const rejected = (yield* sources.current)[0]?.accounts[0];
+    expect(rejected?.signInRequired).toBe(true);
+    // A login that cannot sign in has no usable quota, so the last reading is dropped.
+    expect(rejected?.usageLimits.windows).toEqual([]);
+
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      yield* TestClock.adjust("2 minutes");
+      yield* sources.refresh;
+    }
+    expect(statuses).toHaveLength(1);
+    expect((yield* sources.current)[0]?.accounts[0]?.signInRequired).toBe(true);
+
+    // A new login rewrites the auth file.
+    authFile.modtime = "2026-11-09T13:48:48Z";
+    yield* TestClock.adjust("2 minutes");
+    yield* sources.refresh;
+    expect(statuses).toEqual([]);
+    const restored = (yield* sources.current)[0]?.accounts[0];
+    expect(restored?.signInRequired).toBe(undefined);
+    expect(restored?.usageLimits.windows).toHaveLength(1);
+  }).pipe(Effect.provide(hubLayer(statuses, authFile)));
 });

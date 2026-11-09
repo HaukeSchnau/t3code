@@ -323,8 +323,10 @@ export function collectLimitNotices(
         const wait = throttledFor(account.usageLimits, now);
         return wait === null ? [] : [wait];
       });
+      const signedOut = source.accounts.filter((account) => account.signInRequired).length;
       const unread = source.accounts.filter(
         (account) =>
+          !account.signInRequired &&
           account.usageLimits.unavailable?.reason === "probeFailed" &&
           throttledFor(account.usageLimits, now) === null,
       ).length;
@@ -334,6 +336,11 @@ export function collectLimitNotices(
       } else if (source.accounts.length === 0) {
         notices.push(`${subject}: No accounts reported.`);
       } else {
+        if (signedOut > 0) {
+          notices.push(
+            `${subject}: ${signedOut} ${signedOut === 1 ? "account needs" : "accounts need"} a new sign-in on the hub.`,
+          );
+        }
         if (unread > 0) {
           notices.push(
             `${subject}: Could not read ${unread} ${unread === 1 ? "account" : "accounts"}.`,
