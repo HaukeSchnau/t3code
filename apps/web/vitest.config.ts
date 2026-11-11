@@ -88,7 +88,11 @@ const browserTestProject = {
       provider: playwright(
         chromiumExecutablePath === undefined
           ? {}
-          : { launchOptions: { executablePath: chromiumExecutablePath } },
+          : {
+              launchOptions: { executablePath: chromiumExecutablePath },
+              // The headless shell follows the host's locale; tests expect English number formats.
+              contextOptions: { locale: "en-US" },
+            },
       ),
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,

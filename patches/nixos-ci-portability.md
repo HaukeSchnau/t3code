@@ -12,6 +12,8 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   web browser tests, because the browsers Playwright downloads do not run on NixOS. It is the same browser
   upstream tests with; full Chromium differs, for example in `:hover` over an iframe. Keep that input's
   `playwright-driver` version equal to the workspace's `playwright`.
+  `apps/web/vitest.config.ts` pins that browser's locale to `en-US`, because the headless shell follows the
+  host's German `LANGUAGE`, and tests match English number formats.
 - `apps/desktop/src/wsl/DesktopWslEnvironment.test.ts`: the busy-runtime holder renames a shell instead of
   `cat`. A multi-call coreutils picks its program from argv[0].
 - `packages/provider-acp/src/server/clientTerminals.test.ts`: the Devin shell test passes PATH in the session
