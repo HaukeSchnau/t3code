@@ -69,7 +69,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
           {
             encoding: "utf8",
             env: {
-              PATH: `${bin}:/usr/bin:/bin`,
+              // NixOS has no coreutils in /usr/bin or /bin.
+              PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ""}`,
               CALLS: calls,
               TARGET_PID: String(target.pid),
             },

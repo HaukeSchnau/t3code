@@ -36,6 +36,8 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 - `scripts/install.test.ts`: the `install.sh t3 command` case runs the installer with a folder of links to
   the host's programs instead of `/usr/bin:/bin`, leaving out any `t3`, since srv hosts have T3 Code on
   PATH. Its no-SHELL run sets SHELL empty, because bash as `/bin/sh` fills in an unset SHELL.
+- `apps/server/src/cloud/serviceProtection.test.ts`: the privileged script runs with the test's own PATH
+  after `/usr/bin:/bin`, which hold no `mkdir` on NixOS. Its fake `systemctl` still comes first.
 - `.github/scripts/relay-state-output.test.cjs` and `vercel-deployment-output.test.cjs`: the shells that run
   workflow steps start with `--noprofile --norc`. Node connects a child's stdio through sockets, so NixOS's
   bash takes itself for an SSH session, sources `/etc/bashrc` and resets PATH to the system profile, which
