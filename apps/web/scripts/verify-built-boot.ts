@@ -16,7 +16,7 @@ if (!NodeFS.existsSync(NodePath.join(distDir, "index.html"))) {
   process.exit(1);
 }
 
-// Playwright's downloaded Chromium does not run on NixOS; the Calder shell points this at nixpkgs'.
+// Playwright's downloaded browsers do not run on NixOS; the Calder shell points this at a Nix build of its headless shell.
 const executablePath = process.env.T3CODE_BROWSER_TEST_CHROMIUM?.trim();
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
 try {

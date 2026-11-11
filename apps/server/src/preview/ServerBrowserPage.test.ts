@@ -18,7 +18,7 @@ import {
 
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
-// Playwright's downloaded Chromium does not run on NixOS, so CI points this at nixpkgs' Chromium.
+// Playwright's downloaded browsers do not run on NixOS, so CI points this at a Nix build of its headless shell.
 const executablePath = process.env.T3CODE_BROWSER_TEST_CHROMIUM?.trim();
 const launchOptions = executablePath ? { executablePath } : {};
 

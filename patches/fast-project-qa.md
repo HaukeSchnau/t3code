@@ -91,7 +91,7 @@ plus the fork lockfile checks.
   `reactCompilerCoverage.test.ts` compile every source file. Keep the comments when upstream changes
   those files, and add one to a test that starts reading files by path.
 - The web `browser` project runs `*.browser.test.{ts,tsx}` in headless Chromium. Playwright's own
-  download does not run on NixOS, so `.#ci` points it at nixpkgs' Chromium through
+  download does not run on NixOS, so `.#ci` points it at a Nix build of Playwright's headless shell through
   `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)). It runs as
   its own step, `test-web-browser`: beside the unit projects, one job outgrew a Calder worker's
   4.5 GB.

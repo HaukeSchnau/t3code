@@ -533,6 +533,7 @@
           + lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
             let
               browsers = nixpkgs-node.legacyPackages.${system}.playwright-driver.browsers.override {
+                withChromium = false;
                 withFirefox = false;
                 withWebkit = false;
                 withFfmpeg = false;
