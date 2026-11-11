@@ -527,10 +527,21 @@
             # Tests match English tool messages; Calder workers inherit the host's German locale.
             export LC_ALL=C.UTF-8
           ''
-          # Playwright's downloaded Chromium does not run on NixOS (apps/web/vitest.config.ts).
-          + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-            export T3CODE_BROWSER_TEST_CHROMIUM="${lib.getExe pkgs.chromium}"
-          '';
+          # Playwright's downloaded browsers do not run on NixOS (apps/web/vitest.config.ts). nixpkgs-node's
+          # build of the headless shell upstream tests with keeps browser behavior the same; keep its
+          # playwright-driver version equal to the workspace's playwright.
+          + lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
+            let
+              browsers = nixpkgs-node.legacyPackages.${system}.playwright-driver.browsers.override {
+                withFirefox = false;
+                withWebkit = false;
+                withFfmpeg = false;
+              };
+            in
+            ''
+              export T3CODE_BROWSER_TEST_CHROMIUM="$(echo ${browsers}/chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell)"
+            ''
+          );
         in
         {
           default = pkgs.mkShell {

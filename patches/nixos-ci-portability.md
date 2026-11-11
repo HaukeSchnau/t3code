@@ -8,8 +8,10 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 
 - `flake.nix` (`devShells.ci`): `LC_ALL=C.UTF-8`, because the workers inherit the host's German locale and
   tests match English Git messages. It also adds `jujutsu` for the jj workspace tests, and on Linux points
-  `T3CODE_BROWSER_TEST_CHROMIUM` at nixpkgs' Chromium for the web browser tests, because the Chromium
-  Playwright downloads does not run on NixOS.
+  `T3CODE_BROWSER_TEST_CHROMIUM` at the `nixpkgs-node` build of Playwright's Chromium headless shell for the
+  web browser tests, because the browsers Playwright downloads do not run on NixOS. It is the same browser
+  upstream tests with; full Chromium differs, for example in `:hover` over an iframe. Keep that input's
+  `playwright-driver` version equal to the workspace's `playwright`.
 - `apps/desktop/src/wsl/DesktopWslEnvironment.test.ts`: the busy-runtime holder renames a shell instead of
   `cat`. A multi-call coreutils picks its program from argv[0].
 - `packages/provider-acp/src/server/clientTerminals.test.ts`: the Devin shell test passes PATH in the session
