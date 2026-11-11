@@ -37,7 +37,8 @@ merge conflicts easier to reason about.
   `apps/server/src/persistence/Migrations.ts` is authoritative. Append each new upstream migration at
   the next free fork id instead of adopting upstream's numbering. Every upstream migration from 033
   onward therefore runs under a different id (upstream 054, 055 and 056 run as 77, 78 and 79;
-  upstream 057 to 066 run as 82 to 91, 067 to 069 as 92 to 94, and 070 to 072 as 96 to 98), and
+  upstream 057 to 066 run as 82 to 91, 067 to 069 as 92 to 94, 070 to 072 as 96 to 98, and 073
+  to 081 as 100 to 108; fork-only migrations such as 95, 99 and 109 take the ids around them), and
   some source filenames share a numeric prefix with a fork migration. Keep upstream's filenames and
   point the fork's registry ids at them, so a sync never sees a rename as a delete. Upstream
   migration tests and `apps/server/scripts/migrate-dev-db.test.ts` hardcode upstream ids; rewrite
@@ -70,8 +71,8 @@ merge conflicts easier to reason about.
   upstream's `run`, lint and fmt settings. `apps/desktop` and `packages/client-runtime` keep
   upstream's `test` blocks, since neither config merges the root one. Tests import from `vite-plus/test`. The fork has no direct `vitest`
   dependency or catalog entry.
-- Package `typecheck` scripts stay upstream's `tsc --noEmit` (`typescript` is the `@tsc-rs/typescript`
-  alias), or upstream's `run.tasks.typecheck` in an app's `vite.config.ts`. A limit only Calder needs, such as
+- Package `typecheck` scripts stay upstream's `effect-tsgo tsrs --noEmit`, or upstream's
+  `run.tasks.typecheck` in an app's `vite.config.ts`. A limit only Calder needs, such as
   the server's checker count, goes in `.calder/ci.ts` (see [Fast project QA](fast-project-qa.md)).
 - Push completed fork work to a feature bookmark with `jj-push <bookmark>` and open a pull request
   targeting `main`, including upstream sync merges. Do not push directly to `main`.

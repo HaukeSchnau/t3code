@@ -8,8 +8,10 @@ import * as Layer from "effect/Layer";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { ServerConfig } from "../config.ts";
+import { makeStaleWhileRevalidate } from "./staleWhileRevalidate.ts";
 
 const SSH_PORT = 22;
+const TARGETS_CACHE_TTL = "60 seconds";
 
 export class RemoteOpenTargets extends Context.Service<
   RemoteOpenTargets,
@@ -24,7 +26,7 @@ export const make = Effect.gen(function* () {
   const net = yield* NetService.NetService;
   const { remoteOpenHost } = yield* ServerConfig;
 
-  const resolveTargets = Effect.gen(function* () {
+  const discoverTargets = Effect.gen(function* () {
     // The operator's ssh alias resolves user, port and key through the viewer's ~/.ssh/config,
     // so it skips probing and carries no username.
     if (remoteOpenHost !== undefined) {
@@ -86,6 +88,10 @@ export const make = Effect.gen(function* () {
 
     return targets;
   });
+
+  // Advertised on every client connect; probing sshd and tailscaled is slow
+  // on a loaded host, so serve the last result while it refreshes.
+  const resolveTargets = yield* makeStaleWhileRevalidate(discoverTargets, TARGETS_CACHE_TTL);
 
   return RemoteOpenTargets.of({
     resolveTargets: Effect.fn("RemoteOpenTargets.resolveTargets")(function () {

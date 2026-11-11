@@ -27,10 +27,12 @@ reachable server.
 - `connection/supervisor.ts` (`normalizeDesiredIntent`) treats a browser `offline` report as
   `unknown` while the connection is desired: at startup, during automatic recovery, after a live
   session is replaced, and on an explicit retry. Connection attempts and their backoff decide
-  reachability. Upstream now probes a live session when the network reports offline and keeps it
-  if it answers (`monitorConnectedLease`), but it still parks a desired connection in `offline`
-  once that session is gone; the normalization reconnects instead.
-- Web `ChatView.tsx` mounts `EnvironmentNetworkStatus` above the composer. That component in
+  reachability. Upstream now ignores an offline report for the primary environment only
+  (`targetNetwork`, for `PrimaryConnectionTarget`), and still parks a desired saved, relay, or
+  tailnet connection in `offline` once its session is gone; the normalization reconnects those
+  instead. `retryNow` re-reads the platform status through both.
+- Web `ChatView.tsx` mounts `EnvironmentNetworkStatus` above the composer, except in an embedded
+  side chat, whose parent already shows it. That component in
   `components/chat/TrainNetworkStatus.tsx` subscribes to the environment's connection and shell
   itself, so shell pushes re-render the strip and not the chat, and renders the projection through
   `TrainNetworkStatus` and `trainNetworkExperience.ts`. It runs its own Reconnect through
@@ -47,9 +49,10 @@ reachable server.
 ## Removal
 
 Retire this patch when upstream shows connection progress and content freshness in the chat view
-and stops trusting a stale offline signal.
+and stops trusting a stale offline signal for every desired connection, not only the primary one.
 
 ## Verification
 
-`connectionFreshness.test.ts`, the stale-offline tests in `supervisor.test.ts`,
+`connectionFreshness.test.ts`, the stale-offline tests in `supervisor.test.ts` (on a relay
+target, since upstream already covers the primary one),
 `TrainNetworkStatus.browser.test.tsx` and `trainNetworkExperience.test.ts`.

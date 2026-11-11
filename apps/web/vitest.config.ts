@@ -46,8 +46,8 @@ const browserTimeouts = { hookTimeout: 30_000, testTimeout: 30_000 };
 // Hash the checkout path like scripts/dev-runner.ts does, into 61000-64999 (above Linux's
 // ephemeral range).
 const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
-// Playwright's downloaded Chromium does not run on NixOS, so CI and NixOS hosts point this at
-// nixpkgs' Chromium. Unset, Playwright launches its own build.
+// Playwright's downloaded browsers do not run on NixOS, so CI and NixOS hosts point this at a Nix
+// build of Playwright's headless shell (flake.nix). Unset, Playwright launches its own build.
 const chromiumExecutablePath = process.env.T3CODE_BROWSER_TEST_CHROMIUM?.trim() || undefined;
 
 const browserTestProject = {
@@ -88,7 +88,11 @@ const browserTestProject = {
       provider: playwright(
         chromiumExecutablePath === undefined
           ? {}
-          : { launchOptions: { executablePath: chromiumExecutablePath } },
+          : {
+              launchOptions: { executablePath: chromiumExecutablePath },
+              // The headless shell follows the host's locale; tests expect English number formats.
+              contextOptions: { locale: "en-US" },
+            },
       ),
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,

@@ -4,11 +4,11 @@ import {
   type ServerIdleStatus,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
@@ -20,19 +20,19 @@ import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { getServerIdleStatus } from "../status/IdleStatus.ts";
 import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
-class StatusLiveServerUnavailableError extends Data.TaggedError(
+class StatusLiveServerUnavailableError extends Schema.TaggedError<StatusLiveServerUnavailableError>()(
   "StatusLiveServerUnavailableError",
-)<{
-  readonly reason: string;
-}> {
+  { reason: Schema.String },
+) {
   override get message(): string {
     return this.reason;
   }
 }
 
-class StatusOfflineUnavailableError extends Data.TaggedError("StatusOfflineUnavailableError")<{
-  readonly reason: string;
-}> {
+class StatusOfflineUnavailableError extends Schema.TaggedError<StatusOfflineUnavailableError>()(
+  "StatusOfflineUnavailableError",
+  { reason: Schema.String },
+) {
   override get message(): string {
     return this.reason;
   }
@@ -162,7 +162,7 @@ const queryLiveIdleStatus = Effect.fn("status.queryLiveIdleStatus")(function* (
   );
 });
 
-const idleStatusCommand = Command.make("idle", {
+export const idleStatusCommand = Command.make("idle", {
   ...authLocationFlags,
   json: jsonFlag,
   quiet: quietFlag,
@@ -199,9 +199,4 @@ const idleStatusCommand = Command.make("idle", {
       }
     }),
   ),
-);
-
-export const statusCommand = Command.make("status").pipe(
-  Command.withDescription("Inspect local T3 Code server status."),
-  Command.withSubcommands([idleStatusCommand]),
 );

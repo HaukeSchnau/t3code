@@ -5,26 +5,7 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 
 import { snapshotObservedImage } from "../../observedImageSnapshot.ts";
-import type { CodexDynamicToolItem } from "./CodexAdapterV2.ts";
-
-/**
- * Codex reports `view_image` as its own `imageView` item. T3 shows it like any
- * other tool call that read an image, so it reuses the dynamic tool projection.
- */
-export function codexImageViewToolCall(item: {
-  readonly id: string;
-  readonly path: string;
-}): CodexDynamicToolItem {
-  return {
-    type: "dynamicToolCall",
-    id: item.id,
-    tool: "view_image",
-    arguments: { path: item.path },
-    status: "completed",
-  };
-}
-
-/** Points the item at the viewed image and attaches the server's copy of it. */
+/** Labels a Codex image view as a read and attaches the server's copy of the image. */
 export const withObservedImage = Effect.fn("CodexImageView.withObservedImage")(function* (
   turnItem: OrchestrationV2TurnItem,
   input: {
@@ -55,7 +36,6 @@ export const withObservedImage = Effect.fn("CodexImageView.withObservedImage")(f
   return {
     ...turnItem,
     title: formatReadToolLabel(path),
-    viewedImagePath: path,
     ...(observedImage === undefined ? {} : { observedImage }),
   };
 });

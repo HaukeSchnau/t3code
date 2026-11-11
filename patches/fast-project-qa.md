@@ -46,12 +46,14 @@ plus the fork lockfile checks.
   checks (`rust`), `lint:mobile`, the `.github/scripts` tests, upstream's PR-asset rejection, seven
   typecheck groups, a test step for each package with a sizeable suite, one for the small packages,
   one for the repository scripts, the release smoke, and the fork and deploy lockfile checks.
+  Calder skips only upstream's desktop launch check (`scripts/smoke-desktop-app.ts`), because npm's
+  Electron doesn't run on NixOS, `.#ci` has no xvfb, and its fixture database records upstream's
+  migration ids, which a fork build misreads as its own. Running it on m1 against the packaged app
+  needs a fixture from a fork build first.
 - Upstream's `changes` job skips jobs a change cannot affect; Calder reuses a step whose inputs are
-  unchanged instead. Knip reads the whole repository and runs on every change. Knip loads the mobile Metro
-  config and `desktop-build` runs the web license plugin; both write license notices that download
-  SPDX texts, and PR workers have no network, so these two steps first copy the flake's fixed-output
-  SPDX set (`nix/spdx.nix`, `$T3CODE_SPDX_NOTICES` in `.#ci`) into the notice cache. `desktop-build` reads
-  the web, server and desktop packages and what they depend on. `graphql`, `rust`, `lint-mobile` and
+  unchanged instead. Knip reads the whole repository and runs on every change. `desktop-build` reads
+  the web, server and desktop packages, what they depend on, and the committed SPDX license
+  templates in `third-party-licenses/`. `graphql`, `rust`, `lint-mobile` and
   `github-scripts` read only their generator inputs, crates, native sources and workflow scripts.
 - `rust` and `lint-mobile` run in `.#ci-native`, which adds Rust, SwiftLint, ktlint and detekt to `.#ci`,
   so the other steps' workers don't fetch Rust and a JDK. Upstream lints the native sources on macOS;
@@ -89,7 +91,7 @@ plus the fork lockfile checks.
   `reactCompilerCoverage.test.ts` compile every source file. Keep the comments when upstream changes
   those files, and add one to a test that starts reading files by path.
 - The web `browser` project runs `*.browser.test.{ts,tsx}` in headless Chromium. Playwright's own
-  download does not run on NixOS, so `.#ci` points it at nixpkgs' Chromium through
+  download does not run on NixOS, so `.#ci` points it at a Nix build of Playwright's headless shell through
   `T3CODE_BROWSER_TEST_CHROMIUM` (see [NixOS CI portability](nixos-ci-portability.md)). It runs as
   its own step, `test-web-browser`: beside the unit projects, one job outgrew a Calder worker's
   4.5 GB.
@@ -97,23 +99,24 @@ plus the fork lockfile checks.
   relay, task-cache and the oxlint plugin) run together when their directories or anything their tests import
   changed. The provider and source-control packages run the same way in `test-integrations`, a
   step of their own because together they ran past 20 minutes. Upstream adds a package per
-  provider and per source-control host; add new ones to `integrationPackages` in `.calder/ci.ts`.
+  provider, per secret provider and per source-control host; add new ones to `integrationPackages`
+  in `.calder/ci.ts`.
   The repository scripts' tests read manifests, lockfiles and configs all over the repository, so
   they run on every change. The release smoke and the lockfile checks depend only on what the
   install reads (manifests, lockfiles, workspace file and patches) and the scripts and configs
   they run.
-- Typecheck groups are keyed by what their tsconfigs include and everything it imports, types
-  included. Each group checks its packages one at a time with Vite+'s task cache. The server checks
+- Typecheck groups are keyed by their tsconfigs, the root `tsconfig.base.json` and
+  `tsconfig.effect.json`, what the tsconfigs include and everything it imports, types included. Each group checks its packages one at a time with Vite+'s task cache. The server checks
   with `--checkers 1`, which only the Calder step passes. `evals` imports server sources, so it
-  shares that group and limit. A cold tsc-rs check of the server peaked at 4.7 GB with the default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
+  shares that group and limit. With tsc-rs, before upstream moved to tsrs, a cold check of the server
+  peaked at 4.7 GB with the default checkers and 3.1 GB with one, against a Calder worker's 4.5 GB.
   It also checks incrementally: its `tsconfig.json` sets `incremental`, and Calder keeps
-  `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 a cold check with one checker took about
-  110 s and an unchanged one 8 s. Vite+ never caches it because it rewrites the build info it read.
+  `apps/server/tsconfig.tsbuildinfo` between runs. On srv-2 a cold tsc-rs check with one checker
+  took about 110 s and an unchanged one 8 s. Vite+ never caches it because it rewrites the build info it read.
   Remove `incremental` if upstream makes the server incremental or composite, and the checker limit
   once Calder can budget memory per step.
 - `apps/server/src/testUtils/gitConfig.setup.ts` appends its git settings once per process instead
   of once per test file, so server tests can later share a worker without growing every git
   child's environment.
-- Cancelling a run kills each task's process group 10 seconds after TERM. tsc-rs catches TERM and
-  keeps checking until it finishes (a cold server check ran on for 4 minutes), and under memory
-  pressure a cancelled typecheck ran for hours.
+- Cancelling a run kills each task's process group 10 seconds after TERM. The tsrs typecheck exits
+  on TERM.

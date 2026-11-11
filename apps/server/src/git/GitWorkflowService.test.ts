@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 
@@ -14,13 +15,13 @@ import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
-it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowService", (it) => {
   it.effect("reports a jj repository without Git as not a Git repository", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
-      const isRepository = yield* workflow.isRepository("/jj-repo");
+      const root = yield* workflow.repositoryRoot("/jj-repo");
 
-      assert.equal(isRepository, false);
+      assert.equal(root, null);
     }).pipe(
       Effect.provide(
         GitWorkflowService.layer.pipe(
@@ -89,10 +90,10 @@ it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
           Layer.provideMerge(VcsProcess.layer),
           Layer.provideMerge(
             ServerConfig.layerTest(process.cwd(), { prefix: "t3-ref-named-" }).pipe(
-              Layer.provide(NodeServices.layer),
+              Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),

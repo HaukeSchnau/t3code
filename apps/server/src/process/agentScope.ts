@@ -19,6 +19,12 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 const AGENT_SLICE = "app-t3code-agents.slice";
+// Owns every agent slice and competes with the server's unit or scope under app.slice.
+const AGENTS_PARENT_SLICE = "app-t3code.slice";
+// Low weights yield CPU and disk to the server under contention, where the user manager
+// has those controllers: current systemd delegates cpu, rarely io. TasksMax keeps agents
+// below logind's 33% per-user task limit, leaving forks for the server.
+const AGENTS_PARENT_PROPERTIES = ["CPUWeight=10", "IOWeight=10", "TasksMax=25%"];
 
 export function ownedAgentSlice(stateDir: string): string {
   const hash = NodeCrypto.createHash("sha256").update(stateDir).digest("hex").slice(0, 12);
@@ -202,20 +208,28 @@ export const make = Effect.gen(function* () {
         yield* Effect.logInfo("Agent scopes are off: no systemd user manager");
         return undefined;
       }
+      const setProperties = Effect.fn("agentScope.setProperties")(function* (
+        slice: string,
+        properties: ReadonlyArray<string>,
+      ) {
+        const result = yield* run(systemctl, [
+          "--user",
+          "set-property",
+          "--runtime",
+          slice,
+          ...properties,
+        ]);
+        if (result._tag === "None" || result.value.code !== 0) {
+          yield* Effect.logWarning("Could not set resource limits on an agents slice", {
+            slice,
+            properties,
+            stderr: result._tag === "Some" ? result.value.stderr.trim() : undefined,
+          });
+        }
+      });
       const limits = agentMemoryLimits(NodeOS.totalmem(), hostEnvironment);
-      const limited = yield* run(systemctl, [
-        "--user",
-        "set-property",
-        "--runtime",
-        AGENT_SLICE,
-        `MemoryHigh=${limits.high}`,
-        `MemoryMax=${limits.max}`,
-      ]);
-      if (limited._tag === "None" || limited.value.code !== 0) {
-        yield* Effect.logWarning("Could not set memory limits on the agents slice", {
-          stderr: limited._tag === "Some" ? limited.value.stderr.trim() : undefined,
-        });
-      }
+      yield* setProperties(AGENT_SLICE, [`MemoryHigh=${limits.high}`, `MemoryMax=${limits.max}`]);
+      yield* setProperties(AGENTS_PARENT_SLICE, AGENTS_PARENT_PROPERTIES);
       yield* Effect.logInfo("Agent scopes are on", {
         slice: AGENT_SLICE,
         ...limits,
@@ -232,12 +246,14 @@ export const make = Effect.gen(function* () {
   );
 
   // Scopes that continue after an OOM kill track how many kills the thread was
-  // told about, and the count `stop` read before it reaped the scope.
+  // told about, and the count `stop` read before it reaped the scope. `shared`
+  // scopes serve other threads too: tracked only for OOM diagnosis on old systemd.
   const scopeByThread = new Map<
     string,
     {
       unit: string;
       oomKilled: boolean;
+      shared: boolean;
       reportedOomKills: number | undefined;
       stoppedOomKills: number;
     }
@@ -304,6 +320,7 @@ export const make = Effect.gen(function* () {
     threadId: string,
     unit: string | undefined,
     continues: boolean,
+    shared = false,
   ) {
     const previous = scopeByThread.get(threadId);
     scopeByThread.delete(threadId);
@@ -311,6 +328,7 @@ export const make = Effect.gen(function* () {
       scopeByThread.set(threadId, {
         unit,
         oomKilled: false,
+        shared,
         reportedOomKills: continues ? 0 : undefined,
         stoppedOomKills: 0,
       });
@@ -390,6 +408,40 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  const kill: AgentScopeShape["kill"] = Effect.fn("AgentScope.kill")(function* (threadId) {
+    const tracked = scopeByThread.get(threadId);
+    if (tracked === undefined || tracked.shared) return false;
+    const scope = yield* systemd;
+    if (scope === undefined) return false;
+    const shown = yield* run(scope.systemctl, [
+      "--user",
+      "show",
+      tracked.unit,
+      "--property=ActiveState,ControlGroup",
+    ]);
+    if (shown._tag === "None" || shown.value.code !== 0) return false;
+    const values = parseKeyValues(shown.value.stdout);
+    if (values.get("ActiveState") !== "active") return false;
+    const controlGroup = values.get("ControlGroup") ?? "";
+    // cgroup.kill (Linux 5.14+) kills the whole tree at once; systemd's kill is the fallback.
+    const killedByCgroup =
+      controlGroup.length > 0 &&
+      (yield* fileSystem
+        .writeFileString(path.join("/sys/fs/cgroup", controlGroup, "cgroup.kill"), "1")
+        .pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ));
+    if (killedByCgroup) return true;
+    const killed = yield* run(scope.systemctl, [
+      "--user",
+      "kill",
+      "--signal=SIGKILL",
+      tracked.unit,
+    ]);
+    return killed._tag === "Some" && killed.value.code === 0;
+  });
+
   const clear: AgentScopeShape["clear"] = Effect.fn("agentScope.clear")(function* (threadId) {
     if (!scopeByThread.has(threadId)) return;
     const scope = yield* systemd;
@@ -417,7 +469,13 @@ export const make = Effect.gen(function* () {
       const sharedScope = shared === true && scope.supportsOomPolicy;
       const owned = threadId !== undefined && !sharedScope;
       if (threadId !== undefined) {
-        yield* track(scope.systemctl, threadId, owned ? unit : undefined, scope.supportsOomPolicy);
+        yield* track(
+          scope.systemctl,
+          threadId,
+          owned ? unit : undefined,
+          scope.supportsOomPolicy,
+          shared === true,
+        );
       }
       const systemdScope: AgentSystemdScope = {
         systemdRun: scope.systemdRun,
@@ -438,6 +496,7 @@ export const make = Effect.gen(function* () {
     }),
     oomKilled,
     stop,
+    kill,
     clear,
   } satisfies AgentScopeShape;
 });

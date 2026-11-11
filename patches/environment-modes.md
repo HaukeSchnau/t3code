@@ -17,7 +17,8 @@ personal ones with one shortcut. Upstream has only the per-environment switch.
 - Platform environments (the desktop's local backend and the page's primary) keep their switch in
   memory only, so the web editor offers only the environments Connections settings lists.
 - Web and desktop switch modes from the sidebar footer, the command palette, and the shortcut.
-  iOS shows a mode pill in the thread list filters, Android a submenu in the home header menu.
+  The iPhone shows a mode pill in the thread list filters. Android and the iPad sidebar show a Mode
+  submenu in the thread list's filter menu (`home-list-filter-menu.ts`).
 - Switching an environment off does not unregister the phone's push registration, so a
   switched-off environment that owns the registration still sends notifications.
 

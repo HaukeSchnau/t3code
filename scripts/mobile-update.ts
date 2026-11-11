@@ -20,7 +20,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - Expo Updates keys assets by MD5, which effect/Crypto lacks.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - the Expo Updates asset helpers hash synchronously; effect/crypto/Digest is effectful.
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 

@@ -16,18 +16,17 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as HtmlRender from "../../../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as McpAlwaysLoad from "../../McpAlwaysLoad.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_000)).annotate({
-  description: "A complete, self-contained HTML document. Pass this or path.",
+  description: "Inline HTML.",
 });
 
-const PagePath = Schema.String.check(Schema.isMinLength(1)).annotate({
-  description: "Absolute path to an HTML file on this host, for pages too long for html.",
+const HtmlPath = Schema.String.annotate({
+  description: "Absolute .html file path.",
 });
 
-const pageSource = { html: Schema.optional(Html), path: Schema.optional(PagePath) };
+const pageSource = { path: Schema.optional(HtmlPath), html: Schema.optional(Html) };
 
 const Title = Schema.String.check(
   Schema.isMinLength(1),
@@ -46,10 +45,10 @@ const HtmlRenderOutput = Schema.Struct({
 });
 
 const PAGE_RULES =
-  "Inline <style> and <script>. Local images as absolute paths are inlined. Remote URLs load as-is.";
+  "Self-contained: inline <style> and <script>. Local images as absolute paths are inlined. Remote URLs load as-is.";
 
 export const HtmlPreviewTool = Tool.make("html_preview", {
-  description: `Check an HTML page before html_render. Returns PNG, contentHeight, and console output. If it says the browser is still installing, call again in a minute. ${PAGE_RULES} Theme and layout rules are in html_render.`,
+  description: `Check an HTML page before html_render. Returns PNG, contentHeight, and console output. ${PAGE_RULES} Theme and layout rules are in html_render.`,
   parameters: Schema.Struct({
     ...pageSource,
     width: Schema.optional(
@@ -93,7 +92,7 @@ export const HtmlPreviewTool = Tool.make("html_preview", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true)
-  .annotate(McpAlwaysLoad.AlwaysLoad, true);
+  .annotate(Tool.Meta, { "anthropic/alwaysLoad": true });
 
 // These affect only the caller's thread, not its workspace, so read-only sandboxes and plan mode may use them.
 const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
@@ -120,7 +119,7 @@ const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, true)
-  .annotate(McpAlwaysLoad.AlwaysLoad, true);
+  .annotate(Tool.Meta, { "anthropic/alwaysLoad": true });
 
 const HtmlRenderUpdateTool = Tool.make(HTML_RENDER_UPDATE_TOOL_NAME, {
   description:

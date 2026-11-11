@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-// @effect-diagnostics preferSchemaOverJson:off
+// @effect-diagnostics globalJsonInEffect:off
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";

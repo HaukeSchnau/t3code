@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { McpSchema, McpServer, Tool } from "effect/ai";
+import { McpSchema, Tool } from "effect/ai";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -212,7 +212,7 @@ it.effect("runs a page's call through the handlers /mcp registered, with their a
           McpHttpServer.layerThreadToolkit.pipe(
             Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
             Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
-            Layer.provide(McpServer.McpServer.layer),
+            Layer.provide(McpHttpServer.layerInProcessMcpServer),
           ),
         ),
         Layer.provideMerge(McpToolDirectory.layer),

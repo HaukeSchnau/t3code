@@ -102,6 +102,16 @@ import Migration0096 from "./Migrations/070_PeerLinks.ts";
 import Migration0097 from "./Migrations/071_PeerLinkFence.ts";
 import Migration0098 from "./Migrations/072_WaitingLinkRequestIndex.ts";
 import Migration0099 from "./Migrations/099_ScheduledTaskFailureTracking.ts";
+import Migration0100 from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import Migration0101 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import Migration0102 from "./Migrations/075_SubagentDeliveryState.ts";
+import Migration0103 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
+import Migration0104 from "./Migrations/077_RepairBooleanSettledOverride.ts";
+import Migration0105 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
+import Migration0106 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+import Migration0107 from "./Migrations/080_ScheduledTaskThreadMode.ts";
+import Migration0108 from "./Migrations/081_ProjectionMessageSearchText.ts";
+import Migration0109 from "./Migrations/109_ScheduledTaskOnceRunAt.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -208,6 +218,17 @@ const migrationEntries = [
   [97, "PeerLinkFence", Migration0097],
   [98, "WaitingLinkRequestIndex", Migration0098],
   [99, "ScheduledTaskFailureTracking", Migration0099],
+  // Upstream ids 73-81.
+  [100, "ActiveTurnItemIndexes", Migration0100],
+  [101, "ExcludeAttachmentPlaceholdersFromSearch", Migration0101],
+  [102, "SubagentDeliveryState", Migration0102],
+  [103, "ProjectionProjectsPinArchive", Migration0103],
+  [104, "RepairBooleanSettledOverride", Migration0104],
+  [105, "DropOrchestrationEventCorrelationIndex", Migration0105],
+  [106, "DelegatedRecoveryIndexes", Migration0106],
+  [107, "ScheduledTaskThreadMode", Migration0107],
+  [108, "ProjectionMessageSearchText", Migration0108],
+  [109, "ScheduledTaskOnceRunAt", Migration0109],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

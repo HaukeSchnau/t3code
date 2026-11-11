@@ -18,8 +18,9 @@ a provider session.
   URL fragment at load and written back debounced. Every version shares it; last write wins.
   Guests read it and cannot write it.
 - `html_render_update` publishes a render's next version as its own tool item. Clients join it
-  to the render's row with a version switcher. `html_render`, `html_render_update` and
-  `html_preview` accept `path` instead of `html`.
+  to the render's row with a version switcher. Like upstream's `html_render` and `html_preview`,
+  it takes `path` instead of `html` only in full-access threads, because the server reads the
+  file for the caller.
 - `t3.callTool` runs only the tools in `HTML_RENDER_PAGE_TOOLS`, through the handlers `/mcp`
   registered. Tools without `Tool.Readonly` need the reader's confirmation first, except the
   reading actions of upstream's action tools (`t3_queue` and `t3_pending_request` list and read,

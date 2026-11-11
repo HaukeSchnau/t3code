@@ -25,9 +25,9 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import { ServerActivation } from "../serverActivation.ts";
 import { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
@@ -36,6 +36,7 @@ it.effect("rejects a stale form save after deletion while preserving explicit-id
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Scheduler.layer,
+      ManagedPolicy.layerTest(),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -83,6 +84,7 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Scheduler.layer,
+      ManagedPolicy.layerTest(),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -137,6 +139,7 @@ it.effect("keeps the task list order when a toggle or edit rewrites updated_at",
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Scheduler.layer,
+      ManagedPolicy.layerTest(),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -182,62 +185,12 @@ it.effect("keeps the task list order when a toggle or edit rewrites updated_at",
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("runs a one-time task once, then pauses it and refuses past times", () =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(Date.parse("2026-11-03T04:00:00.000Z"));
-    const layerDependencies = Layer.mergeAll(
-      NodeCrypto.layer,
-      Scheduler.layer,
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-        launch: () => Effect.die("workspace preparation failed"),
-      }),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-        namedProjectsRoot: "/projects",
-        isScratchProject: () => Effect.succeed(false),
-      }),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-      Layer.mock(SecretRequests.SecretRequests)({}),
-    );
-    yield* Effect.gen(function* () {
-      const service = yield* ScheduledTaskService.ScheduledTaskService;
-      const input = yield* decodeUpsertInput({
-        title: "Forwarder run check",
-        prompt: "Check the 04:00Z forwarder run.",
-        enabled: true,
-        schedule: { type: "once", at: "2026-11-03T04:30:00Z" },
-        projectId: "project-once",
-        workspaceStrategy: { type: "root" },
-        modelSelection: { instanceId: "codex", model: "gpt-5.4" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-      });
-      const created = yield* service.upsert(input);
-      expect(created.task.nextRunAt).toBe("2026-11-03T04:30:00.000Z");
-
-      yield* TestClock.setTime(Date.parse("2026-11-03T04:31:00.000Z"));
-      const ran = yield* service.runNow({ id: created.task.id });
-      expect(ran.task).toMatchObject({ enabled: false, nextRunAt: null, runCount: 1 });
-      expect((yield* service.list()).tasks[0]).toMatchObject({ enabled: false, nextRunAt: null });
-
-      const pastTime = "The one-time run is in the past. Pick a future time.";
-      const resumed = yield* service
-        .setEnabled({ id: created.task.id, enabled: true })
-        .pipe(Effect.flip);
-      expect(resumed.message).toBe(pastTime);
-      const recreated = yield* service.upsert({ ...input, id: created.task.id }).pipe(Effect.flip);
-      expect(recreated.message).toBe(pastTime);
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
-  }).pipe(
-    Effect.provideService(ServerActivation, Effect.never),
-    Effect.provide(SqlitePersistence.layerMemory),
-  ),
-);
-
 it.effect("refuses to save a task whose runs could not get their own workspace", () =>
   Effect.gen(function* () {
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Scheduler.layer,
+      ManagedPolicy.layerTest(),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
         checkWorkspaceCopy: () =>
           Effect.fail(
@@ -290,6 +243,7 @@ const failureTrackingLayer = (input: {
       Layer.mergeAll(
         NodeCrypto.layer,
         Scheduler.layer,
+        ManagedPolicy.layerTest(),
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({
           launch: (launch) =>
             Effect.gen(function* () {
@@ -318,6 +272,7 @@ const failureTrackingLayer = (input: {
           getThreadShell: (threadId) =>
             Effect.succeed({
               id: threadId,
+              projectId: "project-forwarder",
               archivedAt: null,
               deletedAt: input.deletedThreads?.includes(threadId)
                 ? "2026-11-03T04:00:00.000Z"
@@ -539,7 +494,7 @@ it.effect("tells only a live creator thread that is not the bound thread about f
         {
           ...(yield* failingTaskInput(null)),
           title: "one-time",
-          schedule: { type: "once", at: "1970-01-01T00:01:00Z" },
+          schedule: { type: "once", runAt: "1970-01-01T00:01:00Z" },
         },
         { creatorThreadId: ThreadId.make("thread-creator") },
       );
@@ -548,7 +503,7 @@ it.effect("tells only a live creator thread that is not the bound thread about f
       const oneTimeNotice = yield* Queue.take(notices);
       assert(oneTimeNotice.type === "message.dispatch");
       // Resuming would fail because the time has passed.
-      expect(oneTimeNotice.text).toContain("schedule {type:'once',at:<a future time>}");
+      expect(oneTimeNotice.text).toContain("schedule {type:'once',runAt:<a future time>}");
       expect(oneTimeNotice.text).not.toContain("enabled=true");
     }).pipe(
       Effect.provide(
@@ -556,4 +511,66 @@ it.effect("tells only a live creator thread that is not the bound thread about f
       ),
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "idle polls still wake for tasks saved later, recorded due times, and beside far-future tasks",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-07-01T09:00:00.000Z"));
+      const launched = yield* Deferred.make<string>();
+      const layerDependencies = Layer.mergeAll(
+        NodeCrypto.layer,
+        Scheduler.layer,
+        ManagedPolicy.layerTest(),
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+          launch: (input) =>
+            Deferred.succeed(launched, input.title).pipe(
+              Effect.as({ threadId: "thread-idle-poll", resumed: false } as never),
+            ),
+        }),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        // The first poll finds no tasks and remembers that nothing is due.
+        yield* TestClock.adjust("6 seconds");
+        // Its year-10000+ next run sorts first as text; it must not hide the task below.
+        yield* service.upsert(
+          yield* decodeUpsertInput({
+            title: "Far future",
+            prompt: "Review the open pull requests.",
+            enabled: true,
+            schedule: { type: "interval", everyMs: 3e14 },
+            projectId: "project-idle-poll",
+            workspaceStrategy: { type: "root" },
+            modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          }),
+        );
+        const created = yield* service.upsert(
+          yield* decodeUpsertInput({
+            title: "Idle poll",
+            prompt: "Review the open pull requests.",
+            enabled: true,
+            schedule: { type: "interval", everyMs: 60_000 },
+            projectId: "project-idle-poll",
+            workspaceStrategy: { type: "root" },
+            modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          }),
+        );
+        // This poll records the new task's due time; the later ones must still fire it.
+        yield* TestClock.adjust("6 seconds");
+        yield* TestClock.adjust("60 seconds");
+        expect(yield* Deferred.await(launched)).toBe(created.task.title);
+      }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

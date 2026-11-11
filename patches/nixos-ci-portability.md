@@ -8,8 +8,12 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 
 - `flake.nix` (`devShells.ci`): `LC_ALL=C.UTF-8`, because the workers inherit the host's German locale and
   tests match English Git messages. It also adds `jujutsu` for the jj workspace tests, and on Linux points
-  `T3CODE_BROWSER_TEST_CHROMIUM` at nixpkgs' Chromium for the web browser tests, because the Chromium
-  Playwright downloads does not run on NixOS.
+  `T3CODE_BROWSER_TEST_CHROMIUM` at the `nixpkgs-node` build of Playwright's Chromium headless shell for the
+  web browser tests, because the browsers Playwright downloads do not run on NixOS. It is the same browser
+  upstream tests with; full Chromium differs, for example in `:hover` over an iframe. Keep that input's
+  `playwright-driver` version equal to the workspace's `playwright`.
+  `apps/web/vitest.config.ts` pins that browser's locale to `en-US`, because the headless shell follows the
+  host's German `LANGUAGE`, and tests match English number formats.
 - `apps/desktop/src/wsl/DesktopWslEnvironment.test.ts`: the busy-runtime holder renames a shell instead of
   `cat`. A multi-call coreutils picks its program from argv[0].
 - `packages/provider-acp/src/server/clientTerminals.test.ts`: the Devin shell test passes PATH in the session
@@ -25,9 +29,17 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   translated Git and libc messages, and transient-exit classification matches the English text.
 - `apps/server/src/entrypoint.ts`: `isEntrypoint` resolves both the module path and `argv[1]`, because
   sandboxed runners can expose one directory through two mount aliases.
+- `apps/server/src/project/AgentSessionScanner.ts`: the scanner resolves the real paths of `baseDir` and
+  `worktreesDir` for the same reason, so a T3 home reached through an alias still matches the
+  session paths it filters out.
 - `scripts/notify-discord-release.test.ts`: the shells that run the release workflow's Discord steps get
   PATH. Their environment replaces the inherited one, and without PATH Node looks for `bash` only in `/bin`
   and `/usr/bin`.
+- `scripts/install.test.ts`: the `install.sh t3 command` case runs the installer with a folder of links to
+  the host's programs instead of `/usr/bin:/bin`, leaving out any `t3`, since srv hosts have T3 Code on
+  PATH. Its no-SHELL run sets SHELL empty, because bash as `/bin/sh` fills in an unset SHELL.
+- `apps/server/src/cloud/serviceProtection.test.ts`: the privileged script runs with the test's own PATH
+  after `/usr/bin:/bin`, which hold no `mkdir` on NixOS. Its fake `systemctl` still comes first.
 - `.github/scripts/relay-state-output.test.cjs` and `vercel-deployment-output.test.cjs`: the shells that run
   workflow steps start with `--noprofile --norc`. Node connects a child's stdio through sockets, so NixOS's
   bash takes itself for an SSH session, sources `/etc/bashrc` and resets PATH to the system profile, which

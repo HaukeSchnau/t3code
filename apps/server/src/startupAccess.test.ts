@@ -1,5 +1,6 @@
 import type * as NodeOS from "node:os";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -12,6 +13,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import {
   acceptsPrivateNetworkConnection,
   headlessServeOutput,
@@ -91,6 +93,8 @@ const headlessServeLayer = EnvironmentAuth.layer.pipe(
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-startup-access-" })),
   Layer.provideMerge(NodeHttpServer.layerTest),
+  Layer.provide(ManagedPolicy.layerTest()),
+  Layer.provideMerge(NodeCrypto.layer),
 );
 
 const headlessServe = (stdoutIsTerminal: boolean) =>

@@ -73,7 +73,7 @@ it.effect("routes each t3_watch action and asks for the field it needs", () => {
   }).pipe(
     Effect.provide(
       McpHttpServer.toolkitRegistration(WatchToolkit, WatchHandlers.layer).pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(
           Layer.mock(AgentWatches.AgentWatches)({

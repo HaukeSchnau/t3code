@@ -15,7 +15,8 @@ work without the desktop-only integrated browser or a server-side browser sessio
   `chat/RightPanelSurfaceContent.tsx` renders the `artifact` surface with the lazy
   `files/ArtifactPreviewPanel.tsx`, and `reopenClosedView.ts` reopens a closed one.
 - Markdown documents use the existing chat renderer, including Mermaid and tables, through its
-  `documentUrl` prop.
+  `documentUrl` prop. That passes a `urlTransform` to `MarkdownSource`, which then builds its own
+  renderer instead of upstream's cached shared one.
   A read-scoped RPC fetches only Markdown from the publishing origin, rejects
   redirects, and limits responses to 2 MiB and 15 seconds. The environment needs
   Tailnet access. Relative links and images resolve against the document URL.

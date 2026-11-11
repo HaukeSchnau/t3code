@@ -20,7 +20,7 @@ import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - App Store Connect tokens are ES256 JWTs, which effect/Crypto cannot sign.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - App Store Connect tokens are ES256 JWTs; effect/crypto/Signature (Effect 4.1.2) could sign them instead.
 import * as NodeCrypto from "node:crypto";
 
 import { requireAccountlessExpoConfig } from "./lib/accountless-expo-config.ts";

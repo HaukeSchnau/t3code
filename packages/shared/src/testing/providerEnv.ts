@@ -10,7 +10,7 @@ const KEPT_ENV = new Set([
   "T3CODE_TRANSFER_BUDGET_RESULT_PATH",
   // Opt-in: points the HtmlRender tests at a headless browser, which they skip without.
   "T3CODE_TEST_HEADLESS_SHELL",
-  // NixOS CI points browser tests at nixpkgs' Chromium; Playwright's download does not run there.
+  // NixOS CI points browser tests at a Nix build of Playwright's headless shell; its download does not run there.
   "T3CODE_BROWSER_TEST_CHROMIUM",
 ]);
 

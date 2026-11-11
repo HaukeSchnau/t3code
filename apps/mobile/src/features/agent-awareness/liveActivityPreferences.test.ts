@@ -23,7 +23,7 @@ describe("liveActivityPreferences", () => {
 
   it.effect("restores the previous value when registration fails", () => {
     vi.mocked(updateAgentAwarenessRegistrationPreferences)
-      .mockImplementationOnce(() => Effect.fail(new Error("offline")))
+      .mockImplementationOnce(() => Effect.die("offline"))
       .mockImplementationOnce(() => Effect.void);
 
     return Effect.gen(function* () {

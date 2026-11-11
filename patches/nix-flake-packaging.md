@@ -55,9 +55,9 @@ when pnpm fails.
 The three derivations deliberately have separate source filters. Web-only edits do not invalidate the server
 bundle or runtime dependencies; server-only edits do not invalidate the web bundle; documentation changes do
 not invalidate dependency fetches. Lockfile and manifest changes remain shared inputs because they can change
-any dependency graph. Both bundles import every `packages/provider-*` and `packages/source-control-*`
-package except the test kits, so `integrationPackages` in `flake.nix` selects those by name and picks up
-packages upstream adds.
+any dependency graph. Both bundles import every `packages/provider-*`, `packages/secret-provider-*` and
+`packages/source-control-*` package except the test kits, so `integrationPackages` in `flake.nix` selects
+those by name and picks up packages upstream adds.
 
 Production Nix builds disable web and server source maps. Local and development builds retain source maps by
 default; set `T3CODE_WEB_SOURCEMAP=false` or `T3CODE_SERVER_SOURCEMAP=false` to reproduce the production mode.
@@ -120,6 +120,7 @@ it as the `wait-for-idle` pre-deploy task (`idleAction` in `flake.nix`). A faile
 running release untouched, and `failureMode = "defer"` keeps the new release queued so the updater
 retries later. Upstream has no idle check. `t3 status idle` (`cli/status.ts`),
 `GET /api/server/idle` (`status/http.ts`) and the `ServerIdleStatus` contract are fork additions.
+`idle` is a subcommand of upstream's own `t3 status`, so the command line stays the same.
 
 The command asks the running server first and falls back to reading the database. It exits 0 when
 idle, 1 when busy and 2 when the state is unknown. `status/IdleStatus.ts` reads the orchestration
@@ -173,8 +174,7 @@ them through `services.t3code.providerPackages` or configure absolute binary pat
 
 ## Offline license notices
 
-The Nix web build runs upstream's third-party license generation. Its SPDX templates come from a
-pinned fixed-output source in `nix/spdx.nix`, because sandboxed builds cannot fetch them on demand.
-When upstream's `third-party-licenses.config.json` uses a new license id, add its hash there.
-Package overrides supply verified MIT notices that the fastdom, strictdom and khroma npm packages
+The Nix web build runs upstream's third-party license generation. It reads the SPDX templates
+upstream commits under `third-party-licenses/spdx/`, so `webSource` must include that directory;
+sandboxed builds cannot fetch a missing template. Package overrides supply verified MIT notices that the fastdom, strictdom and khroma npm packages
 omit. Remove those overrides when the published packages contain usable notices.

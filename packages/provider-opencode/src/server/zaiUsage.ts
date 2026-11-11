@@ -165,7 +165,9 @@ function providerZaiUsageSource(
   provider: OpenCodeProvider,
   model: OpenCodeProvider["models"][string],
 ): ZaiUsageSource | null {
-  const quotaUrl = zaiQuotaUrlForApiUrl(model.api.url);
+  // The SDK types the server's JSON without validating it, and some servers omit `api`.
+  const apiUrl = (model as { readonly api?: { readonly url?: string } }).api?.url;
+  const quotaUrl = apiUrl === undefined ? null : zaiQuotaUrlForApiUrl(apiUrl);
   if (!quotaUrl) return null;
   const apiKey =
     trimmed(provider.key) ??

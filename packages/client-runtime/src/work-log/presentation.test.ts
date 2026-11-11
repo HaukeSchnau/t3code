@@ -13,6 +13,7 @@ import {
   resolveWorkEntryToolPresentation,
   toolItemForDisplay,
   type WorkLogPresentationEntry,
+  workEntriesViewedImages,
   workEntryObservedImage,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
@@ -38,7 +39,6 @@ function commandItem(
     updatedAt: DateTime.makeUnsafe("2026-09-08T00:00:00.000Z"),
     type: "command_execution",
     input: 'rg "command not found"',
-    exitCode: 0,
     ...fields,
   };
 }
@@ -69,6 +69,22 @@ describe("workEntryIndicatesToolFailure", () => {
       expect(JSON.stringify(toolItemForDisplay(structuredPayload))).not.toContain('"output":');
     },
   );
+
+  it.each([
+    "logs/app.log:12: Error: ENOENT: no such file or directory",
+    "fixtures/ci.txt:3: Process exited with exit code 2",
+  ])("trusts a zero exit code over failure text in the output and command: %s", (output) => {
+    const entry: WorkLogPresentationEntry = {
+      ...base,
+      tone: "tool",
+      itemType: "command_execution",
+      toolLifecycleStatus: "completed",
+      command: 'rg -n "ENOENT|exit code" logs fixtures',
+      structuredPayload: commandItem({ output, exitCode: 0, outputIndicatesFailure: true }),
+    };
+    expect(workEntryIndicatesToolFailure(entry)).toBe(false);
+    expect(workEntryDisplayIndicatesToolFailure(entry)).toBe(false);
+  });
 
   it("ignores failure phrases in reasoning text", () => {
     const entry: WorkLogPresentationEntry = {
@@ -246,5 +262,58 @@ describe("resolveViewedImageAsset", () => {
       alt: "screen.png",
       srcFragment: "",
     });
+  });
+  it("keeps one image per path with the copy from its latest view", () => {
+    const view = (id: string, path: string, attachment?: string): WorkLogPresentationEntry => ({
+      id,
+      createdAt: "2026-09-10T00:00:00.000Z",
+      label: `Read ${path}`,
+      tone: "tool",
+      viewedImagePath: path,
+      ...(attachment === undefined
+        ? {}
+        : {
+            structuredPayload: {
+              id: TurnItemId.make(id),
+              threadId,
+              runId: null,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              status: "completed",
+              title: null,
+              startedAt: null,
+              completedAt: null,
+              updatedAt: DateTime.makeUnsafe("2026-09-10T00:00:00.000Z"),
+              type: "dynamic_tool",
+              toolName: "view_image",
+              viewedImagePath: path,
+              observedImage: {
+                type: "image",
+                id: ChatAttachmentId.make(attachment),
+                name: "screen.png",
+                mimeType: "image/png",
+                sizeBytes: 4,
+              },
+              input: { path },
+            },
+          }),
+    });
+    const first = "thread-1-11111111-1111-4111-8111-111111111111";
+    const second = "thread-1-22222222-2222-4222-8222-222222222222";
+    expect(
+      workEntriesViewedImages([
+        view("a", "/workspace/screen.png", first),
+        view("b", "/workspace/other.png"),
+        view("c", "/workspace/screen.png", second),
+        view("d", "/workspace/screen.png"),
+      ]).map((image) => [image.path, image.observedImage?.id]),
+    ).toEqual([
+      ["/workspace/screen.png", second],
+      ["/workspace/other.png", undefined],
+    ]);
   });
 });

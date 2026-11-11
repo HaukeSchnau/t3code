@@ -1,10 +1,13 @@
 import { beforeEach, vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { AgentAwarenessSnapshot, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
+import { loadPreferences } from "../../persistence/imperative";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import type { AgentAwarenessEnvironmentTransport } from "./remoteRegistration";
 import {
@@ -13,6 +16,7 @@ import {
   armAgentAwarenessLiveActivityForLocalWork,
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
+  refreshActiveLiveActivityRemoteRegistration,
   registerLiveActivityPushToken,
   releaseAgentAwarenessEnvironmentTransport,
   setAgentAwarenessEnvironmentTransport,
@@ -29,6 +33,7 @@ const activityMocks = vi.hoisted(() => ({
   getInstances: vi.fn(() => []),
   start: vi.fn(() => ({})),
 }));
+const publishWidgetMock = vi.hoisted(() => vi.fn((_source: unknown) => Promise.resolve()));
 const environmentConfigsMock = vi.hoisted(() => ({
   configs: new Map<
     string,
@@ -54,12 +59,18 @@ vi.mock("expo-widgets", () => ({
   addPushToStartTokenListener: vi.fn(() => ({ remove: vi.fn() })),
 }));
 
+vi.mock("../../widgets/publishAgentActivityWidget", () => ({
+  publishAgentActivityWidget: publishWidgetMock,
+}));
+
 vi.mock("./agentLiveActivity", () => ({
   dismissEndedAgentLiveActivities: activityMocks.dismissEnded,
   getAgentLiveActivities: activityMocks.getInstances,
   startAgentLiveActivity: activityMocks.start,
 }));
 vi.mock("expo-notifications", () => ({
+  AndroidImportance: { NONE: 0, HIGH: 4 },
+  getNotificationChannelAsync: vi.fn(() => Promise.resolve(null)),
   addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
   getDevicePushTokenAsync: vi.fn(() => Promise.resolve({ type: "ios", data: "apns-token" })),
   getPermissionsAsync: vi.fn(() => Promise.resolve({ granted: true })),
@@ -97,8 +108,7 @@ vi.mock("../../state/server", () => ({
 // oxlint-disable t3code/no-manual-effect-runtime-in-tests
 vi.mock("../../lib/runtime", () => ({
   runtime: {
-    runPromiseExit: (operation: Effect.Effect<unknown, unknown>) =>
-      Effect.runPromiseExit(operation),
+    runPromiseExit: <A, E>(operation: Effect.Effect<A, E>) => Effect.runPromiseExit(operation),
   },
 }));
 // oxlint-enable t3code/no-manual-effect-runtime-in-tests
@@ -293,7 +303,6 @@ describe("accountless agent awareness registration", () => {
   });
 
   it("skips the Live Activity seed when the environment reports publishing disabled", async () => {
-    const { loadPreferences } = await import("../../persistence/imperative");
     environmentConfigsMock.configs.set("env-1", {
       environment: { capabilities: { agentActivityPublishing: false } },
     });
@@ -309,7 +318,6 @@ describe("accountless agent awareness registration", () => {
   });
 
   it("seeds the Live Activity for publishing and pre-capability environments", async () => {
-    const { loadPreferences } = await import("../../persistence/imperative");
     environmentConfigsMock.configs.set("env-publishing", {
       environment: { capabilities: { agentActivityPublishing: true } },
     });
@@ -335,6 +343,139 @@ describe("accountless agent awareness registration", () => {
     });
     await vi.waitFor(() => expect(activityMocks.start).toHaveBeenCalledTimes(1));
   });
+
+  describe("home-screen widget", () => {
+    beforeEach(() => {
+      // Most cases cover only the widget, so keep the Live Activity from priming.
+      vi.mocked(loadPreferences).mockResolvedValue({ liveActivitiesEnabled: false } as Preferences);
+    });
+
+    const aggregate: RelayAgentActivityAggregateState = {
+      title: "T3 Code",
+      subtitle: "Agent work in progress",
+      activeCount: 1,
+      updatedAt: "2026-10-18T10:00:00.000Z",
+      activities: [
+        {
+          environmentId: "env-1" as EnvironmentId,
+          threadId: "thread-1" as ThreadId,
+          projectTitle: "t3code",
+          threadTitle: "Fix the widget",
+          modelTitle: "GPT-5.5",
+          phase: "running",
+          status: "Working",
+          updatedAt: "2026-10-18T10:00:00.000Z",
+          deepLink: "/threads/env-1/thread-1",
+        },
+      ],
+    };
+
+    // Activation refreshes in the background and registers the device. Its snapshot read never
+    // answers, so each case drives the reads it lists, in order.
+    function activate(reads: ReadonlyArray<() => Promise<AgentAwarenessSnapshot>>) {
+      let markActivationRead = () => {};
+      const activationRead = new Promise<void>((resolve) => {
+        markActivationRead = resolve;
+      });
+      let markRegistered = () => {};
+      const registered = new Promise<void>((resolve) => {
+        markRegistered = resolve;
+      });
+      const getSnapshot = vi.fn<() => Promise<AgentAwarenessSnapshot>>();
+      getSnapshot.mockImplementationOnce(() => {
+        markActivationRead();
+        return new Promise(() => {});
+      });
+      for (const read of reads) {
+        getSnapshot.mockImplementationOnce(read);
+      }
+      setAgentAwarenessEnvironmentTransport(
+        transport({
+          getSnapshot,
+          registerDevice: vi.fn(() => {
+            markRegistered();
+            return Promise.resolve({ accepted: true as const, deliveryConfigured: true });
+          }),
+        }),
+      );
+      return Effect.promise(() => Promise.all([activationRead, registered]));
+    }
+
+    it.effect("publishes idle snapshots and keeps the last one when a read fails", () =>
+      Effect.gen(function* () {
+        yield* activate([
+          () => Promise.resolve({ aggregate }),
+          () => Promise.resolve({ aggregate: null }),
+          () => Promise.reject(new Error("offline")),
+        ]);
+
+        yield* refreshActiveLiveActivityRemoteRegistration();
+        yield* refreshActiveLiveActivityRemoteRegistration();
+        yield* refreshActiveLiveActivityRemoteRegistration();
+
+        expect(publishWidgetMock.mock.calls).toEqual([
+          [{ kind: "snapshot", aggregate }],
+          [{ kind: "snapshot", aggregate: null }],
+        ]);
+      }),
+    );
+
+    it.effect("keeps the newest rows when an older overlapping read finishes last", () =>
+      Effect.gen(function* () {
+        const newer = { ...aggregate, activeCount: 2 };
+        let markOlderRequested = () => {};
+        const olderRequested = new Promise<void>((resolve) => {
+          markOlderRequested = resolve;
+        });
+        let answerOlder = (_snapshot: AgentAwarenessSnapshot) => {};
+        yield* activate([
+          () => {
+            markOlderRequested();
+            return new Promise((resolve) => {
+              answerOlder = resolve;
+            });
+          },
+          () => Promise.resolve({ aggregate: newer }),
+        ]);
+
+        const older = yield* Effect.forkChild(refreshActiveLiveActivityRemoteRegistration());
+        yield* Effect.promise(() => olderRequested);
+        yield* refreshActiveLiveActivityRemoteRegistration();
+        answerOlder({ aggregate });
+        yield* Fiber.join(older);
+
+        expect(publishWidgetMock.mock.calls).toEqual([[{ kind: "snapshot", aggregate: newer }]]);
+      }),
+    );
+
+    it.effect("does not prime a Live Activity from a read a newer one replaced", () =>
+      Effect.gen(function* () {
+        yield* activate([
+          () => Promise.resolve({ aggregate }),
+          () => Promise.resolve({ aggregate: { ...aggregate, activeCount: 0, activities: [] } }),
+        ]);
+        let markPreferencesRequested = () => {};
+        const preferencesRequested = new Promise<void>((resolve) => {
+          markPreferencesRequested = resolve;
+        });
+        let resolvePreferences = (_preferences: Preferences) => {};
+        vi.mocked(loadPreferences).mockImplementationOnce(() => {
+          markPreferencesRequested();
+          return new Promise((resolve) => {
+            resolvePreferences = resolve;
+          });
+        });
+
+        const older = yield* Effect.forkChild(refreshActiveLiveActivityRemoteRegistration());
+        yield* Effect.promise(() => preferencesRequested);
+        yield* refreshActiveLiveActivityRemoteRegistration();
+        resolvePreferences({ liveActivitiesEnabled: true } as Preferences);
+        yield* Fiber.join(older);
+
+        expect(activityMocks.start).not.toHaveBeenCalled();
+      }),
+    );
+  });
 });
 
 describe("removing a paired environment", () => {
@@ -359,16 +500,5 @@ describe("removing a paired environment", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("loading outside iOS", () => {
-  it("does not load the Live Activity module, which Android's expo-widgets cannot construct", async () => {
-    vi.resetModules();
-    vi.doMock("../../widgets/AgentActivity", () => {
-      throw new TypeError("undefined cannot be used as a constructor.");
-    });
-
-    await expect(import("./remoteRegistration")).resolves.toBeDefined();
   });
 });

@@ -21,7 +21,7 @@ drops accounts it cannot draw without a notice.
   since it has no usable quota, and the notice asks for a new sign-in on the hub. Anthropic
   throttles an account's quota reads for an hour after about ten 401s, so `cliproxyApi.ts` does
   not read the account again until the hub rewrites its auth file (`modtime`), which a token
-  refresh or a new login does. The hub's own `status` cannot drive this: it reports quota
+  refresh or a new login does. This applies to every provider in upstream's `HUB_PROVIDERS`. The hub's own `status` cannot drive this: it reports quota
   cooldowns and dead logins alike as `error`, told apart only by free text.
 
 ## Removal

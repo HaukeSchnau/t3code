@@ -8,6 +8,7 @@ import {
   htmlRenderFromToolItem,
   htmlRenderUpdateFromToolItem,
   mcpAppFromToolItem,
+  previewRecordingIdFromToolItem,
 } from "@t3tools/shared/toolOutput";
 
 import {
@@ -145,7 +146,8 @@ export function threadHtmlRenderAttachmentIds(
     const attachmentId =
       htmlRenderFromToolItem(item)?.attachmentId ??
       htmlRenderUpdateFromToolItem(item)?.attachmentId ??
-      mcpAppFromToolItem(item)?.attachmentId;
+      mcpAppFromToolItem(item)?.attachmentId ??
+      previewRecordingIdFromToolItem(item);
     return attachmentId !== undefined &&
       parseThreadSegmentFromAttachmentId(attachmentId) === segment
       ? [attachmentId]

@@ -16,6 +16,7 @@ import * as ServerConfig from "../config.ts";
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import * as ServerLogger from "../serverLogger.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
+import * as HeapAttribution from "./HeapAttribution.ts";
 import * as RuntimeMetrics from "./RuntimeMetrics.ts";
 
 // The production collector only accepts OTLP/HTTP protobuf metrics; traces keep the configured protocol.
@@ -76,8 +77,11 @@ export const layer = Layer.unwrap(
           ...(delegate ? { delegate } : {}),
         });
 
+        const heapAttribution = yield* HeapAttribution.make(tracer);
+        yield* heapAttribution.run;
+
         return Layer.mergeAll(
-          Layer.succeed(Tracer.Tracer, tracer),
+          Layer.succeed(Tracer.Tracer, heapAttribution.tracer),
           BrowserTraceCollector.layer(sink),
         );
       }),

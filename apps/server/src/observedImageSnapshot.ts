@@ -14,9 +14,15 @@ import {
 } from "@t3tools/shared/filePreview";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
 
 import { createDeterministicAttachmentId, resolveAttachmentPath } from "./attachmentStore.ts";
 import { projectHostPath } from "./project/SeparateProjectRegistry.ts";
+
+class ObservedImageHostPathError extends Schema.TaggedError<ObservedImageHostPathError>()(
+  "ObservedImageHostPathError",
+  { path: Schema.String, cause: Schema.Defect() },
+) {}
 
 /**
  * Copies an image an agent viewed into its thread's attachments, so the preview survives edits or
@@ -42,9 +48,11 @@ export const snapshotObservedImage = Effect.fn("snapshotObservedImage")(
     const hostPath =
       cwd === null
         ? input.path
-        : yield* Effect.tryPromise(() =>
-            projectHostPath(cwd, NodePath.resolve(cwd, input.path), input.agentExecState),
-          );
+        : yield* Effect.tryPromise({
+            try: () =>
+              projectHostPath(cwd, NodePath.resolve(cwd, input.path), input.agentExecState),
+            catch: (cause) => new ObservedImageHostPathError({ path: input.path, cause }),
+          });
     const info = yield* input.fileSystem.stat(hostPath);
     if (
       info.type !== "File" ||

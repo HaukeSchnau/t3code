@@ -1,19 +1,14 @@
 import type { JjStackRow } from "@t3tools/client-runtime/state/vcs";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useMemo, useState } from "react";
-import { Platform, RefreshControl, ScrollView, View } from "react-native";
-import { Screen, ScreenStack, ScreenStackHeaderConfig } from "react-native-screens";
+import { Platform, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { withUniwind } from "uniwind";
 
-import { AndroidSheetHeader } from "../../../components/ui/AndroidScreenHeader";
+import { AppBar } from "../../../components/ui/AppBar";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { cn } from "../../../lib/cn";
-import {
-  NativeStackScreenOptions,
-  nativeHeaderScrollEdgeEffects,
-} from "../../../native/StackHeader";
+import { NativeScrollView } from "../../../native/NativeScrollViewMarker";
 import { useEnvironmentQuery } from "../../../state/query";
 import { useSelectedThreadJjActions } from "../../../state/use-selected-thread-jj-actions";
 import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
@@ -22,13 +17,6 @@ import { useVcsActionState } from "../../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../../state/vcs";
 import { SheetActionButton } from "./gitSheetComponents";
 import { jjBreadcrumb, jjPushState, jjStackViewFromStatus } from "./jj-stack-presentation";
-
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
-const NativeScreen = withUniwind(Screen);
-const NativeHeader = withUniwind(ScreenStackHeaderConfig, {
-  color: { fromClassName: "tintColorClassName", styleProperty: "accentColor" },
-  titleColor: { fromClassName: "titleColorClassName", styleProperty: "accentColor" },
-});
 
 type JjStackSheetProps = StaticScreenProps<{
   readonly environmentId: string;
@@ -85,10 +73,11 @@ export function JjStackSheet(props: JjStackSheetProps) {
   };
 
   const content = (
-    <ScrollView
+    <NativeScrollView
+      nestedScrollEnabled
       alwaysBounceVertical
       className="flex-1 android:bg-sheet-solid ios:bg-screen"
-      contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+      contentInsetAdjustmentBehavior="automatic"
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
       contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
@@ -156,50 +145,21 @@ export function JjStackSheet(props: JjStackSheetProps) {
           />
         </View>
       </View>
-    </ScrollView>
+    </NativeScrollView>
   );
 
-  if (Platform.OS === "ios") {
-    // A form sheet renders no stack header, so the header comes from a nested native stack.
-    return (
-      <View collapsable={false} className="flex-1 bg-sheet">
-        <ScreenStack style={{ flex: 1 }}>
-          <NativeScreen
-            activityState={2}
-            enabled
-            isNativeStack
-            screenId="thread-jj-sheet-native"
-            scrollEdgeEffects={HEADER_SCROLL_EDGE_EFFECTS}
-            className="flex-1 bg-sheet"
-          >
-            {content}
-            <NativeHeader
-              backgroundColor="rgba(0,0,0,0)"
-              tintColorClassName="accent-foreground"
-              hideBackButton
-              hideShadow={false}
-              navigationItemStyle="editor"
-              title={title}
-              subtitle={subtitle}
-              titleColorClassName="accent-foreground"
-              titleFontSize={18}
-              titleFontWeight="800"
-              translucent
-            />
-          </NativeScreen>
-        </ScreenStack>
-      </View>
-    );
-  }
-
   return (
-    <View collapsable={false} className="flex-1 bg-header">
-      <NativeStackScreenOptions options={{ sheetCornerRadius: 28 }} />
-      <AndroidSheetHeader
+    <View collapsable={false} className="flex-1 android:bg-header ios:bg-sheet">
+      <AppBar
         title={title}
         subtitle={subtitle}
         hideBottomBorder
-        onBack={() => navigation.goBack()}
+        onClose={() => navigation.goBack()}
+        refresh={{
+          accessibilityLabel: "Refresh stack",
+          disabled: busy || isPullRefreshing,
+          onPress: () => void handlePullRefresh(),
+        }}
       />
       <ScreenContent>{content}</ScreenContent>
     </View>

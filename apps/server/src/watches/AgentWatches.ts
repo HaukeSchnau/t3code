@@ -15,7 +15,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -351,7 +351,7 @@ export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
@@ -778,7 +778,7 @@ export const make = Effect.gen(function* () {
         Effect.mapError(unavailable("store the watch")),
       );
       const watch: Watch = {
-        watch_id: WatchId.make(`watch:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`),
+        watch_id: WatchId.make(`watch:${yield* random.uuidV4()}`),
         watcher_thread_id: watcher.id,
         label: input.label?.trim() || null,
         source_json: source,

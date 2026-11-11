@@ -5,14 +5,21 @@ import {
   type UsageLimitSourceAccount,
   type UsageLimitSourceConfig,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 
+import {
+  GROK_USAGE_URL,
+  GrokUsageResponse,
+  grokUsageResponseToLimits,
+} from "@t3tools/provider-grok/server";
 import { codexPlanLabel } from "../provider/CodexProvider.ts";
 import {
   CODEX_USAGE_BASE,
@@ -23,11 +30,23 @@ import {
 import { CLAUDE_USAGE_URL } from "../provider/claudeResetCredits.ts";
 import { ClaudeOauthUsage, claudeOauthUsageToLimits } from "../provider/claudeUsageLimits.ts";
 import {
+  antigravityAccountFingerprint,
+  antigravitySummaryWindows,
+  antigravityUserAgent,
+} from "../provider/antigravityUsageLimits.ts";
+import {
   makeUnavailableUsageLimits,
+  makeUsageLimits,
   UsageLimitsReadError,
   usageLimitsReadFailure,
   usageLimitsStatusError,
 } from "@t3tools/provider-core/server/usageLimits";
+
+/** A hub with its management key already read from wherever the setting keeps it. */
+export interface CliproxyHub {
+  readonly url: UsageLimitSourceConfig["url"];
+  readonly managementKey: string;
+}
 
 const AuthFile = Schema.Struct({
   id: Schema.String,
@@ -36,6 +55,7 @@ const AuthFile = Schema.Struct({
   email: Schema.optional(Schema.String),
   disabled: Schema.optional(Schema.Boolean),
   modtime: Schema.optional(Schema.String),
+  project_id: Schema.optional(Schema.String),
   id_token: Schema.optional(
     Schema.Struct({
       chatgpt_account_id: Schema.optional(Schema.String),
@@ -68,6 +88,8 @@ const decodeApiResponse = Schema.decodeUnknownEffect(ApiResponse);
 const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(CreditList));
 const decodeClaudeUsage = Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeOauthUsage));
 const decodeCodexUsage = Schema.decodeUnknownEffect(Schema.fromJsonString(CodexUsage));
+const decodeGrokUsage = Schema.decodeUnknownEffect(Schema.fromJsonString(GrokUsageResponse));
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const isUsageLimitsReadError = Schema.is(UsageLimitsReadError);
 const isUsageLimitSourceError = Schema.is(UsageLimitSourceError);
 
@@ -124,32 +146,196 @@ const creditRedeemRequestId = Effect.fn("CliproxyApi.creditRedeemRequestId")(fun
   accountId: string,
   creditId: string,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const name = new TextEncoder().encode(`${accountId}:${creditId}`);
   const input = new Uint8Array(CREDIT_REDEEM_NAMESPACE.length + name.length);
   input.set(CREDIT_REDEEM_NAMESPACE);
   input.set(name, CREDIT_REDEEM_NAMESPACE.length);
-  const bytes = (yield* crypto.digest("SHA-1", input).pipe(Effect.orDie)).slice(0, 16);
+  const bytes = (yield* digest.digest(Digest.sha1, input).pipe(Effect.orDie)).slice(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x50;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = Hex.encode(bytes);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 });
 
-const accountBase = (account: typeof AuthFile.Type) => ({
-  id: account.id,
-  driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),
+type AuthFile = typeof AuthFile.Type;
+/** Sends one upstream request with the account's token, as GET or as a JSON POST of `data`. */
+type HubCall = (
+  url: string,
+  data?: unknown,
+) => Effect.Effect<string, UsageLimitSourceError | UsageLimitsReadError | Schema.SchemaError>;
+type HubReading = Omit<UsageLimitSourceAccount, "id" | "driver">;
+interface HubProvider {
+  readonly driver: ProviderDriverKind;
+  /** Names the provider in errors about its usage reads. */
+  readonly label: string;
+  readonly header: (
+    account: AuthFile,
+    platform: NodeJS.Platform,
+    architecture: NodeJS.Architecture,
+  ) => Record<string, string>;
+  readonly read: (input: {
+    readonly account: AuthFile;
+    readonly call: HubCall;
+    readonly checkedAt: string;
+  }) => Effect.Effect<
+    HubReading,
+    UsageLimitSourceError | UsageLimitsReadError | Schema.SchemaError,
+    Digest.Digest
+  >;
+}
+
+const listedIdentity = (account: AuthFile) => ({
   ...(account.email ? { email: account.email } : {}),
   ...(account.id_token?.chatgpt_account_id?.trim()
     ? { workspaceId: account.id_token.chatgpt_account_id.trim() }
     : {}),
 });
 
+const credits = Effect.fn("CliproxyApi.credits")(function* (call: HubCall) {
+  const response = yield* decodeCreditList(yield* call(CREDIT_URL));
+  const now = DateTime.toEpochMillis(yield* DateTime.now);
+  return response.credits
+    .filter(
+      (credit) =>
+        credit.reset_type === "codex_rate_limits" &&
+        credit.status === "available" &&
+        Date.parse(credit.expires_at) > now,
+    )
+    .toSorted((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at));
+});
+
+const CODEX_HUB: HubProvider = {
+  driver: ProviderDriverKind.make("codex"),
+  label: "Codex",
+  header: (account) => ({
+    Authorization: "Bearer $TOKEN$",
+    ...codexBackendHeaders(account.id_token?.chatgpt_account_id),
+  }),
+  read: Effect.fnUntraced(function* ({ account, call, checkedAt }) {
+    const usage = yield* decodeCodexUsage(yield* call(`${CODEX_USAGE_BASE}/usage`));
+    const available = yield* credits(call).pipe(Effect.orElseSucceed(() => undefined));
+    const next = available?.[0];
+    const planType =
+      usage.plan_type ?? account.id_token?.plan_type ?? account.id_token?.chatgpt_plan_type;
+    return {
+      ...listedIdentity(account),
+      plan: codexPlanLabel(planType),
+      usageLimits: {
+        ...codexUsageToLimits(usage, checkedAt, planType),
+        ...(available
+          ? {
+              resetCredits: {
+                availableCount: available.length,
+                ...(next
+                  ? {
+                      nextCreditId: next.id,
+                      nextExpiresAt: DateTime.formatIso(DateTime.makeUnsafe(next.expires_at)),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      },
+    };
+  }),
+};
+
+const GROK_CLI_VERSION = "1.0.77";
+const ANTIGRAVITY_SUMMARY_URL =
+  "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+
+// Keyed by the auth-files `provider`; accounts of any other provider are skipped.
+const HUB_PROVIDERS = new Map<string, HubProvider>([
+  ["codex", CODEX_HUB],
+  [
+    "claude",
+    {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      label: "Claude",
+      header: () => ({
+        Authorization: "Bearer $TOKEN$",
+        "anthropic-beta": "oauth-2025-04-20",
+        // The OAuth usage endpoint can return 429 without a Claude Code user agent.
+        "User-Agent": "claude-code/2.1.273",
+      }),
+      read: Effect.fnUntraced(function* ({ account, call, checkedAt }) {
+        const usage = yield* decodeClaudeUsage(yield* call(CLAUDE_USAGE_URL));
+        return {
+          ...listedIdentity(account),
+          plan: "Claude Subscription",
+          usageLimits: claudeOauthUsageToLimits(usage, checkedAt).limits,
+        };
+      }),
+    },
+  ],
+  [
+    "xai",
+    {
+      driver: ProviderDriverKind.make("grok"),
+      label: "Grok",
+      header: () => ({
+        Authorization: "Bearer $TOKEN$",
+        "x-xai-token-auth": "xai-grok-cli",
+        "x-grok-client-version": GROK_CLI_VERSION,
+        "User-Agent": `grok-cli/${GROK_CLI_VERSION}`,
+      }),
+      read: Effect.fnUntraced(function* ({ account, call, checkedAt }) {
+        const usage = yield* decodeGrokUsage(yield* call(GROK_USAGE_URL));
+        return {
+          ...listedIdentity(account),
+          usageLimits: grokUsageResponseToLimits(usage, checkedAt),
+        };
+      }),
+    },
+  ],
+  [
+    "antigravity",
+    {
+      driver: ProviderDriverKind.make("antigravity"),
+      label: "Antigravity",
+      header: (_account, platform, architecture) => ({
+        Authorization: "Bearer $TOKEN$",
+        "Content-Type": "application/json",
+        "User-Agent": antigravityUserAgent(platform, architecture),
+      }),
+      read: Effect.fnUntraced(function* ({ account, call, checkedAt }) {
+        const project = account.project_id?.trim();
+        if (!project) {
+          return yield* new UsageLimitSourceError({ detail: "No Antigravity project reported." });
+        }
+        const requestedAt = DateTime.toEpochMillis(yield* DateTime.now);
+        const summary = yield* call(ANTIGRAVITY_SUMMARY_URL, { project });
+        const windows = yield* antigravitySummaryWindows(yield* decodeJson(summary), requestedAt);
+        if (windows.length === 0) {
+          return yield* new UsageLimitSourceError({ detail: "No Antigravity quota reported." });
+        }
+        // Local Antigravity reports no e-mail, so the Google account fingerprint is what pools the two.
+        const fingerprint = yield* call("https://www.googleapis.com/oauth2/v2/userinfo").pipe(
+          Effect.flatMap(decodeJson),
+          Effect.flatMap(antigravityAccountFingerprint),
+          Effect.option,
+        );
+        const usageLimits = makeUsageLimits({ checkedAt, windows });
+        return Option.match(fingerprint, {
+          onNone: () => ({ ...listedIdentity(account), usageLimits }),
+          onSome: (credentialFingerprint) => ({
+            usageLimits: { ...usageLimits, credentialFingerprint },
+          }),
+        });
+      }),
+    },
+  ],
+]);
+
 const signInRequiredAccount = (
-  account: typeof AuthFile.Type,
+  account: AuthFile,
+  provider: HubProvider,
   checkedAt: string,
 ): UsageLimitSourceAccount => ({
-  ...accountBase(account),
+  id: account.id,
+  driver: provider.driver,
+  ...listedIdentity(account),
   signInRequired: true,
   usageLimits: makeUnavailableUsageLimits({
     checkedAt,
@@ -160,31 +346,33 @@ const signInRequiredAccount = (
 
 export const makeCliproxyApi = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
+  const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
   // The auth file version each rejected account was rejected with, by hub URL and account.
   // Anthropic throttles an account's quota reads for an hour after repeated 401s, so a
   // rejected account is read again only once the hub rewrites its auth file, which a token
   // refresh or a new login does.
   const rejectedVersions = new Map<string, string>();
-  const rejectionKey = (config: UsageLimitSourceConfig, account: typeof AuthFile.Type) =>
-    `${config.url}\0${account.id}`;
+  const rejectionKey = (hub: CliproxyHub, account: AuthFile) => `${hub.url}\0${account.id}`;
 
   const management = Effect.fn("CliproxyApi.management")(function* (
-    config: UsageLimitSourceConfig,
+    hub: CliproxyHub,
     path: string,
     body?: unknown,
   ) {
     const url = yield* Effect.try({
-      try: () =>
-        new URL(
-          `v0/management/${path}`,
-          config.url.endsWith("/") ? config.url : `${config.url}/`,
-        ).toString(),
+      try: () => {
+        const base = new URL(hub.url);
+        // Users often paste the hub's web panel URL, which ends in management.html.
+        base.pathname = base.pathname.replace(/(\/management\.html)?\/?$/i, "/");
+        return new URL(`v0/management/${path}`, base).toString();
+      },
       catch: () => new UsageLimitSourceError({ detail: "The hub URL is not valid." }),
     });
     const request = (
       body === undefined ? HttpClientRequest.get(url) : HttpClientRequest.post(url)
-    ).pipe(HttpClientRequest.setHeader("Authorization", `Bearer ${config.managementKey}`));
+    ).pipe(HttpClientRequest.setHeader("Authorization", `Bearer ${hub.managementKey}`));
     const response = yield* client
       .execute(body === undefined ? request : request.pipe(HttpClientRequest.bodyJsonUnsafe(body)))
       .pipe(
@@ -198,34 +386,23 @@ export const makeCliproxyApi = Effect.gen(function* () {
     return response;
   });
 
-  const authFiles = Effect.fn("CliproxyApi.authFiles")(function* (config: UsageLimitSourceConfig) {
-    const response = yield* management(config, "auth-files");
+  const authFiles = Effect.fn("CliproxyApi.authFiles")(function* (hub: CliproxyHub) {
+    const response = yield* management(hub, "auth-files");
     return (yield* decodeAuthFiles(response)).files;
   });
 
   const apiCall = Effect.fn("CliproxyApi.apiCall")(function* (
-    config: UsageLimitSourceConfig,
-    account: typeof AuthFile.Type,
+    hub: CliproxyHub,
+    account: AuthFile,
+    provider: HubProvider,
     url: string,
     data?: unknown,
   ) {
-    const header =
-      account.provider === "codex"
-        ? {
-            Authorization: "Bearer $TOKEN$",
-            ...codexBackendHeaders(account.id_token?.chatgpt_account_id),
-          }
-        : {
-            Authorization: "Bearer $TOKEN$",
-            "anthropic-beta": "oauth-2025-04-20",
-            // The OAuth usage endpoint can return 429 without a Claude Code user agent.
-            "User-Agent": "claude-code/2.1.273",
-          };
-    const raw = yield* management(config, "api-call", {
+    const raw = yield* management(hub, "api-call", {
       auth_index: account.auth_index,
       method: data === undefined ? "GET" : "POST",
       url,
-      header,
+      header: provider.header(account, platform, architecture),
       ...(data === undefined ? {} : { data: yield* encodeJson(data) }),
     });
     const response = yield* decodeApiResponse(raw);
@@ -234,7 +411,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
         ([name]) => name.toLowerCase() === "retry-after",
       )?.[1][0];
       return yield* usageLimitsStatusError({
-        provider: account.provider === "codex" ? "Codex" : "Claude",
+        provider: provider.label,
         status: response.status_code,
         retryAfter,
         nowMs: DateTime.toEpochMillis(yield* DateTime.now),
@@ -243,66 +420,20 @@ export const makeCliproxyApi = Effect.gen(function* () {
     return response.body;
   });
 
-  const credits = Effect.fn("CliproxyApi.credits")(function* (
-    config: UsageLimitSourceConfig,
-    account: typeof AuthFile.Type,
-  ) {
-    const body = yield* apiCall(config, account, CREDIT_URL);
-    const response = yield* decodeCreditList(body);
-    const now = DateTime.toEpochMillis(yield* DateTime.now);
-    return response.credits
-      .filter(
-        (credit) =>
-          credit.reset_type === "codex_rate_limits" &&
-          credit.status === "available" &&
-          Date.parse(credit.expires_at) > now,
-      )
-      .toSorted((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at));
-  });
-
   const readAccount = Effect.fn("CliproxyApi.readAccount")(function* (
-    config: UsageLimitSourceConfig,
-    account: typeof AuthFile.Type,
+    hub: CliproxyHub,
+    account: AuthFile,
+    provider: HubProvider,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const base = accountBase(account);
-    const read = Effect.gen(function* () {
-      if (account.provider === "claude") {
-        const usage = yield* decodeClaudeUsage(yield* apiCall(config, account, CLAUDE_USAGE_URL));
-        return {
-          ...base,
-          plan: "Claude Subscription",
-          usageLimits: claudeOauthUsageToLimits(usage, checkedAt).limits,
-        };
-      }
-      const body = yield* apiCall(config, account, `${CODEX_USAGE_BASE}/usage`);
-      const usage = yield* decodeCodexUsage(body);
-      const available = yield* credits(config, account).pipe(Effect.orElseSucceed(() => undefined));
-      const next = available?.[0];
-      const planType =
-        usage.plan_type ?? account.id_token?.plan_type ?? account.id_token?.chatgpt_plan_type;
-      return {
-        ...base,
-        plan: codexPlanLabel(planType),
-        usageLimits: {
-          ...codexUsageToLimits(usage, checkedAt, planType),
-          ...(available
-            ? {
-                resetCredits: {
-                  availableCount: available.length,
-                  ...(next
-                    ? {
-                        nextCreditId: next.id,
-                        nextExpiresAt: DateTime.formatIso(DateTime.makeUnsafe(next.expires_at)),
-                      }
-                    : {}),
-                },
-              }
-            : {}),
-        },
-      };
-    });
-    return yield* read.pipe(
+    const call: HubCall = (url, data) => apiCall(hub, account, provider, url, data);
+    return yield* provider.read({ account, call, checkedAt }).pipe(
+      Effect.provideService(Digest.Digest, digest),
+      Effect.map((reading): UsageLimitSourceAccount => ({
+        id: account.id,
+        driver: provider.driver,
+        ...reading,
+      })),
       Effect.catch((cause) =>
         Effect.gen(function* () {
           const error = isUsageLimitsReadError(cause)
@@ -314,11 +445,15 @@ export const makeCliproxyApi = Effect.gen(function* () {
             ...(error.retryAt ? { retryAt: error.retryAt } : {}),
           });
           if (error.status === 401) {
-            if (account.modtime)
-              rejectedVersions.set(rejectionKey(config, account), account.modtime);
-            return signInRequiredAccount(account, checkedAt);
+            if (account.modtime) rejectedVersions.set(rejectionKey(hub, account), account.modtime);
+            return signInRequiredAccount(account, provider, checkedAt);
           }
-          return { ...base, usageLimits: usageLimitsReadFailure(error, checkedAt) };
+          return {
+            id: account.id,
+            driver: provider.driver,
+            ...listedIdentity(account),
+            usageLimits: usageLimitsReadFailure(error, checkedAt),
+          };
         }),
       ),
     );
@@ -326,10 +461,10 @@ export const makeCliproxyApi = Effect.gen(function* () {
 
   /** `reuse` returns the account's last reading when it must not be read now. */
   const readAccounts = Effect.fn("CliproxyApi.readAccounts")(function* (
-    config: UsageLimitSourceConfig,
+    hub: CliproxyHub,
     reuse: (accountId: string) => UsageLimitSourceAccount | undefined = () => undefined,
   ): Effect.fn.Return<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError> {
-    const accounts = yield* authFiles(config).pipe(
+    const accounts = yield* authFiles(hub).pipe(
       Effect.mapError((error) =>
         isUsageLimitSourceError(error)
           ? error
@@ -337,43 +472,43 @@ export const makeCliproxyApi = Effect.gen(function* () {
       ),
     );
     return yield* Effect.forEach(
-      accounts.filter(
-        (account) =>
-          !account.disabled && (account.provider === "codex" || account.provider === "claude"),
-      ),
-      (account) => {
+      accounts.flatMap((account) => {
+        const provider = HUB_PROVIDERS.get(account.provider);
+        return provider && !account.disabled ? [{ account, provider }] : [];
+      }),
+      ({ account, provider }) => {
         if (
           account.modtime !== undefined &&
-          rejectedVersions.get(rejectionKey(config, account)) === account.modtime
+          rejectedVersions.get(rejectionKey(hub, account)) === account.modtime
         ) {
           return DateTime.now.pipe(
-            Effect.map((now) => signInRequiredAccount(account, DateTime.formatIso(now))),
+            Effect.map((now) => signInRequiredAccount(account, provider, DateTime.formatIso(now))),
           );
         }
         const kept = reuse(account.id);
-        return kept ? Effect.succeed(kept) : readAccount(config, account);
+        return kept ? Effect.succeed(kept) : readAccount(hub, account, provider);
       },
       { concurrency: 4 },
     );
   });
 
   const consume = Effect.fn("CliproxyApi.consume")(function* (
-    config: UsageLimitSourceConfig,
+    hub: CliproxyHub,
     accountId: string,
     creditId: string,
   ): Effect.fn.Return<ProviderConsumeResetCreditResult, UsageLimitSourceError> {
     const operation = Effect.gen(function* () {
-      const account = (yield* authFiles(config)).find((account) => account.id === accountId);
+      const account = (yield* authFiles(hub)).find((account) => account.id === accountId);
       if (!account || account.disabled || account.provider !== "codex") {
         return yield* new UsageLimitSourceError({
           detail: "The Codex hub account is missing or disabled.",
         });
       }
-      const body = yield* apiCall(config, account, `${CREDIT_URL}/consume`, {
+      const body = yield* apiCall(hub, account, CODEX_HUB, `${CREDIT_URL}/consume`, {
         redeem_request_id: yield* creditRedeemRequestId(
           account.id_token?.chatgpt_account_id ?? account.id,
           creditId,
-        ).pipe(Effect.provideService(Crypto.Crypto, crypto)),
+        ).pipe(Effect.provideService(Digest.Digest, digest)),
         credit_id: creditId,
       });
       const response = yield* decodeConsumeResponse(body);
@@ -386,7 +521,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
         } as const
       )[response.code];
       if (outcome !== "reset" && outcome !== "alreadyRedeemed") return { outcome };
-      const cleared = yield* management(config, "reset-quota", {
+      const cleared = yield* management(hub, "reset-quota", {
         auth_index: account.auth_index,
       }).pipe(Effect.result);
       return {

@@ -15,8 +15,9 @@ one ordinary user message when sent.
   a quiet source highlight, and paragraph replies keep a small source indicator.
 - The existing main composer remains the only send control. Inline replies enable it even when its
   own prompt is empty (`hasExternalSendableContent`), and its text acts as an optional overall note.
+  Upstream's Tab prompt suggestion is not offered while replies are pending.
 - `chat/useComposerSend.ts` formats the replies with `formatInlineReplyPrompt` for single-model,
-  multi-model (`chat/useMultipleModelSend.ts`), plan follow-up, and outbox sends. A successful send
+  multi-model (`chat/useMultipleModelSend.ts`), and outbox sends. A successful send
   clears them, and a failed send restores them. No provider or wire-contract specialization is allowed.
 
 ## Maintenance notes

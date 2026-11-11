@@ -10,6 +10,7 @@ import {
   type OrchestrationV2TurnItem,
   type ThreadId,
 } from "@t3tools/contracts";
+import type { ToolCallVisibility } from "@t3tools/contracts/settings";
 import {
   resolveT3McpSummaryAction,
   resolveT3McpToolDefinition,
@@ -279,9 +280,9 @@ function workEntryIndicatesToolFailureFromOutput(
   }
   const item = entry.structuredPayload;
   if (item?.type === "command_execution") {
-    if (item.outputIndicatesFailure || (item.exitCode !== undefined && item.exitCode !== 0)) {
-      return true;
-    }
+    // The exit code outranks text in the output or the command itself.
+    if (item.exitCode !== undefined) return item.exitCode !== 0;
+    if (item.outputIndicatesFailure) return true;
     if (item.output && toolOutputIndicatesFailure(item.output.slice(0, 32_768))) {
       return true;
     }
@@ -292,12 +293,48 @@ function workEntryIndicatesToolFailureFromOutput(
   return output.length > 0 && toolOutputIndicatesFailure(output);
 }
 
+// Rows are re-derived on every timeline update but entries are reused while
+// their item is unchanged, so these per-entry checks are computed once.
+const entryChecks = new WeakMap<
+  WorkLogPresentationEntry,
+  { failure?: boolean; displayFailure?: boolean; action?: ToolGroupAction }
+>();
+
+function checksFor(entry: WorkLogPresentationEntry) {
+  let checks = entryChecks.get(entry);
+  if (!checks) {
+    checks = {};
+    entryChecks.set(entry, checks);
+  }
+  return checks;
+}
+
 export function workEntryIndicatesToolFailure(entry: WorkLogPresentationEntry): boolean {
-  return workEntryIndicatesToolFailureFromOutput(entry, true);
+  return (checksFor(entry).failure ??= workEntryIndicatesToolFailureFromOutput(entry, true));
 }
 
 export function workEntryDisplayIndicatesToolFailure(entry: WorkLogPresentationEntry): boolean {
-  return workEntryIndicatesToolFailureFromOutput(entry, false);
+  return (checksFor(entry).displayFailure ??= workEntryIndicatesToolFailureFromOutput(
+    entry,
+    false,
+  ));
+}
+
+const HIDEABLE_TOOL_CALL_ITEM_TYPES: ReadonlySet<WorkLogPresentationEntry["itemType"]> = new Set([
+  "command_execution",
+  "file_change",
+  "file_search",
+  "web_search",
+  "dynamic_tool",
+]);
+
+export function workEntryHiddenByToolCallVisibility(
+  entry: WorkLogPresentationEntry,
+  visibility: ToolCallVisibility,
+): boolean {
+  if (visibility === "showAll" || !HIDEABLE_TOOL_CALL_ITEM_TYPES.has(entry.itemType)) return false;
+  if (visibility !== "hideSuccessful") return true;
+  return entry.toolLifecycleStatus === "completed" && !workEntryDisplayIndicatesToolFailure(entry);
 }
 
 function workLogEntryIsLocalCodeSearch(entry: WorkLogPresentationEntry): boolean {
@@ -309,6 +346,10 @@ function workLogEntryIsLocalCodeSearch(entry: WorkLogPresentationEntry): boolean
 }
 
 export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupAction {
+  return (checksFor(entry).action ??= computeToolGroupAction(entry));
+}
+
+function computeToolGroupAction(entry: WorkLogPresentationEntry): ToolGroupAction {
   if (entry.itemType === "thread_created") return "thread-create";
   const presentation = resolveWorkEntryToolPresentation(entry);
   if (presentation?.action !== undefined) return presentation.action;
@@ -381,6 +422,21 @@ export function workEntryObservedImage(
   return entry.structuredPayload?.type === "dynamic_tool"
     ? entry.structuredPayload.observedImage
     : undefined;
+}
+
+/**
+ * Distinct images the agent opened across a tool group, in viewing order, with the server's copy
+ * from each path's latest view.
+ */
+export function workEntriesViewedImages(
+  entries: ReadonlyArray<WorkLogPresentationEntry>,
+): Array<{ readonly path: string; readonly observedImage: ChatImageAttachment | undefined }> {
+  const images = new Map<string, ChatImageAttachment | undefined>();
+  for (const entry of entries) {
+    const path = workEntryViewedImagePath(entry);
+    if (path !== null) images.set(path, workEntryObservedImage(entry) ?? images.get(path));
+  }
+  return Array.from(images, ([path, observedImage]) => ({ path, observedImage }));
 }
 
 export interface ViewedImageAsset {

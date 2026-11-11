@@ -38,7 +38,8 @@ How it works is in [docs/internals/skill-packs.md](../docs/internals/skill-packs
 - `apps/server/src/persistence/Migrations.ts` and the two migration manifest tests.
 - `packages/client-runtime/src/operations/commands.ts` (draft packs before `launchThread`) and
   `rpc/client.ts` (subscription tag).
-- Web: `chat/ComposerControlsBar.tsx` (first resting block, fed by `ChatComposer.tsx`),
+- Web: `chat/ComposerControlsBar.tsx` (after the model picker, outside upstream's resting blocks,
+  fed by `ChatComposer.tsx`; `restingComposerControlsMeasurement.ts` counts it as fixed width),
   `ChatView.tsx` (control), `chat/useComposerSend.ts` and `chat/useMultipleModelSend.ts` (draft
   bootstrap),
   `ProjectSettingsPanel.tsx` (Skills row).
@@ -50,8 +51,8 @@ How it works is in [docs/internals/skill-packs.md](../docs/internals/skill-packs
 
 The v1 `t3 thread create --skill-pack` flag and the thread-orchestration MCP field went away with
 the v1 orchestration toolkit. Threads that agents create follow their parent or project instead.
-The web control has no entry in the composer's overflow menu, so it is unreachable only when every
-resting control is hidden.
+The web control never moves into the composer's overflow menu; upstream's overflow logic only knows
+its runtime-mode block.
 
 ## Upstream maintenance
 

@@ -10,17 +10,11 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import {
-  ChevronDownIcon,
-  FolderGit2Icon,
-  FolderGitIcon,
-  FolderIcon,
-  PlusIcon,
-  ScaleIcon,
-} from "lucide-react";
+import { FolderGit2Icon, FolderGitIcon, FolderIcon, PlusIcon, ScaleIcon } from "lucide-react";
 import {
   type Ref,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   memo,
   useImperativeHandle,
   useRef,
@@ -79,8 +73,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { useComposerMenuProps } from "./chat/composerEventScope";
-import { measureRestingComposerControls } from "./chat/restingComposerControlsMeasurement";
-import { resolveRestingComposerControlsNaturalWidth } from "./composerFooterLayout";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
 
@@ -112,10 +104,10 @@ interface BranchToolbarProps {
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  /** Shown at the end of the composer strip, such as the new thread's permissions. */
+  trailing?: ReactNode;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
-  composerControlsHostRef?: (element: HTMLDivElement | null) => void;
-  contextStripVisible?: boolean;
   /** A jj checkout shows its stack in the composer strip instead of a branch. */
   jjCwd?: string | null;
   /** jj and directory projects choose a managed workspace instead (patches/workspaces.md). */
@@ -233,9 +225,7 @@ const RunContextSelector = memo(function RunContextSelector({
   const workspaceIcon = (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-        <WorkspaceIcon
-          className={isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0 mx-0!"}
-        />
+        <WorkspaceIcon className={isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"} />
       </TooltipTrigger>
       <TooltipPopup>
         {isPanel
@@ -251,7 +241,7 @@ const RunContextSelector = memo(function RunContextSelector({
       <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
         {autoEnvironmentLabel ? (
           <ScaleIcon
-            className={isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0 mx-0!"}
+            className={isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"}
             aria-hidden="true"
           />
         ) : (
@@ -259,9 +249,7 @@ const RunContextSelector = memo(function RunContextSelector({
             kind={activeEnvironment?.machine ?? "server"}
             // Wide machine glyphs need a little more box to match the square row icons.
             className={
-              isPanel
-                ? cn(THREAD_DETAILS_PANEL_ICON_CLASS, "-mx-px size-4.5")
-                : "size-3 shrink-0 mx-0!"
+              isPanel ? cn(THREAD_DETAILS_PANEL_ICON_CLASS, "-mx-px size-4.5") : "size-3 shrink-0"
             }
           />
         )}
@@ -286,7 +274,7 @@ const RunContextSelector = memo(function RunContextSelector({
     return (
       <span
         className={cn(
-          "inline-flex h-7 min-w-0 max-w-[48%] flex-initial items-center justify-start gap-1 rounded-md border border-transparent px-1.75 font-normal text-foreground/70 text-xs sm:h-6 dark:text-muted-foreground",
+          "inline-flex h-7 min-w-0 max-w-[48%] flex-initial items-center justify-start gap-1 rounded-md border border-transparent px-1.75 font-normal text-foreground/70 text-sm sm:h-6 sm:text-xs dark:text-muted-foreground",
           isPanel && "max-w-full",
           isPanel && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
         )}
@@ -328,7 +316,6 @@ const RunContextSelector = memo(function RunContextSelector({
         ].join(" ")}
       >
         {triggerContent}
-        {!isPanel ? <ChevronDownIcon className="size-3 shrink-0 mx-0!" /> : null}
       </MenuTrigger>
       <MenuPopup
         align="start"
@@ -555,16 +542,7 @@ function useLabelsOverflow(): readonly [
       let groups = 0;
       for (const child of current.children) {
         if (!(child instanceof HTMLElement)) continue;
-        // Reserve overflowed controls' width to prevent repeated hiding and expansion.
-        const hostedControls = child.matches('[data-chat-resting-composer-controls-host="true"]')
-          ? child.querySelector<HTMLElement>('[data-chat-composer-resting-controls="true"]')
-          : null;
-        const hostedMeasurement = hostedControls
-          ? measureRestingComposerControls(hostedControls)
-          : null;
-        const width = hostedMeasurement
-          ? resolveRestingComposerControlsNaturalWidth(hostedMeasurement)
-          : contentWidth(hostedControls ?? child);
+        const width = contentWidth(child);
         if (width <= 1) continue;
         groups += 1;
         needed += width;
@@ -596,7 +574,6 @@ function useLabelsOverflow(): readonly [
         [
           current,
           ...Array.from(current.children),
-          ...Array.from(current.querySelectorAll("[data-chat-composer-resting-controls='true']")),
           ...Array.from(current.querySelectorAll(COMPOSER_CONTEXT_LABEL_SELECTOR)),
         ],
         measure,
@@ -651,8 +628,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
-  composerControlsHostRef,
-  contextStripVisible = true,
+  trailing,
   jjCwd = null,
   managedWorkspaces = null,
 }: BranchToolbarProps) {
@@ -793,14 +769,10 @@ export const BranchToolbar = memo(function BranchToolbar({
     <ComposerSurface.ContextStrip
       ref={attachStrip}
       data-compact={labelsOverflow ? "" : undefined}
-      className={cn(
-        "gap-1 text-xs font-normal text-foreground/70 dark:text-muted-foreground",
-        // Hide empty non-Git strips while retaining host width so controls can reappear as the chat grows.
-        !contextStripVisible && "pointer-events-none invisible absolute inset-x-0 top-full",
-      )}
+      className={cn("gap-1 text-xs font-normal text-foreground/70 dark:text-muted-foreground")}
     >
       {showGitControls && managedWorkspaces === null ? (
-        <div className="contents @3xl/composer-surface:hidden">
+        <div className="contents @xl/composer-surface:hidden">
           <RunContextSelector
             forceNewWorktree={forceNewWorktree}
             autoEnvironmentLabel={autoEnvironmentLabel}
@@ -828,9 +800,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           className={cn(
             "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
             showGitControls && managedWorkspaces === null
-              ? "hidden @3xl/composer-surface:flex"
+              ? "hidden @xl/composer-surface:flex"
               : "flex",
-            composerControlsHostRef ? "shrink" : "flex-1",
+            "flex-1",
           )}
         >
           {showEnvironmentIndicator && availableEnvironments && (
@@ -880,19 +852,10 @@ export const BranchToolbar = memo(function BranchToolbar({
         </div>
       ) : null}
 
-      {composerControlsHostRef ? (
-        <div
-          ref={composerControlsHostRef}
-          data-composer-context-control
-          data-chat-resting-composer-controls-host="true"
-          className="flex min-w-0 flex-1 items-center justify-start overflow-x-clip overflow-y-visible"
-        />
-      ) : null}
-
       {showGitControls && jjCwd !== null ? (
         <JjStackControl
           displayMode="toolbar"
-          className="flex-initial justify-end @3xl/composer-surface:ml-auto"
+          className="flex-initial justify-end @xl/composer-surface:ml-auto"
           environmentId={environmentId}
           threadId={threadId}
           cwd={jjCwd}
@@ -901,7 +864,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}
           ref={branchSelectorRef}
-          className="min-w-0 flex-initial justify-end @3xl/composer-surface:ml-auto"
+          className="min-w-0 flex-initial justify-end @xl/composer-surface:ml-auto"
           environmentId={environmentId}
           threadId={threadId}
           {...(draftId ? { draftId } : {})}
@@ -915,6 +878,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
       ) : null}
+      {trailing}
     </ComposerSurface.ContextStrip>
   );
 });

@@ -5,8 +5,6 @@ export interface DesktopAppControlAddress {
   readonly directory: string | null;
 }
 
-const MAX_UNIX_SOCKET_PATH_BYTES = 103;
-
 function shortHash(value: string): string {
   return Array.from(sha256(new TextEncoder().encode(value)).slice(0, 12), (byte) =>
     byte.toString(16).padStart(2, "0"),
@@ -31,14 +29,12 @@ export function resolveDesktopAppControlAddress(input: {
 
   const userKey =
     input.userId === undefined ? shortHash(input.stateDir).slice(0, 12) : input.userId;
-  const directoryName = `t3code-${userKey}`;
   const socketName = `${stateHash}.sock`;
-  const preferredDirectory = input.joinPath(input.tempDir, directoryName);
-  const preferredAddress = input.joinPath(preferredDirectory, socketName);
-  const directory =
-    new TextEncoder().encode(preferredAddress).length <= MAX_UNIX_SOCKET_PATH_BYTES
-      ? preferredDirectory
-      : input.joinPath("/tmp", directoryName);
+  const maxPathBytes = input.platform === "linux" ? 107 : 103;
+  let directory = input.joinPath(input.tempDir, `t3code-${userKey}`);
+  if (new TextEncoder().encode(input.joinPath(directory, socketName)).byteLength > maxPathBytes) {
+    directory = input.joinPath("/tmp", `t3code-${userKey}`);
+  }
   return {
     address: input.joinPath(directory, socketName),
     directory,

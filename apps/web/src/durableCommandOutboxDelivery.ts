@@ -46,6 +46,7 @@ function uploadFailure(error: unknown): CommandOutboxDeliveryError {
   });
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off - a rejection inside the upload Promise, never an Effect failure.
 class UploadRejectedError extends Error {
   constructor(readonly status: number) {
     super(`The environment refused the upload (${status}).`);

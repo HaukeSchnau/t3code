@@ -2,66 +2,48 @@
 
 ## Goal
 
-Keep the iOS home-screen and Lock Screen widget aligned with the fork's direct, paired-environment
-agent awareness (see `accountless-direct-agent-awareness.md`). The same `AgentActivity` widget
-extension also hosts the Live Activity, but WidgetKit and ActivityKit store separate layouts and
-update state through different APIs.
+Upstream renders the iOS home-screen and Lock Screen widget (#21163). The fork feeds it from the
+paired environment's agent-awareness snapshot instead of upstream's T3 Connect relay (see
+`accountless-direct-agent-awareness.md`).
 
 ## Requirements
 
-- Register both the `AgentActivity` home widget and the `AgentActivity` Live Activity factory.
-- Every home-widget family must apply SwiftUI's `containerBackground(..., "widget")` modifier;
-  newer iOS versions replace non-conforming widgets with a system error.
-- Support `systemSmall`, `systemMedium`, and `accessoryRectangular`, matching `app.config.ts`.
-- Reconcile the widget snapshot through the paired environment's agent-awareness snapshot RPC when
-  an environment connects and when the app returns to the foreground. ActivityKit pushes update
-  only the Live Activity, not the home widget.
-- Treat a snapshot with `aggregate: null` as authoritative idle state, but retain the last useful
-  snapshot when the snapshot request itself fails.
-- Seed the widget immediately when local agent work begins. Removing the last paired environment
-  currently leaves the last snapshot in place.
-- Only iOS may load `widgets/AgentActivity.tsx`. It creates its Live Activity factory on load, and
-  since SDK 58 Android gets `expo-widgets`' native module, which has no `LiveActivityFactory`, so
-  loading it there crashes the app at startup. `remoteRegistration.ts` updates the widget through
-  `widgets/agentActivityWidgetSnapshot.ios.ts`; the `.ts` fallback does nothing.
-- Keep the serialized widget render function self-contained; Expo serializes it into the extension
-  bundle and cannot resolve module-local rendering helpers.
+- `remoteRegistration.ts` publishes `{ kind: "snapshot", aggregate }` through upstream's
+  `publishWidget` when an environment connects and when the app returns to the foreground.
+  ActivityKit pushes update only the Live Activity, not the home widget.
+- A snapshot with `aggregate: null` is authoritative idle state. A failed snapshot request publishes
+  nothing, so the widget keeps the last useful snapshot.
+- Never publish upstream's `signed-out`, `unavailable` or `loading` sources. Their copy names
+  T3 Connect, and their callers are relay token hooks that are no-ops in the fork.
+- Refreshes overlap. Only the newest read for the current environment set
+  (`deviceRegistrationGeneration`) may publish or prime a Live Activity, as upstream's
+  `widgetSnapshotReads` guard does for its account.
+- The fork reads the snapshot before registering an existing card's push token, because the
+  same read decides whether to prime a card.
+- Seed the widget immediately when local agent work begins. `agentActivityWidgetTimeline.ts`
+  accepts `AgentActivityProps` as the aggregate for that seed, which has no thread or environment
+  ids yet. Removing the last paired environment leaves the last snapshot in place.
 - Enable the `remote-notification` background mode so ActivityKit and notification updates can be
   processed while the app is suspended. `expo-notifications`' `enableBackgroundRemoteNotifications`
   appends it to upstream's `UIBackgroundModes: ["audio"]`, so the signed Info.plist lists both.
 - Keep the APNs entitlement, the embedded `apnsEnvironment` sent with device registration, and the
   actual signing mode in agreement. Local Xcode builds use `T3CODE_APNS_ENVIRONMENT=sandbox`;
   distribution builds default to production.
-- Keep the widget extension's marketing version and build number aligned with the containing app;
-  App Store validation rejects mismatched extension metadata. `expo-widgets` 58 sets
-  `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from the app config when it creates the target,
-  and every prebuild runs with `--clean`, so the fork needs no plugin for this. A prebuild that
-  reuses an existing `ios/` directory keeps the target's old versions.
-- Upstream's stale handling reads `environment.isStale`, which only Live Activity environments
-  carry, so the widget guards it with `"isStale" in environment`. The fork's `createWidget` and
-  `containerBackground` branch sits beside upstream's `linkModifiers` Live Activity layout.
 - Local Live Activity starts in `remoteRegistration.ts` pass upstream's `liveActivityStaleDate()`
   (ten minutes). It must match `STALE_AFTER_SECONDS` in `ApnsProvider.ts`, so local and pushed
   cards go stale at the same time.
 
 ## Upstream touch points
 
-- `apps/mobile/app.config.ts`
-- `apps/mobile/plugins/withWidgetLogoAsset.cjs`
-- `apps/mobile/src/widgets/AgentActivity.tsx`
 - `apps/mobile/src/features/agent-awareness/remoteRegistration.ts`
+- `apps/mobile/src/widgets/agentActivityWidgetTimeline.ts`
 - `apps/server/src/agentAwareness/LocalAgentAwareness.ts`
 - `apps/server/src/agentAwareness/ApnsProvider.ts`
 
-Expo SDK upgrades need special attention: `expo-widgets` removed its hard-coded container
-background in SDK 56, making the `@expo/ui` modifier an application responsibility.
+Drop the publishing rules here once upstream feeds the widget from a paired environment.
 
 ## Verification
 
-- Run the focused `AgentActivity` and remote-registration tests.
-- Typecheck `@t3tools/mobile` and run the native static checks.
-- Prebuild and install an iOS app with the widget/app-group entitlements.
-- Inspect the signed app's `aps-environment`, `UIBackgroundModes`, embedded Expo config, and widget
-  extension version before testing APNs delivery.
-- On a physical device, confirm an existing widget no longer shows “Please adopt
-  containerBackground API” and renders idle or aggregate content after opening the app.
+- Run the focused remote-registration and widget timeline tests.
+- Typecheck `@t3tools/mobile`.
+- On a physical device, confirm the widget renders idle or aggregate content after opening the app.

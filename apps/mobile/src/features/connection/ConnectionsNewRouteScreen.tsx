@@ -8,7 +8,6 @@ import {
   StackActions,
   useIsFocused,
   useNavigation,
-  useRoute,
   type StaticScreenProps,
 } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -32,7 +31,7 @@ import { resolveConnectionPairingAutomation } from "./connectionPairingAutomatio
 import { autoConnectReport, devAutoConnectAttemptAtom } from "./devAutoConnect";
 import { splitEnvironmentSections } from "./environmentSections";
 import { leaveSettingsPage } from "../settings/settings-navigation";
-import { workspaceHasColumns } from "../workspace/workspace-selection-store";
+import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 
 const DEVELOPMENT_PAIRING = __DEV__
   ? resolveConnectionPairingAutomation({
@@ -80,7 +79,6 @@ function PairingForm({
   const { connectionPairingUrl, onChangeConnectionPairingUrl, onConnectPress } =
     useRemoteConnections();
   const navigation = useNavigation();
-  const routeName = useRoute().name;
   const insets = useSafeAreaInsets();
   const [initialPairing] = useState(() => parsePairingUrl(routePairingUrl || connectionPairingUrl));
   const [hostInput, setHostInput] = useState(initialPairing.host);
@@ -199,7 +197,6 @@ function PairingForm({
 
   return (
     <SettingsScreen
-      formSheet={routeName === "ConnectionsNew"}
       title="Add environment"
       actions={[
         {
