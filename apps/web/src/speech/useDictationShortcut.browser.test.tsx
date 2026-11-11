@@ -21,8 +21,9 @@ const press = (repeat = false) =>
     new KeyboardEvent("keydown", {
       key: "D",
       code: "KeyD",
-      ctrlKey: !/Mac/i.test(navigator.platform),
-      metaKey: /Mac/i.test(navigator.platform),
+      // The fork's browser binding (patches/browser-safe-thread-shortcuts.md); tests have no desktop bridge.
+      ctrlKey: /Mac/i.test(navigator.platform),
+      altKey: !/Mac/i.test(navigator.platform),
       shiftKey: true,
       cancelable: true,
       repeat,
