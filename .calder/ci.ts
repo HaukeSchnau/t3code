@@ -514,6 +514,8 @@ const nativeClients = Task.make("native-clients", {
   run: sh(
     "node scripts/mobile-native-client.ts ensure ios --prepare && node scripts/mobile-native-client.ts ensure android --prepare --abi arm64-v8a",
   ),
+  // CocoaPods fails on non-UTF-8 locales, which launchd-started runners default to.
+  env: { LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" },
 }).pipe(Step.timeout("60 minutes"));
 
 /**
