@@ -242,6 +242,17 @@ const ClaudeOauthWindow = Schema.Struct({
 export const ClaudeOauthUsage = Schema.Struct({
   five_hour: Schema.optional(Schema.NullOr(ClaudeOauthWindow)),
   seven_day: Schema.optional(Schema.NullOr(ClaudeOauthWindow)),
+  spend: Schema.optional(Schema.Unknown),
+  extra_usage: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        is_enabled: Schema.Boolean,
+        monthly_limit: Schema.NullOr(Schema.Number),
+        used_credits: Schema.NullOr(Schema.Number),
+        utilization: Schema.NullOr(Schema.Number),
+      }),
+    ),
+  ),
   limits: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -276,16 +287,17 @@ export function claudeOauthUsageToLimits(
         ]
       : [],
   );
+  // `spend` is not in the SDK's typings yet; `readSpendPercent` reads it structurally.
+  const rateLimits = {
+    five_hour: usage.five_hour ?? null,
+    seven_day: usage.seven_day ?? null,
+    model_scoped,
+    spend: usage.spend,
+    extra_usage: usage.extra_usage ?? null,
+  };
   return claudeUsageResponseToLimits({
     checkedAt,
-    response: {
-      rate_limits_available: true,
-      rate_limits: {
-        five_hour: usage.five_hour ?? null,
-        seven_day: usage.seven_day ?? null,
-        model_scoped,
-      },
-    },
+    response: { rate_limits_available: true, rate_limits: rateLimits },
   });
 }
 

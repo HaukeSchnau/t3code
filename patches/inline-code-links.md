@@ -23,7 +23,9 @@ autolinking, which forces the user to copy and paste it into a browser.
 - The web renderer transforms matching inline-code AST nodes in
   `apps/web/src/markdown-inline-code-links.ts`. Upstream moved the remark plugin lists to
   `packages/shared/src/markdownPipeline.ts`, which the server's in-thread find also uses, so
-  `ChatMarkdown` appends `remarkLinkifyInlineCode` after the shared list instead of editing it. Running
+  `ChatMarkdown` appends `remarkLinkifyInlineCode` after the shared list instead of editing it. It
+  does so in module-level lists (`CHAT_REMARK_PLUGINS`) that feed upstream's
+  `CHAT_MARKDOWN_REMARK_PLUGIN_SETS`, so the arrays stay stable and upstream's renderer cache holds. Running
   after `remarkNormalizeLinksAndTagInlineCode` is equivalent: the plugin rebuilds the code node inside
   the new link without the inline-code tag, and linking changes no text.
 - Mobile renders Markdown with `react-native-enriched-markdown`. Upstream rewrites file-path code

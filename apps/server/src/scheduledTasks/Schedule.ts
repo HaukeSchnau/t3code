@@ -16,9 +16,10 @@ export function nextScheduledRunAt(
 ): DateTime.DateTime | null {
   if (schedule.type === "webhook") return null;
   if (schedule.type === "once") {
-    const at = DateTime.make(schedule.at);
-    return Option.isSome(at) && DateTime.toEpochMillis(at.value) > DateTime.toEpochMillis(from)
-      ? at.value
+    const runAt = DateTime.make(schedule.runAt);
+    return Option.isSome(runAt) &&
+      DateTime.toEpochMillis(runAt.value) > DateTime.toEpochMillis(from)
+      ? runAt.value
       : null;
   }
   if (schedule.type === "interval") {
@@ -55,9 +56,7 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
     return b.type === "interval" && a.everyMs === b.everyMs;
   }
   if (a.type === "webhook") return b.type === "webhook";
-  if (a.type === "once") {
-    return b.type === "once" && Date.parse(a.at) === Date.parse(b.at);
-  }
+  if (a.type === "once") return b.type === "once" && Date.parse(a.runAt) === Date.parse(b.runAt);
   if (b.type !== "fixed_time") return false;
   // Compare parsed times so padded-hour edits do not reschedule pending runs.
   const aTime = parseTimeOfDay(a.timeOfDay);

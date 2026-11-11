@@ -332,7 +332,18 @@ effectIt.layer(NodeServices.layer)("readClaudeUsageLimits", (it) => {
         ["five_hour", 30],
         ["seven_day_fable", 12],
       ]);
-      expect(limits.resetCredits).toEqual({ availableCount: 1, nextCreditId: "grant_a" });
+      expect(limits.resetCredits).toEqual({
+        availableCount: 1,
+        nextCreditId: "grant_a",
+        options: [
+          {
+            availableCount: 1,
+            creditId: "grant_a",
+            description: "Refills your 5-hour and weekly limits.",
+            label: "Full reset",
+          },
+        ],
+      });
       expect((yield* Ref.get(scopedLimitNames)).overageIncluded).toBe("Fable");
     }),
   );

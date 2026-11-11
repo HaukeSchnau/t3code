@@ -2,14 +2,16 @@
 
 ## Fork requirement
 
-Browser builds must leave native tab navigation to the browser while retaining keyboard access to
-thread and model-picker navigation. The desktop client keeps the native app shortcuts.
+Browser builds must leave native tab shortcuts to the browser while retaining keyboard access to
+thread and model-picker navigation and dictation. The desktop client keeps the native app shortcuts.
 
 ## Defaults
 
 - Desktop uses `mod+1` through `mod+9` and `mod+shift+[` / `mod+shift+]`.
 - Browsers on macOS use the same keys with `ctrl`.
 - Browsers on Windows and Linux use the same keys with `alt`.
+- Upstream's dictation default, `mod+shift+d` (`composer.dictation`), follows the same rule, since
+  browsers bind it to bookmarking every tab.
 
 `clientSpecificKeybindings` in `packages/shared/src/keybindings.ts` expands each default into those
 three rules. The web keybinding context (`apps/web/src/keybindings.ts`) exposes optional `desktop`,

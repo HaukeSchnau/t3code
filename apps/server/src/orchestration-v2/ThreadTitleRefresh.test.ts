@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it, vi } from "@effect/vitest";
 import {
   CommandId,
@@ -85,6 +86,8 @@ function makeHarness(
               scripts: [],
               createdAt: "2026-06-20T00:00:00.000Z",
               updatedAt: "2026-06-20T00:00:00.000Z",
+              pinnedAt: null,
+              archivedAt: null,
               deletedAt: null,
             })
           : Option.none(),
@@ -100,7 +103,7 @@ function makeHarness(
     layer: Layer.mergeAll(
       dependencies,
       ThreadTitleRegeneration.layer.pipe(Layer.provide(dependencies)),
-    ),
+    ).pipe(Layer.provide(NodeServices.layer)),
     generateThreadTitle,
   };
 }

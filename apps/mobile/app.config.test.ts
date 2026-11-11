@@ -1,6 +1,27 @@
-import { expect, it } from "vite-plus/test";
+import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import config, { resolveApnsEnvironment } from "./app.config";
+
+// Keep config parsing independent of local env files and build credentials.
+vi.mock("../../scripts/lib/public-config.ts", () => ({
+  loadRepoEnv: () => ({ APP_VARIANT: process.env.APP_VARIANT }),
+}));
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+async function loadConfig(variant: string | undefined) {
+  vi.resetModules();
+  vi.stubEnv("APP_VARIANT", variant);
+  return (await import("./app.config.ts")).default;
+}
+
+it.each(["prod", ""])("rejects APP_VARIANT=%j before selecting production IDs", async (value) => {
+  await expect(loadConfig(value)).rejects.toThrow(
+    "APP_VARIANT must be development, preview, or production.",
+  );
+});
 
 it("enables iOS background delivery for remote notifications", () => {
   const notificationsPlugin = config.plugins?.find(

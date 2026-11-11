@@ -1,22 +1,20 @@
-# One-time scheduled tasks
+# Scheduled task failure tracking
 
-Upstream scheduled tasks only repeat, report a run as succeeded once its thread is launched, and
-tell nobody when runs fail. An agent asked to check one upcoming run scheduled a daily task that
-launched a new thread each day. Every run failed during workspace preparation, the task still
-showed `succeeded`, and the agent that created it never heard about it, so it failed for a week.
+Upstream scheduled tasks report a run as succeeded once its thread is launched and tell nobody when
+runs fail. An agent asked to check one upcoming run scheduled a daily task that launched a new
+thread each day. Every run failed during workspace preparation, the task still showed `succeeded`,
+and the agent that created it never heard about it, so it failed for a week.
 
-This patch adds a one-time trigger, catches a workspace that can never be copied when the task is
-saved, counts preparation failures as failed runs, pauses a task after repeated failures, and
-tells the agent thread that created a task when its runs fail.
+Upstream now ships one-time tasks (`{type: "once", runAt}`, #28104), so the fork's own `once`
+trigger is gone. This patch still catches a workspace that can never be copied when the task is
+saved, counts preparation failures as failed runs, pauses a task after repeated failures, and tells
+the agent thread that created a task when its runs fail.
 
 ## Requirements
 
-- Scheduled tasks gain a `{type: "once", at}` trigger. `nextScheduledRunAt` returns `at` only while
-  it is in the future. Completion, stuck-run release and restart recovery pause a `once` task that
-  has no next run, so Settings shows it as done. Saving an enabled `once` task, or switching one
-  on, fails when `at` is in the past. Settings leaves that check to the server, whose clock can
-  differ from the client's. Web and mobile Settings offer a "Once" schedule. Mobile uses
-  separate date and time pickers because Android's picker has no combined mode.
+- Fork builds stored one-time tasks as `{type: "once", at}`. Fork migration 109 rewrites them to
+  upstream's `runAt`, so they still decode. A finished one-time task stays enabled with no next run,
+  as upstream shows it.
 - Saving a task whose runs launch into a `worktree` or `workspace` fails when the project is a
   plain directory that is missing or unreadable, too big to copy, or one a workspace may not copy, such as the
   home directory. The MCP `schedule_task` tool hard-codes `worktree` for tasks not
@@ -40,15 +38,18 @@ tells the agent thread that created a task when its runs fail.
 - `scheduled_tasks.creator_thread_id` (fork migration 99) records the thread whose agent created
   the task through `schedule_task`; edits keep it. Each failed run queues a `system` notification
   into that thread with the error, the failure count, whether the task is paused, and how to fix
-  it with `schedule_task` or `delete_scheduled_task`. The notice is skipped when the creator is the
+  it with `schedule_task` or `delete_scheduled_task`; a one-time task with no run left gets a new
+  `runAt` instead of a resume. The notice is skipped when the creator is the
   task's bound thread, when that thread is deleted or archived, and for tasks created in Settings.
 
 ## Upstream hooks
 
-- `apps/server/src/persistence/Migrations.ts` registers migration 99.
+- `apps/server/src/persistence/Migrations.ts` registers migrations 99 and 109.
 - `apps/server/src/orchestration-v2/ThreadLaunchService.ts` completes `preparation` in
   `schedulePreparation`, and at the end of `launch` when it schedules nothing.
+- `ScheduledTaskService.ts` records a run in upstream's transaction and wakes the creator and the
+  preparation watch only after it commits, so no dispatch waits on SQLite's writer lock.
 
-Remove this when upstream ships a one-time trigger, checks a task's workspace when it is saved,
-and reports workspace preparation failures back to the task and its creator. Keep migration 99 in
-the registry when removing the code.
+Remove this when upstream checks a task's workspace when it is saved and reports workspace
+preparation failures back to the task and its creator. Keep migrations 99 and 109 in the registry
+when removing the code.

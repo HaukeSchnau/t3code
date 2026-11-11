@@ -26,7 +26,7 @@ export class MobileSecureStorage extends Context.Service<
     readonly setItem: (key: string, value: string) => Effect.Effect<void, MobileSecureStorageError>;
     readonly removeItem: (key: string) => Effect.Effect<void, MobileSecureStorageError>;
   }
->()("@t3tools/mobile/persistence/MobileSecureStorage") {}
+>()("@t3tools/mobile/persistence/mobile-secure-storage/MobileSecureStorage") {}
 
 /**
  * Readable from the first unlock after a reboot, so the native Reply handler can read saved

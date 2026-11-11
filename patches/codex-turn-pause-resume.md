@@ -35,7 +35,7 @@ fork's retry now only covers overloads upstream does not retry, such as a `/comp
   `ComposerPrimaryActions.tsx`, and `chat/ChatBannerLane.tsx` gives `ThreadErrorBanner.tsx` the
   retry line. Mobile: `useCodexTurnContinuation.ts` feeds
   `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx` (with `CodexOverloadRetryCard.tsx`) and
-  `ThreadComposer.tsx`. `AppSymbol.tsx` maps the pause and filled play icons for Android.
+  `ThreadComposer.tsx`. `AppSymbol.android.tsx` maps the pause and filled play icons for Android.
 - Codex usage-limit stops resume without a message too. The automatic resume at reset
   (`UsageLimitRecoveryWorker.ts`) is upstream's and still sends its visible message.
 - Other providers keep Stop and upstream's Resume message. Mobile shows Resume only for Codex.
@@ -52,7 +52,8 @@ fork's retry now only covers overloads upstream does not retry, such as a `/comp
 - `packages/shared/package.json`: the subpath export.
 - Web: `ChatView.tsx`, `useComposerResume.ts`, `ChatComposer.tsx`, `ComposerFooterControls.tsx`,
   `ComposerPrimaryActions.tsx`, `ChatBannerLane.tsx`, `ThreadErrorBanner.tsx`.
-- Mobile: `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx`, `ThreadComposer.tsx`, `AppSymbol.tsx`.
+- Mobile: `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx`, `ThreadComposer.tsx`,
+  `AppSymbol.android.tsx`.
 
 ## Removal
 

@@ -66,9 +66,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-iqt8PdotRV0WQtxKL/smYQEqn0H0jsWWIEYSAaBt9iE=";
-            server = "sha256-NMO1/b2oHzfpShhqNWai8YjlwIhIU8jK0yi7xXFvGOA=";
-            runtime = "sha256-NMO1/b2oHzfpShhqNWai8YjlwIhIU8jK0yi7xXFvGOA=";
+            web = "sha256-PA2dT6NSgXbmm78skdmyoiN++w3OQUaVzdgJfIC5fm0=";
+            server = "sha256-dTnxfqNu2FlZ18Lifp+KUX7ujcLzgUZF+5gb5dbZB6o=";
+            runtime = "sha256-dTnxfqNu2FlZ18Lifp+KUX7ujcLzgUZF+5gb5dbZB6o=";
           },
         }:
         let
@@ -97,13 +97,17 @@
                 && !lib.hasSuffix ".test.tsx" file.name
               )
             ) path;
-          # The web and server builds import every provider and source-control package except the
-          # test kits, and upstream keeps adding them.
+          # The web and server builds import every provider, secret-provider and source-control
+          # package except the test kits, and upstream keeps adding them.
           integrationPackages = lib.fileset.unions (
             map (name: productionFiles (./packages + "/${name}")) (
               lib.filter (
                 name:
-                (lib.hasPrefix "provider-" name || lib.hasPrefix "source-control-" name)
+                (
+                  lib.hasPrefix "provider-" name
+                  || lib.hasPrefix "secret-provider-" name
+                  || lib.hasPrefix "source-control-" name
+                )
                 && !lib.hasSuffix "-testing" name
               ) (lib.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./packages)))
             )
@@ -117,6 +121,7 @@
             fileset = lib.fileset.unions [
               manifestFiles
               ./tsconfig.base.json
+              ./tsconfig.effect.json
               (productionFiles ./apps/web)
               (productionFiles ./packages/client-runtime)
               (productionFiles ./packages/contracts)
@@ -126,6 +131,7 @@
               ./scripts/lib/public-config.ts
               ./scripts/lib/third-party-licenses.ts
               ./third-party-licenses.config.json
+              ./third-party-licenses
               ./apps/desktop/package.json
               ./apps/server/src/device/deviceToolVersions.json
               ./assets/prod/t3-black-web-apple-touch-180.png
@@ -139,6 +145,7 @@
             fileset = lib.fileset.unions [
               manifestFiles
               ./tsconfig.base.json
+              ./tsconfig.effect.json
               (productionFiles ./apps/server)
               (productionFiles ./packages/client-runtime)
               (productionFiles ./packages/contracts)
@@ -229,8 +236,6 @@
             };
             buildPhase = ''
               runHook preBuild
-              mkdir -p .generated/third-party-licenses
-              cp -R ${import ./nix/spdx.nix { inherit pkgs; }} .generated/third-party-licenses/spdx
               pnpm --filter @t3tools/web build
               runHook postBuild
             '';
@@ -521,8 +526,6 @@
             export npm_config_nodedir="${nodejs}"
             # Tests match English tool messages; Calder workers inherit the host's German locale.
             export LC_ALL=C.UTF-8
-            # License notices download SPDX texts, and PR workers have no network.
-            export T3CODE_SPDX_NOTICES="${import ./nix/spdx.nix { inherit pkgs; }}"
           ''
           # Playwright's downloaded Chromium does not run on NixOS (apps/web/vitest.config.ts).
           + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''

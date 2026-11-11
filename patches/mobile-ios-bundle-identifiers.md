@@ -9,4 +9,8 @@ the same base.
 Signing uses `T3CODE_IOS_TEAM_ID`, which defaults to the fork's team `2243J9RD68`. Personal-team
 builds keep upstream's `T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID` override.
 
+`app.config.ts` declares no associated domains and no Android app links for `app.t3.codes`. That
+domain's `.well-known` files list only upstream's team and packages, so fork builds cannot verify
+it.
+
 Remove this patch when upstream exposes an equivalent bundle identifier and team setting.

@@ -30,6 +30,10 @@ Tap a notification to open its thread. Finished results stay in the Live Activit
 minutes. Alerts stay quiet while the app is open, but the Live Activity keeps updating. Viewing a
 thread on another device does not silence the phone.
 
+You can also add the **Agent Activity** widget to the Home Screen or Lock Screen. It shows the
+same work as the Live Activity, refreshes when you open T3 Code, and marks unfinished work out of
+date after 10 minutes.
+
 A question has an **Answer** action, and finished or failed work has **Reply**. Both work from the
 Lock Screen and from an Apple Watch without opening the app. To answer a question, name one of its
 options or answer in your own words. A reply to finished or failed work becomes the agent's next

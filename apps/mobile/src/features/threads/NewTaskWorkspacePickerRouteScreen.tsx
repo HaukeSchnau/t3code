@@ -3,12 +3,12 @@ import { projectWorkspaceGroups } from "@t3tools/client-runtime/state/workspaces
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
 import { useMemo, useState } from "react";
-import { Platform, Pressable, ScrollView, TextInput, View } from "react-native";
+import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useThreadShells } from "../../state/entities";
 import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
@@ -77,133 +77,130 @@ export function NewTaskWorkspacePickerRouteScreen() {
 
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
-      <NativeStackScreenOptions
-        options={{ headerShown: Platform.OS !== "android", title: "Workspace" }}
-      />
-      {Platform.OS === "android" ? (
-        <AndroidScreenHeader title="Workspace" onBack={() => navigation.goBack()} />
-      ) : null}
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{
-          padding: 16,
-          paddingBottom: Math.max(insets.bottom, 16) + 16,
-          gap: 16,
-        }}
-      >
-        <PickerSurface>
-          <SelectionRow
-            title="New workspace"
-            subtitle="A separate copy for this task"
-            selected={isNew && !isolated}
-            onPress={() => {
-              appAtomRegistry.set(workspaceIsolatedAtom, false);
-              flow.setWorkspaceMode("worktree");
-              navigation.goBack();
-            }}
-          />
-          {managed?.isolated ? (
+      <AppBar title="Workspace" hideBottomBorder onBack={() => navigation.goBack()} />
+      <ScreenContent>
+        <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            padding: 16,
+            paddingBottom: Math.max(insets.bottom, 16) + 16,
+            gap: 16,
+          }}
+        >
+          <PickerSurface>
             <SelectionRow
-              title="New isolated workspace"
-              subtitle="A clean room that can't see your other projects"
-              selected={isNew && isolated}
+              title="New workspace"
+              subtitle="A separate copy for this task"
+              selected={isNew && !isolated}
               onPress={() => {
-                appAtomRegistry.set(workspaceIsolatedAtom, true);
+                appAtomRegistry.set(workspaceIsolatedAtom, false);
                 flow.setWorkspaceMode("worktree");
                 navigation.goBack();
               }}
             />
-          ) : null}
-          <SelectionRow
-            title="Project checkout"
-            selected={!isNew && flow.selectedWorktreePath === null}
-            onPress={() => {
-              appAtomRegistry.set(workspaceIsolatedAtom, false);
-              if (flow.draftKey !== null) {
-                updateComposerDraftSettings(flow.draftKey, {
-                  workspaceSelection: {
-                    mode: "local",
-                    branch: null,
-                    worktreePath: null,
-                    ...(flow.startFromOrigin ? { startFromOrigin: true } : {}),
-                  },
-                });
-              }
-              navigation.goBack();
-            }}
-            isLast
-          />
-        </PickerSurface>
-        <TextInput
-          accessibilityLabel="Find workspace"
-          placeholder="Find workspace…"
-          value={query}
-          onChangeText={setQuery}
-          autoCorrect={false}
-          autoCapitalize="none"
-          className="rounded-xl bg-grouped-card px-4 py-3 text-base text-foreground"
-        />
-        <PickerSurface>
-          {workspaces.map((workspace, index) => (
-            <SelectionRow
-              key={workspace.key}
-              title={workspace.label}
-              subtitle={`${workspace.threadCount} ${workspace.threadCount === 1 ? "thread" : "threads"}${
-                workspace.runningCount > 0
-                  ? ` · ${workspace.runningCount} running`
-                  : workspace.settled
-                    ? " · Settled"
-                    : ""
-              }`}
-              selected={!isNew && flow.selectedWorktreePath === workspace.path}
-              onPress={() => selectWorkspace(workspace.path, workspace.branch)}
-              isLast={index === workspaces.length - 1}
-            />
-          ))}
-          {workspaces.length === 0 ? (
-            <Text className="p-4 text-sm text-foreground-muted">
-              {archive.isLoading
-                ? "Loading settled workspaces…"
-                : (archive.error ?? "No matching workspaces.")}
-            </Text>
-          ) : null}
-        </PickerSurface>
-        <PickerSurface>
-          <ToggleRow title="Show settled" value={showSettled} onValueChange={setShowSettled} />
-        </PickerSurface>
-        {isNew && isolated ? (
-          <>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setAdvanced(!advanced)}
-              className="px-4 py-2"
-            >
-              <Text className="text-sm text-foreground-muted">
-                {advanced ? "Hide clean room setup" : "Clean room setup"}
-              </Text>
-            </Pressable>
-            {advanced ? (
-              <PickerSurface>
-                {(["familiar", "minimal"] as const).map((value) => (
-                  <SelectionRow
-                    key={value}
-                    title={value === "familiar" ? "Familiar" : "Minimal"}
-                    subtitle={
-                      value === "familiar"
-                        ? "Keeps your global instructions and skills"
-                        : "Starts with the project's own instructions and tools"
-                    }
-                    selected={profile === value}
-                    onPress={() => appAtomRegistry.set(workspaceProfileAtom, value)}
-                    isLast={value === "minimal"}
-                  />
-                ))}
-              </PickerSurface>
+            {managed?.isolated ? (
+              <SelectionRow
+                title="New isolated workspace"
+                subtitle="A clean room that can't see your other projects"
+                selected={isNew && isolated}
+                onPress={() => {
+                  appAtomRegistry.set(workspaceIsolatedAtom, true);
+                  flow.setWorkspaceMode("worktree");
+                  navigation.goBack();
+                }}
+              />
             ) : null}
-          </>
-        ) : null}
-      </ScrollView>
+            <SelectionRow
+              title="Project checkout"
+              selected={!isNew && flow.selectedWorktreePath === null}
+              onPress={() => {
+                appAtomRegistry.set(workspaceIsolatedAtom, false);
+                if (flow.draftKey !== null) {
+                  updateComposerDraftSettings(flow.draftKey, {
+                    workspaceSelection: {
+                      mode: "local",
+                      branch: null,
+                      worktreePath: null,
+                      ...(flow.startFromOrigin ? { startFromOrigin: true } : {}),
+                    },
+                  });
+                }
+                navigation.goBack();
+              }}
+              isLast
+            />
+          </PickerSurface>
+          <TextInput
+            accessibilityLabel="Find workspace"
+            placeholder="Find workspace…"
+            value={query}
+            onChangeText={setQuery}
+            autoCorrect={false}
+            autoCapitalize="none"
+            className="rounded-xl bg-grouped-card px-4 py-3 text-base text-foreground"
+          />
+          <PickerSurface>
+            {workspaces.map((workspace, index) => (
+              <SelectionRow
+                key={workspace.key}
+                title={workspace.label}
+                subtitle={`${workspace.threadCount} ${workspace.threadCount === 1 ? "thread" : "threads"}${
+                  workspace.runningCount > 0
+                    ? ` · ${workspace.runningCount} running`
+                    : workspace.settled
+                      ? " · Settled"
+                      : ""
+                }`}
+                selected={!isNew && flow.selectedWorktreePath === workspace.path}
+                onPress={() => selectWorkspace(workspace.path, workspace.branch)}
+                isLast={index === workspaces.length - 1}
+              />
+            ))}
+            {workspaces.length === 0 ? (
+              <Text className="p-4 text-sm text-foreground-muted">
+                {archive.isLoading
+                  ? "Loading settled workspaces…"
+                  : (archive.error ?? "No matching workspaces.")}
+              </Text>
+            ) : null}
+          </PickerSurface>
+          <PickerSurface>
+            <ToggleRow title="Show settled" value={showSettled} onValueChange={setShowSettled} />
+          </PickerSurface>
+          {isNew && isolated ? (
+            <>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setAdvanced(!advanced)}
+                className="px-4 py-2"
+              >
+                <Text className="text-sm text-foreground-muted">
+                  {advanced ? "Hide clean room setup" : "Clean room setup"}
+                </Text>
+              </Pressable>
+              {advanced ? (
+                <PickerSurface>
+                  {(["familiar", "minimal"] as const).map((value) => (
+                    <SelectionRow
+                      key={value}
+                      title={value === "familiar" ? "Familiar" : "Minimal"}
+                      subtitle={
+                        value === "familiar"
+                          ? "Keeps your global instructions and skills"
+                          : "Starts with the project's own instructions and tools"
+                      }
+                      selected={profile === value}
+                      onPress={() => appAtomRegistry.set(workspaceProfileAtom, value)}
+                      isLast={value === "minimal"}
+                    />
+                  ))}
+                </PickerSurface>
+              ) : null}
+            </>
+          ) : null}
+        </ScrollView>
+      </ScreenContent>
     </View>
   );
 }

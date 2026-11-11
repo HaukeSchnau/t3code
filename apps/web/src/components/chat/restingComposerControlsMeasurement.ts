@@ -25,8 +25,18 @@ function providerModelPickerNaturalWidth(picker: HTMLElement): number {
   const style = getComputedStyle(picker);
   const label = picker.querySelector<HTMLElement>('[data-chat-provider-model-picker-label="true"]');
   const labelIsCollapsed = label?.clientWidth === 0 && getComputedStyle(label).flexGrow === "0";
+  // A label with its own max width, such as a long model name, never grows past it.
+  const labelMaxWidth = label ? Number.parseFloat(getComputedStyle(label).maxWidth) : Number.NaN;
   const hiddenLabelWidth =
-    label && !labelIsCollapsed ? Math.max(0, label.scrollWidth - label.clientWidth) : 0;
+    label && !labelIsCollapsed
+      ? Math.max(
+          0,
+          Math.min(
+            label.scrollWidth,
+            Number.isFinite(labelMaxWidth) ? labelMaxWidth : Number.POSITIVE_INFINITY,
+          ) - label.clientWidth,
+        )
+      : 0;
   const maxWidth = Number.parseFloat(style.maxWidth);
   const naturalWidth = Math.min(
     renderedWidth + hiddenLabelWidth,
@@ -77,16 +87,21 @@ export function measureRestingComposerControls(
   const separatorWidth = separator ? elementOuterWidth(separator) : 0;
   const overflow = controls.querySelector<HTMLElement>("[data-resting-controls-overflow]");
   const separatorAndGapWidth = separatorWidth > 0 ? separatorWidth + gap : 0;
+  // The fork's skill packs control never overflows (patches/skill-packs.md).
+  const skillPacks = controls.querySelector<HTMLElement>("[data-composer-skill-packs]");
+  const skillPacksAndGapWidth = skillPacks ? elementOuterWidth(skillPacks) + gap : 0;
   const blocks = Array.from(controls.querySelectorAll<HTMLElement>("[data-resting-block]"));
   const widths = blocks.map(controlBlockWidths);
   return {
     gap,
     naturalFixedWidth:
       (picker ? providerModelPickerNaturalWidth(picker) : elementOuterWidth(leadingControl)) +
-      separatorAndGapWidth,
+      separatorAndGapWidth +
+      skillPacksAndGapWidth,
     minimumFixedWidth:
       (picker ? providerModelPickerMinimumWidth(picker) : elementOuterWidth(leadingControl)) +
-      separatorAndGapWidth,
+      separatorAndGapWidth +
+      skillPacksAndGapWidth,
     blockWidths: widths.map((width) => width.natural),
     iconOnlyBlockWidths: widths.map((width) => width.iconOnly),
     overflowWidth: overflow ? elementOuterWidth(overflow) : 0,

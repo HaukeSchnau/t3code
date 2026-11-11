@@ -21,8 +21,7 @@ per account when it is read too often, and upstream cannot tell that apart from 
   reader run their status probe instead. Older servers ignore the flag and run a full refresh. The
   hub's own polling loop in `UsageLimitSources.ts` is gone. Web `UsagePage.tsx`, mobile
   `features/usage/usageLimitsRefresh.ts` and the usage widget's refresher
-  (`widgets/useSubscriptionUsage.ts`) send the flag, except right after a provider is enabled
-  (`afterPending`), which needs a full status probe.
+  (`widgets/useSubscriptionUsage.ts`) send the flag.
 - `makeManagedServerProvider` (`packages/provider-core/src/server/managedProvider.ts`) takes an
   optional `readUsageLimits` and exposes `refreshUsageLimits`. `ProviderRegistry.refreshUsageLimits`
   (`apps/server/src/provider/ProviderRegistry.ts`) runs it for every instance.
@@ -37,7 +36,11 @@ per account when it is read too often, and upstream cannot tell that apart from 
   update sends each client the whole provider list.
 - A 429 records `rateLimitedUntil` from `Retry-After`, or five minutes later, keeps the last
   reading, and skips the account until then. The hub forwards the provider's headers. The helpers
-  are in `packages/provider-core/src/server/usageLimits.ts`.
+  are in `packages/provider-core/src/server/usageLimits.ts`. Hub accounts of every provider in
+  upstream's `HUB_PROVIDERS` table (`usage/cliproxyApi.ts`) get this handling, and the entry's
+  `label` names the provider in the error.
+- Hub Codex and Claude accounts decode with the same parsers as direct reads (`CodexUsage`,
+  `ClaudeOauthUsage`), so both paths show the same windows, including upstream's monthly spend.
 - Limits notices (`collectLimitNotices` in `packages/shared/src/usageLimits.ts`) say which reads are
   rate-limited and when the next read happens. Clients no longer wait five minutes between
   automatic checks (`refreshUsageLimits` in `packages/client-runtime/src/state/usage.ts`).

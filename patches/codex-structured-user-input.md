@@ -20,9 +20,9 @@ feature off.
 - The adapter turns a request with `isBlocking: false` into questions with `required: false` on
   upstream's question contract. A request without the field stays blocking, as Codex treats it.
 - When every question is optional, the prompt shows an Optional label and a Skip action that
-  answers `{}`. Web and desktop use `isOptionalPendingUserInput` in `pendingUserInput.ts`,
-  `ComposerPendingUserInputPanel.tsx`, and the Skip handler in `chat/usePendingThreadRequests.ts`. Mobile has its own copy in `lib/threadActivity.ts` and
-  renders it in `PendingUserInputCard.tsx`.
+  answers `{}`. `isOptionalPendingUserInput` lives in client-runtime `state/pendingUserInput.ts`.
+  Web renders it in `ComposerPendingUserInputPanel.tsx` with the Skip handler in
+  `chat/usePendingThreadRequests.ts`; mobile renders it in `PendingUserInputCard.tsx`.
 
 ## Removal
 
@@ -32,5 +32,5 @@ the Skip controls when upstream renders optional questions itself.
 ## Verification
 
 `CodexAdapterV2.test.ts` covers the launch arguments and a non-blocking request.
-`pendingUserInput.test.ts` and mobile `threadActivity.test.ts` cover optional detection. After a
+`pendingUserInput.test.ts` covers optional detection. After a
 Codex or composer sync, exercise a live Default-mode question on desktop and on a narrow viewport.

@@ -20,7 +20,12 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as JjCli from "../vcs/JjCli.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import { operationUsername } from "./JjThreadLayer.ts";
-import { decodeJsonBoolean, decodeJsonString, decodeJsonStrings } from "./jjTemplateJson.ts";
+import {
+  decodeJsonBoolean,
+  decodeJsonString,
+  decodeJsonStrings,
+  parseJjOutput,
+} from "./jjTemplateJson.ts";
 import { threadTrailerRevset } from "./JjTurnService.ts";
 
 const MAX_CHANGES_PER_REPOSITORY = 50;
@@ -97,7 +102,7 @@ const make = Effect.gen(function* () {
       })
       .pipe(
         Effect.flatMap((output) =>
-          Effect.try(() =>
+          parseJjOutput(() =>
             output
               .split("\n")
               .filter((line) => line.length > 0)

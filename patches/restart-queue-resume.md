@@ -8,20 +8,22 @@ ends, its queued messages run, whether a person or another thread sent them.
 
 ## Why upstream doesn't meet it
 
-Restart recovery holds every queued run, and only a message sent from the web or mobile client,
-or **Resume**, releases the hold. The restart continuation resumes the interrupted turn but leaves
-the queue held behind it. Later queued messages join the held queue, so a thread that only agents
-talk to never runs them again. That includes a provider's own wake turn after a background
-command, whose MCP calls then fail with `parent_not_active` because the thread has no live run.
+Restart recovery holds every queued run. A message sent from the web or mobile client, or
+**Resume**, releases the hold. Since #27221, a run that completes also releases held messages that
+agents and scheduled tasks queued, but it keeps user-queued messages held for the person to review.
+The fork releases those too: a person who queued a message behind an interrupted turn expects it to
+run once that turn resumes.
 
 ## Implementation
 
 `dispatchMessage` in `apps/server/src/orchestration-v2/Orchestrator.ts` releases held runs for a
-message with `restartContinuationOfRunId`, as it does for client messages. Recovery still holds the
-queue, so a restart without a continuation (the preference is off, or the turn was stopped) keeps
-upstream's behavior. `runtimeLayer.test.ts` covers the release, the queue draining after the
-continuation, and the thread reading as a live MCP caller meanwhile.
+message with `restartContinuationOfRunId`, as it does for client messages, including runs a person
+queued. Recovery still holds the queue, so a restart without a continuation (the preference is off,
+the turn was stopped, or it never started and recovery requeued it) keeps upstream's behavior.
+`runtimeLayer.test.ts` ("delivers a restart-held queue, including a provider wake, after the
+continuation") covers the release and the queue draining after the continuation.
 
 ## Removal
 
-Delete this if upstream resumes or stops holding queued runs after a restart continuation.
+Delete this if upstream releases user-queued runs when a restart continuation starts, or Hauke
+accepts holding them for review.

@@ -46,7 +46,10 @@ passkeys) don't apply to the fork.
   and the newest three builds stay.
 - The app downloads updates on its own and only asks to restart (`DesktopUpdates.ts`). It follows
   the channel its version implies rather than a stored preference, and Settings no longer offers
-  the Stable/Nightly track.
+  the Stable/Nightly track. Fork servers do not advertise `desktopAppChannelSwitch`
+  (`ServerEnvironment.ts`), so "update everything" offers no track switch the app would ignore.
+  Upstream's fleet track switch (`UpdateTrackSwitchDialog.tsx`, `updateTrackSwitch.logic.ts`) is
+  deleted with the picker.
 - `just desktop-macos` runs the install script. Local unsigned installs are gone: each had a new
   code identity, so macOS asked for permissions after every install and the updater could not
   work.

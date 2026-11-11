@@ -243,7 +243,7 @@ function HtmlRenderVersionFrame(props: {
           {expandedSrc !== null ? (
             <HtmlRenderDialog
               src={expandedSrc}
-              title={title}
+              htmlRender={props.htmlRender}
               threadRef={props.threadRef}
               bridge={props.bridge}
               state={props.readState()}

@@ -1,5 +1,8 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
+import type { AppBarMenuItem } from "../../components/ui/AppBar.types";
+import type { useEnvironmentModeMenu } from "../connection/environmentModes";
+
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -10,53 +13,44 @@ export interface HomeListFilterMenuProject {
   readonly label: string;
 }
 
-type HomeListFilterMenuAction = {
-  readonly type: "action";
-  readonly title: string;
-  readonly subtitle?: string;
-  readonly state?: "on" | "off";
-  readonly onPress: () => void;
-};
-
-type HomeListFilterMenuSubmenu = {
-  readonly type: "submenu";
-  readonly title: string;
-  readonly items: HomeListFilterMenuAction[];
-};
-
-export interface HomeListFilterMenu {
-  readonly title: string;
-  readonly items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu>;
-}
-
-export function buildHomeListFilterMenu(props: {
+export function buildHomeListFilterMenuItems(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
-}): HomeListFilterMenu {
-  const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
-
+  readonly modeMenu?: ReturnType<typeof useEnvironmentModeMenu>;
+}): AppBarMenuItem[] {
+  const items: AppBarMenuItem[] = [];
+  const modeMenu = props.modeMenu;
+  if (modeMenu?.visible) {
+    items.push({
+      id: "mode",
+      title: `Mode: ${modeMenu.label}`,
+      items: modeMenu.actions.map((action) => ({
+        id: `mode:${action.id}`,
+        title: action.title,
+        selected: action.state === "on",
+        onPress: () => modeMenu.select(action.id),
+      })),
+    });
+  }
   items.push({
-    type: "submenu",
+    id: "environment",
     title: "Environment",
     items: [
       {
-        type: "action",
+        id: "environment:all",
         title: "All environments",
         subtitle: "Show threads from every environment",
-        state: props.selectedEnvironmentId === null ? "on" : "off",
+        selected: props.selectedEnvironmentId === null,
         onPress: () => props.onEnvironmentChange(null),
       },
       ...props.environments.map((environment) => ({
-        type: "action" as const,
+        id: `environment:${environment.environmentId}`,
         title: environment.label,
-        state:
-          props.selectedEnvironmentId === environment.environmentId
-            ? ("on" as const)
-            : ("off" as const),
+        selected: props.selectedEnvironmentId === environment.environmentId,
         onPress: () => props.onEnvironmentChange(environment.environmentId),
       })),
     ],
@@ -64,28 +58,25 @@ export function buildHomeListFilterMenu(props: {
 
   if (props.projects.length > 0) {
     items.push({
-      type: "submenu",
+      id: "project",
       title: "Project",
       items: [
         {
-          type: "action",
+          id: "project:all",
           title: "All projects",
           subtitle: "Show threads from every project",
-          state: props.selectedProjectKey === null ? "on" : "off",
+          selected: props.selectedProjectKey === null,
           onPress: () => props.onProjectChange(null),
         },
         ...props.projects.map((project) => ({
-          type: "action" as const,
+          id: `project:${project.key}`,
           title: project.label,
-          state: props.selectedProjectKey === project.key ? ("on" as const) : ("off" as const),
+          selected: props.selectedProjectKey === project.key,
           onPress: () => props.onProjectChange(project.key),
         })),
       ],
     });
   }
 
-  return {
-    title: "Thread list options",
-    items,
-  };
+  return items;
 }

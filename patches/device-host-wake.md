@@ -7,7 +7,8 @@ An SSH device host may carry `wakeCommand` (`packages/contracts/src/device.ts`),
 runs before it connects to a host it has no connection to (`ensureReady` in
 `apps/server/src/device/SshDeviceHost.ts`), so listing or opening its devices wakes it. The command
 exits once the host answers SSH, or fails with the reason on stderr, which reaches the user and the
-agent (`sshHostFailureMessage` in `DeviceService.ts`). The reconnect loop never runs it, so a host
+agent (`sshHostFailureMessage` in `DeviceService.ts`, which reads the `summary` of the
+`WakeCommandError`; its message keeps a bounded stderr tail for logs). The reconnect loop never runs it, so a host
 that went to sleep stays asleep until someone asks for its devices.
 
 infra sets the field in `settings.json` (`modules/features/t3/device-hosts.nix`); the settings UI

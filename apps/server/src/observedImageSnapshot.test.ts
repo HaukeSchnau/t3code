@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- project registrations use the launcher's SHA-256 contract.
 import * as NodeCrypto from "node:crypto";
+import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId, type ChatAttachment } from "@t3tools/contracts";
@@ -11,6 +12,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./assets/AssetAccess.ts";
+import * as AssetSigner from "./assets/AssetSigner.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { resolveAttachmentPath } from "./attachmentStore.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -36,9 +38,11 @@ const testLayer = Layer.mergeAll(
     Layer.provide(T3ProjectFileLoader.layer),
   ),
   NativeAppIconResolver.layer.pipe(Layer.provide(configLayer)),
-  ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
+  AssetSigner.layer.pipe(
+    Layer.provideMerge(ServerSecretStore.layer.pipe(Layer.provide(configLayer))),
+  ),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
-).pipe(Layer.provideMerge(NodeServices.layer));
+).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer)));
 
 const threadId = ThreadId.make("thread-observed-image");
 

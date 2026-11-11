@@ -29,7 +29,7 @@ import { jjFilesets } from "../vcs/JjVcsDriver.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as JjCommitWriter from "./JjCommitWriter.ts";
-import { decodeJsonString, decodeJsonStrings } from "./jjTemplateJson.ts";
+import { decodeJsonString, decodeJsonStrings, parseJjOutput } from "./jjTemplateJson.ts";
 import * as JjTurnService from "./JjTurnService.ts";
 
 export class JjWorkflow extends Context.Service<
@@ -354,9 +354,10 @@ const make = Effect.gen(function* () {
           "-T",
           'change_id ++ "\\t" ++ json(description) ++ "\\t" ++ json(local_bookmarks.map(|b| b.name()))',
         ])).split("\t");
-        const bookmarks = yield* Effect.try(() => decodeJsonStrings(bookmarksJson)).pipe(
-          Effect.mapError((cause) => fail("Could not read the change's bookmarks.", cause)),
-        );
+        const bookmarks = yield* Effect.try({
+          try: () => decodeJsonStrings(bookmarksJson),
+          catch: (cause) => fail("Could not read the change's bookmarks.", cause),
+        });
         const settings = yield* projectSettings;
         const remote = "origin";
         if (settings.jjStripTrailersRemotes.includes(remote)) {
@@ -390,9 +391,10 @@ const make = Effect.gen(function* () {
             .filter((line) => line.length > 0),
         );
         const base = bookmarkSlug(
-          yield* Effect.try(() => decodeJsonString(description)).pipe(
-            Effect.mapError((cause) => fail("Could not read the change's description.", cause)),
-          ),
+          yield* Effect.try({
+            try: () => decodeJsonString(description),
+            catch: (cause) => fail("Could not read the change's description.", cause),
+          }),
           resolvedChange,
         );
         let name = base;
@@ -426,7 +428,7 @@ const make = Effect.gen(function* () {
             "json(local_bookmarks.map(|b| b.name()))",
           ])).split("\t");
           const baseBranch =
-            (yield* Effect.try(() => decodeJsonStrings(trunkBookmarksJson)).pipe(
+            (yield* parseJjOutput(() => decodeJsonStrings(trunkBookmarksJson)).pipe(
               Effect.orElseSucceed((): ReadonlyArray<string> => []),
             ))[0] ??
             (yield* handle.provider

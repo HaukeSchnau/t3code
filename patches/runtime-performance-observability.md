@@ -35,6 +35,9 @@ own provider scopes. Host cgroup metrics and limits must target
 projects run their launcher inside the scope (see
 [separate project environments](separate-project-environments.md)).
 
+Upstream also gives the parent `app-t3code.slice` low CPU and IO weights and a task limit; the
+fork's caps sit under those.
+
 The fork caps each session's scope (`agentMemoryLimits`) and runs it with `OOMPolicy=continue`.
 Upstream limits only the slice, so on srv-2 one runaway tool exhausted the host before the slice
 limit applied, and the global OOM killer took unrelated sessions. With the cap the kernel kills the

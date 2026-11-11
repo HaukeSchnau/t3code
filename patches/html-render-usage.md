@@ -6,12 +6,14 @@ Two causes sit in T3:
 
 - Upstream's agent instruction (`orchestrationInstructions.ts`, visuals section) renders unasked only a chart
   for data with a trend or comparison. The fork also asks for one when options side by side, a table, a
-  timeline or a structure says more than prose, and tells agents to write the page to a file once and pass
-  its `path` to `html_preview` and `html_render`, so a large page is not written into two tool calls.
-- Claude Code defers MCP tools behind tool search and shows the model only their names. `McpAlwaysLoad`
-  marks `html_preview` and `html_render`, and `McpHttpServer` advertises them with
-  `_meta["anthropic/alwaysLoad"]`, so Claude sees their descriptions. Both schemas cost tokens on every
-  Claude turn.
+  timeline or a structure says more than prose. In a full-access thread it tells agents to write the page to
+  a file once and pass its `path` to `html_preview` and `html_render`, so a large page is not written into
+  two tool calls. Upstream accepts `path` only from full-access threads, so other threads pass inline `html`.
+- Claude Code defers MCP tools behind tool search and shows the model only their names. `html_preview`
+  and `html_render` carry upstream's `Tool.Meta` annotation `{"anthropic/alwaysLoad": true}` (as
+  `request_secret` does), so Claude sees their descriptions. `registerImageTool` in `McpHttpServer`
+  copies `Tool.Meta` into `_meta` itself, because `html_preview` bypasses `registerToolkit`. Both
+  schemas cost tokens on every Claude turn.
 
 Remove the instruction change if upstream's own guidance gets agents to render unasked. Remove the
 always-load marking if Claude Code stops deferring these tools or the cost outweighs the use; recount the

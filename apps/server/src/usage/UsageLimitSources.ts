@@ -3,7 +3,8 @@ import {
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
   type ServerSettings,
-  type UsageLimitSourceConfig,
+  UsageLimitSourceConfig,
+  settingsSecretLiteral,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
@@ -22,6 +23,9 @@ import {
   resolveUsageLimitsAfterProbe,
   USAGE_LIMITS_MIN_READ_GAP_MS,
 } from "@t3tools/provider-core/server/usageLimits";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
+import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
@@ -51,10 +55,23 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   }
 }
 
+function missingManagementKey(config: UsageLimitSourceConfig): string {
+  return typeof config.managementKey === "string"
+    ? "No management key configured."
+    : "Could not read the management key from its secret provider.";
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const settingsService = yield* Settings.ServerSettingsService;
+  const secrets = yield* SecretResolver.SecretResolver;
+  const readManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
+    config: UsageLimitSourceConfig,
+  ) {
+    const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
+    return settingsSecretLiteral(resolved.managementKey);
+  });
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
@@ -70,8 +87,9 @@ export const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     const checkedAt = DateTime.formatIso(now);
     const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
-    if (config.managementKey.length === 0) {
-      return { ...base, accounts: [], error: "No management key configured." };
+    const managementKey = yield* readManagementKey(config);
+    if (managementKey.length === 0) {
+      return { ...base, accounts: [], error: missingManagementKey(config) };
     }
     // A failed account read keeps its last good reading, because the providers rate-limit
     // their quota endpoints (patches/hub-account-last-reading.md). A throttled account is
@@ -79,7 +97,7 @@ export const make = Effect.gen(function* () {
     const published = (yield* Ref.get(stateRef)).find((source) => source.id === id)?.accounts;
     const nowMs = DateTime.toEpochMillis(now);
     const accounts = yield* api
-      .readAccounts(config, (accountId) => {
+      .readAccounts({ url: config.url, managementKey }, (accountId) => {
         const last = published?.find((candidate) => candidate.id === accountId);
         return last && accountId !== fresh && isUsageLimitsThrottled(last.usageLimits, nowMs)
           ? last
@@ -154,12 +172,20 @@ export const make = Effect.gen(function* () {
       Effect.mapError(() => new UsageLimitSourceError({ detail: "Could not read hub settings." })),
     );
     const config = settings.usageLimitSources[input.sourceId];
-    if (!config?.enabled || !config.managementKey) {
+    if (!config?.enabled) {
       return yield* new UsageLimitSourceError({
         detail: "The usage limit source is missing or disabled.",
       });
     }
-    const result = yield* api.consume(config, input.accountId, input.creditId);
+    const managementKey = yield* readManagementKey(config);
+    if (managementKey.length === 0) {
+      return yield* new UsageLimitSourceError({ detail: missingManagementKey(config) });
+    }
+    const result = yield* api.consume(
+      { url: config.url, managementKey },
+      input.accountId,
+      input.creditId,
+    );
     const snapshot = yield* readSource(input.sourceId, config, input.accountId);
     const previous = yield* Ref.get(stateRef);
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
@@ -195,4 +221,6 @@ export const make = Effect.gen(function* () {
   } satisfies UsageLimitSources["Service"];
 });
 
-export const layer = Layer.effect(UsageLimitSources, make);
+export const layer = Layer.effect(UsageLimitSources, make).pipe(
+  Layer.provide(SecretResolverLayer.layer),
+);

@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -18,6 +19,7 @@ import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 
 const PlatformLayer = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   VcsProcess.layer.pipe(Layer.provide(NodeServices.layer)),
 );
 const JjCliLayer = JjCli.layer.pipe(Layer.provideMerge(PlatformLayer));

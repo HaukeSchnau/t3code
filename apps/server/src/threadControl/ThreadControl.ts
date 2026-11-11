@@ -13,7 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -105,7 +105,7 @@ const make = Effect.gen(function* () {
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const readShell = Effect.fn("ThreadControl.readShell")(function* (threadId: ThreadId) {
     const shell = yield* threads.getThreadShell(threadId);
@@ -209,7 +209,7 @@ const make = Effect.gen(function* () {
   const stop: ThreadControl["Service"]["stop"] = Effect.fn("ThreadControl.stop")(
     function* (threadId) {
       const shell = yield* readShell(threadId);
-      const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const uuid = yield* random.uuidV4();
       yield* threads.dispatch({
         type: "thread.stop",
         commandId: CommandId.make(`thread-stop:${uuid}`),

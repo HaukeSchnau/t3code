@@ -112,10 +112,15 @@ The other mobile deltas live in upstream-owned files, so check each one survives
   `AccountlessAgentAwarenessProvider` ends them once no paired environment remains, since no server
   can update or end them after that. Remounts and environment list changes only release the
   transport (`releaseAgentAwarenessEnvironmentTransport`), as upstream's relay token release does.
+  Keep upstream's Android notification-permission handling and typed errors in these files, and
+  feed upstream's home-screen widget from the environment snapshot
+  (see `mobile-agent-activity-widget.md`).
 - `features/agent-awareness/liveActivityPreferences.ts`: toggling Live Activities updates the
   registration without linking environments to T3 Connect. The file stays the fork's whole:
   upstream's `canConfigureEnvironment` gate (#9786) only guards the T3 Connect link it replaces.
-- `features/settings/SettingsNotificationsRouteScreen.tsx`: the direct APNs path.
+- `features/settings/SettingsNotificationsRouteScreen.tsx`: the direct APNs path. Upstream's
+  `canLinkEnvironmentToConnect` managed-policy gate (#27197) only guards T3 Connect links, so the
+  file stays the fork's.
 - `features/settings/SettingsRouteScreen.tsx`: the Notifications row in `LocalSettingsRouteScreen`'s
   connections list.
 - `connection/migration.ts`: drops legacy relay-managed connections.

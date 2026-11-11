@@ -74,7 +74,7 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   survives reloads, and new-thread actions open a fresh draft. Later sends from that draft join the
   thread as follow-ups. Editing the launch message reopens the draft.
 - Sends that are not replayable keep their online requirement: starts with several models, edits
-  of a queued run, plan follow-ups, answers to pending questions, compact, and resume.
+  of a queued run, answers to pending questions, side chats (`/side`), compact, and resume.
 
 ## Upstream hooks
 

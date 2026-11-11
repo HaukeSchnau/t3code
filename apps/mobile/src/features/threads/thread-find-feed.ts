@@ -3,6 +3,7 @@ import type { OrchestrationV2SearchThreadInput, RunId } from "@t3tools/contracts
 import {
   deriveThreadFeedPresentation,
   type ThreadFeedActivity,
+  type ThreadFeedDisplay,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
@@ -72,6 +73,8 @@ export function resolveThreadFindReveal(input: {
   readonly runlessWorkActive: boolean;
   readonly expandedRunIds: ReadonlySet<RunId>;
   readonly expandedWorkGroupIds: ReadonlySet<string>;
+  /** What the list shows, so the reveal names a row it renders. */
+  readonly display?: ThreadFeedDisplay;
   readonly match: { readonly entryId: string; readonly runId: RunId | null };
 }): ThreadFindReveal | null {
   const { entryId } = input.match;
@@ -83,6 +86,8 @@ export function resolveThreadFindReveal(input: {
       workGroupIds,
       input.activeWorkStartedAt,
       input.runlessWorkActive,
+      undefined,
+      input.display,
     );
   let runIds = input.expandedRunIds;
   let runId: RunId | null = null;

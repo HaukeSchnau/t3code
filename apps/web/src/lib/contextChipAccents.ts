@@ -13,6 +13,7 @@ export const CONTEXT_CHIP_ACCENTS = {
   "pr-merged": "oklch(0.62 0.16 292)",
   "pr-closed": "oklch(0.62 0.16 16)",
   skill: "oklch(0.62 0.16 322)",
+  model: "oklch(0.62 0.13 105)",
   thread: "oklch(0.62 0.12 190)",
   "html-render": "oklch(0.62 0.134 120)",
   environment: "oklch(0.62 0.11 145)",

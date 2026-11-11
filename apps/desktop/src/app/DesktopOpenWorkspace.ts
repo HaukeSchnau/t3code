@@ -3,7 +3,7 @@ import {
   DesktopAppActivationPlatform,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -89,12 +89,12 @@ export const layerAppActivationDelivery = Layer.effectDiscard(
     const openWorkspace = yield* DesktopOpenWorkspace;
     const activation = yield* DesktopAppActivation.DesktopAppActivation;
     const electronApp = yield* ElectronApp.ElectronApp;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const { platform } = yield* DesktopEnvironment.DesktopEnvironment;
     if (!isActivationPlatform(platform)) return;
 
     const open = (workspaceRoot: string) =>
-      crypto.randomUUIDv4().pipe(
+      random.uuidV4().pipe(
         Effect.flatMap((requestId) =>
           activation.request({
             version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,

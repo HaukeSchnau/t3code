@@ -1,12 +1,20 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { developmentClientId } from "./lib/mobile-app-ids.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
-import { NativeClientError, installedBinary, prebuildAndroid } from "./mobile-native-client.ts";
+import {
+  buildRunTitle,
+  installedBinary,
+  NativeClientError,
+  prebuildAndroid,
+  remoteBuildState,
+} from "./mobile-native-client.ts";
 
 const caches = [".gradle/history", "app/.cxx/object"];
 
@@ -64,7 +72,7 @@ it.layer(NodeServices.layer)("prebuildAndroid", (it) => {
   );
 });
 
-it.layer(NodeServices.layer)("installedBinary", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("installedBinary", (it) => {
   it.effect("finds the iOS dev client under the fork's bundle id", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -80,5 +88,66 @@ it.layer(NodeServices.layer)("installedBinary", (it) => {
 
       assert.match(binary ?? "", /^[a-f0-9]{64}$/);
     }),
+  );
+});
+
+it("finds a Blacksmith build by its run title and reads its state", () => {
+  const fingerprint = "a".repeat(40);
+  const title = buildRunTitle("android", "x86_64", fingerprint);
+  assert.strictEqual(title, `Dev client android x86_64 ${fingerprint}`);
+  assert.strictEqual(buildRunTitle("ios", null, fingerprint), `Dev client ios ${fingerprint}`);
+  const run = (
+    createdAt: string,
+    status: string,
+    conclusion: string | null,
+    displayTitle = title,
+  ) => ({
+    displayTitle,
+    status,
+    conclusion,
+    createdAt,
+  });
+  const since = Date.parse("2026-11-09T12:00:00Z");
+  assert.strictEqual(remoteBuildState([], title, since), "none");
+  // Another client's run, and a run from before this wait, say nothing about this build.
+  assert.strictEqual(
+    remoteBuildState(
+      [
+        run(
+          "2026-11-09T12:05:00Z",
+          "in_progress",
+          null,
+          buildRunTitle("android", "arm64-v8a", fingerprint),
+        ),
+        run("2026-11-09T11:00:00Z", "completed", "failure"),
+      ],
+      title,
+      since,
+    ),
+    "none",
+  );
+  assert.strictEqual(
+    remoteBuildState([run("2026-11-09T12:01:00Z", "queued", null)], title, since),
+    "running",
+  );
+  assert.strictEqual(
+    remoteBuildState([run("2026-11-09T12:01:00Z", "completed", "success")], title, since),
+    "succeeded",
+  );
+  // The newest run decides: a retry that is running outranks the failure before it.
+  assert.strictEqual(
+    remoteBuildState(
+      [
+        run("2026-11-09T12:01:00Z", "completed", "failure"),
+        run("2026-11-09T12:09:00Z", "in_progress", null),
+      ],
+      title,
+      since,
+    ),
+    "running",
+  );
+  assert.strictEqual(
+    remoteBuildState([run("2026-11-09T12:01:00Z", "completed", "cancelled")], title, since),
+    "failed",
   );
 });

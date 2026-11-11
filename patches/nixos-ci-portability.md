@@ -25,9 +25,15 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   translated Git and libc messages, and transient-exit classification matches the English text.
 - `apps/server/src/entrypoint.ts`: `isEntrypoint` resolves both the module path and `argv[1]`, because
   sandboxed runners can expose one directory through two mount aliases.
+- `apps/server/src/project/AgentSessionScanner.ts`: the scanner resolves the real paths of `baseDir` and
+  `worktreesDir` for the same reason, so a T3 home reached through an alias still matches the
+  session paths it filters out.
 - `scripts/notify-discord-release.test.ts`: the shells that run the release workflow's Discord steps get
   PATH. Their environment replaces the inherited one, and without PATH Node looks for `bash` only in `/bin`
   and `/usr/bin`.
+- `scripts/install.test.ts`: the `install.sh t3 command` case runs the installer with a folder of links to
+  the host's programs instead of `/usr/bin:/bin`, leaving out any `t3`, since srv hosts have T3 Code on
+  PATH. Its no-SHELL run sets SHELL empty, because bash as `/bin/sh` fills in an unset SHELL.
 - `.github/scripts/relay-state-output.test.cjs` and `vercel-deployment-output.test.cjs`: the shells that run
   workflow steps start with `--noprofile --norc`. Node connects a child's stdio through sockets, so NixOS's
   bash takes itself for an SSH session, sources `/etc/bashrc` and resets PATH to the system profile, which

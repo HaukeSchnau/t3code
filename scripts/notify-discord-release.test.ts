@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -129,6 +130,15 @@ it("preserves custom notes and links outside generated GitHub pull request entri
   assert.equal(
     payloadDescription(buildDiscordReleaseAnnouncement({ ...nightlyAnnouncement, releaseNotes })),
     `${intro}\n\n${releaseNotes}`,
+  );
+});
+
+it("posts a generated summary without its folded full list", () => {
+  const summary = "**v1.2.3** · 4 changes\n\n## Fixes\n- Stop works again (#1)";
+  const releaseNotes = `${summary}\n\n<details>\n<summary>Full changelog</summary>\n\n* fix: raw by @someone in https://github.com/pingdotgg/t3code/pull/1\n\n</details>\n`;
+  assert.equal(
+    payloadDescription(buildDiscordReleaseAnnouncement({ ...nightlyAnnouncement, releaseNotes })),
+    `${intro}\n\n**v1.2.3** · 4 changes\n\n## Fixes\n- Stop works again ([#1](https://github.com/pingdotgg/t3code/pull/1))\n\n[Full changelog](${nightlyAnnouncement.releaseUrl.href})`,
   );
 });
 
@@ -328,6 +338,7 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const { PATH } = yield* HostProcess.Environment;
       const temp = yield* fs.makeTempDirectoryScoped({ prefix: "discord release " });
       const workflow = yield* fs.readFileString(
         yield* path.fromFileUrl(new URL("../.github/workflows/release.yml", import.meta.url)),
@@ -339,7 +350,7 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
       // Without PATH, bash is not found where /bin/bash is missing, and an injected `touch` could
       // not run.
       const shellEnv = {
-        PATH: process.env.PATH,
+        PATH,
         RUNNER_TEMP: temp,
         RELEASE_TAG: nightlyAnnouncement.tag,
         RELEASE_CHANNEL: "nightly",
@@ -377,7 +388,7 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
           ["-e", "-c", `node() { printf '%s\\0' "$@" > "$RUNNER_TEMP/args"; }\n${announce}`],
           {
             env: {
-              PATH: process.env.PATH,
+              PATH,
               RUNNER_TEMP: temp,
               DISCORD_MENTION_ROLE_ID: latestAnnouncement.roleId,
             },

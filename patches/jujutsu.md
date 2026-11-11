@@ -49,6 +49,10 @@ handling, because the maintainer and their agents work in jj repositories.
   its own describes of changes another workspace builds on, and moves that copy's files back into
   `@` after it updates a stale workspace (`vcs/JjCli.ts`). An agent that runs `update-stale` itself
   still leaves its edits in the divergent copy.
+- A side chat (upstream #26901) works in its parent's checkout and sees its live edits, so it gets
+  no workspace of its own, no turn-start hook and no seal. Sealing would commit the parent's edits
+  as the side chat's turn. `runtimeLayer.test.ts` ("a side chat keeps working in its parent's
+  checkout") covers the workspace.
 - Status reads never snapshot (`--ignore-working-copy`); the jj block on the status payload holds
   the stack from `trunk()` to `@` (`jj/JjStatusReader.ts`).
 - jj actions run through one service for RPC (`vcs.jj.runAction`) and MCP (`t3_jj_action`,
@@ -70,8 +74,11 @@ handling, because the maintainer and their agents work in jj repositories.
 - `mcp/McpHttpServer.ts` registers the jj toolkit (`layerJjToolkit`). Its handlers declare access
   through `McpToolAccess`: status and thread work read as the calling thread, and `t3_jj_action`
   acts as it.
-- `vcs/VcsStatusBroadcaster.ts` (local status, including the branch picker's local-only refresh,
-  goes through the jj reader; remote status is skipped for jj without Git).
+- `vcs/VcsStatusBroadcaster.ts`: every local status read, including the branch picker's
+  local-only refresh, goes through the jj reader (`localStatusFor`). For jj without Git the remote
+  status is skipped (`remoteStatusFor`) and the current branch is null (`currentBranchFor`),
+  because `GitWorkflowService` fails those reads for a checkout that is not Git-compatible.
+  `GitWorkflowService.repositoryRoot` reports only Git-compatible checkouts.
 - `auth/RpcAuthorization.ts` and `observability/RpcInstrumentation.ts` list the `vcs.jj.*` RPCs.
   Actions and path assignment need `source-control:write`, like upstream's VCS mutations; thread
   work needs `orchestration:read`. `server.ts` builds one `JjCli` for the jj services and the MCP
@@ -80,6 +87,12 @@ handling, because the maintainer and their agents work in jj repositories.
 - `textGeneration/commitMessageText.ts` holds helpers moved out of `GitManager`.
 - Contracts: `jj.ts`, `kind` and `jj` on the local status, `cwd` on `command_execution`, two
   project settings. Web `JjStackControl`, mobile `JjStackSheet`.
+- Web: `ChatView.tsx` reads `kind` from upstream's narrowed `chatGitStatusAtom` (`state/vcs.ts`),
+  `BranchToolbar.tsx` takes `jjCwd`, and `chat/ThreadDetailsPanel.tsx` puts `JjStackControl` in
+  upstream's Version Control section when any of its rows is visible.
+- Mobile: `ThreadGitControls.tsx` puts the stack breadcrumb and push state in upstream's git menu,
+  omits the Git quick action for a jj stack, and opens `JjStackSheet` from More.
+  `ThreadRouteScreen.tsx` opens the sheet in place of the git inspector.
 
 ## Removal
 

@@ -35,7 +35,12 @@ import {
 } from "../vcs/JjVcsDriver.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import * as JjCommitWriter from "./JjCommitWriter.ts";
-import { decodeJsonBoolean, decodeJsonString, decodeJsonStrings } from "./jjTemplateJson.ts";
+import {
+  decodeJsonBoolean,
+  decodeJsonString,
+  decodeJsonStrings,
+  parseJjOutput,
+} from "./jjTemplateJson.ts";
 import * as JjThreadLayer from "./JjThreadLayer.ts";
 import {
   type ActiveRun,
@@ -398,7 +403,7 @@ const make = Effect.gen(function* () {
         'json(change_id) ++ "\\t" ++ json(commit_id) ++ "\\t" ++ json(description) ++ "\\t" ++ json(diff.files().map(|f| f.path())) ++ "\\t" ++ json(self.contained_in("::remote_bookmarks()")) ++ "\\n"',
       ).pipe(
         Effect.flatMap((output) =>
-          Effect.try(() =>
+          parseJjOutput(() =>
             output
               .split("\n")
               .filter((line) => line.length > 0)
@@ -707,7 +712,7 @@ const make = Effect.gen(function* () {
           'json(diff.files().map(|f| f.path())) ++ "\\t" ++ json(diff.files().map(|f| f.source().path())) ++ "\\n"',
         ).pipe(
           Effect.flatMap((output) =>
-            Effect.try(() =>
+            parseJjOutput(() =>
               output
                 .split("\n")
                 .filter((line) => line.length > 0)

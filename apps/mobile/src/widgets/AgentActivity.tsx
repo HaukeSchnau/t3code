@@ -1,7 +1,6 @@
 import { HStack, Image, Spacer, Text, VStack, ZStack } from "@expo/ui/swift-ui";
-import type { ComponentProps, JSX } from "react";
+import type { ComponentProps } from "react";
 import {
-  containerBackground,
   accessibilityElement,
   accessibilityLabel,
   activityBackgroundTint,
@@ -17,11 +16,11 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import {
   createLiveActivity,
-  createWidget,
-  type LiveActivityEnvironment,
+  type LiveActivityComponent,
   type LiveActivityLayout,
-  type WidgetEnvironment,
 } from "expo-widgets";
+
+type LiveActivityEnvironment = Parameters<LiveActivityComponent<AgentActivityProps>>[1];
 
 export type AgentActivityPhase =
   | "starting"
@@ -53,18 +52,10 @@ export interface AgentActivityProps {
 }
 
 // Widget serialization excludes module helpers; use only imported view/modifier factories.
-export function AgentActivity(
+function AgentActivity(
   props: AgentActivityProps,
   environment: LiveActivityEnvironment,
-): LiveActivityLayout;
-export function AgentActivity(
-  props: AgentActivityProps,
-  environment: WidgetEnvironment,
-): JSX.Element;
-export function AgentActivity(
-  props: AgentActivityProps,
-  environment: LiveActivityEnvironment | WidgetEnvironment,
-): LiveActivityLayout | JSX.Element {
+): LiveActivityLayout {
   "widget";
 
   // Hierarchical foregrounds inherit system tint and vibrancy.
@@ -108,9 +99,7 @@ export function AgentActivity(
     return 3;
   };
   // Mark in-flight rows stale after expiry so they cannot claim agents still work.
-  // Home-screen widgets have no stale date.
-  const isStale = "isStale" in environment && environment.isStale === true;
-  const activities: ReadonlyArray<AgentActivityRowProps> = isStale
+  const activities: ReadonlyArray<AgentActivityRowProps> = environment.isStale
     ? props.activities.map((row) =>
         row.phase === "completed" || row.phase === "failed"
           ? row
@@ -137,34 +126,26 @@ export function AgentActivity(
       ? phaseTint(failedRow.phase)
       : tint;
 
-  const hasRows = props.activities.length > 0;
-  const isIdle = props.activeCount === 0 && !hasRows;
-  const allDone = props.activeCount === 0 && hasRows;
+  const allDone = props.activeCount === 0;
   const doneLabel = failedRow ? "Failed" : "Done";
   const outcomeLabel = failedRow ? "Agent work failed" : "Agent work completed";
 
   const agentWord = props.activeCount === 1 ? "agent" : "agents";
-  let agentsLabel = `${props.activeCount} active ${agentWord}`;
-  if (isIdle) {
-    agentsLabel = "No active agents";
-  } else if (allDone) {
-    agentsLabel = outcomeLabel;
-  } else if (isStale) {
-    agentsLabel = "Agent status out of date";
-  }
+  const agentsLabel = allDone
+    ? outcomeLabel
+    : environment.isStale
+      ? "Agent status out of date"
+      : `${props.activeCount} active ${agentWord}`;
   const attentionSuffix =
     attentionRows.length > 0
       ? `${attentionRows.length} need${attentionRows.length === 1 ? "s" : ""} attention`
       : "";
-  let activeLabel = `${props.activeCount} active`;
-  if (isIdle) {
-    activeLabel = "Idle";
-  } else if (allDone) {
-    activeLabel = doneLabel;
-  } else if (isStale) {
-    activeLabel = "Out of date";
-  }
-  const showCompactGlyph = !attentionRow && !failedRow && !allDone && !isStale && !isIdle;
+  const activeLabel = allDone
+    ? doneLabel
+    : environment.isStale
+      ? "Out of date"
+      : `${props.activeCount} active`;
+  const showCompactGlyph = !attentionRow && !failedRow && !allDone && !environment.isStale;
   const summary = attentionSuffix || activeLabel;
 
   // Widget taps target the containing app, so its production scheme is safe in every build.
@@ -252,134 +233,6 @@ export function AgentActivity(
     </HStack>
   );
 
-  if ("widgetFamily" in environment) {
-    const background = isLightScheme ? "#ffffff" : "#111827";
-    const backgroundModifier = containerBackground(
-      environment.widgetFamily === "accessoryRectangular" ? "clear" : background,
-      "widget",
-    );
-    const rootModifiers = deepLink
-      ? [backgroundModifier, padding({ all: 14 }), widgetURL(deepLink)]
-      : [backgroundModifier, padding({ all: 14 })];
-
-    if (environment.widgetFamily === "accessoryRectangular") {
-      return (
-        <VStack alignment="leading" spacing={3} modifiers={rootModifiers}>
-          <HStack spacing={5} alignment="center">
-            {heroRow ? renderGlyph(phaseSymbol(heroRow.phase), 12, tint) : renderLogo(10, tint)}
-            <Text
-              modifiers={[
-                font({ weight: "semibold", size: 12 }),
-                foregroundStyle(primaryForeground),
-                lineLimit(1),
-              ]}
-            >
-              {agentsLabel}
-            </Text>
-          </HStack>
-          <Text
-            modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
-          >
-            {heroRow ? `${heroRow.threadTitle} · ${heroRow.status}` : props.subtitle}
-          </Text>
-        </VStack>
-      );
-    }
-
-    if (environment.widgetFamily === "systemSmall") {
-      return (
-        <VStack alignment="leading" spacing={8} modifiers={rootModifiers}>
-          <HStack spacing={7} alignment="center">
-            {renderLogo(14, primaryForeground)}
-            <Spacer minLength={4} />
-            <Text
-              modifiers={[
-                font({ weight: "bold", size: 12 }),
-                foregroundStyle(headerTint),
-                lineLimit(1),
-              ]}
-            >
-              {activeLabel}
-            </Text>
-          </HStack>
-          <Spacer minLength={0} />
-          {heroRow ? (
-            <VStack alignment="leading" spacing={4}>
-              <Text
-                modifiers={[
-                  font({ weight: "semibold", size: 14 }),
-                  foregroundStyle(primaryForeground),
-                  lineLimit(2),
-                ]}
-              >
-                {heroRow.threadTitle}
-              </Text>
-              <Text
-                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
-              >
-                {heroRow.projectTitle}
-              </Text>
-              <Text
-                modifiers={[
-                  font({ weight: "semibold", size: 12 }),
-                  foregroundStyle(phaseTint(heroRow.phase)),
-                  lineLimit(1),
-                ]}
-              >
-                {heroRow.status}
-              </Text>
-            </VStack>
-          ) : (
-            <Text
-              modifiers={[font({ size: 13 }), foregroundStyle(secondaryForeground), lineLimit(2)]}
-            >
-              {props.subtitle}
-            </Text>
-          )}
-        </VStack>
-      );
-    }
-
-    return (
-      <VStack alignment="leading" spacing={7} modifiers={rootModifiers}>
-        <HStack spacing={7} alignment="center">
-          {renderLogo(14, primaryForeground)}
-          <Text
-            modifiers={[
-              font({ weight: "semibold", size: 13 }),
-              foregroundStyle(allDone ? headerTint : primaryForeground),
-              lineLimit(1),
-            ]}
-          >
-            {agentsLabel}
-          </Text>
-          <Spacer minLength={4} />
-          {attentionSuffix ? (
-            <Text
-              modifiers={[
-                font({ weight: "semibold", size: 11 }),
-                foregroundStyle(headerTint),
-                lineLimit(1),
-              ]}
-            >
-              {attentionSuffix}
-            </Text>
-          ) : null}
-        </HStack>
-        {row0 ? renderCompactRow(row0) : null}
-        {row1 ? renderCompactRow(row1) : null}
-        {row2 ? renderCompactRow(row2) : null}
-        {!row0 ? (
-          <Text
-            modifiers={[font({ size: 12 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
-          >
-            {props.subtitle}
-          </Text>
-        ) : null}
-      </VStack>
-    );
-  }
-
   return {
     banner: (
       <VStack
@@ -388,11 +241,7 @@ export function AgentActivity(
         modifiers={[
           padding({ all: 14 }),
           // A clear tint reveals iOS 26's glass material; older hosts keep the standard surface.
-          activityBackgroundTint(
-            "isLiquidGlassAvailable" in environment && environment.isLiquidGlassAvailable
-              ? "clear"
-              : null,
-          ),
+          activityBackgroundTint(environment.isLiquidGlassAvailable ? "clear" : null),
           ...(deepLink ? [widgetURL(deepLink)] : []),
         ]}
       >
@@ -535,5 +384,4 @@ export function AgentActivity(
   };
 }
 
-export const AgentActivityWidget = createWidget<AgentActivityProps>("AgentActivity", AgentActivity);
 export default createLiveActivity<AgentActivityProps>("AgentActivity", AgentActivity);

@@ -34,22 +34,11 @@ const check = Task.make("static", { shell, setup: install, run: cmd`vp check` })
 /** A command line of several steps. */
 const sh = (script: string, ...args: ReadonlyArray<string>) => cmd`bash -c ${script} sh ${args}`;
 
-/**
- * Generating license notices downloads SPDX texts unless the cache holds them, and PR workers have
- * no network, so steps that generate notices seed the cache from the flake's fixed-output copy.
- */
-const withSpdxNotices = (script: string) =>
-  sh(
-    "rm -rf .generated/third-party-licenses/spdx && mkdir -p .generated/third-party-licenses && " +
-      'cp -R --no-preserve=mode "$T3CODE_SPDX_NOTICES" .generated/third-party-licenses/spdx && ' +
-      script,
-  );
-
-/** Unused files, dependencies and exports. Knip loads the mobile Metro config, which writes notices. */
+/** Unused files, dependencies and exports. */
 const knip = Task.make("knip", {
   shell,
   setup: install,
-  run: withSpdxNotices("vp run knip:check"),
+  run: cmd`vp run knip:check`,
 }).pipe(Step.timeout("15 minutes"));
 
 /** The generated GraphQL operations match their documents and schemas. */
@@ -88,10 +77,11 @@ const desktopBuild = Task.make("desktop-build", {
       "native/browser-secret",
       "native/libghostty-vt/LICENSE",
       "scripts/lib",
+      "third-party-licenses",
       "third-party-licenses.config.json",
     ),
   ),
-  run: withSpdxNotices(
+  run: sh(
     "vp run build:desktop && node apps/desktop/scripts/verify-preload-bundle.mjs && " +
       "node apps/web/scripts/verify-built-boot.ts",
   ),
@@ -148,7 +138,8 @@ const githubScripts = Task.make("github-scripts", {
     "python3 -B .github/scripts/stage-preview-bundle.test.py && node --test " +
       ".github/scripts/check-nightly-release.test.cjs " +
       ".github/scripts/vercel-deployment-output.test.cjs " +
-      ".github/scripts/thread-transfer-report.test.cjs",
+      ".github/scripts/thread-transfer-report.test.cjs " +
+      ".github/scripts/mobile-preview-comment.test.cjs",
   ),
 }).pipe(Step.timeout("10 minutes"));
 
@@ -277,7 +268,7 @@ const testShared = Vitest.files({
 /** Vite+ `--filter` arguments that select the packages in `dirs`. */
 const filters = (dirs: ReadonlyArray<string>) => dirs.flatMap((dir) => ["--filter", `./${dir}`]);
 
-/** One package per provider and per source-control host. */
+/** One package per provider, per secret provider and per source-control host. */
 const integrationPackages = [
   "packages/provider-acp",
   "packages/provider-acp-registry",
@@ -285,13 +276,18 @@ const integrationPackages = [
   "packages/provider-cursor",
   "packages/provider-fx",
   "packages/provider-grok",
+  "packages/provider-kiro",
   "packages/provider-muse",
   "packages/provider-opencode",
   "packages/provider-pi",
   "packages/provider-testing",
+  "packages/secret-provider-core",
+  "packages/secret-provider-definitions",
+  "packages/secret-provider-onepassword",
   "packages/source-control-azure-devops",
   "packages/source-control-bitbucket",
   "packages/source-control-core",
+  "packages/source-control-cursor-origin",
   "packages/source-control-definitions",
   "packages/source-control-forgejo",
   "packages/source-control-gitcafe",
@@ -333,6 +329,7 @@ const testIntegrations = packageSuites(
     (dir) =>
       ![
         "packages/provider-testing",
+        "packages/secret-provider-definitions",
         "packages/source-control-definitions",
         "packages/source-control-testing",
       ].includes(dir),
@@ -362,7 +359,11 @@ const typecheck = (
     shell,
     setup: install,
     inputs: Files.union(
-      Files.of("tsconfig.base.json", ...dirs.map((dir) => `${dir}/tsconfig.json`)),
+      Files.of(
+        "tsconfig.base.json",
+        "tsconfig.effect.json",
+        ...dirs.map((dir) => `${dir}/tsconfig.json`),
+      ),
       Files.imports(sources, { aliases, types: true }),
     ),
     run: cmd`vp run --cache --concurrency-limit 1 ${filters(dirs)} typecheck ${args}`,

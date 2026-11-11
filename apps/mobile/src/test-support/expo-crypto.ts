@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Vitest-only stand-in for expo-crypto.
 import * as NodeCrypto from "node:crypto";
 
 export const CryptoDigestAlgorithm = {

@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { JJ_THREAD_TRAILER, JJ_TURN_TRAILER } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import * as JjCli from "../vcs/JjCli.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -66,7 +67,8 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const vcsProcess = yield* VcsProcess.VcsProcess;
   const { stateDir } = yield* ServerConfig.ServerConfig;
-  const launcherHost = (process.env.T3CODE_EXECUTION_LAUNCHER ?? "").trim().length > 0;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const launcherHost = (hostEnvironment.T3CODE_EXECUTION_LAUNCHER ?? "").trim().length > 0;
 
   const layerPath = (threadId: string) =>
     path.join(
@@ -95,7 +97,7 @@ const make = Effect.gen(function* () {
   // files go first. Missing paths are skipped by jj.
   const userConfigPaths = yield* Effect.cached(
     Effect.gen(function* () {
-      const explicit = process.env.JJ_CONFIG;
+      const explicit = hostEnvironment.JJ_CONFIG;
       if (explicit !== undefined) return explicit.split(":").filter((entry) => entry.length > 0);
       // One path per line: ~/.jjconfig.toml, ~/.config/jj/config.toml and conf.d when present.
       return (yield* jjGlobal("JjThreadLayer.userConfigPath", ["config", "path", "--user"]))

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -17,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -199,6 +201,7 @@ const runtimeLayer = (cwd: string, gates: Map<ThreadId, Deferred.Deferred<void>>
     ),
     ProjectStore.layer,
     NodeServices.layer,
+    NodeCrypto.layer,
   ).pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 };
 
@@ -224,6 +227,7 @@ const withRuntime = <A, E>(
     | ProjectStore.ProjectStoreV2
     | SqlClient.SqlClient
     | NodeServices.NodeServices
+    | SecureRandom.SecureRandom
     | Scope.Scope
   >,
 ) =>

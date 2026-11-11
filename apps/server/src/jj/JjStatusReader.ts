@@ -19,7 +19,12 @@ import { parseTurnDiffFilesFromNumstat } from "../checkpointing/Diffs.ts";
 import * as JjCli from "../vcs/JjCli.ts";
 import { splitNul } from "../vcs/JjVcsDriver.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
-import { decodeJsonBoolean, decodeJsonString, decodeJsonStrings } from "./jjTemplateJson.ts";
+import {
+  decodeJsonBoolean,
+  decodeJsonString,
+  decodeJsonStrings,
+  parseJjOutput,
+} from "./jjTemplateJson.ts";
 import { loadWorkingCopyState } from "./JjWorkingCopyState.ts";
 
 const MAX_STACK_ENTRIES = 100;
@@ -145,7 +150,7 @@ const make = Effect.gen(function* () {
         ],
         { concurrency: "unbounded" },
       );
-      const { parsed, trunk } = yield* Effect.try(() => {
+      const { parsed, trunk } = yield* parseJjOutput(() => {
         const [change = "", isRoot = "", remote = "", local = ""] = trunkOutput.split("\t");
         return {
           parsed: stackOutput

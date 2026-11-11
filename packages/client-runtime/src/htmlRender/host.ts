@@ -29,6 +29,7 @@ const encoder = new TextEncoder();
 
 type JsonRpcId = string | number;
 
+// @effect-diagnostics-next-line extendsNativeError:off - the host is Promise code; this is a throw sentinel, never an Effect failure.
 export class HtmlRenderHostRefusal extends Error {}
 
 /** A render shown in a thread; pages elsewhere only get `copy`. */

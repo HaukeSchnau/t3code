@@ -26,7 +26,9 @@ client-neutral, so mobile uses it as is and adds no server code.
   opens those folds while find is open, keeps them open when find closes, pages in older history
   until an unloaded match arrives (at most 20 pages), and scrolls the row into view. It places a
   match in a long message by its position in the text. The revealed folds go into upstream's
-  `useThreadFeedPresentation`, and `findActive` keeps end-follow and end maintenance off.
+  `useThreadFeedPresentation`, and the reveal uses the list's tool-call visibility so it names a
+  row the list shows. `findActive` turns off Legend List's `maintainScrollAtEnd` while find is
+  open.
 - Rendered Markdown cannot carry marks: `react-native-enriched-markdown` has no range highlight
   API, and its `==highlight==` syntax has one colour and skips code. Find therefore marks matches
   only in plain text, which today means an expanded plan row (`ThreadFindText` in
@@ -34,11 +36,10 @@ client-neutral, so mobile uses it as is and adds no server code.
 - `ThreadRouteScreen.tsx` owns whether find is open and registers Cmd+F (`focusSearch`) while the
   screen is focused. `ThreadDetailScreen.tsx` renders `ThreadFindBar.tsx` in the composer slot and closes find before
   any path that focuses the composer. Android Back closes find first.
-- The thread header shows a Find button: `useThreadHeaderOptions.tsx` on iOS, `ThreadGitControls.tsx`
-  in the fallback toolbar, and `ThreadHeader.tsx` on Android. `ThreadRouteScreen.tsx` passes
-  `onOpenFind` through upstream's `ThreadScreenBinding` header; the draft header has no Find.
-- `ThreadNavigationSidebar.tsx` registers its Cmd+F handler once, so toggling the sidebar does not
-  take the shortcut from an open thread.
+- `ThreadHeader.tsx` adds a Find action to upstream's `AppBar` on both platforms.
+  `ThreadRouteScreen.tsx` passes `onOpenFind`; the draft header has no Find.
+- `WorkspaceListHeader.tsx` and `WorkspaceListHeader.android.tsx` register the sidebar's Cmd+F
+  handler once, so a sidebar re-render does not take the shortcut from an open thread.
 
 ## Removal
 

@@ -131,6 +131,11 @@ export const GUEST_RENDER_ROUTE = `${GUEST_ROUTE_PREFIX}/render`;
 export const GUEST_RENDER_STATE_ROUTE = `${GUEST_ROUTE_PREFIX}/render-state`;
 /** One item of the shared thread, as an expanded row loads it: `?share=<share id>&item=<id>`. */
 export const GUEST_ITEM_ROUTE = `${GUEST_ROUTE_PREFIX}/item`;
+/**
+ * Older turns of the shared thread, as the owner's "Load earlier turns" pages them:
+ * `?share=<share id>&cursor=<history cursor>`.
+ */
+export const GUEST_HISTORY_ROUTE = `${GUEST_ROUTE_PREFIX}/history`;
 /** Server-sent output frames of one command in the shared thread: `?share=<share id>&item=<id>`. */
 export const GUEST_COMMAND_OUTPUT_ROUTE = `${GUEST_ROUTE_PREFIX}/command-output`;
 /**
