@@ -38,8 +38,9 @@ session-wide choice, because Grok would remember that command for the whole proj
 ACP Registry agents run their own tools in their own mode; T3 Code answers their approval requests
 by the permission mode. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
 
-Claude can still ask in **Full access** when its settings disable bypass permissions or require
-approval for an action.
+Claude can still ask in **Full access** when its settings disable bypass permissions. T3 Code
+approves what Claude asks in bypass mode: your ask rules, and the safety checks Claude keeps, such
+as removing a path it can't resolve before the command runs.
 While a Claude approval is pending, type a text reply to decline that request and give feedback
 directly to the agent that asked, including a subagent. Other pending requests stay unanswered.
 
