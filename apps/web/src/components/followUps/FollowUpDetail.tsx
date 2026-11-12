@@ -219,6 +219,7 @@ function DonePopover(props: {
           className="flex flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
+            if (props.disabled) return;
             void props.onDone(result.trim()).then((saved) => {
               if (!saved) return;
               setOpen(false);
@@ -240,7 +241,7 @@ function DonePopover(props: {
             />
           </label>
           <div className="flex justify-end">
-            <Button type="submit" size="sm">
+            <Button type="submit" size="sm" disabled={props.disabled}>
               Mark done
             </Button>
           </div>
