@@ -79,7 +79,7 @@ describe("FollowUps", () => {
         const history = yield* followUps.history(created.id);
         assert.deepEqual(
           history.map((change) => change.summary),
-          ["created", "open → done; changed result; result: Rotated on Nov 13."],
+          ["created", "open → done; result: Rotated on Nov 13."],
         );
         // Saving the same values again changes nothing and logs nothing.
         yield* followUps.save({ id: created.id, result: "Rotated on Nov 13." }, agent);

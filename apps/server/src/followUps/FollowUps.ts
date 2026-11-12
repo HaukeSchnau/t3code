@@ -286,6 +286,8 @@ const describeChanges = (before: FollowUp, after: FollowUp) => {
     parts.push(`picked up${pickedUpIn}`);
   }
   if (before.title !== after.title) parts.push(`renamed from "${before.title}"`);
+  const showResult =
+    after.result !== null && after.result !== before.result && CLOSED_STATUSES.has(after.status);
   const changed = (
     [
       ["body", before.body !== after.body],
@@ -295,17 +297,11 @@ const describeChanges = (before: FollowUp, after: FollowUp) => {
       ["links", JSON.stringify(before.links) !== JSON.stringify(after.links)],
       ["type", before.type !== after.type],
       ["fields", JSON.stringify(before.fields) !== JSON.stringify(after.fields)],
-      ["result", before.result !== after.result],
+      ["result", before.result !== after.result && !showResult],
     ] as const
   ).flatMap(([name, isChanged]) => (isChanged ? [name] : []));
   if (changed.length > 0) parts.push(`changed ${changed.join(", ")}`);
-  if (
-    after.result !== null &&
-    after.result !== before.result &&
-    CLOSED_STATUSES.has(after.status)
-  ) {
-    parts.push(`result: ${after.result}`);
-  }
+  if (showResult) parts.push(`result: ${after.result}`);
   return parts.join("; ");
 };
 
