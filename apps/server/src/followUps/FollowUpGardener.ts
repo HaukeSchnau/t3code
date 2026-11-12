@@ -188,7 +188,6 @@ const make = Effect.gen(function* () {
             Effect.catch((error) =>
               Effect.logWarning("The nightly follow-up gardener did not start", {
                 message: error.message,
-                cause: error.cause,
               }).pipe(Effect.as(false)),
             ),
           );
