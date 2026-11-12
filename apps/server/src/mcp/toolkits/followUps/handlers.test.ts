@@ -120,10 +120,10 @@ const serve = (
         }),
         Layer.mock(FollowUps.FollowUps)({
           isGardenerThread: () => Effect.succeed(false),
-          save: (input, actor) =>
+          apply: ({ save: input }, actor) =>
             Effect.sync(() => {
               record({ input, actor });
-              return stored(input, actor);
+              return input === undefined ? {} : { followUp: stored(input, actor) };
             }),
         }),
       ),

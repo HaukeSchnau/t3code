@@ -679,7 +679,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
-    threadListV2Layout.settledCount > 0;
+    threadListV2Layout.settledCount > 0 ||
+    inboxFollowUps.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null

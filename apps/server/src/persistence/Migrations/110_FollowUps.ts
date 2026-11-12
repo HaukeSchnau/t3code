@@ -32,6 +32,11 @@ export default Effect.gen(function* () {
     WHERE status = 'open' AND due_at IS NOT NULL AND returned_at IS NULL
   `;
   yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_follow_ups_closed
+    ON follow_ups(closed_at)
+    WHERE status NOT IN ('open', 'picked_up')
+  `;
+  yield* sql`
     CREATE TABLE IF NOT EXISTS follow_up_types (
       name TEXT PRIMARY KEY,
       description TEXT NOT NULL,

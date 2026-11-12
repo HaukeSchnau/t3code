@@ -101,7 +101,8 @@ describe("FollowUps", () => {
         assert.deepEqual(takenOver.pickedUpThread, thread("thread:c"));
         assert.deepEqual(
           (yield* followUps.history(created.id)).slice(2).map((change) => change.summary),
-          ["done → picked up in thread thread:b", "picked up in thread thread:c"],
+          // Reopening drops the old result.
+          ["done → picked up in thread thread:b; changed result", "picked up in thread thread:c"],
         );
       }),
     ),
@@ -119,11 +120,26 @@ describe("FollowUps", () => {
           .pipe(Effect.flip);
         assert.include(untypedFields.message, "Fields belong to a type");
 
-        yield* followUps.defineType(
+        // A type and a follow-up land together or not at all.
+        const halfSaved = yield* followUps
+          .apply(
+            {
+              defineType: { name: "idea", description: "Work worth doing.", fields: [] },
+              save: { type: "idea" },
+            },
+            agent,
+          )
+          .pipe(Effect.flip);
+        assert.include(halfSaved.message, "needs a title");
+        assert.deepEqual((yield* followUps.snapshot({})).types, []);
+
+        yield* followUps.apply(
           {
-            name: "risk",
-            description: "Something that can go wrong.",
-            fields: [{ name: "severity", description: "low, medium or high" }],
+            defineType: {
+              name: "risk",
+              description: "Something that can go wrong.",
+              fields: [{ name: "severity", description: "low, medium or high" }],
+            },
           },
           agent,
         );
@@ -137,7 +153,7 @@ describe("FollowUps", () => {
         assert.include(unknownField.message, "has no field owner");
 
         const dropInUse = yield* followUps
-          .defineType({ name: "risk", description: "Renamed.", fields: [] }, agent)
+          .apply({ defineType: { name: "risk", description: "Renamed.", fields: [] } }, agent)
           .pipe(Effect.flip);
         assert.include(dropInUse.message, `${risk.id} still use the field severity`);
       }),

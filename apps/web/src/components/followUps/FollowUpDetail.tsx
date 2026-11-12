@@ -197,7 +197,8 @@ function LaterMenu(props: {
 
 function DonePopover(props: {
   readonly disabled: boolean;
-  readonly onDone: (result: string) => void;
+  /** Resolves whether the save went through; the popover keeps the text until it does. */
+  readonly onDone: (result: string) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
   const [result, setResult] = useState("");
@@ -218,9 +219,11 @@ function DonePopover(props: {
           className="flex flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
-            setOpen(false);
-            props.onDone(result.trim());
-            setResult("");
+            void props.onDone(result.trim()).then((saved) => {
+              if (!saved) return;
+              setOpen(false);
+              setResult("");
+            });
           }}
         >
           <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -266,7 +269,7 @@ function FollowUpActions(props: {
   );
   const disabled = busy || !canSave;
 
-  const apply = async (patch: Omit<FollowUpSaveInput, "id">) => {
+  const apply = async (patch: Omit<FollowUpSaveInput, "id">): Promise<boolean> => {
     setBusy(true);
     const result = await save({
       environmentId: homeEnvironmentId,
@@ -281,6 +284,7 @@ function FollowUpActions(props: {
         description: failure instanceof Error ? failure.message : "An error occurred.",
       });
     }
+    return result._tag === "Success";
   };
   const start = async (project: EnvironmentProject) => {
     setBusy(true);
@@ -315,7 +319,7 @@ function FollowUpActions(props: {
       )}
       <DonePopover
         disabled={disabled}
-        onDone={(result) => void apply({ status: "done", ...(result === "" ? {} : { result }) })}
+        onDone={(result) => apply({ status: "done", ...(result === "" ? {} : { result }) })}
       />
       <LaterMenu
         homeEnvironmentId={homeEnvironmentId}

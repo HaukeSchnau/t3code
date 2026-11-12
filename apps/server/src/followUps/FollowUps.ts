@@ -72,10 +72,14 @@ export class FollowUps extends Context.Service<
       id: FollowUpId,
     ) => Effect.Effect<ReadonlyArray<FollowUpChange>, FollowUpError>;
     readonly types: Effect.Effect<ReadonlyArray<FollowUpType>, FollowUpError>;
-    readonly defineType: (
-      input: FollowUpTypeInput,
+    /** Defines a type and saves a follow-up in one transaction; either may be left out. */
+    readonly apply: (
+      input: { readonly defineType?: FollowUpTypeInput; readonly save?: FollowUpSaveInput },
       actor: FollowUpActor,
-    ) => Effect.Effect<FollowUpType, FollowUpError>;
+    ) => Effect.Effect<
+      { readonly type?: FollowUpType; readonly followUp?: FollowUp },
+      FollowUpError
+    >;
     readonly recordGardenerRun: (run: FollowUpGardenerRun) => Effect.Effect<void, FollowUpError>;
     /** Whether a nightly gardener run started this thread, so its changes log as the gardener's. */
     readonly isGardenerThread: (thread: FollowUpThreadRef) => Effect.Effect<boolean>;
@@ -186,9 +190,7 @@ const fail = (message: string) => new FollowUpError({ message });
 const failWith =
   (message: string) =>
   (cause: unknown): FollowUpError =>
-    new FollowUpError({
-      message: `${message}${cause instanceof Error && cause.message ? `: ${cause.message}` : ""}`,
-    });
+    new FollowUpError({ message, cause });
 
 /** Tags compare case-insensitively and keep their first spelling. */
 const normalizeTags = (tags: ReadonlyArray<string>) => {
@@ -582,7 +584,13 @@ const make = Effect.gen(function* () {
       fields: input.fields ?? base.fields,
       pickedUpThread:
         input.pickedUpThread === undefined ? base.pickedUpThread : input.pickedUpThread,
-      result: input.result === undefined ? base.result : input.result,
+      // Reopening drops the old result; the next close writes its own.
+      result:
+        input.result !== undefined
+          ? input.result
+          : CLOSED_STATUSES.has(base.status) && !CLOSED_STATUSES.has(status)
+            ? null
+            : base.result,
       mergedInto,
       // A new date sends it back to waiting; the scanner returns it once the date arrives.
       returnedAt: dueAt !== base.dueAt || status !== "open" ? null : base.returnedAt,
@@ -628,38 +636,39 @@ const make = Effect.gen(function* () {
     Effect.mapError(failWith("Could not read the follow-up's history")),
   );
 
-  const defineType: FollowUps["Service"]["defineType"] = Effect.fn("FollowUps.defineType")(
-    function* (input, actor) {
-      const name = input.name.trim();
-      if (!/^[a-z][a-z0-9-]*$/.test(name)) {
-        return yield* fail("A type name is one lowercase word, such as risk or idea.");
-      }
-      const fieldNames = input.fields.map((field) => field.name);
-      if (new Set(fieldNames).size !== fieldNames.length) {
-        return yield* fail("A type names each field once.");
-      }
-      const now = yield* nowIso;
-      const existing = (yield* types).find((entry) => entry.name === name);
-      if (existing !== undefined) {
-        const kept = new Set(fieldNames);
-        const dropped = existing.fields
-          .filter((field) => !kept.has(field.name))
-          .map((field) => field.name);
-        const inUse = (yield* loadAll).filter(
-          (followUp) =>
-            followUp.type === name &&
-            dropped.some((field) => Object.hasOwn(followUp.fields, field)),
+  const defineTypeRow = Effect.fnUntraced(function* (
+    input: FollowUpTypeInput,
+    actor: FollowUpActor,
+  ) {
+    const name = input.name.trim();
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+      return yield* fail("A type name is one lowercase word, such as risk or idea.");
+    }
+    const fieldNames = input.fields.map((field) => field.name);
+    if (new Set(fieldNames).size !== fieldNames.length) {
+      return yield* fail("A type names each field once.");
+    }
+    const now = yield* nowIso;
+    const existing = (yield* types).find((entry) => entry.name === name);
+    if (existing !== undefined) {
+      const kept = new Set(fieldNames);
+      const dropped = existing.fields
+        .filter((field) => !kept.has(field.name))
+        .map((field) => field.name);
+      const inUse = (yield* loadAll).filter(
+        (followUp) =>
+          followUp.type === name && dropped.some((field) => Object.hasOwn(followUp.fields, field)),
+      );
+      if (inUse.length > 0) {
+        return yield* fail(
+          `Follow-ups ${inUse.map((followUp) => followUp.id).join(", ")} still use the field${
+            dropped.length === 1 ? "" : "s"
+          } ${dropped.join(", ")}. Move their values first.`,
         );
-        if (inUse.length > 0) {
-          return yield* fail(
-            `Follow-ups ${inUse.map((followUp) => followUp.id).join(", ")} still use the field${
-              dropped.length === 1 ? "" : "s"
-            } ${dropped.join(", ")}. Move their values first.`,
-          );
-        }
       }
-      const fieldsJson = yield* encodeTypeFields(input.fields);
-      yield* sql`
+    }
+    const fieldsJson = yield* encodeTypeFields(input.fields);
+    yield* sql`
         INSERT INTO follow_up_types (name, description, fields_json, updated_at)
         VALUES (${name}, ${input.description}, ${fieldsJson}, ${now})
         ON CONFLICT(name) DO UPDATE SET
@@ -667,12 +676,29 @@ const make = Effect.gen(function* () {
           fields_json = excluded.fields_json,
           updated_at = excluded.updated_at
       `;
-      yield* Effect.logInfo("Follow-up type saved", { name, actor: actor.kind });
-      yield* notifyChanged;
-      return { name, description: input.description, fields: input.fields, updatedAt: now };
+    yield* Effect.logInfo("Follow-up type saved", { name, actor: actor.kind });
+    return { name, description: input.description, fields: input.fields, updatedAt: now };
+  });
+
+  // A type and the follow-up that uses it land together or not at all.
+  const apply: FollowUps["Service"]["apply"] = Effect.fn("FollowUps.apply")(
+    function* (input, actor) {
+      const result = yield* Effect.gen(function* () {
+        const type =
+          input.defineType === undefined
+            ? undefined
+            : yield* defineTypeRow(input.defineType, actor);
+        const saved = input.save === undefined ? undefined : yield* saveRow(input.save, actor);
+        return { type, saved };
+      }).pipe(sql.withTransaction);
+      if (result.type !== undefined || result.saved?.changed === true) yield* notifyChanged;
+      return {
+        ...(result.type === undefined ? {} : { type: result.type }),
+        ...(result.saved === undefined ? {} : { followUp: result.saved.followUp }),
+      };
     },
     Effect.mapError((cause) =>
-      isFollowUpError(cause) ? cause : failWith("Could not save the type")(cause),
+      isFollowUpError(cause) ? cause : failWith("Could not save the follow-up")(cause),
     ),
   );
 
@@ -736,7 +762,7 @@ const make = Effect.gen(function* () {
     save,
     history,
     types,
-    defineType,
+    apply,
     recordGardenerRun,
     isGardenerThread,
   });

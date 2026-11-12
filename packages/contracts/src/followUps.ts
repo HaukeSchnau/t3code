@@ -154,6 +154,7 @@ export type FollowUpHistory = typeof FollowUpHistory.Type;
 
 export class FollowUpError extends Schema.TaggedError<FollowUpError>()("FollowUpError", {
   message: TrimmedNonEmptyString,
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 export const FOLLOW_UP_WS_METHODS = {

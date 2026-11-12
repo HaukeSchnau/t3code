@@ -162,18 +162,16 @@ const save = Effect.fn("FollowUpTools.save")(function* (params: SaveParams) {
     thread: actingThread,
   };
 
-  const type =
-    params.defineType === undefined
-      ? undefined
-      : yield* followUps.defineType(params.defineType, actor).pipe(Effect.mapError(toFailure));
   if (!hasFollowUpChange(params)) {
-    if (type === undefined) {
+    if (params.defineType === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
         message: "Give a follow-up to write or change, or a type to define.",
       });
     }
-    return { type };
+    return yield* followUps
+      .apply({ defineType: params.defineType }, actor)
+      .pipe(Effect.mapError(toFailure));
   }
 
   if (params.status === "picked_up" && actingThread === null) {
@@ -203,8 +201,15 @@ const save = Effect.fn("FollowUpTools.save")(function* (params: SaveParams) {
       : {}),
     ...(params.id === undefined && origin !== undefined ? { origin } : {}),
   };
-  const followUp = yield* followUps.save(input, actor).pipe(Effect.mapError(toFailure));
-  return { followUp, ...(type === undefined ? {} : { type }) };
+  return yield* followUps
+    .apply(
+      {
+        save: input,
+        ...(params.defineType === undefined ? {} : { defineType: params.defineType }),
+      },
+      actor,
+    )
+    .pipe(Effect.mapError(toFailure));
 });
 
 const search = Effect.fn("FollowUpTools.search")(function* (
