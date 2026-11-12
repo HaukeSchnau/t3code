@@ -71,6 +71,8 @@ import { JjToolkit } from "./toolkits/jj/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WatchHandlers from "./toolkits/watch/handlers.ts";
+import * as FollowUpHandlers from "./toolkits/followUps/handlers.ts";
+import { FollowUpsToolkit } from "./toolkits/followUps/tools.ts";
 import { WatchToolkit } from "./toolkits/watch/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
@@ -1209,6 +1211,7 @@ const layerWorktreeToolkitRegistration = toolkitRegistration(
 const layerJjToolkit = toolkitRegistration(JjToolkit, JjHandlers.layer);
 
 const layerWatchToolkit = toolkitRegistration(WatchToolkit, WatchHandlers.layer);
+const layerFollowUpsToolkit = toolkitRegistration(FollowUpsToolkit, FollowUpHandlers.layer);
 
 const layerPreviewControlsRegistration = toolkitRegistration(
   PreviewControlsToolkit,
@@ -1291,6 +1294,7 @@ export const layerTools = Layer.mergeAll(
   layerDeviceToolkit,
   layerHtmlToolkit,
   layerWatchToolkit,
+  layerFollowUpsToolkit,
 );
 
 export const layer = layerMcpTransport(layerTools);

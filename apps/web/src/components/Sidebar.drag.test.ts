@@ -21,6 +21,7 @@ const thread = (key: string, section: SidebarSection): SidebarListItem => ({
   section,
 });
 const marker = (marker: SidebarListMarker): SidebarListItem => ({ kind: "marker", marker });
+const followUp = (key: string): SidebarListItem => ({ kind: "followUp", key });
 const pinnedHeader = marker("pinned-header");
 const divider = marker("pinned-divider");
 const settledHeader = marker("settled-header");
@@ -38,9 +39,11 @@ function layout(
     const height =
       item.kind === "thread"
         ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
-        : item.marker === "pinned-header" || item.marker === "pinned-divider"
-          ? 0
-          : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
+        : item.kind === "followUp"
+          ? 36 * scale
+          : item.marker === "pinned-header" || item.marker === "pinned-divider"
+            ? 0
+            : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
     const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
     top += height + 1;
     return rect;
@@ -350,6 +353,40 @@ describe("sidebar drag projection", () => {
       expect(result.get("a1")?.y).toBe(a1Offset);
       expect(result.get("a2")?.y).toBe(a2Offset);
       expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(0);
+    },
+  );
+
+  it.each([
+    // Ordered by key, a follow-up stays above every thread.
+    [undefined, 36 + 1 + 82 + 1],
+    // Ordered by return time, the dropped pin is the newest return.
+    [["p", "f", "a1"], 36 + 1],
+  ] as const)(
+    "keeps a follow-up row in the inbox while a pin drops in, with active order %j",
+    (activeOrder, followUpToThreadGap) => {
+      const items = [
+        pinnedHeader,
+        thread("p", "pinned"),
+        divider,
+        followUp("f"),
+        thread("a1", "active"),
+        settledHeader,
+        thread("s", "settled"),
+      ];
+      const input = {
+        items,
+        settledOrder: [],
+        settledExpanded: true,
+        ...(activeOrder === undefined ? {} : { activeOrder }),
+      };
+      const result = preview(input, "p", "f");
+      const { rects } = layout(items, "p", "f");
+      const top = (key: string) => {
+        const index = items.findIndex((item) => sidebarListItemId(item) === key);
+        return rects[index]!.top + result.get(key)!.y;
+      };
+      expect(result.get("f")?.scaleY).toBe(1);
+      expect(top("a1") - top("f")).toBe(followUpToThreadGap);
     },
   );
 

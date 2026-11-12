@@ -20,6 +20,8 @@ import {
   searchSidebarThreads,
   shouldRecedeSidebarThread,
   sortInboxThreadsByReturn,
+  inboxReturnTime,
+  mergeInboxFollowUps,
   resolveSidebarDropTarget,
   planSidebarThreadDrop,
   resolveSidebarReorderableThreadKeys,
@@ -1059,6 +1061,38 @@ describe("Working shelf (beta)", () => {
       expect(sorted.map((entry) => entry.id)).toEqual(["old-finished-now", "reopened", "new"]);
     });
 
+    it("places returned follow-ups by return time, and above threads ordered by key", () => {
+      const threads = sortInboxThreadsByReturn([
+        thread("finished", {
+          createdAt: "2026-03-09T09:00:00.000Z",
+          completedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        thread("older", { createdAt: "2026-03-09T10:00:00.000Z" }),
+      ]);
+      const followUps = [
+        { id: "back-at-11", returnedAtMs: Date.parse("2026-03-09T11:00:00.000Z") },
+        { id: "back-at-9", returnedAtMs: Date.parse("2026-03-09T09:00:00.000Z") },
+      ];
+      const ids = (entries: ReadonlyArray<{ readonly id: string }>) =>
+        entries.map((entry) => entry.id);
+      const byReturn = {
+        thread: (entry: (typeof threads)[number]) => inboxReturnTime(entry),
+        followUp: (entry: (typeof followUps)[number]) => entry.returnedAtMs,
+      };
+      expect(ids(mergeInboxFollowUps(threads, followUps, byReturn))).toEqual([
+        "finished",
+        "back-at-11",
+        "older",
+        "back-at-9",
+      ]);
+      expect(ids(mergeInboxFollowUps(threads, followUps, null))).toEqual([
+        "back-at-11",
+        "back-at-9",
+        "finished",
+        "older",
+      ]);
+    });
+
     it("counts a return the server does not stamp, like an approval request", () => {
       const waiting = thread("asks-approval", {
         createdAt: "2026-03-09T09:00:00.000Z",
@@ -1092,6 +1126,7 @@ describe("Working shelf (beta)", () => {
       row("p1", "pinned"),
       marker("pinned-divider"),
       row("a1", "active"),
+      { kind: "followUp", key: "f1" },
       row("a2", "active"),
       marker("working-header"),
       row("w1", "working"),
@@ -1099,13 +1134,19 @@ describe("Working shelf (beta)", () => {
       row("s1", "settled"),
     ];
 
-    it("never drops into the Working shelf, and keeps it out of the inbox order", () => {
+    it("never drops into the Working shelf, and keeps it and follow-ups out of the inbox order", () => {
       expect(resolveSidebarDropTarget(items, "a1", "w1")).toBeNull();
       expect(resolveSidebarDropTarget(items, "p1", "a2")).toEqual({
         section: "active",
         pinnedOrder: [],
         activeOrder: ["a1", "a2", "p1"],
       });
+      expect(resolveSidebarDropTarget(items, "p1", "f1")).toEqual({
+        section: "active",
+        pinnedOrder: [],
+        activeOrder: ["a1", "p1", "a2"],
+      });
+      expect(resolveSidebarDropTarget(items, "f1", "a1")).toBeNull();
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
     });
 

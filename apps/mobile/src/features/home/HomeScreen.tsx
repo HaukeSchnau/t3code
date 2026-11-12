@@ -59,6 +59,9 @@ import { useSearchScrollRestoration } from "../layout/workspace/useSearchScrollR
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
+import { inboxFollowUpsAtom } from "../../state/follow-ups";
+import { FollowUpInboxRow } from "../follow-ups/FollowUpInboxRow";
+import { useOpenFollowUp } from "../follow-ups/useOpenFollowUp";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import {
@@ -458,6 +461,8 @@ export function HomeScreen(props: HomeScreenProps) {
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
+  const inboxFollowUps = useAtomValue(inboxFollowUpsAtom);
+  const openFollowUp = useOpenFollowUp();
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
@@ -466,6 +471,7 @@ export function HomeScreen(props: HomeScreenProps) {
   } = useThreadListV2({
     threads: props.threads,
     pendingTasks: props.pendingTasks,
+    followUps: inboxFollowUps,
     environmentId: props.selectedEnvironmentId,
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
     searchQuery: props.searchQuery,
@@ -540,6 +546,17 @@ export function HomeScreen(props: HomeScreenProps) {
           onSwipeableWillOpen={handleSwipeableWillOpen}
           simultaneousSwipeGesture={homeScrollGesture}
           activationKey={item.key}
+        />
+      );
+    }
+    if (item.type === "v2-follow-up") {
+      return (
+        <FollowUpInboxRow
+          entry={item.entry}
+          timeLabel={item.timeLabel}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          showTrailingDivider={item.showTrailingDivider}
+          onOpen={openFollowUp}
         />
       );
     }
@@ -662,7 +679,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
-    threadListV2Layout.settledCount > 0;
+    threadListV2Layout.settledCount > 0 ||
+    inboxFollowUps.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null

@@ -8,7 +8,7 @@ import * as Path from "effect/Path";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
-import type { OtlpEndpointSource } from "@t3tools/contracts";
+import type { EnvironmentId, OtlpEndpointSource } from "@t3tools/contracts";
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import {
   DEFAULT_SIGNAL_EXPORT,
@@ -109,6 +109,8 @@ export class ServerConfig extends Context.Service<
     readonly tailscaleServePort: number;
     /** ssh config alias clients use for remote open-in-editor deep links. */
     readonly remoteOpenHost?: string | undefined;
+    /** The environment that keeps this one's follow-ups; absent when it keeps its own. */
+    readonly followUpHome?: EnvironmentId | undefined;
   }
 >()("t3/config/ServerConfig") {
   static readonly layerTest = (

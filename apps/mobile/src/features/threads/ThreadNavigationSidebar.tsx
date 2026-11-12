@@ -32,6 +32,9 @@ import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-pref
 import { useThreadListNow } from "./use-thread-list-now";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
+import { inboxFollowUpsAtom } from "../../state/follow-ups";
+import { FollowUpInboxRow } from "../follow-ups/FollowUpInboxRow";
+import { useOpenFollowUp } from "../follow-ups/useOpenFollowUp";
 import {
   useLaunchingThreads,
   usePendingNewTasks,
@@ -141,6 +144,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     regenerateThreadTitle,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
+  const inboxFollowUps = useAtomValue(inboxFollowUpsAtom);
+  const openFollowUp = useOpenFollowUp();
   const launchingThreads = useLaunchingThreads(threads);
   const activeNewTask = useActiveNewTask();
   const queuedThreadKeys = useQueuedThreadKeys();
@@ -272,6 +277,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   } = useThreadListV2({
     threads: launchingThreads,
     pendingTasks,
+    followUps: inboxFollowUps,
     environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
     searchQuery: props.searchQuery,
@@ -485,6 +491,16 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           />
         );
       }
+      case "v2-follow-up":
+        return (
+          <FollowUpInboxRow
+            entry={item.entry}
+            timeLabel={item.timeLabel}
+            pane="sidebar"
+            showTrailingDivider={item.showTrailingDivider}
+            onOpen={openFollowUp}
+          />
+        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader

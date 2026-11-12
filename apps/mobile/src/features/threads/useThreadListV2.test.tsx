@@ -42,6 +42,7 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
   const input: Parameters<typeof useThreadListV2>[0] = {
     threads,
     pendingTasks: [],
+    followUps: [],
     environmentId: null,
     projectRefs: null,
     searchQuery: "",

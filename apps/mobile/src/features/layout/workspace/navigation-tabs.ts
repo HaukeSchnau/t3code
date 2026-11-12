@@ -10,6 +10,7 @@ import {
 } from "./navigation-tab-order";
 import type { AppSymbolName } from "../../../components/ui/AppSymbol";
 import { mobilePreferencesAtom } from "../../../state/preferences";
+import { FOLLOW_UP_ICON } from "../../follow-ups/followUpPresentation";
 import { PullRequestGlyph } from "../../pull-requests/pullRequestGlyphs";
 import { resolveWorkspaceTabOrder } from "./workspace-tabs-state";
 
@@ -21,6 +22,7 @@ export const WORKSPACE_TAB_LABELS = {
 export const NAVIGATION_TAB_ICONS = {
   threads: "text.bubble",
   pullRequests: PullRequestGlyph.pullRequest,
+  followUps: FOLLOW_UP_ICON,
   usage: "chart.bar.xaxis",
 } as const satisfies Readonly<Record<NavigationTab, AppSymbolName>>;
 

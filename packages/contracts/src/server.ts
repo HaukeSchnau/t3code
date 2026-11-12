@@ -8,6 +8,7 @@ import {
 } from "./environment.ts";
 import { AuthClientPresentationMetadata, ServerAuthDescriptor } from "./auth.ts";
 import {
+  EnvironmentId,
   ForwardCompatibleArray,
   IsoDateTime,
   NonNegativeInt,
@@ -625,6 +626,8 @@ export const ServerConfig = Schema.Struct({
   settings: ServerSettings,
   /** Skill packs this environment offers (patches/skill-packs.md). */
   skillPackCatalog: Schema.optionalKey(SkillPackCatalog),
+  /** The environment that keeps this one's follow-ups, itself included (patches/follow-ups.md). */
+  followUpHome: Schema.optionalKey(EnvironmentId),
   /** Present when an administrator's policy file manages this environment. */
   managedPolicy: Schema.optionalKey(ManagedPolicySummary),
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
