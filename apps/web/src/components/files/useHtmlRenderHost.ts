@@ -43,8 +43,7 @@ export function useHtmlRenderHost(
   bridge: HtmlRenderPageBridge | undefined,
 ) {
   const callTool = useAtomCommand(htmlRenderEnvironment.callTool, { reportFailure: false });
-  const setState = useAtomCommand(htmlRenderEnvironment.setState, { reportFailure: false });
-  const readLive = useEffectEvent(() => ({ bridge, callTool, setState }));
+  const readLive = useEffectEvent(() => ({ bridge, callTool }));
   const bridged = bridge !== undefined;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The page posts to this window; listen while the frame is mounted.
   useEffect(() => {
@@ -88,14 +87,7 @@ export function useHtmlRenderHost(
               }
               return approved;
             },
-            saveState: (state) => {
-              const { environmentId, threadId, renderId, onStateSaved } = live();
-              onStateSaved(state);
-              void readLive().setState({
-                environmentId,
-                input: { threadId, renderId, state },
-              });
-            },
+            saveState: (state) => live().onStateSaved(state),
           }
         : undefined,
     });

@@ -527,6 +527,10 @@
       "types": "./src/htmlRender/host.ts",
       "default": "./src/htmlRender/host.ts"
     },
+    "./html-render/state-store": {
+      "types": "./src/htmlRender/stateStore.ts",
+      "default": "./src/htmlRender/stateStore.ts"
+    },
     "./state/html-render": {
       "types": "./src/state/htmlRender.ts",
       "default": "./src/state/htmlRender.ts"

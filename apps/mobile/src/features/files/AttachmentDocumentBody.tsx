@@ -3,11 +3,7 @@ import { View } from "react-native";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import type { useAttachmentDocument } from "../../lib/attachmentDocument";
-import {
-  type HtmlRenderBridgeTarget,
-  HtmlRenderWebView,
-  useHtmlRenderSavedState,
-} from "../threads/HtmlRenderWebView";
+import { type HtmlRenderBridgeTarget, HtmlRenderWebView } from "../threads/HtmlRenderWebView";
 import { AudioFilePreview } from "./AudioFilePreview";
 import { DelimitedFilePreview } from "./DelimitedFilePreview";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
@@ -27,16 +23,12 @@ function FullScreenHtmlRender(props: {
   readonly title: string;
   readonly bridge: HtmlRenderBridgeTarget | undefined;
 }) {
-  const savedState = useHtmlRenderSavedState(props.bridge);
-  if (!savedState.ready) return <FilePreviewLoading message="Loading page..." />;
   return (
     <HtmlRenderWebView
       uri={props.uri}
       title={props.title.replace(/\.html$/i, "")}
       nested={false}
       bridge={props.bridge}
-      state={savedState.read()}
-      onStateSaved={savedState.saved}
     />
   );
 }
