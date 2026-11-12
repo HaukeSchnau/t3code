@@ -34,6 +34,11 @@ export function createFollowUpEnvironmentAtoms<R, E>(
       label: "environment-data:follow-ups:save",
       tag: FOLLOW_UP_WS_METHODS.save,
     }),
+    /** Starts the gardener's nightly pass now; its thread's last message is the report. */
+    runGardener: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:follow-ups:run-gardener",
+      tag: FOLLOW_UP_WS_METHODS.runGardener,
+    }),
   };
 }
 
@@ -125,4 +130,21 @@ export function followUpSeedMessage(followUp: FollowUp): string {
     `This thread picked it up. When the work is done, close ${followUp.id} with its result.`,
   );
   return lines.join("\n");
+}
+
+/** Where a quick capture goes: the one home in reach, or null when the user has to pick. */
+export function captureHome(homes: ReadonlyArray<FollowUpHome>): FollowUpHome | null {
+  const connected = homes.filter((home) => home.connected);
+  return connected.length === 1 ? connected[0]! : null;
+}
+
+/** A captured note becomes a follow-up: its first line the title, all of it the body. */
+export function captureToFollowUp(
+  text: string,
+): { readonly title: string; readonly body: string } | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  const firstLine = trimmed.split("\n", 1)[0]!.trim();
+  const title = firstLine.length <= 80 ? firstLine : `${firstLine.slice(0, 79).trimEnd()}…`;
+  return { title, body: trimmed === firstLine ? "" : trimmed };
 }

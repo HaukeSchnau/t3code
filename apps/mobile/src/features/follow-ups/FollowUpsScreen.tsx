@@ -1,26 +1,49 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useNavigation } from "@react-navigation/native";
 import { type FollowUpHome, groupFollowUps } from "@t3tools/client-runtime/state/follow-ups";
-import type { EnvironmentId, FollowUp } from "@t3tools/contracts";
-import { useState } from "react";
+import type {
+  EnvironmentId,
+  FollowUp,
+  FollowUpGardenerRun,
+  FollowUpThreadRef,
+} from "@t3tools/contracts";
+import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
+import * as Dialog from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ListRow } from "../../components/ui/ListRow";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { allFollowUpsAtom, followUpHomesAtom, openFollowUpsAtom } from "../../state/follow-ups";
+import {
+  allFollowUpsAtom,
+  followUpEnvironment,
+  followUpHomesAtom,
+  openFollowUpsAtom,
+} from "../../state/follow-ups";
 import { useEnvironmentQuery } from "../../state/query";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
-import { followUpRowDescription } from "./followUpPresentation";
+import { followUpRowDescription, formatFollowUpDate } from "./followUpPresentation";
 import { useOpenFollowUp } from "./useOpenFollowUp";
+import { failureMessage } from "./useStartFollowUpThread";
 
 /** The Follow-ups workspace tab: each home's follow-ups by where they stand. */
 export function FollowUpsScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const openFollowUp = useOpenFollowUp();
+  const selectDetail = useSelectWorkspaceDetail();
+  const openThread = (thread: FollowUpThreadRef) =>
+    selectDetail({
+      name: "Thread",
+      params: { environmentId: String(thread.environmentId), threadId: String(thread.threadId) },
+    });
   const homes = useAtomValue(followUpHomesAtom);
   const environments = useWorkspaceEnvironments();
   const [showClosed, setShowClosed] = useState(false);
@@ -33,6 +56,14 @@ export function FollowUpsScreen() {
     <SettingsScreen
       title="Follow-ups"
       workspaceRoot
+      actions={[
+        {
+          accessibilityLabel: "New follow-up",
+          icon: "plus",
+          disabled: connectedHomes.length === 0,
+          onPress: () => navigation.navigate("FollowUpCapture"),
+        },
+      ]}
       menus={[
         {
           title: "Show follow-ups",
@@ -80,6 +111,7 @@ export function FollowUpsScreen() {
               onOpen={(followUp) =>
                 openFollowUp({ homeEnvironmentId: home.environmentId, followUp })
               }
+              onOpenThread={openThread}
             />
           ) : (
             <Text key={home.environmentId} className="px-2 text-sm text-foreground-muted">
@@ -98,6 +130,7 @@ function HomeFollowUps(props: {
   readonly title: string | null;
   readonly showClosed: boolean;
   readonly onOpen: (followUp: FollowUp) => void;
+  readonly onOpenThread: (thread: FollowUpThreadRef) => void;
 }) {
   const query = useEnvironmentQuery(
     props.showClosed
@@ -147,6 +180,74 @@ function HomeFollowUps(props: {
           </SettingsSection>
         ))
       )}
+      {query.data !== null ? (
+        <NightlyPass
+          home={props.home.environmentId}
+          lastRun={query.data.lastGardenerRun}
+          onOpenThread={props.onOpenThread}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** The gardener's nightly pass: when it last ran, its report, and a way to run it now. */
+function NightlyPass(props: {
+  readonly home: EnvironmentId;
+  readonly lastRun: FollowUpGardenerRun | null;
+  readonly onOpenThread: (thread: FollowUpThreadRef) => void;
+}) {
+  const canRun = useAtomValue(followUpEnvironment.runGardener.permissionAtom(props.home));
+  const runGardener = useAtomCommand(followUpEnvironment.runGardener, {
+    label: "follow-up nightly pass",
+    reportFailure: false,
+  });
+  const [running, setRunning] = useState(false);
+  const inFlight = useRef(false);
+  const run = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setRunning(true);
+    const result = await runGardener({ environmentId: props.home, input: {} });
+    inFlight.current = false;
+    setRunning(false);
+    const message = failureMessage(result);
+    if (message !== null) Dialog.alert("Could not start the nightly pass", message);
+    if (result._tag === "Success") props.onOpenThread(result.value.thread);
+  };
+  const { lastRun } = props;
+  return (
+    <View className="gap-1">
+      <Text textRole="footnote" className="px-2 text-foreground-muted">
+        {lastRun === null
+          ? "The nightly pass has not run yet."
+          : `The nightly pass last ran ${formatFollowUpDate(lastRun.startedAt)}.`}
+      </Text>
+      <View className="-ml-3 flex-row flex-wrap">
+        {lastRun !== null ? (
+          <Button
+            label="Open its report"
+            tone="text"
+            size="compact"
+            onPress={() => props.onOpenThread(lastRun.thread)}
+          />
+        ) : null}
+        <Button
+          label="Run now"
+          tone="text"
+          size="compact"
+          disabled={!canRun}
+          loading={running}
+          onPress={() =>
+            Dialog.confirm({
+              title: "Run the nightly pass now?",
+              message: "An agent tidies these follow-ups in a new thread, as it does each night.",
+              confirmText: "Run now",
+              onConfirm: () => void run(),
+            })
+          }
+        />
+      </View>
     </View>
   );
 }

@@ -62,6 +62,15 @@ export interface MarkdownFileContextMenu {
   readonly actions: ReadonlyArray<MarkdownFileContextMenuAction>;
 }
 
+/** An item of the text selection menu, after the system's own. */
+export interface MarkdownSelectionMenuItem {
+  /** Identifies the item, so it must be unique within one text. */
+  readonly text: string;
+  /** SF Symbol name; Android menus show the text alone. */
+  readonly icon?: string;
+  readonly onPress: (event: { readonly text: string }) => void;
+}
+
 export interface MarkdownLinkCustomization {
   readonly iconTintColor?: string;
   readonly color?: string;
@@ -80,6 +89,7 @@ export interface SelectableMarkdownTextProps {
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
   readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;
+  readonly selectionMenuItems?: ReadonlyArray<MarkdownSelectionMenuItem>;
   readonly contextClipboardFragment?: string;
   readonly renderImage?: MarkdownImageRenderer;
   readonly fileEmbedLabel?: (href: string, standalone: boolean) => string | null;

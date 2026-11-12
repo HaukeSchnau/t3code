@@ -108,7 +108,7 @@ const activeThreadShortcutAtom = Atom.make((get): RecentThreadShortcut | null =>
 
 /** Wired to the root navigation container's state changes. */
 export function recordAppShortcutNavigationState(state: NavigationState): void {
-  // Launcher shortcuts are Android-only; iOS never subscribes to thread shells.
+  // Recent threads are Android-only; iOS never subscribes to thread shells.
   if (Platform.OS !== "android") return;
   const next = activeThreadRef(state);
   const current = appAtomRegistry.get(activeThreadRefAtom);
@@ -130,12 +130,18 @@ export function installAppShortcuts(navigate: (href: string) => void): () => voi
     const href = shortcutHref(action);
     if (href !== null) navigate(href);
   });
-  if (Platform.OS !== "android") return () => subscription.remove();
+  if (Platform.OS !== "android") {
+    // iOS lists only the fixed actions, so it never subscribes to thread shells.
+    void QuickActions.setItems(buildShortcutActions([], "ios")).catch((error: unknown) => {
+      console.warn("[app-shortcuts] failed to update home screen quick actions", error);
+    });
+    return () => subscription.remove();
+  }
 
   const recents = createRecentThreadShortcuts({
     load: loadRecentThreadShortcuts,
     save: saveRecentThreadShortcuts,
-    publish: (list) => QuickActions.setItems(buildShortcutActions(list)),
+    publish: (list) => QuickActions.setItems(buildShortcutActions(list, "android")),
   });
   const unsubscribe = appAtomRegistry.subscribe(
     activeThreadShortcutAtom,

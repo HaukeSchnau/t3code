@@ -51,6 +51,14 @@ export const followUpHomesAtom = Atom.make((get) => {
     : next;
 }).pipe(Atom.withLabel("web-follow-up-homes"));
 
+/** Where a thread's environment saves follow-ups: the home it names, else itself. */
+export const followUpHomeOfAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get): EnvironmentId =>
+      get(serverEnvironment.configValueAtom(environmentId))?.followUpHome ?? environmentId,
+  ).pipe(Atom.withLabel(`web-follow-up-home-of:${environmentId}`)),
+);
+
 function followUpRowKey(homeEnvironmentId: EnvironmentId, followUp: Pick<FollowUp, "id">) {
   return `follow-up:${homeEnvironmentId}:${followUp.id}`;
 }

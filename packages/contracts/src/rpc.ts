@@ -98,7 +98,12 @@ import {
   AgentAwarenessServiceError,
   AgentAwarenessSnapshot,
 } from "./agentAwareness.ts";
-import { WsFollowUpsHistoryRpc, WsFollowUpsSaveRpc, WsFollowUpsSubscribeRpc } from "./followUps.ts";
+import {
+  WsFollowUpsHistoryRpc,
+  WsFollowUpsRunGardenerRpc,
+  WsFollowUpsSaveRpc,
+  WsFollowUpsSubscribeRpc,
+} from "./followUps.ts";
 import {
   WsSkillPacksSetProjectDefaultRpc,
   WsSkillPacksSetThreadPacksRpc,
@@ -2197,6 +2202,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsFollowUpsSubscribeRpc,
   WsFollowUpsSaveRpc,
   WsFollowUpsHistoryRpc,
+  WsFollowUpsRunGardenerRpc,
   WsArtifactsReadMarkdownRpc,
   WsVcsJjRunActionRpc,
   WsVcsJjAssignPathsRpc,

@@ -9,6 +9,9 @@ const MAX_RECENT_THREAD_SHORTCUTS = 3;
 const NEW_TASK_SHORTCUT_ID = "new-task";
 const NEW_TASK_SHORTCUT_HREF = "/new";
 
+const NEW_FOLLOW_UP_SHORTCUT_ID = "new-follow-up";
+const NEW_FOLLOW_UP_SHORTCUT_HREF = "/follow-ups/new";
+
 const SHORTCUT_ICON = "shortcut_icon";
 
 const THREAD_SHORTCUT_HREF_PATTERN = /^\/threads\/[^/?#]+\/[^/?#]+$/;
@@ -66,7 +69,11 @@ export function shortcutHref(action: Action): string | null {
     return null;
   }
 
-  return href === NEW_TASK_SHORTCUT_HREF || THREAD_SHORTCUT_HREF_PATTERN.test(href) ? href : null;
+  return href === NEW_TASK_SHORTCUT_HREF ||
+    href === NEW_FOLLOW_UP_SHORTCUT_HREF ||
+    THREAD_SHORTCUT_HREF_PATTERN.test(href)
+    ? href
+    : null;
 }
 
 export function withRecentThreadShortcut(
@@ -88,19 +95,30 @@ export function withRecentThreadShortcut(
   ].slice(0, MAX_RECENT_THREAD_SHORTCUTS);
 }
 
-export function buildShortcutActions(recents: ReadonlyArray<RecentThreadShortcut>): Action[] {
+/** iOS draws SF Symbols; Android launchers show the app icon. */
+export function buildShortcutActions(
+  recents: ReadonlyArray<RecentThreadShortcut>,
+  platform: "ios" | "android",
+): Action[] {
+  const icon = (symbol: string) => (platform === "ios" ? `symbol:${symbol}` : SHORTCUT_ICON);
   return [
     {
       id: NEW_TASK_SHORTCUT_ID,
       title: "New task",
-      icon: SHORTCUT_ICON,
+      icon: icon("square.and.pencil"),
       params: { href: NEW_TASK_SHORTCUT_HREF },
+    },
+    {
+      id: NEW_FOLLOW_UP_SHORTCUT_ID,
+      title: "New follow-up",
+      icon: icon("tray.and.arrow.down"),
+      params: { href: NEW_FOLLOW_UP_SHORTCUT_HREF },
     },
     ...recents.slice(0, MAX_RECENT_THREAD_SHORTCUTS).map((thread): Action => ({
       // URI-encoded hrefs avoid env/thread id collisions that plain hyphen joins allow.
       id: `thread:${threadShortcutHref(thread)}`,
       title: threadShortcutLabel(thread),
-      icon: SHORTCUT_ICON,
+      icon: icon("text.bubble"),
       params: { href: threadShortcutHref(thread) },
     })),
   ];

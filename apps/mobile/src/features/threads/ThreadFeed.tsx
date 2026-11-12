@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -161,9 +162,12 @@ import {
   type MarkdownImageRenderer,
   type MarkdownImageSourceResolver,
   type MarkdownLinkCustomization,
+  type MarkdownSelectionMenuItem,
   type NativeMarkdownTextStyle,
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
+import { environmentFollowUpHomeAtom } from "../../state/follow-ups";
+import { FOLLOW_UP_ICON } from "../follow-ups/followUpPresentation";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/ui/VideoPreviewModal";
@@ -1098,6 +1102,8 @@ interface MarkdownLinkHandlers {
   readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;
 }
 
+type QuoteToFollowUp = (messageId: MessageId, quote: string) => void;
+
 interface MarkdownStyleSets {
   readonly user: MarkdownStyleSet;
   readonly assistant: MarkdownStyleSet;
@@ -1165,6 +1171,9 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  readonly messageId?: MessageId;
+  /** Offers "Follow-up" for text selected in the message. Separate props keep the memo. */
+  readonly onQuoteToFollowUp?: QuoteToFollowUp | undefined;
 }) {
   const models = useModelMentions(props.environmentId, props.markdown);
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
@@ -1174,6 +1183,17 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
     linkCustomization: (href) =>
       withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
   };
+  const { messageId, onQuoteToFollowUp } = props;
+  const selectionMenuItems: ReadonlyArray<MarkdownSelectionMenuItem> | undefined =
+    messageId !== undefined && onQuoteToFollowUp !== undefined
+      ? [
+          {
+            text: "Follow-up",
+            icon: FOLLOW_UP_ICON,
+            onPress: ({ text }) => onQuoteToFollowUp(messageId, text),
+          },
+        ]
+      : undefined;
 
   return (
     <AssistantMarkdownBlocks
@@ -1184,6 +1204,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       renderImage={props.renderImage}
       skills={props.skills}
       models={models}
+      selectionMenuItems={selectionMenuItems}
     />
   );
 });
@@ -1197,6 +1218,7 @@ function AssistantMarkdownBlocks(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
+  readonly selectionMenuItems: ReadonlyArray<MarkdownSelectionMenuItem> | undefined;
 }) {
   const blocks = useMemo(
     () =>
@@ -1240,6 +1262,7 @@ function AssistantMarkdownBlocks(props: {
           textStyle={props.markdownStyles.nativeTextStyle}
           {...props.linkHandlers}
           renderImage={props.renderImage}
+          selectionMenuItems={props.selectionMenuItems}
         />
       );
     });
@@ -1713,6 +1736,8 @@ function renderFeedEntry(
       rect: { readonly top: number; readonly bottom: number },
     ) => void;
     readonly userMessageGrouping: GroupedThreadFeedRow["userMessageGrouping"];
+    /** Unset when the thread's environment keeps no follow-ups. */
+    readonly onQuoteToFollowUp: QuoteToFollowUp | undefined;
   },
 ) {
   const entry = info.item;
@@ -2307,6 +2332,8 @@ function renderFeedEntry(
               onUseArtifactTemplate={props.onUseArtifactTemplate}
               renderImage={props.renderMarkdownImage}
               skills={props.skills}
+              messageId={message.id}
+              onQuoteToFollowUp={props.onQuoteToFollowUp}
             />
           </MarkdownImageAvailableWidthContext>
         ) : null}
@@ -3097,6 +3124,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     threadId: props.threadId,
     workspaceRoot: props.workspaceRoot ?? null,
   });
+  const followUpHome = useAtomValue(environmentFollowUpHomeAtom(props.environmentId));
+  const onQuoteToFollowUp: QuoteToFollowUp | undefined =
+    followUpHome === null
+      ? undefined
+      : (messageId, quote) =>
+          navigation.navigate("FollowUpCapture", {
+            environmentId: props.environmentId,
+            threadId: props.threadId,
+            messageId,
+            quote,
+            threadTitle: props.threadTitle,
+          });
   const markdownLinkHandlers: MarkdownLinkHandlers = {
     fileEmbedLabel: (href, standalone) =>
       markdownFileEmbedLabel(
@@ -3329,6 +3368,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     skills: props.skills,
     workflowOpening,
     htmlRenderViews,
+    onQuoteToFollowUp,
   };
   const reportHeaderMaterialVisibility = (visible: boolean) => {
     if (headerMaterialVisibleRef.current === visible) {
@@ -3995,6 +4035,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onSelectHtmlRenderVersion,
             onHtmlRenderContentHeight,
             onRevealHtmlRenderFocus,
+            onQuoteToFollowUp,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />

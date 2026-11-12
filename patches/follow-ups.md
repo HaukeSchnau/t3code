@@ -36,10 +36,25 @@ that keeps a tidy list of open work with its origin.
   passes; moving the date clears it. Clients merge returned follow-ups into the inbox section of
   the thread list. `dueAt` is stored as UTC ISO text so the scan compares strings.
 
+- **A nightly gardener.** A home with `T3CODE_FOLLOW_UP_GARDENER_AT` (local `HH:MM`) launches one
+  agent thread a night in the scratch project with the server's default model. It merges
+  duplicates, closes finished work, checks conditions, keeps types consistent and reads the threads
+  its members (`T3CODE_FOLLOW_UP_MEMBERS`) settled since the last pass. Its thread's last message
+  is the report, and saves from that thread log as the gardener's. Clients can start a pass at once
+  (`followUps.runGardener`).
+- **Hints at thread start.** The first turn of a top-level thread a user started (not a scheduled
+  task or a goal command) gets one line naming open follow-ups whose title its first 2,000
+  characters mostly repeat (two or more title words, at least 60% of them) or whose id it cites.
+  It reads the 100 most recently updated open follow-ups. Weak matches stay silent. Turn start sits below the peer link in the layer graph, so the server
+  above registers the lookup in `FollowUpHints`; without it, and after two seconds, there is no
+  hint. The line goes to the provider only, beside the restart note.
+
 ## Upstream touch points
 
 - `apps/server/src/persistence/Migrations.ts` (fork migration 110).
 - `packages/contracts/src/rpc.ts` (`ForkWsRpcGroup`) and `server.ts` (`ServerConfig.followUpHome`).
+- `apps/server/src/orchestration-v2/ProviderTurnStartService.ts` (the hint joins the inline
+  context of a thread's first turn).
 - `apps/server/src/ws.ts` (fork RPC layer and the config field), `server.ts` (layer wiring),
   `mcp/McpHttpServer.ts` (toolkit registration), `provider/agentContextBudget.json`.
 - Web: the inbox rows in `Sidebar.tsx`, `Sidebar.logic.ts` and `Sidebar.drag.ts` (a follow-up row
@@ -51,6 +66,11 @@ that keeps a tidy list of open work with its origin.
   `threadListV2.ts`; the `FollowUp` route in `Stack.tsx`.
 - `packages/client-runtime/src/state/threadInbox.ts` (`inboxReturnTime`, shared by threads and
   follow-ups in the inbox order).
+- Quote to follow-up: `AssistantSelectionToolbar.tsx` on web; on mobile `ThreadFeed.tsx`,
+  `EnrichedMarkdownText.tsx` and `SelectableMarkdownText.types.ts` pass a selection menu item to
+  the markdown library.
+- Phone capture: the `FollowUpCapture` route in `Stack.tsx`, the app shortcuts (iOS now publishes
+  "New task" and "New follow-up" quick actions too) and the mobile command palette.
 
 ## Removal
 

@@ -1,10 +1,11 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   MessageId,
   type AssistantCitation,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { QuoteIcon } from "lucide-react";
+import { ListTodoIcon, QuoteIcon } from "lucide-react";
 import { use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -17,6 +18,8 @@ import {
   resolveSelectionActionPosition,
   type SelectionActionPoint,
 } from "~/lib/selectionActions";
+import { followUpEnvironment, followUpHomeOfAtom } from "~/state/followUps";
+import { QuoteFollowUpDialog } from "../followUps/QuoteFollowUpDialog";
 import { Button } from "../ui/button";
 import { BackgroundThreadContext } from "./backgroundThread";
 
@@ -34,9 +37,15 @@ export function AssistantSelectionToolbar({
     position: SelectionActionPoint;
     sourceAnchor: AssistantCitationSourceAnchor;
   } | null>(null);
-  const toolbarRef = useRef<HTMLButtonElement>(null);
+  const [followUpQuote, setFollowUpQuote] = useState<{
+    messageId: MessageId;
+    quote: string;
+  } | null>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<ReturnType<typeof observeSelectionActions> | null>(null);
   const backgroundThread = use(BackgroundThreadContext);
+  const followUpHome = useAtomValue(followUpHomeOfAtom(threadRef.environmentId));
+  const canSaveFollowUp = useAtomValue(followUpEnvironment.save.permissionAtom(followUpHome));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the toolbar DOM node and clamps its position inside the window before paint
   useLayoutEffect(() => {
@@ -160,10 +169,11 @@ export function AssistantSelectionToolbar({
       ) {
         return;
       }
-      if (toolbar.disabled) return;
+      const action = toolbar.querySelector<HTMLButtonElement>("button:not(:disabled)");
+      if (!action) return;
       event.preventDefault();
       event.stopPropagation();
-      toolbar.focus({ preventScroll: true });
+      action.focus({ preventScroll: true });
     };
     // Tab belongs to the foreground chat; a background timeline only follows its selection.
     if (!backgroundThread) document.addEventListener("keydown", focusActions, true);
@@ -176,7 +186,15 @@ export function AssistantSelectionToolbar({
     };
   }, [backgroundThread, threadRef, viewport]);
 
-  if (!selection) return null;
+  const followUpDialog = followUpQuote ? (
+    <QuoteFollowUpDialog
+      threadRef={threadRef}
+      messageId={followUpQuote.messageId}
+      quote={followUpQuote.quote}
+      onClose={() => setFollowUpQuote(null)}
+    />
+  ) : null;
+  if (!selection) return followUpDialog;
   const tooLong = selection.citation.text.length > ASSISTANT_CITATION_MAX_TEXT_LENGTH;
   const dismiss = () => {
     actionsRef.current?.cancel();
@@ -188,29 +206,59 @@ export function AssistantSelectionToolbar({
     dismiss();
     return true;
   };
-  return createPortal(
-    <Button
-      ref={toolbarRef}
-      type="button"
-      size="xs"
-      variant="glass"
-      disabled={tooLong}
-      aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
-      className="fixed z-50 max-w-[calc(100vw-1rem)]"
-      style={{ left: selection.position.x, top: selection.position.y }}
-      onPointerDown={(event) => event.preventDefault()}
-      onClick={cite}
-      onKeyDown={(event) => {
-        event.stopPropagation();
-        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          dismiss();
-        }
-      }}
-    >
-      <QuoteIcon aria-hidden="true" className="size-3.5" />
-      {tooLong ? "Shorten selection" : "Cite"}
-    </Button>,
-    document.body,
+  const followUp = () => {
+    setFollowUpQuote({
+      messageId: selection.citation.messageId,
+      quote: selection.citation.text.trim(),
+    });
+    window.getSelection()?.removeAllRanges();
+    dismiss();
+  };
+  return (
+    <>
+      {createPortal(
+        <div
+          ref={toolbarRef}
+          role="group"
+          aria-label="Selection actions"
+          className="fixed z-50 flex max-w-[calc(100vw-1rem)] gap-1"
+          style={{ left: selection.position.x, top: selection.position.y }}
+          onPointerDown={(event) => event.preventDefault()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              dismiss();
+            }
+          }}
+        >
+          <Button
+            type="button"
+            size="xs"
+            variant="glass"
+            disabled={tooLong}
+            aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
+            onClick={cite}
+          >
+            <QuoteIcon aria-hidden="true" className="size-3.5" />
+            {tooLong ? "Shorten selection" : "Cite"}
+          </Button>
+          {canSaveFollowUp ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="glass"
+              aria-label="Save selection as a follow-up"
+              onClick={followUp}
+            >
+              <ListTodoIcon aria-hidden="true" className="size-3.5" />
+              Follow-up
+            </Button>
+          ) : null}
+        </div>,
+        document.body,
+      )}
+      {followUpDialog}
+    </>
   );
 }

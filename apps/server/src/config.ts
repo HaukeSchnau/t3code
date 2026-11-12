@@ -111,6 +111,10 @@ export class ServerConfig extends Context.Service<
     readonly remoteOpenHost?: string | undefined;
     /** The environment that keeps this one's follow-ups; absent when it keeps its own. */
     readonly followUpHome?: EnvironmentId | undefined;
+    /** Local time (HH:MM) of the nightly follow-up gardener; absent turns the nightly run off. */
+    readonly followUpGardenerAt?: string | undefined;
+    /** Environments that keep their follow-ups here; the gardener reads their settled threads. */
+    readonly followUpMembers?: ReadonlyArray<EnvironmentId> | undefined;
   }
 >()("t3/config/ServerConfig") {
   static readonly layerTest = (

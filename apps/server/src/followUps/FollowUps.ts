@@ -222,7 +222,7 @@ const STOP_WORDS = new Set([
   "with",
 ]);
 
-const searchTerms = (query: string) => [
+export const searchTerms = (query: string) => [
   ...new Set(
     query
       .toLowerCase()

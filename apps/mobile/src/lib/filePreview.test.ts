@@ -169,6 +169,11 @@ vi.mock("../state/projects", () => ({
   },
 }));
 vi.mock("../state/server", () => ({ serverEnvironment: {} }));
+vi.mock("../state/follow-ups", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const noHome = Atom.make(null);
+  return { environmentFollowUpHomeAtom: () => noHome };
+});
 vi.mock("../state/session", () => ({
   readEnvironmentScope: () => true,
   usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://example.com" } }),

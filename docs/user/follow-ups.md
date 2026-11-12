@@ -15,9 +15,30 @@ the workspace navigation.
 - **Done** and **Drop** close it. **Later** moves its date.
 - A follow-up with a date comes back to your inbox, in the thread list, when the date arrives.
 
+## Write one yourself
+
+- Select a passage in an agent's reply and choose **Follow-up** to keep it, with a link back to
+  that message.
+- On your phone, tap **+** in **Follow-ups**, or long-press the app icon and choose **New
+  follow-up**, then type or dictate. The first line becomes the title.
+
+**Graph** on the follow-ups page shows how follow-ups connect to each other and to the threads
+they came from or were picked up in.
+
+## Keep them tidy
+
 Agents keep follow-ups tidy themselves: they search before they write, update an existing one
 rather than add a duplicate, and may define types with their own fields, such as a risk with a
 severity. Every change is listed under the follow-up's history.
+
+A server can tend its follow-ups once a night when `T3CODE_FOLLOW_UP_GARDENER_AT` is set to a local
+time such as `03:30`. The pass merges duplicates, closes what turns out to be done, checks the
+plain-language conditions, keeps types consistent, and writes down follow-ups that settled threads
+left behind. Its thread ends with a short report of every change; the follow-ups page links to the
+latest one and can start a pass now. `T3CODE_FOLLOW_UP_MEMBERS` lists the other environments, by
+id, whose settled threads the pass reads.
+
+When you start a thread that clearly continues an open follow-up, the agent is told about it.
 
 ## Share follow-ups across machines
 

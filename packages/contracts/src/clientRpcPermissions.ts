@@ -70,6 +70,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
   [FOLLOW_UP_WS_METHODS.save]: AuthOrchestrationOperateScope,
+  // Starts an agent thread, as running a scheduled task now does.
+  [FOLLOW_UP_WS_METHODS.runGardener]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   [WS_METHODS.htmlRenderSetState]: AuthOrchestrationOperateScope,
   [WS_METHODS.htmlRenderCallTool]: AuthOrchestrationOperateScope,

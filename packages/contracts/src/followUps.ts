@@ -161,6 +161,7 @@ export const FOLLOW_UP_WS_METHODS = {
   subscribe: "followUps.subscribe",
   save: "followUps.save",
   history: "followUps.history",
+  runGardener: "followUps.runGardener",
 } as const;
 
 export const WsFollowUpsSubscribeRpc = Rpc.make(FOLLOW_UP_WS_METHODS.subscribe, {
@@ -179,5 +180,12 @@ export const WsFollowUpsSaveRpc = Rpc.make(FOLLOW_UP_WS_METHODS.save, {
 export const WsFollowUpsHistoryRpc = Rpc.make(FOLLOW_UP_WS_METHODS.history, {
   payload: FollowUpHistoryInput,
   success: FollowUpHistory,
+  error: Schema.Union([FollowUpError, EnvironmentAuthorizationError]),
+});
+
+/** Starts the gardener's pass now, outside its nightly time. */
+export const WsFollowUpsRunGardenerRpc = Rpc.make(FOLLOW_UP_WS_METHODS.runGardener, {
+  payload: Schema.Struct({}),
+  success: FollowUpGardenerRun,
   error: Schema.Union([FollowUpError, EnvironmentAuthorizationError]),
 });

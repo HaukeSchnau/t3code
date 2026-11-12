@@ -380,6 +380,11 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
       ),
   };
   const resolveNativeImageSource = useRetryingImageSource(resolveImageSource);
+  const contextMenuItems = props.selectionMenuItems?.map((item) => ({
+    text: item.text,
+    icon: item.icon,
+    onPress: ({ text }: { text: string }) => item.onPress({ text }),
+  }));
   const renderMarkdown = (openAndroidMenu?: () => void) => {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
@@ -442,6 +447,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           }
           onLinkLongPress={onLinkLongPress}
           linkContextMenuItems={linkContextMenuItems}
+          contextMenuItems={contextMenuItems}
           linkPillContent={linkPillContent}
         />
       </View>
