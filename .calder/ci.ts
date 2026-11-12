@@ -564,6 +564,9 @@ const apps = (promote: Step.Any) => {
 
 export default Project.standard({
   flake,
+  // Every fleet host gets the Release built for its system: srv-1 and srv-2, dev-hauke and the
+  // tower, and m1.
+  releaseSystems: ["aarch64-linux", "x86_64-linux", "aarch64-darwin"],
   checks: [
     ...deps,
     check,
