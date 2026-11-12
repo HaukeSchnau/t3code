@@ -10,10 +10,12 @@ import {
   presentPendingBackgroundWork,
   presentProviderGoal,
   type RunStopPresentation,
+  waitCheckInLabel,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
 import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { isAgentWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 import {
   CircleDashedIcon,
@@ -173,6 +175,8 @@ export function backgroundWorkNowItem(input: {
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
+  /** When T3 next wakes the quiet thread to check on what it waits for, if it will. */
+  readonly checkInAt: string | null;
   readonly stopDisabled: boolean;
   readonly stopping: boolean;
   readonly onStop: () => Promise<void>;
@@ -200,7 +204,11 @@ export function backgroundWorkNowItem(input: {
           task.label
         ),
       activity: subagent?.progress?.replace(/\s+/gu, " ").trim() || null,
-      startedAtMs: item?.startedAt ? DateTime.toEpochMillis(item.startedAt) : null,
+      startedAtMs: item?.startedAt
+        ? DateTime.toEpochMillis(item.startedAt)
+        : task.startedAt
+          ? Date.parse(task.startedAt)
+          : null,
       updatedAtMs: subagent ? DateTime.toEpochMillis(subagent.updatedAt) : 0,
       childThreadId: task.childThreadId ?? subagent?.childThreadId ?? undefined,
     };
@@ -211,7 +219,9 @@ export function backgroundWorkNowItem(input: {
     .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   const isCommand = (row: (typeof rows)[number]) => row.task.kind !== "subagent";
   const onlyThreadId = only?.childThreadId;
-  const startedAtMs = only?.startedAtMs ?? null;
+  const startedAtMs =
+    only?.startedAtMs ?? (presentation.since === null ? null : Date.parse(presentation.since));
+  const checkInAt = presentation.waiting ? input.checkInAt : null;
   return {
     id: `background-work:${input.threadId}`,
     icon: rows.every(isCommand) ? <TerminalIcon /> : <CircleDashedIcon />,
@@ -248,6 +258,12 @@ export function backgroundWorkNowItem(input: {
             className="tabular-nums"
           />
         )}
+        {checkInAt === null ? null : (
+          <span
+            ref={tickTextContent((nowMs) => waitCheckInLabel(checkInAt, nowMs), true)}
+            className="text-muted-foreground"
+          />
+        )}
         <BackgroundWorkDetails
           environmentId={input.environmentId}
           threadId={input.threadId}
@@ -260,9 +276,11 @@ export function backgroundWorkNowItem(input: {
             Open
           </InlineButton>
         )}
-        <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
-          {input.stopping ? "Stopping..." : "Stop"}
-        </InlineButton>
+        {input.tasks.every(isAgentWatchTask) ? null : (
+          <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
+            {input.stopping ? "Stopping..." : "Stop"}
+          </InlineButton>
+        )}
       </>
     ),
   };

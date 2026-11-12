@@ -22,8 +22,11 @@ export type FloatingWorkingStatus =
       readonly label: string;
       readonly accessibilityLabel: string;
       readonly waiting: boolean;
+      /** When T3 next wakes the quiet thread to check on what it waits for. */
+      readonly checkInAt: string | null;
       readonly onPress: () => void;
-      readonly action: FloatingStatusAction;
+      /** Null when only `t3_watch` watches wait, which the agent cancels itself. */
+      readonly action: FloatingStatusAction | null;
     }
   | {
       readonly kind: "lifecycle";

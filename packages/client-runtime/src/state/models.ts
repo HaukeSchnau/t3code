@@ -1,4 +1,7 @@
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  backgroundWorkHoldsCompletion,
+  threadWaitCheckIn,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "../threadPullRequests.ts";
 import type {
   ThreadLinkedPullRequest,
@@ -166,6 +169,8 @@ export interface EnvironmentThreadShell {
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
   >;
+  /** When T3 next wakes this quiet thread to check on what it waits for, if it will. */
+  readonly waitCheckInAt: string | null;
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
   readonly goal: OrchestrationV2ProviderGoal | null;
   readonly itemCount: number;
@@ -321,6 +326,10 @@ export function presentThreadShell(
     pendingGuestMessageCount: thread.pendingGuestMessageCount ?? 0,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
+    waitCheckInAt: (() => {
+      const checkIn = threadWaitCheckIn(thread);
+      return checkIn === null ? null : DateTime.formatIso(checkIn.at);
+    })(),
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
     goal: thread.goal ?? null,
     itemCount: thread.itemCount,

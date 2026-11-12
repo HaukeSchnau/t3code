@@ -121,8 +121,11 @@ const encodeDelivery = Schema.encodeEffect(Schema.fromJsonString(WatchDelivery))
 type Watch = typeof WatchRow.Type;
 
 type Decision =
-  | { readonly reason: "cancelled" | "deadline" | "watcher_closed" }
-  | { readonly reason: "fired" | "exited" | "failed"; readonly delivery: WatchDelivery };
+  | { readonly reason: "cancelled" | "watcher_closed" }
+  | {
+      readonly reason: "fired" | "exited" | "failed" | "deadline";
+      readonly delivery: WatchDelivery;
+    };
 
 export class AgentWatchNotFoundError extends Schema.TaggedError<AgentWatchNotFoundError>()(
   "AgentWatchNotFoundError",
@@ -250,6 +253,20 @@ function threadFired(
         ...(run === null ? [] : ["Read its result with t3_thread_read."]),
       ].join("\n"),
       notification: monitor(outcome, `${prefix}Thread ${name} ${verb}`),
+    },
+  };
+}
+
+// Fork: a deadline is when the agent expects the wait to be over, so passing it wakes the agent.
+function deadlinePassed(watch: Watch): Decision {
+  const name = watchName(watch);
+  const command = watch.source_json.type === "command";
+  return {
+    reason: "deadline",
+    delivery: {
+      key: "deadline",
+      text: `Watch ${watch.watch_id} (${name}) passed its deadline before it ${command ? "exited" : "fired"}, so T3 closed it${command ? " and stopped its command" : ""}. Check whether what it watched is stuck, and create a new watch if you still need one.`,
+      notification: monitor("failed", `Watch "${name}" passed its deadline`),
     },
   };
 }
@@ -397,9 +414,9 @@ export const make = Effect.gen(function* () {
     watch: Watch,
     delivery: WatchDelivery,
   ) {
-    if (!(yield* watcherIsLive(watch))) return false;
+    if (!(yield* watcherIsLive(watch))) return "gone" as const;
     const id = `${watch.watch_id}:${delivery.key}`;
-    yield* threads
+    return yield* threads
       .dispatch({
         type: "message.dispatch",
         commandId: CommandId.make(`${id}:command`),
@@ -415,17 +432,17 @@ export const make = Effect.gen(function* () {
         creationSource: "server",
       })
       .pipe(
+        Effect.as("sent" as const),
         Effect.catchCause((cause) =>
           Effect.logWarning("Could not deliver a watch notification", {
             watchId: watch.watch_id,
             cause,
-          }),
+          }).pipe(Effect.as("failed" as const)),
         ),
       );
-    return true;
   });
 
-  const closeRow = (watchId: WatchId, reason: "cancelled" | "deadline" | "watcher_closed") =>
+  const closeRow = (watchId: WatchId, reason: "cancelled" | "watcher_closed") =>
     nowIso.pipe(
       Effect.flatMap(
         (closedAt) => sql`
@@ -437,13 +454,16 @@ export const make = Effect.gen(function* () {
       Effect.mapError(unavailable("close the watch")),
     );
 
+  // Fork: a failed final wake keeps the row `closing`, so the next start delivers it again.
   const deliverFinal = (watch: Watch, delivery: WatchDelivery) =>
     deliver(watch, delivery).pipe(
-      Effect.andThen(
-        sql`
-          UPDATE agent_watches SET state = 'closed', final_json = NULL
-          WHERE watch_id = ${watch.watch_id} AND state = 'closing'
-        `,
+      Effect.flatMap((result) =>
+        result === "failed"
+          ? Effect.void
+          : sql`
+              UPDATE agent_watches SET state = 'closed', final_json = NULL
+              WHERE watch_id = ${watch.watch_id} AND state = 'closing'
+            `.pipe(Effect.asVoid),
       ),
       Effect.mapError(unavailable("close the watch")),
     );
@@ -512,7 +532,7 @@ export const make = Effect.gen(function* () {
           Effect.flatMap((now) =>
             Effect.sleep(Duration.millis(Math.max(0, DateTime.toEpochMillis(deadline) - now))),
           ),
-          Effect.as({ reason: "deadline" } as const),
+          Effect.as(deadlinePassed(watch)),
         ),
     });
 
@@ -579,7 +599,7 @@ export const make = Effect.gen(function* () {
       }
       if (!changed(lines)) return true;
       sequence += 1;
-      if (yield* deliver(watch, commandOutput(watch, generation, sequence, lines))) {
+      if ((yield* deliver(watch, commandOutput(watch, generation, sequence, lines))) !== "gone") {
         return true;
       }
       stop = { reason: "watcher_closed" };
@@ -631,7 +651,7 @@ export const make = Effect.gen(function* () {
     }
     const now = yield* Clock.currentTimeMillis;
     if (Option.exists(deadlineAt(watch), (deadline) => DateTime.toEpochMillis(deadline) <= now)) {
-      return Option.some<Decision>({ reason: "deadline" });
+      return Option.some(deadlinePassed(watch));
     }
     return watch.source_json.type === "thread"
       ? yield* evaluateTarget(watch, watch.source_json).pipe(

@@ -1040,6 +1040,10 @@ const PendingBackgroundTaskFields = {
    * subagent. Only the agent knows whether a command is a wait or a dev server it left running.
    */
   awaited: Schema.optional(Schema.Literal(true)),
+  /** When the wait began. Absent when no record of the start survives. */
+  startedAt: Schema.optional(IsoDateTime),
+  /** When the agent said it expects this to be over, such as a `t3_watch` deadline. */
+  expectedBy: Schema.optional(IsoDateTime),
 };
 
 export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(

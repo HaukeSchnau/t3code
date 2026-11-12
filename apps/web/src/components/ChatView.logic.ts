@@ -1,11 +1,18 @@
-import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@t3tools/contracts";
+import {
+  type OrchestrationV2PendingBackgroundTask,
+  type OrchestrationV2ProviderTurn,
+  type RunAttemptId,
+} from "@t3tools/contracts";
 import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { COMPACT_COMMAND_PATTERN } from "@t3tools/client-runtime/state/context-window";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  derivePendingBackgroundWork,
+  isAgentWatchTask,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   latestUnheldRun,
   usageLimitRunPresentedAsLatest,
@@ -1454,8 +1461,14 @@ export function presentThreadShellFromProjection(
   };
 }
 
-/** Background work the provider still runs after the latest run ended. */
-export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure | null) {
+/**
+ * Background work the provider still runs after the latest run ended. `t3_watch` watches live only
+ * on the server, so they come from the thread's shell.
+ */
+export function deriveThreadPendingBackgroundTasks(
+  projection: ThreadStructure | null,
+  shellTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [],
+) {
   if (projection === null) return [];
   const sessionError =
     projection.providerSessions.findLast(
@@ -1473,6 +1486,7 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
       runs: projection.runs,
       pullRequests: projection.thread.pullRequests,
     }),
+    ...shellTasks.filter(isAgentWatchTask),
   ];
 }
 

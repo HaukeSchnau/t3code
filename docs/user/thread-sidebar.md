@@ -343,11 +343,39 @@ An agent can hand its waiting to T3 Code and end its turn. It can watch another
 thread until that thread's current run ends, or keep a command running on the
 server and hear about each new burst of output and the exit. The environment
 keeps watching across restarts and wakes the thread with a notification. An idle
-thread starts right away; a busy one picks it up after its current turn.
+thread starts right away; a busy one picks it up after its current turn. When the
+agent gives a watch a deadline, passing it wakes the agent too.
 
 Command watches run without approval, so only full-access threads can start one.
 Archiving or deleting a thread stops its watches. Ask the agent to list or cancel
 them.
+
+### See what a thread waits on
+
+A thread shows **Waiting** while its agent waits on a watched pull request, a watch,
+a subagent, or a command it said it waits on. Hover the thread in the sidebar to see
+what it waits on, since when, and when T3 Code next checks in. In the thread, the
+line above the composer counts up from when the wait began and shows the next
+check-in; **Details** lists each wait with its start and the time the agent expects
+it to be done. On iOS and Android, the status above the composer shows the next
+check-in, and tapping it lists each wait with its times.
+
+### Check-ins and stalled turns
+
+A waiting thread can't stall silently. If nothing wakes it, T3 Code checks in: it
+wakes the agent with what it is still waiting on, so the agent can look for a stuck
+build or a missed result. The first check-in comes 30 minutes after the thread went
+quiet, or at the time the agent expects the wait to be done. Each later check-in
+waits as long as the wait has already run, up to four hours, so a long wait costs
+few turns. Threads you settled or stopped, threads that ask you something, and
+threads at a usage limit get no check-ins.
+
+A turn that shows no activity for 20 minutes, with nothing still open in it, is
+stopped, and force-stopped two minutes later if the agent ignores the stop. The
+agent then gets a note to continue, after anything that was already waiting for
+the turn to end. Both rules run from stored state, so
+they also apply after the server restarts. A restart that stops a monitor the agent
+started wakes the thread as well.
 
 ## Side chats
 

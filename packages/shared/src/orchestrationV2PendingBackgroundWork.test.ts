@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  threadWaitCheckIn,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
 describe("backgroundWorkHoldsCompletion", () => {
@@ -162,6 +164,7 @@ describe("derivePendingBackgroundWork", () => {
           title: "npm test",
           nativeItemRef: { nativeId: "cmd-1" },
           input: "npm test",
+          startedAt: DateTime.makeUnsafe("2026-11-06T12:00:00.000Z"),
         },
         {
           id: "item-2" as never,
@@ -173,7 +176,14 @@ describe("derivePendingBackgroundWork", () => {
         },
       ],
     });
-    expect(tasks).toEqual([{ taskId: "cmd-1", description: "npm test", kind: "command" }]);
+    expect(tasks).toEqual([
+      {
+        taskId: "cmd-1",
+        description: "npm test",
+        kind: "command",
+        startedAt: "2026-11-06T12:00:00.000Z",
+      },
+    ]);
   });
 
   it("dedupes roster entries against turn items by native task id", () => {
@@ -183,7 +193,12 @@ describe("derivePendingBackgroundWork", () => {
         {
           id: "pt-1" as never,
           pendingBackgroundTasks: [
-            { taskId: "task-9", description: "Agent review", kind: "background_task" },
+            {
+              taskId: "task-9",
+              description: "Agent review",
+              kind: "background_task",
+              itemId: "item-sub" as never,
+            },
           ],
         },
       ],
@@ -195,11 +210,18 @@ describe("derivePendingBackgroundWork", () => {
           title: "Agent review",
           nativeItemRef: { nativeId: "task-9" },
           prompt: "review the plan",
+          startedAt: DateTime.makeUnsafe("2026-11-06T12:00:00.000Z"),
         },
       ],
     });
     expect(tasks).toEqual([
-      { taskId: "task-9", description: "Agent review", kind: "background_task" },
+      {
+        taskId: "task-9",
+        description: "Agent review",
+        kind: "background_task",
+        itemId: "item-sub",
+        startedAt: "2026-11-06T12:00:00.000Z",
+      },
     ]);
   });
 
@@ -409,18 +431,21 @@ describe("derivePendingBackgroundWork kinds", () => {
           description: "Watching pull request #1",
           kind: "monitor",
           awaited: true,
+          startedAt: "2026-10-05T00:00:00.000Z",
         },
         {
           taskId: "pull-request-watch:github.com/acme/app#4",
           description: "Watching pull request #4",
           kind: "monitor",
           awaited: true,
+          startedAt: "2026-10-05T00:00:00.000Z",
         },
         {
           taskId: "pull-request-watch:github.com/acme/app#5",
           description: "Watching pull request #5",
           kind: "monitor",
           awaited: true,
+          startedAt: "2026-10-05T00:00:00.000Z",
         },
       ]);
       expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
@@ -451,5 +476,164 @@ describe("derivePendingBackgroundWork kinds", () => {
         }),
       ).toEqual([]);
     });
+  });
+
+  describe("t3_watch watches", () => {
+    const watches = [
+      {
+        watchId: "w-1",
+        label: "Deploy to srv-2",
+        command: "until calder done; do sleep 30; done",
+        createdAt: "2026-11-12T10:00:00.000Z",
+        deadlineAt: "2026-11-12T10:20:00.000Z",
+      },
+      {
+        watchId: "w-2",
+        label: null,
+        command: null,
+        createdAt: "2026-11-12T10:05:00.000Z",
+        deadlineAt: null,
+      },
+    ];
+
+    it("lists each open watch as an awaited monitor with its start and deadline", () => {
+      expect(
+        derivePendingBackgroundWork({
+          latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" },
+          providerThreads: [],
+          turnItems: [],
+          watches,
+        }),
+      ).toEqual([
+        {
+          taskId: "watch:w-1",
+          kind: "monitor",
+          awaited: true,
+          description: "Deploy to srv-2",
+          command: "until calder done; do sleep 30; done",
+          startedAt: "2026-11-12T10:00:00.000Z",
+          expectedBy: "2026-11-12T10:20:00.000Z",
+        },
+        {
+          taskId: "watch:w-2",
+          kind: "monitor",
+          awaited: true,
+          startedAt: "2026-11-12T10:05:00.000Z",
+        },
+      ]);
+    });
+
+    it("lists no watch while a run is active", () => {
+      expect(
+        derivePendingBackgroundWork({
+          latestRun: { id: "run-1" as never, ordinal: 1, status: "running" },
+          providerThreads: [],
+          turnItems: [],
+          watches,
+        }),
+      ).toEqual([]);
+    });
+  });
+});
+
+describe("threadWaitCheckIn", () => {
+  const quiet = {
+    archivedAt: null,
+    deletedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lineage: { relationshipToParent: null },
+    creationSource: "web",
+    activeRunId: null,
+    activityRunStatus: null,
+    pendingRuntimeRequest: null,
+    latestRunStopRequested: false,
+    lastErrorClass: null,
+    latestRunCompletedAt: DateTime.makeUnsafe("2026-11-12T12:00:00.000Z"),
+  } as unknown as Parameters<typeof threadWaitCheckIn>[0];
+  const checkIn = (
+    pendingBackgroundTasks: Parameters<typeof threadWaitCheckIn>[0]["pendingBackgroundTasks"],
+    thread: Partial<Parameters<typeof threadWaitCheckIn>[0]> = {},
+  ) =>
+    threadWaitCheckIn({ ...quiet, ...thread, pendingBackgroundTasks })?.at.pipe(
+      DateTime.formatIso,
+    ) ?? null;
+
+  it.each([
+    ["nothing", [], null],
+    ["only a dev server", [{ taskId: "dev", kind: "command" }], null],
+    [
+      "a wait that just began",
+      [{ taskId: "a", kind: "subagent", startedAt: "2026-11-12T12:00:00.000Z" }],
+      "2026-11-12T12:30:00.000Z",
+    ],
+    [
+      "a wait with no recorded start",
+      [{ taskId: "a", kind: "monitor", awaited: true }],
+      "2026-11-12T12:30:00.000Z",
+    ],
+    [
+      "a wait that began after the thread went quiet",
+      [{ taskId: "a", kind: "monitor", awaited: true, startedAt: "2026-11-12T15:00:00.000Z" }],
+      "2026-11-12T15:30:00.000Z",
+    ],
+    [
+      "a wait open for an hour",
+      [{ taskId: "a", kind: "monitor", awaited: true, startedAt: "2026-11-12T11:00:00.000Z" }],
+      "2026-11-12T13:00:00.000Z",
+    ],
+    [
+      "a wait open for a day",
+      [{ taskId: "a", kind: "monitor", awaited: true, startedAt: "2026-11-11T12:00:00.000Z" }],
+      "2026-11-12T16:00:00.000Z",
+    ],
+    [
+      "the agent's expected time",
+      [
+        {
+          taskId: "a",
+          kind: "monitor",
+          awaited: true,
+          startedAt: "2026-11-12T12:00:00.000Z",
+          expectedBy: "2026-11-12T13:15:00.000Z",
+        },
+      ],
+      "2026-11-12T13:15:00.000Z",
+    ],
+    [
+      "an expected time that passed before the thread went quiet",
+      [
+        {
+          taskId: "a",
+          kind: "monitor",
+          awaited: true,
+          startedAt: "2026-11-12T11:50:00.000Z",
+          expectedBy: "2026-11-12T11:55:00.000Z",
+        },
+      ],
+      "2026-11-12T12:30:00.000Z",
+    ],
+    [
+      "the earliest of several waits",
+      [
+        { taskId: "a", kind: "subagent", startedAt: "2026-11-12T10:00:00.000Z" },
+        { taskId: "b", kind: "monitor", awaited: true, expectedBy: "2026-11-12T12:45:00.000Z" },
+      ],
+      "2026-11-12T12:45:00.000Z",
+    ],
+  ] as const)("with %s, checks in at %s", (_case, tasks, expected) => {
+    expect(checkIn(tasks)).toBe(expected);
+  });
+
+  it.each([
+    ["has not run", { latestRunCompletedAt: null }],
+    ["is settled", { settledOverride: "settled" }],
+    ["was stopped", { latestRunStopRequested: true }],
+    ["hit a usage limit", { lastErrorClass: "usage_limit" }],
+    ["asks its user something", { pendingRuntimeRequest: {} }],
+  ] as const)("never checks in on a thread that %s", (_case, thread) => {
+    expect(
+      checkIn([{ taskId: "a", kind: "subagent" }], thread as Partial<typeof quiet>),
+    ).toBeNull();
   });
 });

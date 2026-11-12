@@ -86,6 +86,7 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpToolDirectory from "./mcp/McpToolDirectory.ts";
 import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
 import * as AgentWatches from "./watches/AgentWatches.ts";
+import * as WaitWatchdog from "./watches/WaitWatchdog.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
@@ -695,6 +696,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerServerRestart),
   ),
   layerThreadPullRequestWorker,
+  WaitWatchdog.layer,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(ThreadTitleRefresh.make.pipe(Effect.flatMap((service) => service.start()))),
   Layer.effectDiscard(

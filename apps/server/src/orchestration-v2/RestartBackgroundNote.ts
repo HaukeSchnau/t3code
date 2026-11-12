@@ -163,6 +163,11 @@ export function isAwaitedWork(work: Pick<Work, "kind" | "awaited">): boolean {
   return work.awaited === true || (work.kind !== "shell" && work.kind !== "monitor");
 }
 
+/** Fork: a monitor exists to wake its agent, so a restart that stops one wakes the thread too. */
+export function wakesAfterRestart(work: Pick<Work, "kind" | "awaited">): boolean {
+  return isAwaitedWork(work) || work.kind === "monitor";
+}
+
 export function runOutcome(
   run: Pick<OrchestrationV2Run, "status" | "restartCancelledBackgroundWork">,
 ): OrchestrationV2Run["status"] {
@@ -253,7 +258,7 @@ export function isRestartContinuationSource(
   providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId" | "status">>,
 ): boolean {
   return isRestartNoteSource(source, providerTurns)
-    ? (source.restartCancelledBackgroundWork ?? []).some(isAwaitedWork)
+    ? (source.restartCancelledBackgroundWork ?? []).some(wakesAfterRestart)
     : source.status === "cancelled";
 }
 

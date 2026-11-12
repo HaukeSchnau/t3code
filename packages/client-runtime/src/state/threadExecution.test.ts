@@ -645,4 +645,17 @@ describe("presentPendingBackgroundWork", () => {
     ]);
     expect(presentation?.items[0]?.label).toBe("mv a.ts b.ts\ncat > b.ts <<'EOF'\nexport {};\nEOF");
   });
+
+  it("dates waiting from the oldest wait", () => {
+    const presentation = presentPendingBackgroundWork([
+      {
+        taskId: "watch:w-1",
+        kind: "monitor",
+        awaited: true,
+        startedAt: "2026-11-12T11:00:00.000Z",
+      },
+      { taskId: "review", kind: "subagent", startedAt: "2026-11-12T11:40:00.000Z" },
+    ]);
+    expect(presentation?.since).toBe("2026-11-12T11:00:00.000Z");
+  });
 });

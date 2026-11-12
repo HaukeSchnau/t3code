@@ -532,12 +532,16 @@ export interface PendingBackgroundWorkItem {
   readonly kind: BackgroundWorkKind;
   readonly label: string;
   readonly childThreadId: ThreadId | undefined;
+  readonly startedAt: string | undefined;
+  readonly expectedBy: string | undefined;
 }
 
 export interface PendingBackgroundWorkPresentation {
   readonly title: string;
   readonly items: ReadonlyArray<PendingBackgroundWorkItem>;
   readonly waiting: boolean;
+  /** When the oldest work began, if any start is known. */
+  readonly since: string | null;
 }
 
 function joinWithAnd(parts: ReadonlyArray<string>): string {
@@ -570,6 +574,14 @@ export function presentPendingBackgroundWork(
 ): PendingBackgroundWorkPresentation | null {
   if (tasks.length === 0) return null;
   const waiting = backgroundWorkHoldsCompletion(tasks);
+  const startedAtMs = tasks.flatMap((task) => {
+    const ms = task.startedAt === undefined ? Number.NaN : Date.parse(task.startedAt);
+    return Number.isNaN(ms) ? [] : [ms];
+  });
+  const since =
+    startedAtMs.length === 0
+      ? null
+      : DateTime.formatIso(DateTime.makeUnsafe(Math.min(...startedAtMs)));
   const items = tasks
     .map((task): PendingBackgroundWorkItem => {
       const description = task.description?.trim();
@@ -589,6 +601,8 @@ export function presentPendingBackgroundWork(
             ? BACKGROUND_WORK_KINDS[task.kind].singular
             : label,
         childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
+        startedAt: task.startedAt,
+        expectedBy: task.expectedBy,
       };
     })
     // `map` returned a new array; Hermes has no `toSorted`.
@@ -605,7 +619,7 @@ export function presentPendingBackgroundWork(
       : waiting
         ? `Waiting on a ${noun}`
         : `Running a ${noun}`;
-    return { title, items, waiting };
+    return { title, items, waiting, since };
   }
   const counts = new Map<BackgroundWorkKind, number>();
   for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
@@ -613,7 +627,22 @@ export function presentPendingBackgroundWork(
     const { singular, plural } = BACKGROUND_WORK_KINDS[kind];
     return `${count} ${count === 1 ? singular : plural}`;
   });
-  return { title: `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}`, items, waiting };
+  return {
+    title: `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}`,
+    items,
+    waiting,
+    since,
+  };
+}
+
+/** "check-in in 25m": when T3 next wakes a waiting thread that nothing else woke. */
+export function waitCheckInLabel(checkInAt: string, nowMs: number): string {
+  const remainingMs = Date.parse(checkInAt) - nowMs;
+  if (!(remainingMs > 0)) return "check-in due";
+  const minutes = Math.ceil(remainingMs / 60_000);
+  return minutes < 60
+    ? `check-in in ${minutes}m`
+    : `check-in in ${Math.floor(minutes / 60)}h${minutes % 60 === 0 ? "" : ` ${minutes % 60}m`}`;
 }
 
 export interface ProviderGoalPresentation {

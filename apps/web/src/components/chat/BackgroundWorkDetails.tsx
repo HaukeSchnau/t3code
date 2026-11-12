@@ -6,6 +6,8 @@ import type {
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import { useState } from "react";
 
+import { usePrimarySettings } from "../../hooks/useSettings";
+import { formatDayAwareTimestamp, formatUpcomingTimestamp } from "../../timestampFormat";
 import { InlineButton } from "../ui/button";
 import {
   Dialog,
@@ -27,6 +29,7 @@ export function BackgroundWorkDetails(props: {
 }) {
   const [open, setOpen] = useState(false);
   const streamsOutput = useCommandOutputStreaming(props.environmentId);
+  const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<InlineButton />}>Details</DialogTrigger>
@@ -62,6 +65,20 @@ export function BackgroundWorkDetails(props: {
                       {task.awaited ? "Waiting" : "Running"}
                     </span>
                   </div>
+                  {task.startedAt === undefined && task.expectedBy === undefined ? null : (
+                    <p className="text-xs text-muted-foreground">
+                      {[
+                        task.startedAt === undefined
+                          ? null
+                          : `Since ${formatDayAwareTimestamp(task.startedAt, timestampFormat)}`,
+                        task.expectedBy === undefined
+                          ? null
+                          : `expected by ${formatUpcomingTimestamp(task.expectedBy, timestampFormat)}`,
+                      ]
+                        .filter((part) => part !== null)
+                        .join(" · ")}
+                    </p>
+                  )}
                   {command ? (
                     <div className="rounded-md border border-border bg-muted/20 p-3 font-mono text-xs whitespace-pre-wrap break-words">
                       <ShellCommandBlock command={command} />

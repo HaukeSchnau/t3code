@@ -196,12 +196,12 @@ it("does not continue settled root runs with restart-cancelled background work",
 });
 
 it.effect.each(["completed", "waiting", "cancelled"] as const)(
-  "wakes a %s run whose awaited monitor the restart cancelled, with the note as its prompt",
+  "wakes a %s run whose monitor the restart cancelled, with the note as its prompt",
   (status) =>
     Effect.gen(function* () {
       const base = makeProjection();
       const work = [
-        { kind: "monitor" as const, label: "Watch CI run 42", awaited: true as const },
+        { kind: "monitor" as const, label: "Watch CI run 42" },
         { kind: "shell" as const, label: "vp run dev" },
       ];
       const projection = {
@@ -598,12 +598,22 @@ const devServer = {
   },
   work: { kind: "shell" as const, label: "vp run dev", id: "turn-item:dev-server" },
 };
+const unmarkedMonitor = {
+  turnItem: {
+    ...devServer.turnItem,
+    id: "turn-item:ci-monitor",
+    input: "gh run watch 42",
+    monitor: true,
+  },
+  work: { kind: "monitor" as const, label: "gh run watch 42", id: "turn-item:ci-monitor" },
+};
 
 it.effect.each([
   ["completed", scratchProjectId, backgroundSubagent, true],
   ["waiting", ProjectId.make("restart-project"), backgroundSubagent, true],
   ["completed", ProjectId.make("restart-project"), devServer, false],
   ["waiting", scratchProjectId, devServer, false],
+  ["completed", scratchProjectId, unmarkedMonitor, true],
 ] as const)(
   "cleans up background work of a %s run in project %s and wakes it only for awaited work",
   ([status, projectId, background, wakes]) =>
