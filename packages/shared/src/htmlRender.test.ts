@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Runs the page bridge in a VM context instead of a browser.
 import * as NodeVM from "node:vm";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   HTML_RENDER_BRIDGE_SCRIPT,
@@ -70,20 +70,30 @@ describe("injectHtmlRenderBootstrap", () => {
 type Listener = (event: Record<string, unknown>) => void;
 
 /** Runs the bridge the way a framed page does, with the window and host it talks to. */
-function runBridge(state?: Record<string, string>) {
+function runBridge(state?: Record<string, string>, sandboxed = false) {
   const listeners = new Map<string, Array<Listener>>();
   const posted: Array<Record<string, unknown>> = [];
   const parent = {
     postMessage: (message: unknown) => posted.push(structuredClone(message) as never),
+  };
+  // An opaque-origin frame throws on the browser's own sessionStorage and cookies.
+  const insecure = () => {
+    throw new DOMException("The operation is insecure.", "SecurityError");
   };
   const page: Record<string, unknown> = {
     parent,
     addEventListener: (type: string, listener: Listener) =>
       listeners.set(type, [...(listeners.get(type) ?? []), listener]),
   };
+  const document: Record<string, unknown> = {};
+  if (sandboxed) {
+    Object.defineProperty(page, "sessionStorage", { configurable: true, get: insecure });
+    Object.defineProperty(document, "cookie", { configurable: true, get: insecure, set: insecure });
+  }
   const hash = `#t3-theme=x${state === undefined ? "" : `&t3-state=${encodeURIComponent(JSON.stringify(state))}`}`;
   NodeVM.runInNewContext(HTML_RENDER_BRIDGE_SCRIPT, {
     window: page,
+    document,
     location: { hash },
     setTimeout,
     clearTimeout,
@@ -97,7 +107,7 @@ function runBridge(state?: Record<string, string>) {
     send: (text: string) => Promise<void>;
     callTool: (name: string, args?: unknown) => Promise<unknown>;
   };
-  return { posted, dispatch, storage, t3, parent };
+  return { posted, dispatch, storage, t3, parent, page, document };
 }
 
 describe("page bridge", () => {
@@ -110,6 +120,36 @@ describe("page bridge", () => {
     expect(posted).toEqual([
       { jsonrpc: "2.0", method: "t3/notifications/storage", params: { state: { score: "4" } } },
     ]);
+  });
+
+  it("hands each burst of writes to the host on the next tick, even while writes continue", () => {
+    vi.useFakeTimers();
+    try {
+      const { storage, posted } = runBridge();
+      storage.setItem("tick", "1");
+      storage.setItem("tick", "2");
+      vi.advanceTimersByTime(0);
+      storage.setItem("tick", "3");
+      vi.advanceTimersByTime(0);
+      expect(posted.map((message) => message.params)).toEqual([
+        { state: { tick: "2" } },
+        { state: { tick: "3" } },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps sessionStorage and cookies in memory where the sandbox refuses them", () => {
+    const { page, document } = runBridge(undefined, true);
+    const session = page.sessionStorage as Storage;
+    session.setItem("step", "2");
+    expect(session.getItem("step")).toBe("2");
+    document.cookie = "seen=1; path=/";
+    document.cookie = "theme=dark";
+    expect(document.cookie).toBe("seen=1; theme=dark");
+    document.cookie = "seen=; max-age=0";
+    expect(document.cookie).toBe("theme=dark");
   });
 
   it("refuses a write past the cap, as a full localStorage would", () => {

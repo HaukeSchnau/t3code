@@ -32,7 +32,7 @@ import {
 } from "./worktree-setup-card";
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
-import { KeyboardController } from "react-native-keyboard-controller";
+import { KeyboardController, KeyboardEvents } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -126,6 +126,7 @@ import {
   type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
+  TextInput,
   type ColorValue,
   useWindowDimensions,
   View,
@@ -1555,6 +1556,10 @@ interface HtmlRenderViews {
 }
 
 const EMPTY_HTML_RENDER_VIEWS: HtmlRenderViews = { selected: new Map(), heights: new Map() };
+// Leaving a thread unmounts its feed. Coming back keeps the versions the reader picked and the
+// measured page heights, instead of resetting them and jumping as pages measure again.
+const htmlRenderViewsByThread = new Map<string, HtmlRenderViews>();
+const HTML_RENDER_VIEWS_KEPT = 30;
 
 function shownHtmlRenderVersion(
   entry: Extract<ThreadFeedRow, { type: "html-render" }>,
@@ -1703,6 +1708,10 @@ function renderFeedEntry(
     readonly htmlRenderViews: HtmlRenderViews;
     readonly onSelectHtmlRenderVersion: (entryId: string, index: number | undefined) => void;
     readonly onHtmlRenderContentHeight: (attachmentId: string, height: number) => void;
+    readonly onRevealHtmlRenderFocus: (
+      rowId: string,
+      rect: { readonly top: number; readonly bottom: number },
+    ) => void;
     readonly userMessageGrouping: GroupedThreadFeedRow["userMessageGrouping"];
   },
 ) {
@@ -1773,6 +1782,7 @@ function renderFeedEntry(
           shownHtmlRenderVersion(entry, props.htmlRenderViews).attachmentId,
         )}
         onContentHeight={props.onHtmlRenderContentHeight}
+        onFocusRect={(rect) => props.onRevealHtmlRenderFocus(entry.id, rect)}
         frameWidth={props.contentWidth}
         iconColor={iconSubtleColor}
       />
@@ -2781,7 +2791,25 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds, revealedMessageId } =
     interactionState;
   // Rows are sized here, so the version a render shows and its page's height live here too.
-  const [htmlRenderViews, setHtmlRenderViews] = useState<HtmlRenderViews>(EMPTY_HTML_RENDER_VIEWS);
+  const htmlRenderViewsKey =
+    props.detailRef === null
+      ? null
+      : `${props.detailRef.environmentId}\u0000${props.detailRef.threadId}`;
+  const [htmlRenderViews, setHtmlRenderViews] = useState<HtmlRenderViews>(
+    () =>
+      (htmlRenderViewsKey === null ? undefined : htmlRenderViewsByThread.get(htmlRenderViewsKey)) ??
+      EMPTY_HTML_RENDER_VIEWS,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps this thread's render views for its next visit
+  useEffect(() => {
+    if (htmlRenderViewsKey === null || htmlRenderViews === EMPTY_HTML_RENDER_VIEWS) return;
+    htmlRenderViewsByThread.delete(htmlRenderViewsKey);
+    htmlRenderViewsByThread.set(htmlRenderViewsKey, htmlRenderViews);
+    const oldest = htmlRenderViewsByThread.keys().next().value;
+    if (htmlRenderViewsByThread.size > HTML_RENDER_VIEWS_KEPT && oldest !== undefined) {
+      htmlRenderViewsByThread.delete(oldest);
+    }
+  }, [htmlRenderViewsKey, htmlRenderViews]);
   const onSelectHtmlRenderVersion = (entryId: string, index: number | undefined) =>
     setHtmlRenderViews((current) => {
       const selected = new Map(current.selected);
@@ -3633,17 +3661,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     userExpandedWorkGroupIds,
   ]);
 
+  // How much of the list the header covers at the top, and the composer and keyboard at the
+  // bottom. The keyboard covers the feed without resizing it.
+  const coveredInsets = () => {
+    const keyboardInset = KeyboardController.isVisible() ? KeyboardController.state().height : 0;
+    return {
+      headerInset: usesNativeAutomaticInsets ? anchorTopInset : 0,
+      footerInset:
+        props.contentInsetEndAdjustment.value +
+        (usesNativeAutomaticInsets ? insets.bottom : 0) +
+        keyboardInset,
+    };
+  };
   const scrollToFindTarget = (target: { readonly rowId: string; readonly share: number }) => {
     const list = listRef.current;
     const index = groupedFeed.findIndex((row) => row.id === target.rowId);
     if (list === null || index < 0) return false;
-    const headerInset = usesNativeAutomaticInsets ? anchorTopInset : 0;
-    // The keyboard covers the feed without resizing it.
-    const keyboardInset = KeyboardController.isVisible() ? KeyboardController.state().height : 0;
-    const footerInset =
-      props.contentInsetEndAdjustment.value +
-      (usesNativeAutomaticInsets ? insets.bottom : 0) +
-      keyboardInset;
+    const { headerInset, footerInset } = coveredInsets();
     const place = (animated: boolean) => {
       const state = list.getState();
       const rowSize = state.sizeAtIndex(index);
@@ -3679,6 +3713,58 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     });
     return true;
   };
+  // A field focused in a page sits wherever the page put it; the keyboard does not lift the feed
+  // unless it is at the end, so scroll the field into the space above the keyboard and composer.
+  const revealHtmlRenderFocus = (
+    rowId: string,
+    rect: { readonly top: number; readonly bottom: number },
+  ) => {
+    const reveal = () => {
+      // A page that focuses a field itself must not pull the feed while the composer has the keyboard.
+      if (TextInput.State.currentlyFocusedInput() !== null) return;
+      const list = listRef.current;
+      const index = groupedFeed.findIndex((row) => row.id === rowId);
+      if (list === null || index < 0) return;
+      const state = list.getState();
+      const { headerInset, footerInset } = coveredInsets();
+      const rowTop = state.positionAtIndex(index);
+      const top = rowTop + rect.top - 16;
+      const bottom = rowTop + rect.bottom + 16;
+      const visibleTop = state.scroll + headerInset;
+      const visibleBottom = state.scroll + state.scrollLength - footerInset;
+      if (bottom > visibleBottom) {
+        list.scrollToOffset({
+          offset: state.scroll + Math.min(bottom - visibleBottom, top - visibleTop),
+          animated: true,
+        });
+      } else if (top < visibleTop) {
+        list.scrollToOffset({ offset: state.scroll - (visibleTop - top), animated: true });
+      }
+    };
+    if (KeyboardController.isVisible()) {
+      // A tap from the composer into the page blurs the composer on a path that may land later.
+      requestAnimationFrame(reveal);
+      return;
+    }
+    // The page reports focus before the keyboard opens; a focus that opens none times out.
+    const shown = KeyboardEvents.addListener("keyboardDidShow", () => {
+      shown.remove();
+      clearTimeout(timeout);
+      reveal();
+    });
+    const timeout = setTimeout(() => shown.remove(), 1_000);
+  };
+  // Rows keep the handlers they rendered with (see listAppearanceData), so they reach the
+  // latest feed through this ref.
+  const latestRevealHtmlRenderFocus = useRef(revealHtmlRenderFocus);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the handler rows call pointed at the latest feed
+  useEffect(() => {
+    latestRevealHtmlRenderFocus.current = revealHtmlRenderFocus;
+  });
+  const onRevealHtmlRenderFocus = (
+    rowId: string,
+    rect: { readonly top: number; readonly bottom: number },
+  ) => latestRevealHtmlRenderFocus.current(rowId, rect);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the native list to the find target once its row has rendered
   useEffect(() => {
     if (findScrollTarget === null) return;
@@ -3908,6 +3994,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             htmlRenderViews,
             onSelectHtmlRenderVersion,
             onHtmlRenderContentHeight,
+            onRevealHtmlRenderFocus,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />

@@ -15,8 +15,11 @@ a provider session.
   relay's `active` flag) and one trusted click each. Sends carry an `html-render` context record,
   which the agent sees as a line saying the page wrote the message.
 - `localStorage` in a page is a shim over one server-stored map per render (64 KiB), passed in the
-  URL fragment at load and written back debounced. Every version shares it; last write wins.
-  Guests read it and cannot write it.
+  URL fragment at load. The page hands each change to its host on the next tick; the host
+  debounces the write and sends it when the page's last view goes away or the app leaves the
+  foreground, because a torn-down frame never gets to flush. Every version shares it; last write
+  wins. Guests read it and cannot write it. Where the opaque-origin frame refuses
+  `sessionStorage` and `document.cookie`, the page gets in-memory stand-ins for its lifetime.
 - `html_render_update` publishes a render's next version as its own tool item. Clients join it
   to the render's row with a version switcher. Like upstream's `html_render` and `html_preview`,
   it takes `path` instead of `html` only in full-access threads, because the server reads the
@@ -29,7 +32,10 @@ a provider session.
   and interaction mode, so `McpToolAccess` applies the same checks as for an OAuth MCP client. A thread caller would need a live run for
   every write, and pages are used after the agent stops.
 - Mobile loads the page in a sandboxed frame behind a relay document, like MCP apps, so the bridge
-  and reported heights work there too.
+  and reported heights work there too. The relay never scrolls or zooms, so it pins the viewport
+  scale (iOS zooms focused small text and the frame could not pan back) and leaves room for the
+  header and keyboard itself. A framed page reports where a focused field sits, so the feed can
+  scroll it above the keyboard.
 
 ## Implementation
 
@@ -38,7 +44,8 @@ a provider session.
   `/mcp` registers), `toolkits/html/`.
 - Page side: `HTML_RENDER_BRIDGE_SCRIPT` in `packages/shared/src/htmlRender.ts`, injected at
   publish, so pages published before this patch keep the old bootstrap.
-- Clients: `packages/client-runtime/src/htmlRender/host.ts`, web `useHtmlRenderHost.ts`, mobile
+- Clients: `packages/client-runtime/src/htmlRender/host.ts` and `stateStore.ts`, web
+  `useHtmlRenderHost.ts` and `HtmlRenderFrame.tsx`, mobile
   `HtmlRenderWebView.tsx` (full-screen pages through `features/files/AttachmentDocumentBody.tsx`).
 
 ## Removing it

@@ -12,12 +12,12 @@ import {
   type HtmlRenderVersionEntry,
 } from "@t3tools/shared/htmlRender";
 import { ChevronLeftIcon, ChevronRightIcon, Maximize2Icon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 import { cn } from "~/lib/utils";
-import { htmlRenderEnvironment } from "~/state/htmlRender";
+import { htmlRenderEnvironment, htmlRenderStateStore } from "~/state/htmlRender";
 import { useEnvironmentQuery } from "~/state/query";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
@@ -61,12 +61,23 @@ export function HtmlRenderFrame(props: {
           input: { threadId: props.threadRef.threadId, renderId },
         }),
   );
-  // Versions opened later must see what earlier ones saved, not the state read at mount.
-  const latestState = useRef<HtmlRenderState | null>(null);
+  // Versions opened later, and later visits, must see what this tab saved, not the state read
+  // at mount. The store also sends a page's last save when its frame goes away.
+  const { environmentId } = props;
+  const threadId = props.threadRef?.threadId;
+  const stateTarget = threadId === undefined ? undefined : { environmentId, threadId, renderId };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Counts mounted views; the last one to leave sends the page's latest save.
+  useEffect(() => {
+    if (threadId === undefined) return;
+    return htmlRenderStateStore.view({ environmentId, threadId, renderId });
+  }, [environmentId, threadId, renderId]);
   // An older server lacks the state RPC; its pages still open, without saved state.
   const stateReady =
     props.threadRef === undefined || savedState.isSuccess || savedState.error !== null;
-  const readState = () => latestState.current ?? savedState.data ?? NO_STATE;
+  const readState = () =>
+    (stateTarget === undefined ? undefined : htmlRenderStateStore.read(stateTarget)) ??
+    savedState.data ??
+    NO_STATE;
   const { onSendMessage } = props;
   const bridge: HtmlRenderPageBridge | undefined =
     props.threadRef === undefined
@@ -81,7 +92,7 @@ export function HtmlRenderFrame(props: {
               ? undefined
               : (message) => onSendMessage(message.text, message.context),
           onStateSaved: (state) => {
-            latestState.current = state;
+            if (stateTarget !== undefined) htmlRenderStateStore.save(stateTarget, state);
           },
         };
 

@@ -21,6 +21,7 @@ import {
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
   readHtmlRenderContentHeight,
+  readHtmlRenderFocus,
   readHtmlRenderLinkRequest,
   type HtmlRenderReference,
   type HtmlRenderTheme,
@@ -30,15 +31,18 @@ import * as Clipboard from "expo-clipboard";
 import * as Predicate from "effect/Predicate";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Platform, Pressable, View, type ColorValue } from "react-native";
+import { useKeyboardState } from "react-native-keyboard-controller";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { useContentTopInset } from "../../components/ui/useBarInset";
 import { AppText as Text } from "../../components/ui/AppText";
 import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { uuidv4 } from "../../lib/uuid";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
-import { htmlRenderEnvironment } from "../../state/htmlRender";
+import { htmlRenderEnvironment, htmlRenderStateStore } from "../../state/htmlRender";
 import { useEnvironmentQuery } from "../../state/query";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -68,7 +72,7 @@ function useHtmlRenderTheme() {
 // directly. The relay wraps what it forwards with a secret only it holds, and attests whether
 // the reader is using the frame, which the sandboxed page cannot fake.
 function relayDocument(src: string, secret: string) {
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>html,body{margin:0;height:100%;background:transparent}iframe{border:0;display:block;width:100%;height:100%}</style></head>
 <body><iframe id="page" sandbox="allow-scripts allow-forms" allow="clipboard-write; fullscreen"></iframe>
 <script>(function(){var frame=document.getElementById("page"),secret=${JSON.stringify(secret)},loads=0,live=true;
@@ -109,27 +113,16 @@ export interface HtmlRenderBridgeTarget {
   readonly renderId: string;
 }
 
-// What pages saved on this device while a view of the render is mounted, so the feed row and the
-// full-screen page, which mount at once and share a cached read, start from the latest save. The
-// entry goes with the last view, so a later visit reads what other devices saved since.
-const savedHere = new Map<string, { state: HtmlRenderState | undefined; views: number }>();
-const savedKey = (target: HtmlRenderBridgeTarget) =>
-  `${target.environmentId}\u0000${target.threadId}\u0000${target.renderId}`;
-
-/** The render's saved state: this device's latest save, else a read when the view mounts. */
-export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefined) {
-  const key = target === undefined ? undefined : savedKey(target);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Counts mounted views so the local save outlives none of them.
+/** The render's saved state: this device's unsent or newer save, else a read when the view mounts. */
+function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefined) {
+  const environmentId = target?.environmentId;
+  const threadId = target?.threadId;
+  const renderId = target?.renderId;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Counts mounted views; the last one to leave sends the page's latest save.
   useEffect(() => {
-    if (key === undefined) return;
-    const entry = savedHere.get(key) ?? { state: undefined, views: 0 };
-    savedHere.set(key, { ...entry, views: entry.views + 1 });
-    return () => {
-      const current = savedHere.get(key);
-      if (current === undefined || current.views <= 1) savedHere.delete(key);
-      else savedHere.set(key, { ...current, views: current.views - 1 });
-    };
-  }, [key]);
+    if (environmentId === undefined || threadId === undefined || renderId === undefined) return;
+    return htmlRenderStateStore.view({ environmentId, threadId, renderId });
+  }, [environmentId, threadId, renderId]);
   const query = useEnvironmentQuery(
     target === undefined
       ? null
@@ -142,27 +135,52 @@ export function useHtmlRenderSavedState(target: HtmlRenderBridgeTarget | undefin
     // An older server lacks the state RPC; its pages still open, without saved state.
     ready: target === undefined || query.isSuccess || query.error !== null,
     read: () =>
-      (key === undefined ? undefined : savedHere.get(key)?.state) ?? query.data ?? NO_STATE,
-    saved: (state: HtmlRenderState) => {
-      const entry = key === undefined ? undefined : savedHere.get(key);
-      if (key !== undefined && entry !== undefined) savedHere.set(key, { ...entry, state });
+      (target === undefined ? undefined : htmlRenderStateStore.read(target)) ??
+      query.data ??
+      NO_STATE,
+    save: (state: HtmlRenderState) => {
+      if (target !== undefined) htmlRenderStateStore.save(target, state);
     },
   };
 }
 
-export function HtmlRenderWebView(props: {
+type HtmlRenderWebViewProps = {
   readonly uri: string;
   readonly title: string;
   readonly nested: boolean;
   readonly bridge?: HtmlRenderBridgeTarget | undefined;
-  readonly state?: HtmlRenderState | undefined;
-  readonly onStateSaved?: ((state: HtmlRenderState) => void) | undefined;
   readonly onContentHeight?: ((height: number) => void) | undefined;
+  readonly onFocusRect?:
+    | ((rect: { readonly top: number; readonly bottom: number }) => void)
+    | undefined;
   readonly onLoadError?: () => void;
-}) {
+};
+
+/** A page and, when it belongs to a thread, the state it saved. */
+export function HtmlRenderWebView(props: HtmlRenderWebViewProps) {
+  const saved = useHtmlRenderSavedState(props.bridge);
+  if (!saved.ready) {
+    return (
+      <View className="flex-1 items-center justify-center">
+        <AppActivityIndicator />
+      </View>
+    );
+  }
+  return <HtmlRenderPage {...props} saved={saved} />;
+}
+
+function HtmlRenderPage(
+  props: HtmlRenderWebViewProps & {
+    readonly saved: ReturnType<typeof useHtmlRenderSavedState>;
+  },
+) {
   const theme = useHtmlRenderTheme();
   const [initialTheme] = useState(theme);
-  const [initialState] = useState(props.state);
+  const [pageState, setPageState] = useState(props.saved.read);
+  const topInset = useContentTopInset();
+  const insets = useSafeAreaInsets();
+  // Full screen, the frame shrinks above the keyboard so the page can scroll a field into view.
+  const keyboardHeight = useKeyboardState((keyboard) => (props.nested ? 0 : keyboard.height));
   const [secret] = useState(uuidv4);
   const [generation, setGeneration] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -171,7 +189,7 @@ export function HtmlRenderWebView(props: {
   const crashes = useRef(0);
   const shownTheme = useRef<HtmlRenderTheme | null>(null);
   const source = {
-    html: relayDocument(props.uri + htmlRenderThemeFragment(initialTheme, initialState), secret),
+    html: relayDocument(props.uri + htmlRenderThemeFragment(initialTheme, pageState), secret),
   };
   const post = (message: unknown) =>
     webView.current?.injectJavaScript(
@@ -187,13 +205,11 @@ export function HtmlRenderWebView(props: {
   }, [theme]);
 
   const callTool = useAtomCommand(htmlRenderEnvironment.callTool, { reportFailure: false });
-  const setState = useAtomCommand(htmlRenderEnvironment.setState, { reportFailure: false });
   const readLive = useEffectEvent(() => ({
     bridge: props.bridge,
     title: props.title,
-    onStateSaved: props.onStateSaved,
+    save: props.saved.save,
     callTool,
-    setState,
   }));
   const bridged = props.bridge !== undefined;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Each page document gets one host; it answers until the document goes away.
@@ -240,12 +256,7 @@ export function HtmlRenderWebView(props: {
             },
             confirm: ({ page, tool, arguments: args }) =>
               confirm(`Allow ${page} to run ${tool}?`, JSON.stringify(args, null, 2)),
-            saveState: (state) => {
-              const current = live();
-              const { environmentId, threadId, renderId } = current.bridge;
-              current.onStateSaved?.(state);
-              void current.setState({ environmentId, input: { threadId, renderId, state } });
-            },
+            saveState: (state) => live().save(state),
           }
         : undefined,
     });
@@ -264,6 +275,8 @@ export function HtmlRenderWebView(props: {
     }
     shownTheme.current = null;
     setLoaded(false);
+    // The reloaded page starts from the latest save, not from what it opened with.
+    setPageState(props.saved.read());
     setGeneration((value) => value + 1);
   };
 
@@ -292,6 +305,11 @@ export function HtmlRenderWebView(props: {
       props.onContentHeight?.(height);
       return;
     }
+    const focus = readHtmlRenderFocus(message);
+    if (focus !== undefined) {
+      props.onFocusRect?.(focus);
+      return;
+    }
     const link = readHtmlRenderLinkRequest(message);
     if (link !== undefined) {
       // A page must not leave T3 on a timer; only a tap in it opens a link.
@@ -310,6 +328,9 @@ export function HtmlRenderWebView(props: {
           : {
               flex: 1,
               paddingHorizontal: FULL_SCREEN_GUTTER,
+              // The relay page never scrolls, so the page starts below the header itself.
+              paddingTop: Platform.OS === "ios" ? topInset : 0,
+              paddingBottom: Math.max(insets.bottom, keyboardHeight),
               backgroundColor: theme.variables["--background"],
             }
       }
@@ -322,7 +343,7 @@ export function HtmlRenderWebView(props: {
         style={{ flex: 1, backgroundColor: "transparent" }}
         originWhitelist={["*"]}
         allowsInlineMediaPlayback
-        contentInsetAdjustmentBehavior={props.nested ? "never" : "automatic"}
+        contentInsetAdjustmentBehavior="never"
         bounces={!props.nested}
         // The frame fits the page in the feed; the page scrolls inside it when full screen.
         scrollEnabled={false}
@@ -360,6 +381,8 @@ export function ThreadHtmlRender(props: {
   readonly onSelect: (index: number | undefined) => void;
   readonly contentHeight: number | undefined;
   readonly onContentHeight: (attachmentId: string, height: number) => void;
+  /** Where a field the reader focused sits in the frame. */
+  readonly onFocusRect: (rect: { readonly top: number; readonly bottom: number }) => void;
   readonly frameWidth: number;
   readonly iconColor: ColorValue;
 }) {
@@ -375,7 +398,6 @@ export function ThreadHtmlRender(props: {
     threadId: props.threadId,
     renderId: props.render.attachmentId,
   };
-  const savedState = useHtmlRenderSavedState(bridge);
   const resource = {
     _tag: "attachment" as const,
     attachmentId,
@@ -413,16 +435,15 @@ export function ThreadHtmlRender(props: {
   return (
     <View style={{ marginBottom: ROW_BOTTOM_MARGIN }}>
       <View style={{ height }}>
-        {uri !== null && !failed && savedState.ready ? (
+        {uri !== null && !failed ? (
           <HtmlRenderWebView
             key={`${uri}:${attempt}`}
             uri={uri}
             title={title}
             nested
             bridge={bridge}
-            state={savedState.read()}
-            onStateSaved={savedState.saved}
             onContentHeight={(contentHeight) => props.onContentHeight(attachmentId, contentHeight)}
+            onFocusRect={props.onFocusRect}
             onLoadError={handleLoadError}
           />
         ) : failed || asset._tag === "Failure" ? (
