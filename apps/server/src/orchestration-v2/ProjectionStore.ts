@@ -85,6 +85,7 @@ import {
 import {
   deriveBlockedOnThreadWait,
   derivePendingBackgroundWork,
+  type PendingBackgroundWorkWatch,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -1008,6 +1009,15 @@ export function applyToProjection(
 
 type PayloadRow = {
   readonly payload_json: string;
+};
+
+type ShellAgentWatchRow = {
+  readonly watch_id: string;
+  readonly watcher_thread_id: string;
+  readonly label: string | null;
+  readonly command: string | null;
+  readonly created_at: string;
+  readonly deadline_at: string | null;
 };
 
 type ShellPendingTurnItemRow = PayloadRow & {
@@ -6611,6 +6621,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
           `;
 
+    // Fork: open `t3_watch` watches are waits too (patches/thread-waits.md). Few are open, and the
+    // partial index on state keeps this read cheap.
+    const selectShellAgentWatchRows = () => sql<ShellAgentWatchRow>`
+      SELECT watch_id, watcher_thread_id, label,
+        json_extract(source_json, '$.command') AS command, created_at, deadline_at
+      FROM agent_watches
+      WHERE state <> 'closed'
+      ORDER BY created_at ASC
+    `;
+
     const selectShellPendingTurnItemRows = (
       threadIds?: ReadonlyArray<ThreadId>,
       activeRunIds: ReadonlyArray<string> = [],
@@ -6679,6 +6699,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     )(function* (input: {
       readonly providerThreadRows: ReadonlyArray<PayloadRow & { readonly thread_id: string }>;
       readonly pendingTurnItemRows: ReadonlyArray<ShellPendingTurnItemRow>;
+      readonly watchRows: ReadonlyArray<ShellAgentWatchRow>;
     }) {
       const providerThreadsByThreadId = new Map<
         ThreadId,
@@ -6712,7 +6733,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         pendingTurnItemsByThreadId.set(threadId, existing);
       }
 
-      return { providerThreadsByThreadId, pendingTurnItemsByThreadId };
+      const agentWatchesByThreadId = new Map<ThreadId, Array<PendingBackgroundWorkWatch>>();
+      for (const row of input.watchRows) {
+        const threadId = ThreadId.make(row.watcher_thread_id);
+        const existing = agentWatchesByThreadId.get(threadId) ?? [];
+        existing.push({
+          watchId: row.watch_id,
+          label: row.label,
+          command: row.command,
+          createdAt: row.created_at,
+          deadlineAt: row.deadline_at,
+        });
+        agentWatchesByThreadId.set(threadId, existing);
+      }
+
+      return { providerThreadsByThreadId, pendingTurnItemsByThreadId, agentWatchesByThreadId };
     });
 
     const getSettlementCandidates: ProjectionStoreV2Shape["getSettlementCandidates"] = (threadId) =>
@@ -6785,11 +6820,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           `;
             if (rows.length === 0) return [];
             const threadIds = rows.map((row) => ThreadId.make(row.thread_id));
-            const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-              yield* pendingBackgroundDataByThreadId({
-                providerThreadRows: yield* selectShellProviderThreadRows(threadIds),
-                pendingTurnItemRows: yield* selectShellPendingTurnItemRows(threadIds),
-              });
+            const {
+              providerThreadsByThreadId,
+              pendingTurnItemsByThreadId,
+              agentWatchesByThreadId,
+            } = yield* pendingBackgroundDataByThreadId({
+              providerThreadRows: yield* selectShellProviderThreadRows(threadIds),
+              pendingTurnItemRows: yield* selectShellPendingTurnItemRows(threadIds),
+              watchRows: yield* selectShellAgentWatchRows(),
+            });
             return yield* Effect.forEach(rows, (row) =>
               Effect.gen(function* () {
                 const thread = yield* decodeThreadPayload(row.payload_json);
@@ -6839,6 +6878,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     activeProviderThreadId: thread.activeProviderThreadId,
                     hasActiveRun: false,
                     pullRequests: thread.pullRequests,
+                    watches: agentWatchesByThreadId.get(thread.id),
                   }),
                 } satisfies ProjectionSettlementCandidate;
               }),
@@ -6935,6 +6975,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ThreadId,
           ReadonlyArray<OrchestrationV2TurnItem>
         >;
+        readonly agentWatchesByThreadId: ReadonlyMap<
+          ThreadId,
+          ReadonlyArray<PendingBackgroundWorkWatch>
+        >;
       }) {
         const {
           row,
@@ -6943,6 +6987,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           shellItemCountsByThreadId,
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
+          agentWatchesByThreadId,
         } = input;
         const thread = yield* decodeThreadPayload(row.payload_json);
         const latestUserAuthoredMessageAt =
@@ -7051,6 +7096,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             activeProviderThreadId: thread.activeProviderThreadId,
             hasActiveRun: row.active_run_id !== null,
             pullRequests: thread.pullRequests,
+            watches: agentWatchesByThreadId.get(thread.id),
           }),
         ];
         return {
@@ -7149,6 +7195,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         sequenceRows,
         providerThreadRows,
         pendingTurnItemRows,
+        watchRows,
       ] = yield* Effect.all([
         readForThreadIds(selectShellRunRows, forkSourceIds),
         readForThreadIds(selectShellRunItemCounts, forkSourceIds),
@@ -7170,6 +7217,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ),
           ),
         ),
+        selectShellAgentWatchRows(),
       ]);
       return {
         targetThreadIds,
@@ -7180,6 +7228,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         sequenceRows,
         providerThreadRows,
         pendingTurnItemRows,
+        watchRows,
       };
     });
 
@@ -7192,14 +7241,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sequenceRows,
       providerThreadRows,
       pendingTurnItemRows,
+      watchRows,
     }: Effect.Success<ReturnType<typeof readShellSnapshotRows>>) {
       const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
         runRows,
         itemCountRows,
       });
       const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
-      const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-        yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+      const { providerThreadsByThreadId, pendingTurnItemsByThreadId, agentWatchesByThreadId } =
+        yield* pendingBackgroundDataByThreadId({
+          providerThreadRows,
+          pendingTurnItemRows,
+          watchRows,
+        });
       const states = yield* Effect.forEach(threadRows, (row) =>
         shellThreadStateFromRow({
           row,
@@ -7208,6 +7262,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           shellItemCountsByThreadId,
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
+          agentWatchesByThreadId,
         }),
       );
       const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
@@ -7275,7 +7330,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const getAgentAwarenessSnapshot = Effect.fn("ProjectionStore.getAgentAwarenessSnapshot")(
       function* (threadId?: ThreadId) {
-        const { threadRows, providerThreadRows, pendingTurnItemRows, sequenceRows } =
+        const { threadRows, providerThreadRows, pendingTurnItemRows, watchRows, sequenceRows } =
           yield* sql.withTransaction(
             Effect.gen(function* () {
               const threadRows = yield* selectShellThreadRows(
@@ -7300,11 +7355,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               SELECT MAX(sequence) AS snapshot_sequence FROM orchestration_events
               WHERE application_event_version = 2 AND aggregate_kind = 'thread'
             `;
-              return { threadRows, providerThreadRows, pendingTurnItemRows, sequenceRows };
+              const watchRows = yield* selectShellAgentWatchRows();
+              return {
+                threadRows,
+                providerThreadRows,
+                pendingTurnItemRows,
+                watchRows,
+                sequenceRows,
+              };
             }),
           );
-        const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-          yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+        const { providerThreadsByThreadId, pendingTurnItemsByThreadId, agentWatchesByThreadId } =
+          yield* pendingBackgroundDataByThreadId({
+            providerThreadRows,
+            pendingTurnItemRows,
+            watchRows,
+          });
         const threads = yield* Effect.forEach(threadRows, (row) =>
           shellThreadStateFromRow({
             row,
@@ -7314,6 +7380,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             shellItemCountsByThreadId: new Map(),
             providerThreadsByThreadId,
             pendingTurnItemsByThreadId,
+            agentWatchesByThreadId,
           }).pipe(
             Effect.map((state): AgentAwarenessThread => ({
               id: state.thread.id,
@@ -7426,6 +7493,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             OR EXISTS (
               SELECT 1 FROM json_each(t.payload_json, '$.pullRequests') link
               WHERE json_type(link.value, '$.watch') IS NOT NULL
+            )
+            OR EXISTS (
+              SELECT 1 FROM agent_watches watch
+              WHERE watch.watcher_thread_id = t.thread_id AND watch.state <> 'closed'
             )
           ) AS may_be_live
         FROM orchestration_v2_projection_threads t
@@ -7582,6 +7653,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               shellItemCountRows,
               providerThreadRows,
               pendingTurnItemRows,
+              watchRows,
             ] = yield* Effect.all([
               forkSourceIds.length === 0
                 ? Effect.succeed([] as ReadonlyArray<ShellRunRow>)
@@ -7599,14 +7671,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     : [],
                 ),
               ),
+              selectShellAgentWatchRows(),
             ]);
             const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
               runRows,
               itemCountRows,
             });
             const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
-            const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-              yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+            const {
+              providerThreadsByThreadId,
+              pendingTurnItemsByThreadId,
+              agentWatchesByThreadId,
+            } = yield* pendingBackgroundDataByThreadId({
+              providerThreadRows,
+              pendingTurnItemRows,
+              watchRows,
+            });
 
             const states = yield* Effect.forEach([...rowsByThreadId.values()], (row) =>
               shellThreadStateFromRow({
@@ -7616,6 +7696,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 shellItemCountsByThreadId,
                 providerThreadsByThreadId,
                 pendingTurnItemsByThreadId,
+                agentWatchesByThreadId,
               }),
             );
             const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));

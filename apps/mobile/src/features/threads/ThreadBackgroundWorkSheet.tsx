@@ -23,6 +23,19 @@ const KIND_LABELS = {
   background_task: "Background task",
 } as const;
 
+function formatWaitTime(iso: string): string {
+  const date = new Date(iso);
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return sameDay
+    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+}
+
 type BackgroundWorkTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
 
 export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<BackgroundWorkTarget>) {
@@ -33,6 +46,7 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
     environmentThreadShells.threadShellAtom(scopeThreadRef(target.environmentId, target.threadId)),
   );
   const presentation = presentPendingBackgroundWork(thread?.pendingBackgroundTasks ?? []);
+  const checkInAt = thread?.waitCheckInAt ?? null;
   const openThread = (threadId: ThreadId) => {
     void Haptics.selectionAsync();
     // A thread replaces the leaf sheet so workspace back navigation still works.
@@ -53,9 +67,16 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
           Nothing running in the background.
         </Text>
       ) : (
-        presentation.items.map((item) => (
-          <BackgroundWorkRow key={item.taskId} item={item} onOpen={openThread} />
-        ))
+        <>
+          {presentation.waiting && checkInAt !== null ? (
+            <Text className="pt-3 text-xs text-foreground-muted">
+              If nothing wakes this thread first, T3 checks in at {formatWaitTime(checkInAt)}.
+            </Text>
+          ) : null}
+          {presentation.items.map((item) => (
+            <BackgroundWorkRow key={item.taskId} item={item} onOpen={openThread} />
+          ))}
+        </>
       )}
     </ScrollView>
   );
@@ -85,7 +106,15 @@ function BackgroundWorkRow(props: {
       />
       <View className="min-w-0 flex-1">
         <Text className="font-t3-medium text-sm text-foreground">{item.label}</Text>
-        <Text className="text-xs text-foreground-muted">{KIND_LABELS[item.kind]}</Text>
+        <Text className="text-xs text-foreground-muted">
+          {[
+            KIND_LABELS[item.kind],
+            item.startedAt === undefined ? null : `since ${formatWaitTime(item.startedAt)}`,
+            item.expectedBy === undefined ? null : `expected by ${formatWaitTime(item.expectedBy)}`,
+          ]
+            .filter((part) => part !== null)
+            .join(" · ")}
+        </Text>
       </View>
       {childThreadId === undefined ? null : (
         <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />

@@ -16,8 +16,10 @@ import {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -38,6 +40,7 @@ import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentWatches from "./AgentWatches.ts";
+import * as WaitWatchdog from "./WaitWatchdog.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const driver = ProviderDriverKind.make("codex");
@@ -170,7 +173,14 @@ function makeAdapter(
               ]);
             }),
           steerTurn: () => Effect.void,
-          interruptTurn: unused,
+          // A gated turn ends when stopped, like a provider that honors Stop.
+          interruptTurn: ({ providerThread }) => {
+            const gate =
+              providerThread.appThreadId === null
+                ? undefined
+                : gates.get(providerThread.appThreadId);
+            return gate === undefined ? Effect.void : Deferred.succeed(gate, undefined);
+          },
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: unused,
           rollbackThread: unused,
@@ -300,17 +310,41 @@ const awaitNotifications = (threadId: ThreadId, count: number) =>
     return Array.from(messages);
   });
 
-const awaitTargetFinished = Effect.gen(function* () {
-  const threads = yield* ThreadManagementService.ThreadManagementService;
-  yield* threads.streamStoredEventsFrom({ threadId: targetId, afterSequence: 0 }).pipe(
-    Stream.filter(
-      (stored) =>
-        stored.event.type === "run.updated" &&
-        ThreadManagementService.isTerminalRunStatus(stored.event.payload.status),
-    ),
-    Stream.runHead,
-  );
-});
+const awaitRunFinished = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* threads.streamStoredEventsFrom({ threadId, afterSequence: 0 }).pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "run.updated" &&
+          ThreadManagementService.isTerminalRunStatus(stored.event.payload.status),
+      ),
+      Stream.runHead,
+    );
+  });
+
+const awaitTargetFinished = awaitRunFinished(targetId);
+
+/** Runs `effect` with the wall clock moved forward, so a sweep sees time that has not passed. */
+const later =
+  (offset: Duration.Input) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const clock = yield* Clock.Clock;
+      const shiftMs = Duration.toMillis(Duration.fromInputUnsafe(offset));
+      const shiftNs = BigInt(shiftMs) * 1_000_000n;
+      return yield* effect.pipe(
+        Effect.provideService(Clock.Clock, {
+          currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe() + shiftMs,
+          currentTimeMillis: Effect.map(clock.currentTimeMillis, (ms) => ms + shiftMs),
+          currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe() + shiftNs,
+          currentTimeNanos: Effect.map(clock.currentTimeNanos, (ns) => ns + shiftNs),
+          monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+          monotonicTimeNanos: clock.monotonicTimeNanos,
+          sleep: (duration) => clock.sleep(duration),
+        }),
+      );
+    });
 
 const notificationMessages = (threadId: ThreadId) =>
   Effect.gen(function* () {
@@ -412,66 +446,71 @@ describe("thread watches", () => {
     ),
   );
 
-  it.live("close without waking when the watcher is archived or the deadline passes", () =>
-    withRuntime(({ send, createThread }) =>
-      Effect.gen(function* () {
-        yield* send(targetId, "long");
-        const expired = yield* Effect.gen(function* () {
-          const watches = yield* AgentWatches.make;
-          const past = DateTime.formatIso(
-            DateTime.subtractDuration(yield* DateTime.now, "1 minute"),
-          );
-          return yield* watches.create({
-            watcherThreadId: watcherId,
-            source: { type: "thread", threadId: targetId },
-            deadline: past,
-          });
-        }).pipe(Effect.scoped);
-        assert.deepInclude(expired, { state: "closed", closeReason: "deadline" });
-
-        const otherWatcher = ThreadId.make("thread:other-watcher");
-        yield* createThread(otherWatcher, "Other coordinator");
-        const pending = yield* Effect.scoped(
-          Effect.gen(function* () {
+  it.live(
+    "wake once when the deadline passes, and close quietly when the watcher is archived",
+    () =>
+      withRuntime(({ send, createThread }) =>
+        Effect.gen(function* () {
+          yield* send(targetId, "long");
+          const expired = yield* Effect.gen(function* () {
             const watches = yield* AgentWatches.make;
-            const later = yield* watches.create({
-              watcherThreadId: otherWatcher,
+            const past = DateTime.formatIso(
+              DateTime.subtractDuration(yield* DateTime.now, "1 minute"),
+            );
+            return yield* watches.create({
+              watcherThreadId: watcherId,
               source: { type: "thread", threadId: targetId },
-              deadline: "30 minutes",
+              deadline: past,
             });
-            assert.deepInclude(later, { state: "open" });
-            const invalid = yield* watches
-              .create({
+          }).pipe(Effect.scoped);
+          assert.deepInclude(expired, { state: "closed", closeReason: "deadline" });
+          const [overdue, ...rest] = yield* notificationMessages(watcherId);
+          assert.lengthOf(rest, 0);
+          assert.deepInclude(overdue?.notification, { outcome: "failed" });
+
+          const otherWatcher = ThreadId.make("thread:other-watcher");
+          yield* createThread(otherWatcher, "Other coordinator");
+          const pending = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const watches = yield* AgentWatches.make;
+              const later = yield* watches.create({
                 watcherThreadId: otherWatcher,
                 source: { type: "thread", threadId: targetId },
-                deadline: "soon",
-              })
-              .pipe(Effect.flip);
-            assert.equal(invalid._tag, "AgentWatchInputError");
-            return later;
-          }),
-        );
+                deadline: "30 minutes",
+              });
+              assert.deepInclude(later, { state: "open" });
+              const invalid = yield* watches
+                .create({
+                  watcherThreadId: otherWatcher,
+                  source: { type: "thread", threadId: targetId },
+                  deadline: "soon",
+                })
+                .pipe(Effect.flip);
+              assert.equal(invalid._tag, "AgentWatchInputError");
+              return later;
+            }),
+          );
 
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        yield* orchestrator.dispatch({
-          type: "thread.archive",
-          commandId: CommandId.make("command:other-watcher:archive"),
-          threadId: otherWatcher,
-        });
-        const restarted = yield* AgentWatches.make;
-        yield* restarted.start;
-        const [archived] = yield* restarted.list({
-          watcherThreadId: otherWatcher,
-          includeClosed: true,
-        });
-        assert.deepInclude(archived, {
-          watchId: pending.watchId,
-          state: "closed",
-          closeReason: "watcher_closed",
-        });
-        assert.lengthOf(yield* notificationMessages(otherWatcher), 0);
-      }),
-    ),
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          yield* orchestrator.dispatch({
+            type: "thread.archive",
+            commandId: CommandId.make("command:other-watcher:archive"),
+            threadId: otherWatcher,
+          });
+          const restarted = yield* AgentWatches.make;
+          yield* restarted.start;
+          const [archived] = yield* restarted.list({
+            watcherThreadId: otherWatcher,
+            includeClosed: true,
+          });
+          assert.deepInclude(archived, {
+            watchId: pending.watchId,
+            state: "closed",
+            closeReason: "watcher_closed",
+          });
+          assert.lengthOf(yield* notificationMessages(otherWatcher), 0);
+        }),
+      ),
   );
 });
 
@@ -538,4 +577,87 @@ describe("command watches", () => {
       }),
     ),
   );
+});
+
+describe("wait watchdog", () => {
+  it.live("checks in once on a quiet thread whose wait ran past its time", () =>
+    withRuntime(({ send }) =>
+      Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        yield* send(watcherId, "plan");
+        yield* awaitRunFinished(watcherId);
+        // A command watch, so no running thread can trip the stall rule during the late sweeps.
+        const watch = yield* (yield* AgentWatches.make).create({
+          watcherThreadId: watcherId,
+          source: { type: "command", command: "sleep 600" },
+          label: "Login fix",
+        });
+
+        const shell = yield* threads.getThreadShell(watcherId);
+        assert.deepInclude(shell?.pendingBackgroundTasks?.[0], {
+          taskId: `watch:${watch.watchId}`,
+          kind: "monitor",
+          awaited: true,
+          description: "Login fix",
+          startedAt: watch.createdAt,
+        });
+        const watchdog = yield* WaitWatchdog.make;
+        yield* watchdog.sweep;
+        assert.lengthOf(yield* notificationMessages(watcherId), 0);
+
+        yield* watchdog.sweep.pipe(later("31 minutes"));
+        const [checkIn] = yield* awaitNotifications(watcherId, 1);
+        yield* watchdog.sweep.pipe(later("31 minutes"));
+        assert.lengthOf(yield* notificationMessages(watcherId), 1);
+        assert.deepInclude(checkIn?.notification, { source: { kind: "system" } });
+        assert.include(checkIn?.notification?.summary, "Login fix");
+        assert.include(checkIn?.text, `- Login fix (since ${watch.createdAt})`);
+      }),
+    ),
+  );
+
+  it.live("stops a turn that shows no activity and runs the notice queued behind it", () =>
+    withRuntime(({ send }) =>
+      Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        yield* send(targetId, "long");
+        yield* threads.streamStoredEventsFrom({ threadId: targetId, afterSequence: 0 }).pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" && stored.event.payload.status === "running",
+          ),
+          Stream.runHead,
+        );
+        const watchdog = yield* WaitWatchdog.make;
+        yield* watchdog.sweep.pipe(later("19 minutes"));
+        assert.lengthOf(yield* notificationMessages(targetId), 0);
+
+        yield* watchdog.sweep.pipe(later("21 minutes"));
+        yield* awaitTargetFinished;
+        const [notice] = yield* awaitNotifications(targetId, 1);
+        assert.deepInclude(notice?.notification, {
+          source: { kind: "system" },
+          outcome: "failed",
+        });
+        const { runs } = yield* threads.getThreadRecords(targetId, ["runs"]);
+        assert.isTrue(runs.some((run) => run.userMessageId === notice?.id));
+      }),
+    ),
+  );
+
+  it.each([
+    ["a quiet run under 20 minutes", 19, null, "wait"],
+    ["a run quiet for 20 minutes", 21, null, "stop"],
+    ["a run stopped a minute ago", 1, 1, "wait"],
+    ["a run that ignored a Stop", 3, 3, "force-stop"],
+    ["a busy run that ignored a Stop", 0, 3, "force-stop"],
+  ] as const)("acts on %s: %s", (_case, quietMinutes, minutesSinceStop, action) => {
+    assert.equal(
+      WaitWatchdog.stalledRunAction({
+        quietMs: quietMinutes * 60_000,
+        sinceStopMs: minutesSinceStop === null ? null : minutesSinceStop * 60_000,
+      }),
+      action,
+    );
+  });
 });

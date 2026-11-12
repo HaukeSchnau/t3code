@@ -1,3 +1,4 @@
+import { waitCheckInLabel } from "@t3tools/client-runtime/state/thread-execution";
 import type { SubagentPillSegment } from "@t3tools/client-runtime/state/thread-subagents";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { GlassContainer, GlassView } from "expo-glass-effect";
@@ -26,6 +27,7 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ControlPill } from "../../components/ui/ControlPill";
+import { useNowMinuteMs } from "../../lib/clock";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { BrowserPreviewButton } from "../browser/browser-preview-button";
 import { DevicePreviewButton } from "../devices/device-preview-button";
@@ -522,6 +524,9 @@ function FloatingStatusLabel(props: {
         />
         <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
           {props.status.label}
+          {props.status.checkInAt === null ? null : (
+            <CheckInSuffix checkInAt={props.status.checkInAt} />
+          )}
         </Text>
       </StatusLabelRow>
     );
@@ -634,6 +639,15 @@ function StatusLabelRow(props: {
         </View>
       )}
     </Animated.View>
+  );
+}
+
+function CheckInSuffix(props: { readonly checkInAt: string }) {
+  const nowMs = useNowMinuteMs();
+  return (
+    <Text className="text-xs text-foreground-muted">
+      {` · ${waitCheckInLabel(props.checkInAt, nowMs)}`}
+    </Text>
   );
 }
 

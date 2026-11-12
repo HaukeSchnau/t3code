@@ -4893,7 +4893,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     ["completed", "shell", false],
     ["waiting", "shell", false],
     ["cancelled", "shell", false],
-    ["completed", "watchdog-monitor", false],
+    // Fork: a stopped monitor wakes its thread (patches/thread-waits.md).
+    ["completed", "watchdog-monitor", true],
     ["failed", "awaited-monitor", false],
     ["completed", "awaited-monitor", true],
     ["waiting", "awaited-monitor", true],

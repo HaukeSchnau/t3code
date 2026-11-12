@@ -25,6 +25,7 @@ import {
   formatWorkingDurationLabel,
   resolveThreadProviderStack,
 } from "@t3tools/client-runtime/state/models";
+import { presentPendingBackgroundWork } from "@t3tools/client-runtime/state/thread-execution";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
@@ -74,7 +75,13 @@ import { useNowSecond } from "../../hooks/useNowSecond";
 import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampFormat";
+import {
+  formatDayAwareTimestamp,
+  formatRelativeTimeLabel,
+  formatUpcomingTimestamp,
+  parseTimestampDate,
+} from "../../timestampFormat";
+import { usePrimarySettings } from "../../hooks/useSettings";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
@@ -266,6 +273,8 @@ function SidebarThreadTooltip({
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
+  const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const waits = presentPendingBackgroundWork(thread.pendingBackgroundTasks);
   return (
     <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
       <ThreadHoverCard
@@ -334,6 +343,31 @@ function SidebarThreadTooltip({
             <ArrowRightLeftIcon className="size-3 shrink-0 stroke-muted-foreground" />
             <div className="min-w-0 truncate text-foreground/75">
               Handed off from {previousProviderNames.join(", ")}
+            </div>
+          </div>
+        ) : null}
+        {waits?.waiting ? (
+          <div className="flex min-w-0 items-start gap-2">
+            <CircleDotDashedIcon
+              aria-hidden
+              className="mt-0.5 size-3 shrink-0 stroke-muted-foreground"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-foreground/75">{waits.title}</div>
+              {waits.since !== null || thread.waitCheckInAt !== null ? (
+                <div className="text-muted-foreground">
+                  {[
+                    waits.since === null
+                      ? null
+                      : `Since ${formatDayAwareTimestamp(waits.since, timestampFormat)}`,
+                    thread.waitCheckInAt === null
+                      ? null
+                      : `next check-in ${formatUpcomingTimestamp(thread.waitCheckInAt, timestampFormat)}`,
+                  ]
+                    .filter((part) => part !== null)
+                    .join(" · ")}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

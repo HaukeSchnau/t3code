@@ -33,9 +33,10 @@ model whether a batch was worth a wake-up, is gone on purpose.
   seconds) fails the watch after 30 seconds of sustained overload. Exit closes the watch with one
   last wake-up carrying the exit status. Command watches run without approval, so the watching
   thread must be full-access.
-- An optional deadline, an ISO date-time or a duration such as `30 minutes`, closes the watch
-  without a wake-up. Cancelling, or archiving or deleting the watching thread, closes it the same
-  way and stops the command.
+- An optional deadline, an ISO date-time or a duration such as `30 minutes`, is when the agent
+  expects the watch to be done. Passing it closes the watch with one wake-up and stops a command
+  ([thread waits](thread-waits.md)). Cancelling, or archiving or deleting the watching thread,
+  closes it without a wake-up and stops the command.
 - Each wake-up is one `message.dispatch` into the watching thread with
   `notification.source.kind: "monitor"`, `createdBy: "agent"`, `creationSource: "server"` and
   `dispatchMode: queue_after_active`. It starts an idle thread and queues behind an active turn.
@@ -65,9 +66,10 @@ Server shutdown interrupts watch fibers without closing their rows. A SIGTERM/SI
 shutdown first, because a service manager can kill the command before the server interrupts it, and
 that exit must not close the watch.
 
-No client changes are needed. Web and mobile render `monitor` notifications as a work row with an
-eye icon and the summary; the web inspector also shows the output in `detail`. The feature works the
-same for every provider with access to the `t3-code` MCP server.
+Web and mobile render `monitor` notifications as a work row with an eye icon and the summary; the
+web inspector also shows the output in `detail`. Open watches count as waits in the thread shell,
+auto-settle and check-ins ([thread waits](thread-waits.md)). The feature works the same for every
+provider with access to the `t3-code` MCP server.
 
 ## Differences from the v1 fork
 

@@ -1,5 +1,6 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { isAgentWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import type { Dispatch } from "react";
 import type { ComposerThreadTarget } from "../../composerDraftStore";
 import type { ComposerHandleRef } from "../../composerHandleContext";
@@ -428,7 +429,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       return;
     const request: BackgroundWorkStopRequest = {
       threadKey: `${environmentId}:${activeThread.id}`,
-      taskIds: pendingBackgroundTasks.map((task) => task.taskId),
+      // Stop cannot end a `t3_watch` watch; its agent cancels it.
+      taskIds: pendingBackgroundTasks.flatMap((task) =>
+        isAgentWatchTask(task) ? [] : [task.taskId],
+      ),
       retryAt: null,
     };
     setBackgroundWorkStops((current) => ({ ...current, [request.threadKey]: request }));
@@ -583,7 +587,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     threadDetailRef ? environmentThreadDetails.runStopAtom(threadDetailRef) : NO_RUN_STOP_ATOM,
   );
   // A background Stop matters only while that work is still pending.
-  const runStop = anyRunStop?.background && activeBackgroundTasks.length === 0 ? null : anyRunStop;
+  const runStop =
+    anyRunStop?.background && !activeBackgroundTasks.some((task) => !isAgentWatchTask(task))
+      ? null
+      : anyRunStop;
   const runStopNow =
     activeThread && runStop !== null
       ? runStopNowItem({
@@ -600,6 +607,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         threadId: activeThread.id,
         tasks: activeBackgroundTasks,
         turnItems,
+        checkInAt: activeThreadShell?.waitCheckInAt ?? null,
         stopDisabled: !canOperateThread || isStoppingBackgroundWork,
         stopping: isStoppingBackgroundWork,
         onStop: handleStopBackgroundWorkStable,

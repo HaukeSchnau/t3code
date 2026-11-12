@@ -73,6 +73,7 @@ import {
   type ProviderSubagentStatus,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
+import { isAgentWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { isProviderNativeSubagentThread } from "@t3tools/contracts";
 import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
@@ -615,7 +616,8 @@ function ThreadDetailBody(
   );
   // A background Stop matters only while that work is still pending.
   const runStop =
-    anyRunStop?.background && props.selectedThread.pendingBackgroundTasks.length === 0
+    anyRunStop?.background &&
+    !props.selectedThread.pendingBackgroundTasks.some((task) => !isAgentWatchTask(task))
       ? null
       : anyRunStop;
   const forceStopThread = useAtomCommand(orchestrationEnvironment.forceStopThread, {
@@ -707,7 +709,9 @@ function ThreadDetailBody(
       threadKey: selectedThreadKey,
       taskIds:
         action === "stop"
-          ? props.selectedThread.pendingBackgroundTasks.map((task) => task.taskId)
+          ? props.selectedThread.pendingBackgroundTasks.flatMap((task) =>
+              isAgentWatchTask(task) ? [] : [task.taskId],
+            )
           : [],
       retryAt: null,
     };
@@ -852,6 +856,7 @@ function ThreadDetailBody(
           .map((item) => item.label)
           .join(", ")}`,
         waiting: pendingBackgroundWork.waiting,
+        checkInAt: pendingBackgroundWork.waiting ? props.selectedThread.waitCheckInAt : null,
         onPress: () => {
           Keyboard.dismiss();
           navigation.navigate("ThreadBackgroundWork", {
@@ -859,12 +864,14 @@ function ThreadDetailBody(
             threadId: props.selectedThread.id,
           });
         },
-        action: {
-          label: statusPending ? "Stopping..." : "Stop",
-          accessibilityLabel: "Stop background work",
-          disabled: !props.canOperateThread || statusPending,
-          onPress: () => void runStatusAction("stop"),
-        },
+        action: props.selectedThread.pendingBackgroundTasks.every(isAgentWatchTask)
+          ? null
+          : {
+              label: statusPending ? "Stopping..." : "Stop",
+              accessibilityLabel: "Stop background work",
+              disabled: !props.canOperateThread || statusPending,
+              onPress: () => void runStatusAction("stop"),
+            },
       };
     }
     if (contentPresentationKind === "ready" && (lifecycleSnoozed || settled || woke)) {

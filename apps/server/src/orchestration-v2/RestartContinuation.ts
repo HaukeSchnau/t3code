@@ -21,7 +21,7 @@ import {
   cancelledRosterTaskWork,
   cancelledTurnItemWork,
   continuationFailedBeforePrompt,
-  isAwaitedWork,
+  wakesAfterRestart,
   isRestartContinuationSource,
   cancelledBeforeStart,
   isRestartNoteSource,
@@ -97,7 +97,7 @@ function hasOpenAwaitedWork(
     const work = cancelledTurnItemWork(item);
     return (
       work !== undefined &&
-      isAwaitedWork(work) &&
+      wakesAfterRestart(work) &&
       awaitingProviderThreadId(item, projection.runs) === providerThread.id
     );
   });
@@ -105,7 +105,7 @@ function hasOpenAwaitedWork(
     openItem ||
     (providerThread.ownerNodeId === null &&
       (providerThread.pendingBackgroundTasks ?? []).some((task) =>
-        isAwaitedWork(cancelledRosterTaskWork(task)),
+        wakesAfterRestart(cancelledRosterTaskWork(task)),
       ))
   );
 }

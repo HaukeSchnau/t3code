@@ -1299,7 +1299,13 @@ it.effect("SQL shells use the latest subagent owner for duplicate provider-threa
       }
     });
     const owned = [
-      { taskId: nativeTaskId, description: item.title, kind: "subagent", providerInstanceId },
+      {
+        taskId: nativeTaskId,
+        description: item.title,
+        kind: "subagent",
+        providerInstanceId,
+        ...(item.startedAt === null ? {} : { startedAt: DateTime.formatIso(item.startedAt) }),
+      },
     ];
     yield* assertOwners(threadId, owned);
     yield* assertOwners(otherThreadId, owned);
@@ -8701,6 +8707,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           description: "Watching pull request #7",
           kind: "monitor",
           awaited: true,
+          startedAt: DateTime.formatIso(at),
         },
       ]);
       assert.equal(yield* phase, "running");
