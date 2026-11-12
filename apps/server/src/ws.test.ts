@@ -150,6 +150,7 @@ import * as JjThreadWork from "./jj/JjThreadWork.ts";
 import * as JjTurnService from "./jj/JjTurnService.ts";
 import * as JjWorkflow from "./jj/JjWorkflow.ts";
 import * as SkillPacks from "./skills/SkillPacks.ts";
+import * as FollowUps from "./followUps/FollowUps.ts";
 import * as ManagedWorkspaces from "./workspace/ManagedWorkspaces.ts";
 import {
   layerWsRpc,
@@ -787,6 +788,9 @@ const UpstreamWsRpcGroup = WsRpcGroup.omit(
   "skillPacks.subscribe",
   "skillPacks.setThreadPacks",
   "skillPacks.setProjectDefault",
+  "followUps.subscribe",
+  "followUps.save",
+  "followUps.history",
   "artifacts.readMarkdown",
   "vcs.jj.runAction",
   "vcs.jj.assignPaths",
@@ -870,6 +874,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(JjTurnService.JjTurnService)({}),
   Layer.mock(JjWorkflow.JjWorkflow)({}),
   Layer.mock(SkillPacks.SkillPacks)({ catalog: null }),
+  Layer.mock(FollowUps.FollowUps)({}),
   Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({}),
   Layer.mock(UsageService.UsageService)({}),
   Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),

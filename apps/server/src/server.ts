@@ -87,6 +87,8 @@ import * as McpToolDirectory from "./mcp/McpToolDirectory.ts";
 import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
 import * as AgentWatches from "./watches/AgentWatches.ts";
 import * as WaitWatchdog from "./watches/WaitWatchdog.ts";
+import * as FollowUps from "./followUps/FollowUps.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
@@ -731,7 +733,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  Layer.provideMerge(AgentWatches.layer),
+  Layer.provideMerge(
+    Layer.merge(AgentWatches.layer, FollowUps.layer.pipe(Layer.provide(Scheduler.layer))),
+  ),
   Layer.provideMerge(layerOrchestrationApplication),
   // References read by request fibers too (revert admission, session opens),
   // so they join the runtime context rather than one layer's construction.

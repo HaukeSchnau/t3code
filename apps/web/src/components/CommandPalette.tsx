@@ -70,6 +70,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  ListTodoIcon,
   MessageSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
@@ -1636,6 +1637,17 @@ function OpenCommandPaletteDialog(props: {
             ? paletteRouteTarget.threadRef.environmentId
             : null),
       );
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:follow-ups",
+    searchTerms: ["follow-ups", "follow up", "later", "todo", "reminders", "back now"],
+    title: "Open follow-ups",
+    icon: <ListTodoIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/follow-ups" });
     },
   });
 

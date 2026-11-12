@@ -4,6 +4,7 @@ import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
+import type { InboxFollowUp } from "../../state/follow-ups";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
@@ -46,6 +47,7 @@ function observeInbox(
 export function useThreadListV2(input: {
   readonly threads: LayoutInput["threads"];
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly followUps: ReadonlyArray<InboxFollowUp>;
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly searchQuery: string;
@@ -164,6 +166,7 @@ export function useThreadListV2(input: {
               ),
           ),
         ),
+        followUps: input.followUps,
       }),
     [
       input.pendingOrder,
@@ -187,6 +190,7 @@ export function useThreadListV2(input: {
       isListed,
       unloadedCount,
       scopes,
+      input.followUps,
     ],
   );
   useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);
@@ -214,6 +218,7 @@ export function useThreadListV2(input: {
       buildThreadListV2ListItems({
         items: layout.items,
         pendingTasks,
+        followUpSlots: layout.followUpSlots,
         workingCount: layout.workingCount,
         workingShelfExpanded: input.workingShelfExpanded,
         workingShelfHeaderIndex: layout.workingShelfHeaderIndex,

@@ -1,5 +1,5 @@
 import { attachSidebarTree } from "../lib/sidebarTree";
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import { type EnvironmentId, type FollowUpId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
   dropThreadContext,
@@ -80,7 +80,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { type AnyRouter, useRouter } from "@tanstack/react-router";
+import { type AnyRouter, useLocation, useRouter } from "@tanstack/react-router";
 
 import {
   isAtomCommandInterrupted,
@@ -150,6 +150,7 @@ import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
+import { type InboxFollowUp, useInboxFollowUps } from "../state/followUps";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
@@ -198,6 +199,8 @@ import {
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
   sidebarThreadKeyAtY,
+  inboxReturnTime,
+  mergeInboxFollowUps,
   sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
   sortThreadsForSidebar,
@@ -264,6 +267,7 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { SidebarFollowUpRow } from "./sidebar/SidebarFollowUpRow";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -333,6 +337,10 @@ const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 
 const inboxReturns = createInboxReturnTracker();
+const INBOX_RETURN_TIME = {
+  thread: (thread: EnvironmentThreadShell) => inboxReturnTime(thread, inboxReturns.returnedAt),
+  followUp: (row: InboxFollowUp) => row.returnedAtMs,
+};
 
 type SidebarOptimisticDrop = {
   readonly key: string;
@@ -381,9 +389,11 @@ function resolveDraggedOrders(input: {
   readonly threadByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   readonly settledThreads: readonly EnvironmentThreadShell[];
   readonly activeThreads: readonly EnvironmentThreadShell[];
+  readonly inboxFollowUps: readonly InboxFollowUp[];
   readonly workingShelfEnabled: boolean;
 }): typeof NO_DRAGGED_ORDERS {
-  const { drag, threadByKey, settledThreads, activeThreads, workingShelfEnabled } = input;
+  const { drag, threadByKey, settledThreads, activeThreads, inboxFollowUps, workingShelfEnabled } =
+    input;
   const thread = threadByKey.get(drag.activeKey);
   if (thread === undefined) return NO_DRAGGED_ORDERS;
   const others = (list: readonly EnvironmentThreadShell[]) =>
@@ -394,10 +404,14 @@ function resolveDraggedOrders(input: {
       applySidebarThreadDrop(thread, "settled", drag.occurredAt),
     ]).map(threadShellKey),
     activeOrder: workingShelfEnabled
-      ? sortInboxThreadsByReturn(
-          [...others(activeThreads), applySidebarThreadDrop(thread, "active", drag.occurredAt)],
-          inboxReturns.returnedAt,
-        ).map(threadShellKey)
+      ? mergeInboxFollowUps(
+          sortInboxThreadsByReturn(
+            [...others(activeThreads), applySidebarThreadDrop(thread, "active", drag.occurredAt)],
+            inboxReturns.returnedAt,
+          ),
+          inboxFollowUps,
+          INBOX_RETURN_TIME,
+        ).map((entry) => ("followUp" in entry ? entry.key : threadShellKey(entry)))
       : undefined,
   };
 }
@@ -1929,6 +1943,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
+  const inboxFollowUps = useInboxFollowUps();
+  const inboxFollowUpByKey = new Map(inboxFollowUps.map((row) => [row.key, row] as const));
+  const routeFollowUpId = useLocation({
+    select: (location) => (location.pathname === "/follow-ups" ? location.search.id : undefined),
+  });
+  const openFollowUp = (followUpId: FollowUpId) => {
+    if (isMobile) setOpenMobile(false);
+    void router.navigate({ to: "/follow-ups", search: { id: followUpId } });
+  };
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
@@ -1945,7 +1968,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         activeThreads.length +
         workingThreads.length +
         snoozedThreads.length +
-        settledCount ===
+        settledCount +
+        inboxFollowUps.length ===
         0
     ) {
       return [];
@@ -1954,7 +1978,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    // Folders keep their own order, so follow-ups sit above them there.
+    const activeRows = mergeInboxFollowUps(
+      activeThreads,
+      inboxFollowUps,
+      workingShelfEnabled ? INBOX_RETURN_TIME : null,
+    ).map((entry): SidebarListItem =>
+      "followUp" in entry
+        ? { kind: "followUp", key: entry.key }
+        : { kind: "thread", key: threadShellKey(entry), section: "active" },
+    );
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (workingThreads.length > 0) {
@@ -1973,7 +2006,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   })();
   // Preserve the list while streamed updates leave order unchanged to retain row memoization.
   const sidebarListItemsKey = sidebarListItemsFresh
-    .map((item) => (item.kind === "thread" ? item.section + ":" + item.key : item.marker))
+    .map((item) =>
+      item.kind === "thread"
+        ? item.section + ":" + item.key
+        : item.kind === "followUp"
+          ? item.key
+          : item.marker,
+    )
     .join("\n");
   const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
   const [sidebarListItemsKeyState, setSidebarListItemsKeyState] = useState(sidebarListItemsKey);
@@ -2037,6 +2076,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           threadByKey,
           settledThreads,
           activeThreads,
+          inboxFollowUps,
           workingShelfEnabled,
         });
   const sidebarSortingStrategy = createSidebarSortingStrategy({
@@ -3435,6 +3475,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           />
                         );
                       };
+                      const renderFollowUpRow = (key: string) => {
+                        const row = inboxFollowUpByKey.get(key);
+                        if (row === undefined || row.followUp.returnedAt === null) return null;
+                        return (
+                          <SidebarFollowUpRow
+                            key={key}
+                            sortableId={key}
+                            followUpId={row.followUp.id}
+                            title={row.followUp.title}
+                            returnedAt={row.followUp.returnedAt}
+                            timestampFormat={timestampFormat}
+                            isActive={routeFollowUpId === row.followUp.id}
+                            onOpen={openFollowUp}
+                          />
+                        );
+                      };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
@@ -3454,7 +3510,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
                         }
+                        if (item.kind === "followUp") {
+                          if (projectFolders === null) items.push(renderFollowUpRow(item.key));
+                          continue;
+                        }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
+                          for (const row of inboxFollowUps) items.push(renderFollowUpRow(row.key));
                           for (const folder of projectFolders) {
                             items.push(
                               <SidebarProjectFolderHeader

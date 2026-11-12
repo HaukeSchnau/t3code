@@ -69,6 +69,7 @@ import {
 } from "./commandPaletteItems";
 import { parseActiveThreadPath, type HardwareKeyboardCommand } from "./hardwareKeyboardCommands";
 import { threadJumpIndex } from "./threadKeyboardShortcuts";
+import { FOLLOW_UP_ICON } from "../follow-ups/followUpPresentation";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { openSettings } from "../settings/settings-navigation";
 import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
@@ -93,6 +94,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   appearance: "paintbrush",
   environments: "desktopcomputer",
   usage: "chart.bar.xaxis",
+  followUps: FOLLOW_UP_ICON,
   archive: "archivebox",
   files: "doc.text",
   terminal: "terminal",
@@ -331,6 +333,13 @@ export function CommandPalette(props: {
         title: "Scheduled tasks",
         searchTerms: ["schedule", "automations", "recurring"],
         run: () => openSettings(navigation, "SettingsScheduledTasks"),
+      },
+      {
+        key: "followUps",
+        kind: "action",
+        title: "Follow-ups",
+        searchTerms: ["later", "todo", "inbox", "reminders"],
+        run: () => selectTab("followUps"),
       },
       {
         key: "usage",

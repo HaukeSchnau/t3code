@@ -6,7 +6,7 @@ import {
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import { DesktopBackendBootstrap, EnvironmentId, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -176,6 +176,10 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   remoteOpenHost: Config.String("T3CODE_REMOTE_OPEN_HOST").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  followUpHome: Config.String("T3CODE_FOLLOW_UP_HOME").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -533,6 +537,9 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     tailscaleServeEnabled,
     tailscaleServePort,
     remoteOpenHost: env.remoteOpenHost?.trim() || undefined,
+    ...(env.followUpHome?.trim()
+      ? { followUpHome: EnvironmentId.make(env.followUpHome.trim()) }
+      : {}),
   };
 
   return config;

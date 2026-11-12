@@ -18,6 +18,7 @@ import {
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import {
   createInboxReturnTracker,
+  inboxReturnTime,
   isThreadWorking,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
@@ -33,6 +34,7 @@ import { isListedThreadLineage, type EnvironmentId, type ProjectId } from "@t3to
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import type { MenuAction } from "@react-native-menu/menu";
 
+import type { InboxFollowUp } from "../../state/follow-ups";
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import type { ThreadMoveAvailability } from "./threadOrder";
 
@@ -360,8 +362,15 @@ export interface ThreadListV2Item {
   readonly isLast: boolean;
 }
 
+/** A returned follow-up listed in the inbox ahead of the thread item at `beforeIndex`. */
+export interface ThreadListV2FollowUpSlot {
+  readonly entry: InboxFollowUp;
+  readonly beforeIndex: number;
+}
+
 export interface ThreadListV2Layout {
   readonly items: ThreadListV2Item[];
+  readonly followUpSlots: ReadonlyArray<ThreadListV2FollowUpSlot>;
   readonly hiddenSettledCount: number;
   /** The settled rows the shelf may list, before its visible limit. */
   readonly listedSettledThreads: ReadonlyArray<EnvironmentThreadShell>;
@@ -399,6 +408,14 @@ export interface ThreadListV2PendingListItem {
   readonly showTrailingDivider: boolean;
 }
 
+export interface ThreadListV2FollowUpListItem {
+  readonly type: "v2-follow-up";
+  readonly key: string;
+  readonly entry: InboxFollowUp;
+  readonly timeLabel: string;
+  readonly showTrailingDivider: boolean;
+}
+
 export interface ThreadListV2WorkingShelfListItem {
   readonly type: "v2-working-shelf";
   readonly key: "v2-working-shelf";
@@ -427,6 +444,7 @@ export interface ThreadListV2SettledShelfListItem {
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
+  | ThreadListV2FollowUpListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
@@ -437,6 +455,7 @@ export function isThreadListV2ListItem(value: {
   return (
     value.type === "v2-thread" ||
     value.type === "v2-pending" ||
+    value.type === "v2-follow-up" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
     value.type === "v2-settled-shelf"
@@ -472,6 +491,14 @@ export function threadListV2ListItemsAreEqual(
         previous.key === item.key &&
         previous.pendingTask === item.pendingTask &&
         previous.showPendingDivider === item.showPendingDivider &&
+        previous.showTrailingDivider === item.showTrailingDivider
+      );
+    case "v2-follow-up":
+      return (
+        previous.type === "v2-follow-up" &&
+        previous.key === item.key &&
+        previous.entry.followUp === item.entry.followUp &&
+        previous.timeLabel === item.timeLabel &&
         previous.showTrailingDivider === item.showTrailingDivider
       );
     case "v2-working-shelf":
@@ -521,6 +548,7 @@ function resolveThreadListV2ItemTimeLabel(
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly followUpSlots?: ReadonlyArray<ThreadListV2FollowUpSlot>;
   readonly workingCount?: number;
   readonly workingShelfExpanded?: boolean;
   readonly workingShelfHeaderIndex?: number | null;
@@ -584,7 +612,20 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  const result: ThreadListV2ListItem[] = [...pendingItems, ...threadItems.slice(0, activeEnd)];
+  const head = threadItems.slice(0, activeEnd);
+  const followUpSlots = input.followUpSlots ?? [];
+  // Back to front, so each insertion leaves the earlier slots' indices valid.
+  for (let index = followUpSlots.length - 1; index >= 0; index -= 1) {
+    const { entry, beforeIndex } = followUpSlots[index]!;
+    head.splice(Math.min(beforeIndex, head.length), 0, {
+      type: "v2-follow-up",
+      key: `v2-follow-up:${entry.homeEnvironmentId}:${entry.followUp.id}`,
+      entry,
+      timeLabel: relativeTime(entry.followUp.returnedAt ?? entry.followUp.updatedAt),
+      showTrailingDivider: false,
+    });
+  }
+  const result: ThreadListV2ListItem[] = [...pendingItems, ...head];
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
     result.push({
@@ -617,13 +658,40 @@ export function buildThreadListV2ListItems(input: {
     result.push(...threadItems.slice(settledShelfHeaderIndex));
   }
   return result.map((entry, index) => {
-    if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
+    if (entry.type !== "v2-thread" && entry.type !== "v2-pending" && entry.type !== "v2-follow-up")
+      return entry;
     const next = result[index + 1];
     const showTrailingDivider =
-      next?.type === "v2-thread" || (next?.type === "v2-pending" && !next.showPendingDivider);
+      next?.type === "v2-thread" ||
+      next?.type === "v2-follow-up" ||
+      (next?.type === "v2-pending" && !next.showPendingDivider);
     return showTrailingDivider === entry.showTrailingDivider
       ? entry
       : { ...entry, showTrailingDivider };
+  });
+}
+
+/**
+ * Where returned follow-ups sit among the active threads: by when they came back while the inbox
+ * orders by return, otherwise above the hand-ordered rows.
+ */
+function placeInboxFollowUps(input: {
+  readonly followUps: ReadonlyArray<InboxFollowUp>;
+  readonly active: ReadonlyArray<EnvironmentThreadShell>;
+  readonly firstActiveIndex: number;
+  readonly returnedAt: ((thread: EnvironmentThreadShell) => number) | undefined;
+}): ReadonlyArray<ThreadListV2FollowUpSlot> {
+  const { returnedAt } = input;
+  const followUps = [...input.followUps].sort((left, right) =>
+    (right.followUp.returnedAt ?? "").localeCompare(left.followUp.returnedAt ?? ""),
+  );
+  let cursor = 0;
+  return followUps.map((entry) => {
+    if (returnedAt !== undefined) {
+      const at = parseTimestampMs(entry.followUp.returnedAt ?? "");
+      while (cursor < input.active.length && returnedAt(input.active[cursor]!) >= at) cursor += 1;
+    }
+    return { entry, beforeIndex: input.firstActiveIndex + cursor };
   });
 }
 
@@ -675,6 +743,8 @@ export function buildThreadListV2Items(input: {
   readonly isListedSettled?: (thread: EnvironmentThreadShell) => boolean;
   /** Settled threads in scope that are not local (older settled threads not loaded). */
   readonly unloadedSettledCount?: number;
+  /** Returned follow-ups, which join the inbox by when they came back. */
+  readonly followUps?: ReadonlyArray<InboxFollowUp>;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -786,6 +856,7 @@ export function buildThreadListV2Items(input: {
         wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
         isLast: index === results.length - 1,
       })),
+      followUpSlots: [],
       hiddenSettledCount: 0,
       listedSettledThreads: [],
       workingCount: 0,
@@ -860,6 +931,23 @@ export function buildThreadListV2Items(input: {
       isLast: false,
     });
   }
+  const followUpSlots = placeInboxFollowUps({
+    // A follow-up belongs to no project; an environment scope lists those that came from it.
+    followUps:
+      projectKeys === null
+        ? (input.followUps ?? []).filter(
+            (entry) =>
+              input.environmentId === null ||
+              (entry.followUp.origin?.environmentId ?? entry.homeEnvironmentId) ===
+                input.environmentId,
+          )
+        : [],
+    active: orderedActive,
+    firstActiveIndex: items.length,
+    returnedAt: workingShelfEnabled
+      ? (thread) => inboxReturnTime(thread, input.inboxReturnAt)
+      : undefined,
+  });
   for (const thread of orderedActive) {
     items.push({
       thread,
@@ -909,6 +997,7 @@ export function buildThreadListV2Items(input: {
   }
   return {
     items,
+    followUpSlots,
     hiddenSettledCount: Math.max(0, settledTotal - pagedSettled.length),
     listedSettledThreads: listedSettled,
     workingCount: orderedWorking.length,

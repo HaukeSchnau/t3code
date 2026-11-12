@@ -35,12 +35,30 @@ import {
 } from "./ui/dialog";
 
 type SnoozeChoice = { readonly snoozedUntil: string };
-type Request = { readonly resolve: (choice: SnoozeChoice | null) => void };
+/** The dialog's words, for things other than threads that come back to the inbox. */
+interface CustomSnoozeCopy {
+  readonly title: string;
+  readonly description: string;
+  readonly durationLabel: string;
+  readonly submitLabel: string;
+}
+const THREAD_SNOOZE_COPY: CustomSnoozeCopy = {
+  title: "Custom snooze",
+  description: "Choose when snoozed threads return to your inbox.",
+  durationLabel: "Snooze for",
+  submitLabel: "Snooze",
+};
+type Request = {
+  readonly copy: CustomSnoozeCopy;
+  readonly resolve: (choice: SnoozeChoice | null) => void;
+};
 const useRequest = create<{ request: Request | null }>(() => ({ request: null }));
 
-export function requestCustomSnooze(): Promise<SnoozeChoice | null> {
+export function requestCustomSnooze(
+  copy: CustomSnoozeCopy = THREAD_SNOOZE_COPY,
+): Promise<SnoozeChoice | null> {
   useRequest.getState().request?.resolve(null);
-  return new Promise((resolve) => useRequest.setState({ request: { resolve } }));
+  return new Promise((resolve) => useRequest.setState({ request: { copy, resolve } }));
 }
 
 function finish(choice: SnoozeChoice | null) {
@@ -59,10 +77,10 @@ export function CustomSnoozeDialogHost() {
   const request = useRequest((state) => state.request);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resolves any pending snooze request promise with null when the dialog host unmounts
   useEffect(() => () => finish(null), []);
-  return request ? <CustomSnoozeDialog /> : null;
+  return request ? <CustomSnoozeDialog copy={request.copy} /> : null;
 }
 
-function CustomSnoozeDialog() {
+function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
   const id = useId();
   const navigate = useNavigate();
   const [initial] = useState(() => new Date(Date.now() + 3_600_000));
@@ -103,8 +121,8 @@ function CustomSnoozeDialog() {
           }}
         >
           <DialogHeader>
-            <DialogTitle>Custom snooze</DialogTitle>
-            <DialogDescription>Choose when snoozed threads return to your inbox.</DialogDescription>
+            <DialogTitle>{copy.title}</DialogTitle>
+            <DialogDescription>{copy.description}</DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <div className="flex flex-col gap-4">
@@ -143,7 +161,7 @@ function CustomSnoozeDialog() {
                           })}
                           <CalendarIcon className="size-4 text-muted-foreground" />
                         </PopoverTrigger>
-                        <PopoverPopup align="start" aria-label="Choose snooze date">
+                        <PopoverPopup align="start" aria-label="Choose date">
                           <Calendar
                             mode="single"
                             required
@@ -188,7 +206,7 @@ function CustomSnoozeDialog() {
                         setError(null);
                       }}
                     >
-                      <Label htmlFor={`${id}-amount`}>Snooze for</Label>
+                      <Label htmlFor={`${id}-amount`}>{copy.durationLabel}</Label>
                       <NumberFieldGroup>
                         <NumberFieldDecrement aria-label="Decrease duration" />
                         <NumberFieldInput required />
@@ -245,7 +263,7 @@ function CustomSnoozeDialog() {
             <Button type="button" variant="outline" onClick={() => finish(null)}>
               Cancel
             </Button>
-            <Button type="submit">Snooze</Button>
+            <Button type="submit">{copy.submitLabel}</Button>
           </DialogFooter>
         </form>
       </DialogPopup>

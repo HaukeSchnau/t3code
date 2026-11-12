@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   SKILL_PACK_WS_METHODS,
+  FOLLOW_UP_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
 } from "@t3tools/contracts";
@@ -47,6 +48,9 @@ const RPC_AGGREGATES = {
   [SKILL_PACK_WS_METHODS.subscribe]: "skillPacks",
   [SKILL_PACK_WS_METHODS.setThreadPacks]: "skillPacks",
   [SKILL_PACK_WS_METHODS.setProjectDefault]: "skillPacks",
+  [FOLLOW_UP_WS_METHODS.subscribe]: "followUps",
+  [FOLLOW_UP_WS_METHODS.save]: "followUps",
+  [FOLLOW_UP_WS_METHODS.history]: "followUps",
   [WS_METHODS.serverProbe]: "server",
   [WS_METHODS.serverGetConfig]: "server",
   [WS_METHODS.serverGetNpmRelease]: "server",

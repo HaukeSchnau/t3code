@@ -18,6 +18,7 @@ import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/t
 import {
   CommandId,
   EnvironmentId,
+  FollowUpId,
   MessageId,
   OrchestrationV2ThreadShell,
   ProjectId,
@@ -29,6 +30,7 @@ import {
 import type { MenuAction } from "@react-native-menu/menu";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import type { InboxFollowUp } from "../../state/follow-ups";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { makeRawThreadShell, makeThreadShellFixture } from "../../test-fixtures";
 import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
@@ -1729,6 +1731,73 @@ describe("Working section beta", () => {
       tracker.observe(null);
       vi.useRealTimers();
     }
+  });
+
+  it("merges returned follow-ups into the inbox by when they came back", () => {
+    const returned = (id: string, returnedAt: string): InboxFollowUp => ({
+      homeEnvironmentId: environmentId,
+      followUp: {
+        id: FollowUpId.make(id),
+        title: id,
+        body: "",
+        status: "open",
+        dueAt: returnedAt,
+        condition: null,
+        tags: [],
+        links: [],
+        type: null,
+        fields: {},
+        origin: null,
+        pickedUpThread: null,
+        result: null,
+        mergedInto: null,
+        returnedAt,
+        createdBy: { kind: "agent", thread: null },
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: returnedAt,
+        closedAt: null,
+      },
+    });
+    const followUps = [
+      returned("back-earlier", "2026-06-01T02:30:00.000Z"),
+      returned("back-latest", "2026-06-01T05:00:00.000Z"),
+    ];
+    const rows = (input: Partial<Parameters<typeof buildThreadListV2Items>[0]>) => {
+      const layout = build({ followUps, ...input });
+      return buildThreadListV2ListItems({
+        items: layout.items,
+        pendingTasks: [],
+        followUpSlots: layout.followUpSlots,
+        workingCount: layout.workingCount,
+        workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+      }).map((item) =>
+        item.type === "v2-thread"
+          ? item.item.thread.id
+          : item.type === "v2-follow-up"
+            ? `${item.entry.followUp.id} divider:${item.showTrailingDivider}`
+            : item.type,
+      );
+    };
+
+    expect(rows({})).toEqual([
+      "pinned-working",
+      "back-latest divider:true",
+      "finished-late",
+      "back-earlier divider:true",
+      "asks-approval",
+      "finished-early",
+      "v2-working-shelf",
+    ]);
+    // Hand-ordered rows have no return time to merge by, so follow-ups lead them.
+    expect(rows({ workingShelfEnabled: false }).slice(0, 3)).toEqual([
+      "pinned-working",
+      "back-latest divider:true",
+      "back-earlier divider:true",
+    ]);
+    expect(build({ followUps, searchQuery: "finished" }).followUpSlots).toEqual([]);
+    expect(
+      build({ followUps, environmentId: EnvironmentId.make("environment-2") }).followUpSlots,
+    ).toEqual([]);
   });
 
   it("orders the inbox by the latest return this device observed", () => {

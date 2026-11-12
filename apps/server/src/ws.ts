@@ -102,6 +102,7 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   SKILL_PACK_WS_METHODS,
+  FOLLOW_UP_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
   ForkWsRpcGroup,
@@ -131,6 +132,7 @@ import * as DocumentText from "./provider/DocumentText.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SkillPacks from "./skills/SkillPacks.ts";
+import * as FollowUps from "./followUps/FollowUps.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
@@ -686,6 +688,9 @@ const ServerUpstreamWsRpcGroup = ServerWsRpcGroup.omit(
   SKILL_PACK_WS_METHODS.subscribe,
   SKILL_PACK_WS_METHODS.setThreadPacks,
   SKILL_PACK_WS_METHODS.setProjectDefault,
+  FOLLOW_UP_WS_METHODS.subscribe,
+  FOLLOW_UP_WS_METHODS.save,
+  FOLLOW_UP_WS_METHODS.history,
   WS_METHODS.artifactsReadMarkdown,
   WS_METHODS.vcsJjRunAction,
   WS_METHODS.vcsJjAssignPaths,
@@ -699,6 +704,7 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
     const jjWorkflow = yield* JjWorkflow.JjWorkflow;
     const jjTurns = yield* JjTurnService.JjTurnService;
     const jjThreadWork = yield* JjThreadWork.JjThreadWork;
+    const followUps = yield* FollowUps.FollowUps;
     return ServerForkWsRpcGroup.of({
       [WS_METHODS.agentAwarenessRegisterDevice]: (input) =>
         localAgentAwareness.registerDevice(input),
@@ -710,6 +716,10 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
       [SKILL_PACK_WS_METHODS.subscribe]: (input) => skillPacks.subscribe(input),
       [SKILL_PACK_WS_METHODS.setThreadPacks]: (input) => skillPacks.setThreadPacks(input),
       [SKILL_PACK_WS_METHODS.setProjectDefault]: (input) => skillPacks.setProjectDefault(input),
+      [FOLLOW_UP_WS_METHODS.subscribe]: (input) => followUps.subscribe(input),
+      [FOLLOW_UP_WS_METHODS.save]: (input) => followUps.save(input, { kind: "user", thread: null }),
+      [FOLLOW_UP_WS_METHODS.history]: (input) =>
+        followUps.history(input.id).pipe(Effect.map((changes) => ({ changes }))),
       [WS_METHODS.artifactsReadMarkdown]: (input) => readArtifactMarkdown(input.url),
       [WS_METHODS.vcsJjRunAction]: (input) => jjWorkflow.runAction(input),
       [WS_METHODS.vcsJjThreadWork]: (input) =>
@@ -2029,6 +2039,7 @@ export const layerWsRpc = (
           },
           settings,
           ...(skillPacks.catalog === null ? {} : { skillPackCatalog: skillPacks.catalog }),
+          followUpHome: config.followUpHome ?? environment.environmentId,
           ...(serverSettings.managedPolicy === undefined
             ? {}
             : { managedPolicy: serverSettings.managedPolicy }),

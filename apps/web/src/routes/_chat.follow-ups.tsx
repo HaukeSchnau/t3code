@@ -1,0 +1,11 @@
+import { createFileRoute } from "@tanstack/react-router";
+
+import { FollowUpsPage, type FollowUpsSearch } from "../components/followUps/FollowUpsPage";
+
+export const Route = createFileRoute("/_chat/follow-ups")({
+  validateSearch: (raw: Record<string, unknown>): FollowUpsSearch => ({
+    ...(typeof raw.id === "string" && raw.id.trim() ? { id: raw.id.trim().slice(0, 200) } : {}),
+    ...(raw.closed === true || raw.closed === "true" ? { closed: true } : {}),
+  }),
+  component: FollowUpsPage,
+});

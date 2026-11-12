@@ -211,12 +211,41 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
 }
 
+/** A follow-up row sits in the inbox only and never drags. */
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
+  | { readonly kind: "followUp"; readonly key: string }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
 
 export function sidebarListItemId(item: SidebarListItem): string {
-  return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
+  return item.kind === "marker" ? sidebarMarkerId(item.marker) : item.key;
+}
+
+/**
+ * Returned follow-ups among the inbox threads, both newest first: merged by return time when the
+ * inbox is ordered by time (`returnTime`), otherwise above the threads.
+ */
+export function mergeInboxFollowUps<T, F>(
+  threads: readonly T[],
+  followUps: readonly F[],
+  returnTime: {
+    readonly thread: (thread: T) => number;
+    readonly followUp: (followUp: F) => number;
+  } | null,
+): Array<T | F> {
+  if (returnTime === null || followUps.length === 0) return [...followUps, ...threads];
+  const merged: Array<T | F> = [];
+  let next = 0;
+  for (const thread of threads) {
+    const threadTime = returnTime.thread(thread);
+    while (next < followUps.length && returnTime.followUp(followUps[next]!) > threadTime) {
+      merged.push(followUps[next]!);
+      next += 1;
+    }
+    merged.push(thread);
+  }
+  merged.push(...followUps.slice(next));
+  return merged;
 }
 
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
@@ -254,6 +283,7 @@ export function resolveSidebarDropTarget(
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
   for (const item of moved) {
+    if (item.kind === "followUp") continue;
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
       else if (
@@ -1092,6 +1122,7 @@ export function firstValidTimestampMs(
 
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
 export {
+  inboxReturnTime,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
 } from "@t3tools/client-runtime/state/thread-inbox";
