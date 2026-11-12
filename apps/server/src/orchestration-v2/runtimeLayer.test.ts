@@ -4578,6 +4578,110 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect.each([
+    { ending: "merged", seenIn: "read", summary: "#31: merged, stopped watching" },
+    { ending: "merged", seenIn: "snapshot", summary: "#31: merged, stopped watching" },
+    { ending: "closed", seenIn: "read", summary: "#31: closed, stopped watching" },
+  ] as const)(
+    "wakes the agent once when a watched PR is $ending ($seenIn)",
+    ({ ending, seenIn, summary }) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const threadId = ThreadId.make(`runtime-pull-request-watch-end-${ending}-${seenIn}`);
+        const projectId = ProjectId.make(`pr-watch-end-project-${ending}-${seenIn}`);
+        yield* seedProject({
+          projectId,
+          title: "Watch end",
+          workspaceRoot: "/workspace/watch-end",
+          defaultModelSelection: null,
+          createdAt: "2026-10-01T00:00:00.000Z",
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`pr-watch-end-create-${ending}-${seenIn}`),
+          threadId,
+          projectId,
+          title: "Watch end",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+        const key = { host: "github.com", repository: "pingdotgg/t3code", number: 31 };
+        const url = "https://github.com/pingdotgg/t3code/pull/31";
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-watch-end-start-${ending}-${seenIn}`),
+          threadId,
+          ...key,
+          watching: true,
+          link: { url, source: "agent" },
+        });
+        const at = "2026-10-02T12:00:00.000Z";
+        if (seenIn === "snapshot") {
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request-link.sync",
+            commandId: CommandId.make(`pr-watch-end-snapshot-${ending}`),
+            threadId,
+            ...key,
+            snapshot: {
+              state: ending,
+              title: "Watched pull request",
+              headBranch: "feature",
+              baseBranch: "main",
+              isDraft: false,
+              updatedAt: at,
+              syncedAt: at,
+              mergedAt: at,
+            },
+            stack: null,
+          });
+        }
+        const reactor = yield* PullRequestWatchReactor.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeServices.layer,
+              NodeCrypto.layer,
+              Layer.mock(PullRequestService.PullRequestService)({
+                watchFingerprint: () => Effect.succeed(null),
+                // The snapshot row must end the watch without reading the host.
+                detail: (input) =>
+                  seenIn === "snapshot"
+                    ? Effect.die("read a pull request its snapshot already showed merged")
+                    : Effect.succeed({
+                        ...watchedPullRequestDetail({ projectId, number: input.number, at }),
+                        state: ending,
+                      }),
+                activity: () =>
+                  Effect.succeed({
+                    comments: [],
+                    commentCount: 0,
+                    commentsTruncated: false,
+                    reviewThreads: [],
+                    commits: [],
+                  }),
+              }),
+            ),
+          ),
+        );
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const summaries = Effect.map(
+          orchestrator.getThreadRecords(threadId, ["messages"]),
+          ({ messages }) => messages.flatMap((message) => message.notification?.summary ?? []),
+        );
+        yield* reactor.sweep.pipe(Effect.andThen(worker.drain()));
+        yield* TestClock.adjust("2 minutes");
+        yield* reactor.sweep.pipe(Effect.andThen(worker.drain()));
+        assert.deepEqual(yield* summaries, [summary]);
+        assert.isUndefined(
+          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch,
+        );
+      }),
+  );
+
   it.effect("reads each watched PR as soon as its own fingerprint lands", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
