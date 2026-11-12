@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { ServerConfig } from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -28,6 +29,7 @@ it.effect("starts the nightly pass once after its time, and again only the next 
     const ticks = yield* Ref.make<ReadonlyArray<Effect.Effect<void>>>([]);
     const launched = yield* Ref.make<ReadonlyArray<string>>([]);
     const activeThreads = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const unreadable = yield* Ref.make(false);
     const scheduler = Layer.succeed(Scheduler.Scheduler, {
       register: <E, R>(_name: string, work: Effect.Effect<void, E, R>) =>
         Effect.gen(function* () {
@@ -63,6 +65,11 @@ it.effect("starts the nightly pass once after its time, and again only the next 
       const running = yield* gardener.runNow;
       assert.strictEqual(running.thread.threadId, ThreadId.make("thread:1"));
       yield* Ref.set(activeThreads, new Set());
+      // Not knowing whether that pass still works starts nothing.
+      yield* Ref.set(unreadable, true);
+      yield* Effect.flip(gardener.runNow);
+      yield* Ref.set(unreadable, false);
+      assert.lengthOf(yield* Ref.get(launched), 1);
       yield* TestClock.setTime(local(13, 3, 29));
       yield* tick;
       assert.lengthOf(yield* Ref.get(launched), 1);
@@ -107,11 +114,15 @@ it.effect("starts the nightly pass once after its time, and again only the next 
               }),
               Layer.mock(ThreadManagementService.ThreadManagementService)({
                 getThreadShell: (threadId) =>
-                  Ref.get(activeThreads).pipe(
-                    Effect.map((active) =>
-                      active.has(threadId) ? ({ activityRunStatus: "waiting" } as never) : null,
-                    ),
-                  ),
+                  Effect.gen(function* () {
+                    if (yield* Ref.get(unreadable)) {
+                      return yield* new OrchestratorProjectionError({ threadId });
+                    }
+                    const active = yield* Ref.get(activeThreads);
+                    return active.has(threadId)
+                      ? ({ activityRunStatus: "waiting" } as never)
+                      : null;
+                  }),
               }),
               Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                 launch: (input) =>

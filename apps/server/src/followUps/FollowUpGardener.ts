@@ -94,20 +94,13 @@ const make = Effect.gen(function* () {
   const running = yield* Semaphore.make(1);
   const isHome = config.followUpHome === undefined || config.followUpHome === environmentId;
 
-  const failWith = (message: string) => (cause: unknown) =>
-    new FollowUpError({
-      message: `${message}${cause instanceof Error && cause.message ? `: ${cause.message}` : ""}`,
-    });
-
   const launch = Effect.fn("FollowUpGardener.launch")(
     function* () {
       const snapshot = yield* followUps.snapshot({});
       // One pass at a time: a pass still working answers for the next request.
       const last = snapshot.lastGardenerRun;
       if (last !== null) {
-        const shell = yield* threads
-          .getThreadShell(last.thread.threadId)
-          .pipe(Effect.orElseSucceed(() => null));
+        const shell = yield* threads.getThreadShell(last.thread.threadId);
         if ((shell?.activityRunStatus ?? null) !== null) return last;
       }
       const now = yield* DateTime.now;
@@ -157,7 +150,9 @@ const make = Effect.gen(function* () {
     },
     (effect) => running.withPermits(1)(effect),
     Effect.mapError((cause) =>
-      isFollowUpError(cause) ? cause : failWith("Could not start the gardener")(cause),
+      isFollowUpError(cause)
+        ? cause
+        : new FollowUpError({ message: "Could not start the gardener", cause }),
     ),
   );
 
@@ -193,6 +188,7 @@ const make = Effect.gen(function* () {
             Effect.catch((error) =>
               Effect.logWarning("The nightly follow-up gardener did not start", {
                 message: error.message,
+                cause: error.cause,
               }).pipe(Effect.as(false)),
             ),
           );

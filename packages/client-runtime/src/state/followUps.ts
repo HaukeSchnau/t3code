@@ -146,5 +146,5 @@ export function captureToFollowUp(
   if (trimmed === "") return null;
   const firstLine = trimmed.split("\n", 1)[0]!.trim();
   const title = firstLine.length <= 80 ? firstLine : `${firstLine.slice(0, 79).trimEnd()}…`;
-  return { title, body: trimmed === firstLine ? "" : trimmed };
+  return { title, body: trimmed === title ? "" : trimmed };
 }

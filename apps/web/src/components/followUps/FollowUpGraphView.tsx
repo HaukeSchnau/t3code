@@ -3,14 +3,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, FollowUp, FollowUpId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
-import {
-  type CSSProperties,
-  type ReactNode,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { type ForceLayout, forceLayout } from "~/lib/forceLayout";
 import { observeResize } from "~/lib/observeResize";
@@ -47,12 +40,8 @@ function clamp(value: number, min: number, max: number) {
 
 const LABEL_SCALE = "--follow-up-graph-label-scale";
 // Labels keep their screen size as the graph shrinks; zoomed in, they grow with it.
-const NODE_LABEL_STYLE: CSSProperties = {
-  transform: `scale(var(${LABEL_SCALE}, 1))`,
-  transformBox: "fill-box",
-  transformOrigin: "left center",
-};
-const EDGE_LABEL_STYLE: CSSProperties = { ...NODE_LABEL_STYLE, transformOrigin: "center" };
+const LABEL_SCALE_CLASS =
+  "[transform:scale(var(--follow-up-graph-label-scale,1))] [transform-box:fill-box]";
 
 /** Labels thin out as the graph shrinks, so a zoomed-out graph stays legible. */
 function zoomLevel(scale: number): "far" | "mid" | "near" {
@@ -264,7 +253,6 @@ export function FollowUpGraphView(props: {
   }, [layout]);
 
   const open = (node: FollowUpGraphNode) => {
-    if (draggedRef.current) return;
     if (node.kind === "followUp") {
       props.onSelectFollowUp(node.followUp.id);
       return;
@@ -382,9 +370,9 @@ export function FollowUpGraphView(props: {
                   textAnchor="middle"
                   dominantBaseline="middle"
                   strokeWidth={3}
-                  style={EDGE_LABEL_STYLE}
                   className={cn(
-                    "pointer-events-none fill-muted-foreground stroke-background text-3xs [paint-order:stroke]",
+                    LABEL_SCALE_CLASS,
+                    "pointer-events-none origin-center fill-muted-foreground stroke-background text-3xs [paint-order:stroke]",
                     labelVisibility,
                   )}
                 >
@@ -420,7 +408,9 @@ export function FollowUpGraphView(props: {
                 }
                 aria-current={selected ? "true" : undefined}
                 className="group/node cursor-pointer outline-none"
-                onClick={() => open(node)}
+                onClick={() => {
+                  if (!draggedRef.current) open(node);
+                }}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
@@ -456,9 +446,9 @@ export function FollowUpGraphView(props: {
                   x={radius + 6}
                   dominantBaseline="middle"
                   strokeWidth={3}
-                  style={NODE_LABEL_STYLE}
                   className={cn(
-                    "stroke-background [paint-order:stroke]",
+                    LABEL_SCALE_CLASS,
+                    "origin-left stroke-background [paint-order:stroke]",
                     node.kind === "thread"
                       ? "fill-muted-foreground text-3xs"
                       : isFollowUpClosed(node.followUp)

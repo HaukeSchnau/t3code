@@ -47,6 +47,9 @@ describe("followUpCaptureInput", () => {
       title: "Call the bank",
       body: "Call the bank\nabout the card",
     });
+    // A long one-line note keeps all its words in the body once the title shortens it.
+    const long = `Renew the Hamburg FritzBox certificate before it expires, ${"and check the tower wake ".repeat(3)}`;
+    expect(followUpCaptureInput(long, null)?.body).toBe(long.trim());
   });
 
   it("names a quote by its first line until the user titles it", () => {

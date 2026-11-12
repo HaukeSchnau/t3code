@@ -38,6 +38,7 @@ export function AssistantSelectionToolbar({
     sourceAnchor: AssistantCitationSourceAnchor;
   } | null>(null);
   const [followUpQuote, setFollowUpQuote] = useState<{
+    threadRef: ScopedThreadRef;
     messageId: MessageId;
     quote: string;
   } | null>(null);
@@ -188,10 +189,10 @@ export function AssistantSelectionToolbar({
 
   const followUpDialog = followUpQuote ? (
     <QuoteFollowUpDialog
-      threadRef={threadRef}
+      threadRef={followUpQuote.threadRef}
       messageId={followUpQuote.messageId}
       quote={followUpQuote.quote}
-      onClose={() => setFollowUpQuote(null)}
+      onClose={() => setFollowUpQuote((current) => (current === followUpQuote ? null : current))}
     />
   ) : null;
   if (!selection) return followUpDialog;
@@ -208,6 +209,7 @@ export function AssistantSelectionToolbar({
   };
   const followUp = () => {
     setFollowUpQuote({
+      threadRef,
       messageId: selection.citation.messageId,
       quote: selection.citation.text.trim(),
     });
