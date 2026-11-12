@@ -38,7 +38,11 @@ passkeys) don't apply to the fork.
   bridge keeps upstream's `passkeys: true` (`DesktopClerk.ts`, `preload.ts`), which loads the native
   module only when sign-in uses a passkey, and upstream's preload verifier requires the exposure.
   Signed builds skip upstream's passkey entitlements unless `T3CODE_MACOS_PROVISIONING_PROFILE` is
-  set, which no fork pipeline does.
+  set, which no fork pipeline does. Upstream grants the hardened runtime's camera and microphone
+  only in that passkey file, so `apps/desktop/resources/entitlements.mac.plist` keeps those grants
+  for profile-less builds; electron-builder signs with it whenever `mac.entitlements` is unset.
+  Without them macOS hands dictation silence and never prompts. Remove the file when upstream
+  grants them outside the passkey path.
 - `scripts/desktop-publish.ts` runs in the `desktop-publish` step and writes into
   `T3CODE_DESKTOP_UPDATES_DIR`. Infra's `modules/features/t3/mobile-updates.nix` serves it at
   `https://t3code-updates.schnau.dev/desktop/`, Tailnet only. The zip lands before
