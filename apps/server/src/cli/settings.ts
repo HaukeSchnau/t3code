@@ -1,20 +1,25 @@
 import {
   type AuthEnvironmentScope,
   AuthOrchestrationReadScope,
-  DEFAULT_SERVER_SETTINGS,
+  AuthProvidersManageScope,
+  AuthSettingsWriteScope,
   EnvironmentHttpApi,
   requiredScopesForServerSettingsPatch,
-  ServerSettings,
+  type ServerSettingsApplyInput,
+  type ServerSettingsError,
   ServerSettingsPatch,
+  type ServerSettingsSnapshot,
+  type ServerSettingsUpdateResult,
+  StoredSettingsDocument,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
@@ -35,71 +40,121 @@ import {
 } from "../serverRuntimeState.ts";
 import * as ServerSettingsService from "../serverSettings.ts";
 import {
-  readSettingsForClient,
+  applyStoredSettings,
+  patchStoredSettings,
+  readSettingsSnapshot,
   settingsErrorMessage,
-  updateSettingsForClient,
 } from "../settingsAccess.ts";
-import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import {
+  authLocationFlags,
+  type CliAuthLocationFlags,
+  DurationFromString,
+  resolveCliAuthConfig,
+} from "./config.ts";
 
-export class SettingsPatchInputError extends Schema.TaggedError<SettingsPatchInputError>()(
-  "SettingsPatchInputError",
-  { source: Schema.String, detail: Schema.String },
-) {
+/** Exit code for failures that may pass: a server starting, busy, or older than this CLI. */
+const SETTINGS_EXIT_TEMPORARY = 75;
+
+class SettingsInputError extends Schema.TaggedError<SettingsInputError>()("SettingsInputError", {
+  source: Schema.String,
+  detail: Schema.String,
+}) {
   override get message(): string {
-    return `Invalid settings patch from ${this.source}. Nothing was changed.\n${this.detail}`;
+    return `Invalid input from ${this.source}. Nothing was changed.\n${this.detail}`;
   }
 }
 
-export class SettingsRejectedError extends Schema.TaggedError<SettingsRejectedError>()(
-  "SettingsRejectedError",
-  { detail: Schema.String },
-) {
+class SettingsFailedError extends Schema.TaggedError<SettingsFailedError>()("SettingsFailedError", {
+  detail: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {
   override get message(): string {
-    return `T3 Code rejected the settings patch. Nothing was changed.\n${this.detail}`;
+    return this.detail;
   }
 }
 
-export class SettingsServerError extends Schema.TaggedError<SettingsServerError>()(
-  "SettingsServerError",
-  { origin: Schema.String, detail: Schema.String, cause: Schema.Defect() },
-) {
+class SettingsBusyError extends Schema.TaggedError<SettingsBusyError>()("SettingsBusyError", {
+  detail: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {
   override get message(): string {
-    return `The running T3 Code server at ${this.origin} could not answer: ${this.detail}`;
+    return `${this.detail} Try again, or pass --wait <duration>.`;
   }
 }
 
-export class SettingsOfflineError extends Schema.TaggedError<SettingsOfflineError>()(
-  "SettingsOfflineError",
-  { settingsPath: Schema.String, detail: Schema.String },
-) {
-  override get message(): string {
-    return `Could not read the settings in ${this.settingsPath}.\n${this.detail}`;
-  }
-}
-
-type SettingsMode = "live" | "offline";
+type SettingsCommandError = SettingsFailedError | SettingsBusyError;
 
 interface SettingsSession {
-  readonly mode: SettingsMode;
+  readonly mode: "live" | "offline";
   readonly location: string;
-  readonly current: ServerSettings;
-  readonly update: (
+  readonly snapshot: ServerSettingsSnapshot;
+  readonly patch: (
     patch: ServerSettingsPatch,
-  ) => Effect.Effect<ServerSettings, SettingsRejectedError | SettingsServerError>;
+  ) => Effect.Effect<ServerSettingsUpdateResult, SettingsCommandError>;
+  readonly apply: (
+    input: ServerSettingsApplyInput,
+  ) => Effect.Effect<ServerSettingsUpdateResult, SettingsCommandError>;
 }
 
 const LIVE_REQUEST_TIMEOUT = Duration.seconds(10);
-
-const encodeSettings = Schema.encodeUnknownEffect(ServerSettings);
-const decodePatchJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettingsPatch));
+const SESSION_TTL = Duration.minutes(2);
+const WAIT_INTERVAL = Duration.seconds(2);
 
 const failureDetail = (cause: unknown) =>
   cause instanceof Error && cause.message.length > 0 ? cause.message : String(cause);
 
-// A server that never answered falls back to offline; one that answered badly is an error.
+const hasTag = (cause: unknown, tag: string) =>
+  typeof cause === "object" && cause !== null && "_tag" in cause && cause._tag === tag;
+
+// A server that never answered means offline; any answer means one is running.
 const isUnreachable = (cause: unknown) =>
-  (HttpClientError.isHttpClientError(cause) && cause.response === undefined) ||
-  (typeof cause === "object" && cause !== null && "_tag" in cause && cause._tag === "TimeoutError");
+  HttpClientError.isHttpClientError(cause) && cause.response === undefined;
+
+const TEMPORARY_STATUSES: ReadonlySet<number> = new Set([404, 502, 503, 504]);
+
+const liveFailure = (origin: string, cause: unknown): SettingsCommandError => {
+  if (hasTag(cause, "EnvironmentHttpBadRequestError")) {
+    return new SettingsFailedError({ detail: failureDetail(cause), cause });
+  }
+  if (isUnreachable(cause) || hasTag(cause, "TimeoutError")) {
+    return new SettingsBusyError({
+      detail: `The T3 Code server at ${origin} did not answer in time.`,
+      cause,
+    });
+  }
+  if (HttpClientError.isHttpClientError(cause) && cause.response !== undefined) {
+    const { status } = cause.response;
+    return TEMPORARY_STATUSES.has(status)
+      ? new SettingsBusyError({
+          detail: `The T3 Code server at ${origin} answered HTTP ${status}; it may be starting or older than this CLI.`,
+          cause,
+        })
+      : new SettingsFailedError({
+          detail: `The T3 Code server at ${origin} answered HTTP ${status}.`,
+          cause,
+        });
+  }
+  if (hasTag(cause, "SchemaError")) {
+    return new SettingsBusyError({
+      detail: `The T3 Code server at ${origin} sent an answer this CLI cannot read; it may be older than this CLI.`,
+      cause,
+    });
+  }
+  return new SettingsFailedError({
+    detail: `The T3 Code server at ${origin} failed: ${failureDetail(cause)}`,
+    cause,
+  });
+};
+
+const commandFailure = (cause: unknown): SettingsCommandError =>
+  hasTag(cause, "SettingsBusyError") || hasTag(cause, "SettingsFailedError")
+    ? (cause as SettingsCommandError)
+    : new SettingsFailedError({
+        detail: hasTag(cause, "ServerSettingsError")
+          ? settingsErrorMessage(cause as ServerSettingsError)
+          : failureDetail(cause),
+        cause,
+      });
 
 const withLiveSession = <A, E, R>(
   environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
@@ -107,7 +162,11 @@ const withLiveSession = <A, E, R>(
   run: (token: string) => Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
-    environmentAuth.issueSession({ scopes: [...scopes], label: "t3 settings cli" }),
+    environmentAuth.issueSession({
+      scopes: [...scopes],
+      label: "t3 settings cli",
+      ttl: SESSION_TTL,
+    }),
     (issued) => run(issued.token),
     (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
   );
@@ -118,14 +177,13 @@ const offlineLayer = ServerSettingsService.layer.pipe(
   Layer.provide(SqlitePersistence.layerConfig),
 );
 
-const runWithSettings = Effect.fn("cli.settings.run")(function* <A, E, R>(
+const runWithSettings = Effect.fn("cli.settings.run")(function* <A>(
   flags: CliAuthLocationFlags,
   scopes: ReadonlyArray<AuthEnvironmentScope>,
-  use: (session: SettingsSession) => Effect.Effect<A, E, R>,
+  use: (session: SettingsSession) => Effect.Effect<A, SettingsCommandError>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel, { quietLogs: true });
-  // Logs share stdout with the settings output, so they stay quiet unless asked for.
   const minimumLogLevel = Option.isSome(logLevel) ? config.logLevel : "Error";
 
   return yield* Effect.gen(function* () {
@@ -137,35 +195,29 @@ const runWithSettings = Effect.fn("cli.settings.run")(function* <A, E, R>(
         Effect.gen(function* () {
           const client = yield* HttpApiClient.make(EnvironmentHttpApi, { baseUrl: origin });
           const headers = { authorization: `Bearer ${token}` };
-          const serverError = (cause: unknown) =>
-            new SettingsServerError({ origin, detail: failureDetail(cause), cause });
-          const current = yield* client.server.settings({ headers }).pipe(
+          const request = <B, E>(effect: Effect.Effect<B, E>) =>
+            effect.pipe(
+              Effect.timeout(LIVE_REQUEST_TIMEOUT),
+              Effect.mapError((cause) => liveFailure(origin, cause)),
+            );
+          const snapshot = yield* client.server.settings({ headers }).pipe(
             Effect.timeout(LIVE_REQUEST_TIMEOUT),
             Effect.asSome,
             Effect.catch((cause) =>
               isUnreachable(cause)
-                ? Effect.logDebug("No running server answered; using offline mode.", {
-                    origin,
-                    cause,
-                  }).pipe(Effect.as(Option.none<ServerSettings>()))
-                : Effect.fail(serverError(cause)),
+                ? Effect.succeed(Option.none<ServerSettingsSnapshot>())
+                : Effect.fail(liveFailure(origin, cause)),
             ),
           );
-          if (Option.isNone(current)) return Option.none<A>();
+          if (Option.isNone(snapshot)) return Option.none<A>();
           return Option.some(
             yield* use({
               mode: "live",
               location: origin,
-              current: current.value,
-              update: (patch) =>
-                client.server.updateSettings({ headers, payload: { patch } }).pipe(
-                  Effect.timeout(LIVE_REQUEST_TIMEOUT),
-                  Effect.mapError((cause) =>
-                    cause._tag === "EnvironmentHttpBadRequestError"
-                      ? new SettingsRejectedError({ detail: cause.message })
-                      : serverError(cause),
-                  ),
-                ),
+              snapshot: snapshot.value,
+              patch: (patch) =>
+                request(client.server.patchSettings({ headers, payload: { patch } })),
+              apply: (payload) => request(client.server.applySettings({ headers, payload })),
             }),
           );
         }),
@@ -173,38 +225,39 @@ const runWithSettings = Effect.fn("cli.settings.run")(function* <A, E, R>(
       if (Option.isSome(live)) return live.value;
     }
 
-    // An unreachable server may still be running; the lock fails rather than write behind it.
+    // An unreachable server may still be running or starting; the lock refuses to write behind it.
     yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath).pipe(
       Effect.provide(ProcessRunner.layer),
+      Effect.catchTags({
+        ServerAlreadyRunningError: (cause) =>
+          Effect.fail(
+            new SettingsBusyError({
+              detail: `A T3 Code server owns ${config.stateDir} but did not answer; it may be starting.`,
+              cause,
+            }),
+          ),
+      }),
     );
     yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
     return yield* Effect.gen(function* () {
-      const updateContext =
-        yield* Effect.context<Effect.Services<ReturnType<typeof updateSettingsForClient>>>();
-      const current = yield* readSettingsForClient().pipe(
-        Effect.mapError(
-          (error) =>
-            new SettingsOfflineError({
-              settingsPath: config.settingsPath,
-              detail: settingsErrorMessage(error),
-            }),
-        ),
-      );
+      type OfflineServices =
+        | Effect.Services<ReturnType<typeof readSettingsSnapshot>>
+        | Effect.Services<ReturnType<typeof patchStoredSettings>>
+        | Effect.Services<ReturnType<typeof applyStoredSettings>>;
+      const context = yield* Effect.context<OfflineServices>();
+      const offline = <B, E>(effect: Effect.Effect<B, E, OfflineServices>) =>
+        effect.pipe(Effect.provide(context), Effect.mapError(commandFailure));
       return yield* use({
         mode: "offline",
         location: config.settingsPath,
-        current,
-        update: (patch) =>
-          updateSettingsForClient(patch).pipe(
-            Effect.provide(updateContext),
-            Effect.mapError(
-              (error) => new SettingsRejectedError({ detail: settingsErrorMessage(error) }),
-            ),
-          ),
+        snapshot: yield* offline(readSettingsSnapshot()),
+        patch: (patch) => offline(patchStoredSettings(patch)),
+        apply: (input) => offline(applyStoredSettings(input)),
       });
     }).pipe(Effect.provide(offlineLayer));
   }).pipe(
     Effect.scoped,
+    Effect.mapError(commandFailure),
     Effect.provide(
       EnvironmentAuth.layerRuntime.pipe(
         Layer.provideMerge(FetchHttpClient.layer),
@@ -216,36 +269,18 @@ const runWithSettings = Effect.fn("cli.settings.run")(function* <A, E, R>(
   );
 });
 
-interface SettingsChange {
-  readonly path: ReadonlyArray<string>;
-  readonly before?: unknown;
-  readonly after?: unknown;
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+  );
 }
 
-const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** Leaf-level differences between two encoded settings documents; arrays compare whole. */
-function settingsChanges(
-  before: unknown,
-  after: unknown,
-  path: ReadonlyArray<string> = [],
-): ReadonlyArray<SettingsChange> {
-  if (isPlainRecord(before) && isPlainRecord(after)) {
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    return [...keys].flatMap((key) => settingsChanges(before[key], after[key], [...path, key]));
-  }
-  if (Equal.equals(before, after)) return [];
-  return [
-    {
-      path,
-      ...(before === undefined ? {} : { before }),
-      ...(after === undefined ? {} : { after }),
-    },
-  ];
-}
-
-const formatValue = (value: unknown) => (value === undefined ? "(unset)" : JSON.stringify(value));
+const formatValue = (value: unknown) =>
+  value === undefined ? "(default)" : JSON.stringify(sortKeys(value));
 
 function formatSettings(
   session: Pick<SettingsSession, "mode">,
@@ -253,27 +288,38 @@ function formatSettings(
   options: { readonly json: boolean },
 ): string {
   return options.json
-    ? JSON.stringify({ mode: session.mode, settings })
-    : JSON.stringify(settings, null, 2);
+    ? JSON.stringify(sortKeys({ mode: session.mode, settings }))
+    : JSON.stringify(sortKeys(settings), null, 2);
 }
 
-function formatChanges(
+function formatResult(
   session: Pick<SettingsSession, "mode" | "location">,
-  changes: ReadonlyArray<SettingsChange>,
-  options: { readonly json: boolean },
+  result: ServerSettingsUpdateResult,
+  options: { readonly json: boolean; readonly dryRun: boolean },
 ): string {
-  if (options.json) return JSON.stringify({ mode: session.mode, changes });
+  if (options.json) {
+    return JSON.stringify(sortKeys({ mode: session.mode, dryRun: options.dryRun, ...result }));
+  }
   const location =
     session.mode === "live"
       ? `through the running server at ${session.location}`
       : `in ${session.location} (no server running)`;
-  if (changes.length === 0) return `No settings changed ${location}.`;
+  const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  const { changes, secrets } = result;
+  if (changes.length + secrets.length === 0) {
+    return `No settings ${options.dryRun ? "would change" : "changed"} ${location}.`;
+  }
+  const counts = [
+    ...(changes.length > 0 ? [count(changes.length, "setting")] : []),
+    ...(secrets.length > 0 ? [count(secrets.length, "secret")] : []),
+  ].join(" and ");
   return [
-    `Changed ${changes.length} setting${changes.length === 1 ? "" : "s"} ${location}:`,
+    `${options.dryRun ? "Would change" : "Changed"} ${counts} ${location}:`,
     ...changes.map(
       (change) =>
         `  ${change.path.join(".")}: ${formatValue(change.before)} -> ${formatValue(change.after)}`,
     ),
+    ...secrets.map((secret) => `  ${secret.secret}: secret ${secret.change}`),
   ].join("\n");
 }
 
@@ -282,78 +328,98 @@ const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDefault(false),
 );
 
-const sparseFlag = Flag.Boolean("sparse").pipe(
-  Flag.withDescription("Print only values that differ from T3 Code's defaults."),
-  Flag.withDefault(false),
+const waitFlag = Flag.String("wait").pipe(
+  Flag.withSchema(DurationFromString),
+  Flag.withDescription(
+    "Keep retrying while T3 Code is starting or busy, for up to this long, for example `2m`.",
+  ),
+  Flag.optional,
 );
 
-const readPatchText = Effect.fn("cli.settings.readPatchText")(function* (source: string) {
-  if (source === "-") {
-    return yield* Stdio.Stdio.pipe(
-      Effect.flatMap((stdio) => stdio.stdin.pipe(Stream.decodeText(), Stream.mkString)),
-    );
-  }
-  const fs = yield* FileSystem.FileSystem;
-  return yield* fs.readFileString(source);
+const readText = Effect.fnUntraced(function* (source: string) {
+  if (source !== "-") return yield* (yield* FileSystem.FileSystem).readFileString(source);
+  const stdio = yield* Stdio.Stdio;
+  return yield* stdio.stdin.pipe(Stream.decodeText(), Stream.mkString);
 });
 
-const readSettingsPatch = Effect.fn("cli.settings.readPatch")(function* (source: string) {
-  const label = source === "-" ? "stdin" : source;
-  const text = yield* readPatchText(source).pipe(
+// A misspelled key would otherwise be dropped silently and change nothing.
+const readInput = <A>(source: string, schema: Schema.Codec<A, string, never, never>) =>
+  readText(source).pipe(
+    Effect.flatMap((text) =>
+      Schema.decodeEffect(schema)(text, { onExcessProperty: "error", errors: "all" }),
+    ),
     Effect.mapError(
-      (cause) => new SettingsPatchInputError({ source: label, detail: failureDetail(cause) }),
+      (cause) =>
+        new SettingsInputError({
+          source: source === "-" ? "stdin" : source,
+          detail: failureDetail(cause),
+        }),
     ),
   );
-  // A misspelled key would otherwise be dropped silently and change nothing.
-  return yield* decodePatchJson(text, { onExcessProperty: "error", errors: "all" }).pipe(
-    Effect.mapError(
-      (cause) => new SettingsPatchInputError({ source: label, detail: failureDetail(cause) }),
-    ),
-  );
-});
 
-// Stdout carries only settings output, so scripts never parse a failure as data.
-const reportFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(
+const decodePatchJson = Schema.fromJsonString(ServerSettingsPatch);
+const decodeDocumentJson = Schema.fromJsonString(StoredSettingsDocument);
+
+// Stdout carries only results; temporary failures exit 75 so callers can tell them from bad input.
+const runCommand = <A, E, R>(
+  wait: Option.Option<Duration.Duration>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  (Option.isNone(wait)
+    ? effect
+    : effect.pipe(
+        Effect.retry({
+          while: (error) => hasTag(error, "SettingsBusyError"),
+          schedule: Schedule.spaced(WAIT_INTERVAL).pipe(Schedule.upTo({ duration: wait.value })),
+        }),
+      )
+  ).pipe(
     Effect.catch((error) =>
       Console.error(failureDetail(error)).pipe(
         Effect.andThen(
           Effect.sync(() => {
-            process.exitCode = 1;
+            process.exitCode = hasTag(error, "SettingsBusyError") ? SETTINGS_EXIT_TEMPORARY : 1;
           }),
         ),
       ),
     ),
+    Effect.provideService(References.LogToStderr, true),
   );
 
 const settingsGetCommand = Command.make("get", {
   ...authLocationFlags,
   json: jsonFlag,
-  sparse: sparseFlag,
+  sparse: Flag.Boolean("sparse").pipe(
+    Flag.withDescription(
+      "Print the stored document instead: patchable values that differ from the defaults.",
+    ),
+    Flag.withDefault(false),
+  ),
+  wait: waitFlag,
 }).pipe(
   Command.withDescription(
     "Print the effective server settings, defaults included, with secrets redacted.",
   ),
   Command.withHandler((flags) =>
-    runWithSettings(flags, [AuthOrchestrationReadScope], (session) =>
-      Effect.gen(function* () {
-        const shown = flags.sparse
-          ? (ServerSettingsService.stripDefaultServerSettings(
-              session.current,
-              DEFAULT_SERVER_SETTINGS,
-            ) ?? {})
-          : session.current;
-        yield* Console.log(
-          formatSettings(session, yield* encodeSettings(shown), { json: flags.json }),
-        );
-      }),
-    ).pipe(reportFailure),
+    runCommand(
+      flags.wait,
+      runWithSettings(flags, [AuthOrchestrationReadScope], (session) =>
+        Console.log(
+          formatSettings(
+            session,
+            flags.sparse ? session.snapshot.stored : session.snapshot.settings,
+            { json: flags.json },
+          ),
+        ),
+      ),
+    ),
   ),
 );
 
 const settingsPatchCommand = Command.make("patch", {
   ...authLocationFlags,
   json: jsonFlag,
+  wait: waitFlag,
   source: Argument.String("file").pipe(
     Argument.withDescription("JSON file holding a settings patch, or - to read it from stdin."),
   ),
@@ -362,23 +428,76 @@ const settingsPatchCommand = Command.make("patch", {
     "Apply a settings patch the way the settings UI does, then print what changed.",
   ),
   Command.withHandler((flags) =>
-    Effect.gen(function* () {
-      const patch = yield* readSettingsPatch(flags.source);
-      const scopes = [AuthOrchestrationReadScope, ...requiredScopesForServerSettingsPatch(patch)];
-      yield* runWithSettings(flags, scopes, (session) =>
-        Effect.gen(function* () {
-          const before = yield* encodeSettings(session.current);
-          const after = yield* encodeSettings(yield* session.update(patch));
-          yield* Console.log(
-            formatChanges(session, settingsChanges(before, after), { json: flags.json }),
-          );
-        }),
-      );
-    }).pipe(reportFailure),
+    runCommand(
+      flags.wait,
+      Effect.gen(function* () {
+        const patch = yield* readInput(flags.source, decodePatchJson);
+        const scopes = [AuthOrchestrationReadScope, ...requiredScopesForServerSettingsPatch(patch)];
+        yield* runWithSettings(flags, scopes, (session) =>
+          session
+            .patch(patch)
+            .pipe(
+              Effect.flatMap((result) =>
+                Console.log(formatResult(session, result, { json: flags.json, dryRun: false })),
+              ),
+            ),
+        );
+      }),
+    ),
+  ),
+);
+
+const settingsApplyCommand = Command.make("apply", {
+  ...authLocationFlags,
+  json: jsonFlag,
+  wait: waitFlag,
+  dryRun: Flag.Boolean("dry-run").pipe(
+    Flag.withDescription("Print the changes without writing anything."),
+    Flag.withDefault(false),
+  ),
+  base: Flag.String("base").pipe(
+    Flag.withDescription(
+      "The previously applied document. Only paths where the desired document differs from it change.",
+    ),
+    Flag.optional,
+  ),
+  source: Argument.String("desired").pipe(
+    Argument.withDescription(
+      "JSON file holding the desired settings document (the form `get --sparse` prints), or -.",
+    ),
+  ),
+}).pipe(
+  Command.withDescription("Make the stored settings match a document, then print what changed."),
+  Command.withHandler((flags) =>
+    runCommand(
+      flags.wait,
+      Effect.gen(function* () {
+        const desired = yield* readInput(flags.source, decodeDocumentJson);
+        const base = Option.isSome(flags.base)
+          ? yield* readInput(flags.base.value, decodeDocumentJson)
+          : undefined;
+        const scopes = [
+          AuthOrchestrationReadScope,
+          AuthSettingsWriteScope,
+          AuthProvidersManageScope,
+        ];
+        yield* runWithSettings(flags, scopes, (session) =>
+          session
+            .apply({ desired, ...(base === undefined ? {} : { base }), dryRun: flags.dryRun })
+            .pipe(
+              Effect.flatMap((result) =>
+                Console.log(
+                  formatResult(session, result, { json: flags.json, dryRun: flags.dryRun }),
+                ),
+              ),
+            ),
+        );
+      }),
+    ),
   ),
 );
 
 export const settingsCommand = Command.make("settings").pipe(
   Command.withDescription("Read or change the server settings."),
-  Command.withSubcommands([settingsGetCommand, settingsPatchCommand]),
+  Command.withSubcommands([settingsGetCommand, settingsPatchCommand, settingsApplyCommand]),
 );

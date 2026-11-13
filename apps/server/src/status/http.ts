@@ -1,5 +1,7 @@
 import {
   AuthOrchestrationReadScope,
+  AuthProvidersManageScope,
+  AuthSettingsWriteScope,
   EnvironmentHttpApi,
   EnvironmentHttpBadRequestError,
   requiredScopesForServerSettingsPatch,
@@ -13,11 +15,15 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import {
-  readSettingsForClient,
+  applyStoredSettings,
+  patchStoredSettings,
+  readSettingsSnapshot,
   settingsErrorMessage,
-  updateSettingsForClient,
 } from "../settingsAccess.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
+
+const badRequest = (message: string) =>
+  Effect.fail(new EnvironmentHttpBadRequestError({ message }));
 
 export const layer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -39,24 +45,37 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.server.settings")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* readSettingsForClient().pipe(
-            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          return yield* readSettingsSnapshot().pipe(
+            Effect.catchTags({
+              ServerSettingsError: (error) => badRequest(settingsErrorMessage(error)),
+            }),
           );
         }),
       )
       .handle(
-        "updateSettings",
-        Effect.fn("environment.server.updateSettings")(function* (args) {
+        "patchSettings",
+        Effect.fn("environment.server.patchSettings")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           for (const scope of requiredScopesForServerSettingsPatch(args.payload.patch)) {
             yield* requireEnvironmentScope(scope);
           }
-          return yield* updateSettingsForClient(args.payload.patch).pipe(
+          return yield* patchStoredSettings(args.payload.patch).pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) =>
-                Effect.fail(
-                  new EnvironmentHttpBadRequestError({ message: settingsErrorMessage(error) }),
-                ),
+              ServerSettingsError: (error) => badRequest(settingsErrorMessage(error)),
+            }),
+          );
+        }),
+      )
+      .handle(
+        "applySettings",
+        Effect.fn("environment.server.applySettings")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthSettingsWriteScope);
+          yield* requireEnvironmentScope(AuthProvidersManageScope);
+          return yield* applyStoredSettings(args.payload).pipe(
+            Effect.catchTags({
+              ServerSettingsError: (error) => badRequest(settingsErrorMessage(error)),
+              SettingsDocumentError: (error) => badRequest(error.message),
             }),
           );
         }),

@@ -84,17 +84,28 @@ If the file contains credentials, restrict access to that file with `chmod 600`
 ## Change settings from a script
 
 `t3 settings get` prints the server's settings, defaults included, with secrets
-hidden. `--sparse` prints only what differs from the defaults.
+hidden. `--sparse` prints the settings document instead: only what you can set
+and what differs from the defaults.
 
-`t3 settings patch settings.json` (or `-` for stdin) applies a partial settings
-object, checks it like the Settings page does, and prints what changed. A
-misspelled key or a bad value fails with exit code 1 and changes nothing. Values
-of sensitive environment variables go to the server's secret store. Provider
-instances are replaced as a whole map, so include every instance you keep.
+`t3 settings apply desired.json` makes the settings match a document in that
+form, resetting whatever the document leaves out. With `--base previous.json`,
+the document you applied last time, it changes only what you changed since, and
+keeps edits made in the Settings page meanwhile. `--dry-run` shows the changes
+without making them. Sensitive environment variables marked `valueRedacted`
+keep their stored value.
 
-Both commands talk to the running server when there is one. Otherwise they read
-and write the settings in the T3 home directly, and refuse while another server
-owns it. Add `--json` for one JSON object on stdout.
+`t3 settings patch patch.json` applies a partial settings object instead, as the
+Settings page does. Provider instances are replaced as a whole map, so include
+every instance you keep.
+
+Both write commands check the input like the Settings page does and print what
+changed, including secrets they stored or removed. Use `-` to read from stdin and
+`--json` for one JSON object on stdout. A misspelled key or a bad value exits 1
+and changes nothing. If T3 Code is starting, busy, or older than the `t3`
+command, the command exits 75; `--wait 2m` keeps retrying for up to two minutes.
+
+The commands talk to the running server when there is one. Otherwise they work
+on the T3 home directly, and refuse while another server owns it.
 
 ## Platform support
 

@@ -81,7 +81,12 @@ import {
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import { ServerIdleStatus } from "./server.ts";
-import { ServerSettings, ServerSettingsPatch } from "./settings.ts";
+import { ServerSettingsPatch } from "./settings.ts";
+import {
+  ServerSettingsApplyInput,
+  ServerSettingsSnapshot,
+  ServerSettingsUpdateResult,
+} from "./settingsCli.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -829,15 +834,31 @@ class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
   .add(
     HttpApiEndpoint.get("settings", "/api/server/settings", {
       headers: OptionalBearerHeaders,
-      success: ServerSettings,
-      error: [EnvironmentScopeRequiredError, EnvironmentInternalError],
+      success: ServerSettingsSnapshot,
+      error: [
+        EnvironmentHttpBadRequestError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("updateSettings", "/api/server/settings", {
+    HttpApiEndpoint.post("patchSettings", "/api/server/settings", {
       headers: OptionalBearerHeaders,
       payload: Schema.Struct({ patch: ServerSettingsPatch }),
-      success: ServerSettings,
+      success: ServerSettingsUpdateResult,
+      error: [
+        EnvironmentHttpBadRequestError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("applySettings", "/api/server/settings/apply", {
+      headers: OptionalBearerHeaders,
+      payload: ServerSettingsApplyInput,
+      success: ServerSettingsUpdateResult,
       error: [
         EnvironmentHttpBadRequestError,
         EnvironmentScopeRequiredError,
