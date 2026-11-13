@@ -3,10 +3,13 @@ import {
   buildOidcSignInUrl,
   describeOidcSignInError,
   readHostedPairingRequest,
+  readOidcSignInClientState,
   readOidcSignInFailure,
   setPairingTokenOnUrl,
 } from "@t3tools/shared/remote";
 import Constants from "expo-constants";
+import * as ExpoCrypto from "expo-crypto";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import * as WebBrowser from "expo-web-browser";
@@ -20,6 +23,9 @@ function appScheme(): string {
   return (Array.isArray(scheme) ? scheme[0] : scheme) ?? "t3code";
 }
 
+/** The error of a sheet that could not open, which says nothing about the server. */
+export const OIDC_BROWSER_UNAVAILABLE = "browser_unavailable";
+
 export type OidcSignInResult =
   | { readonly _tag: "Signed"; readonly pairingUrl: string }
   | { readonly _tag: "Failed"; readonly error: string }
@@ -31,17 +37,24 @@ export async function signInWithOidc(
   options?: { readonly prompt?: "none" },
 ): Promise<OidcSignInResult> {
   const returnTo = `${appScheme()}://oidc`;
+  // Another app can open this scheme while the sheet is up, so only a result that brings this
+  // attempt's value back from the server counts.
+  const clientState = Base64Url.encode(ExpoCrypto.getRandomBytes(24));
   // A shared session makes iOS ask "wants to use ... to sign in" every time; the fleet's
   // provider signs in without cookies, so the ephemeral sheet stays silent.
   const result = await WebBrowser.openAuthSessionAsync(
-    buildOidcSignInUrl(origin, { returnTo, ...options }),
+    buildOidcSignInUrl(origin, { returnTo, clientState, ...options }),
     returnTo,
     { preferEphemeralSession: true },
-  );
+  ).catch(() => null);
+  // Android rejects when no browser can show the sheet.
+  if (result === null) return { _tag: "Failed", error: OIDC_BROWSER_UNAVAILABLE };
   if (result.type !== "success") return { _tag: "Cancelled" };
   const url = new URL(result.url);
+  if (readOidcSignInClientState(url) !== clientState) {
+    return { _tag: "Failed", error: "sign_in_failed" };
+  }
   const request = readHostedPairingRequest(url);
-  // Another app can open this scheme while the sheet is up; only the server signed in to counts.
   if (request && URL.canParse(request.host) && new URL(request.host).origin === origin) {
     return {
       _tag: "Signed",

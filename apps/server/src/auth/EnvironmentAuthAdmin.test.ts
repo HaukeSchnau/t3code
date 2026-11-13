@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -13,6 +14,7 @@ import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { OidcSignInConfig } from "./OidcSignInConfig.ts";
 
 const layerServerConfig = (
   overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken">>,
@@ -68,6 +70,32 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         );
         assert.isAbove(startup.credential.length, 0);
       }).pipe(Effect.provide(layerEnvironmentAuth(undefined, desktopAndLocalOnly))),
+    );
+
+    it.effect("offers sign-in only where the policy lets remote clients pair", () =>
+      Effect.gen(function* () {
+        const layerOidc = Layer.succeed(OidcSignInConfig, {
+          issuer: "https://id.example.test",
+          clientId: "t3-box",
+          clientSecret: Redacted.make("secret"),
+          redirectUri: new URL("https://box.example.test/api/auth/oidc/callback"),
+          label: "Schnau ID",
+          returnOrigins: new Set(["https://box.example.test"]),
+          returnSchemes: new Set<string>(),
+          require: [{ claim: "groups", value: "t3-owner" }],
+        });
+        const offered = (policy?: ManagedPolicyDocument) =>
+          EnvironmentAuth.EnvironmentAuth.pipe(
+            Effect.flatMap((auth) => auth.getDescriptor()),
+            Effect.map((descriptor) => descriptor.oidc),
+            Effect.provide(layerEnvironmentAuth(undefined, policy).pipe(Layer.provide(layerOidc))),
+          );
+        expect(yield* offered()).toEqual({
+          label: "Schnau ID",
+          origin: "https://box.example.test",
+        });
+        expect(yield* offered(desktopAndLocalOnly)).toBeUndefined();
+      }),
     );
 
     it.effect("revokes link-paired clients on startup under a policy without remote clients", () =>

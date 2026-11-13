@@ -32,7 +32,8 @@ import {
   satisfiesClaimRules,
 } from "./OidcSignInConfig.ts";
 
-const BINDING_COOKIE = "t3_oidc_binding";
+// One cookie per sign-in, so sign-ins started in two tabs do not overwrite each other's binding.
+const BINDING_COOKIE_PREFIX = "t3_oidc_";
 const BINDING_COOKIE_PATH = "/api/auth/oidc";
 const PENDING_TTL = Duration.minutes(10);
 const MAX_PENDING = 256;
@@ -41,6 +42,8 @@ const JWKS_CACHE_TTL = Duration.minutes(10);
 const HTTP_TIMEOUT = Duration.seconds(10);
 const PROMPTS = new Set(["none", "login", "consent", "select_account"]);
 const SCOPE = "openid email groups";
+// An app's return URL carries this back, so the app can tell its own sign-in's result apart.
+const CLIENT_STATE = /^[A-Za-z0-9_-]{16,128}$/u;
 // Codes the provider may send back that a client can act on; anything else reads as a failure.
 const FORWARDED_PROVIDER_ERRORS = new Set([
   "login_required",
@@ -55,13 +58,15 @@ export type OidcSignInStep =
   | {
       readonly _tag: "Redirect";
       readonly location: string;
-      /** Set to bind a new sign-in to this browser, or null to clear the binding. */
-      readonly binding?: string | null;
+      /** Binds a new sign-in to this browser, or clears a finished one's binding (null value). */
+      readonly binding?: { readonly cookie: string; readonly value: string | null };
     }
   | { readonly _tag: "Page"; readonly status: number; readonly message: string };
 
 interface PendingSignIn {
+  readonly cookie: string;
   readonly binding: string;
+  readonly clientState: string | null;
   readonly nonce: string;
   readonly verifier: string;
   readonly returnTo: URL;
@@ -80,9 +85,10 @@ const decodeDiscovery = Schema.decodeUnknownEffect(Discovery);
 const decodeTokens = Schema.decodeUnknownEffect(TokenResponse);
 const decodeKeySet = Schema.decodeUnknownEffect(Jwks.KeySet);
 
+/** `stage` names the step that failed for logs; provider data and identities stay out of them. */
 class OidcSignInFailure extends Schema.TaggedError<OidcSignInFailure>()("OidcSignInFailure", {
   code: Schema.String,
-  detail: Schema.String,
+  stage: Schema.String,
 }) {}
 
 const page = (status: number, message: string): OidcSignInStep => ({
@@ -101,10 +107,11 @@ export class OidcSignIn extends Context.Service<
     readonly start: (input: {
       readonly returnTo: string | null;
       readonly prompt: string | null;
+      readonly clientState: string | null;
     }) => Effect.Effect<OidcSignInStep>;
     readonly callback: (input: {
       readonly params: URLSearchParams;
-      readonly binding: string | undefined;
+      readonly cookies: Readonly<Record<string, string | undefined>>;
     }) => Effect.Effect<OidcSignInStep>;
   }
 >()("t3/auth/OidcSignIn") {}
@@ -123,14 +130,14 @@ export const make = Effect.gen(function* () {
   let keySet: { readonly keys: Jwks.KeySet; readonly expiresAt: number } | undefined;
 
   const randomToken = (size: number) => random.randomBytes(size).pipe(Effect.map(Base64Url.encode));
-  const fail = (code: string, detail: string) => new OidcSignInFailure({ code, detail });
+  const fail = (code: string, stage: string) => new OidcSignInFailure({ code, stage });
 
-  const getJson = (url: string) =>
+  const getJson = (url: string, stage: string) =>
     http.get(url, { headers: { accept: "application/json" } }).pipe(
       Effect.filterOrFail((response) => response.status === 200),
       Effect.flatMap((response) => response.json),
       Effect.timeout(HTTP_TIMEOUT),
-      Effect.mapError(() => fail("unavailable", `GET ${url} failed.`)),
+      Effect.mapError(() => fail("unavailable", stage)),
     );
 
   // The provider's endpoints must live on the issuer's origin, so a tampered document cannot
@@ -139,9 +146,10 @@ export const make = Effect.gen(function* () {
     if (discovered) return discovered;
     const document = yield* getJson(
       `${config.issuer.replace(/\/+$/u, "")}/.well-known/openid-configuration`,
+      "discovery",
     ).pipe(
       Effect.flatMap(decodeDiscovery),
-      Effect.mapError(() => fail("unavailable", "The provider's discovery document is invalid.")),
+      Effect.mapError(() => fail("unavailable", "discovery")),
     );
     const issuerOrigin = new URL(config.issuer).origin;
     const endpoints = [document.authorization_endpoint, document.token_endpoint, document.jwks_uri];
@@ -149,16 +157,16 @@ export const make = Effect.gen(function* () {
       document.issuer !== config.issuer ||
       endpoints.some((url) => !URL.canParse(url) || new URL(url).origin !== issuerOrigin)
     ) {
-      return yield* fail("unavailable", "The provider's discovery document names another issuer.");
+      return yield* fail("unavailable", "discovery-issuer");
     }
     discovered = document;
     return document;
   });
 
   const fetchKeySet = Effect.fn("OidcSignIn.fetchKeySet")(function* (jwksUri: string) {
-    const keys = yield* getJson(jwksUri).pipe(
+    const keys = yield* getJson(jwksUri, "keys").pipe(
       Effect.flatMap(decodeKeySet),
-      Effect.mapError(() => fail("unavailable", "The provider's signing keys are invalid.")),
+      Effect.mapError(() => fail("unavailable", "keys")),
     );
     keySet = {
       keys,
@@ -199,9 +207,7 @@ export const make = Effect.gen(function* () {
           );
     return yield* verified.pipe(
       Effect.mapError((error) =>
-        error._tag === "OidcSignInFailure"
-          ? error
-          : fail("sign_in_failed", "The provider's ID token did not verify."),
+        error._tag === "OidcSignInFailure" ? error : fail("sign_in_failed", "id-token"),
       ),
     );
   });
@@ -212,7 +218,8 @@ export const make = Effect.gen(function* () {
     code: string,
     verifier: string,
   ) {
-    const response = yield* http
+    // The timeout covers the body too: a provider that stalls after its headers fails the sign-in.
+    return yield* http
       .execute(
         HttpClientRequest.post(document.token_endpoint).pipe(
           HttpClientRequest.setHeaders({
@@ -231,25 +238,24 @@ export const make = Effect.gen(function* () {
         ),
       )
       .pipe(
-        Effect.timeout(HTTP_TIMEOUT),
-        Effect.mapError(() => fail("unavailable", "The token endpoint could not be reached.")),
+        Effect.mapError(() => fail("unavailable", "token")),
+        Effect.flatMap((response) =>
+          response.status === 200
+            ? response.json.pipe(
+                Effect.flatMap(decodeTokens),
+                Effect.mapError(() => fail("sign_in_failed", "token-response")),
+              )
+            : Effect.fail(fail("sign_in_failed", "token-status")),
+        ),
+        Effect.timeoutOrElse({
+          duration: HTTP_TIMEOUT,
+          orElse: () => Effect.fail(fail("unavailable", "token")),
+        }),
       );
-    if (response.status !== 200) {
-      return yield* fail("sign_in_failed", `The token endpoint answered ${response.status}.`);
-    }
-    return yield* response.json.pipe(
-      Effect.flatMap(decodeTokens),
-      Effect.mapError(() => fail("sign_in_failed", "The token response has no ID token.")),
-    );
   });
 
   const pruneExpired = (now: number) => {
     for (const [state, entry] of pending) if (entry.expiresAt <= now) pending.delete(state);
-    // Unauthenticated starts must not grow memory without bound; the oldest give way.
-    for (const state of pending.keys()) {
-      if (pending.size < MAX_PENDING) break;
-      pending.delete(state);
-    }
   };
 
   const resolveReturnTo = (config: OidcSignInSettings, raw: string | null): URL | undefined => {
@@ -266,6 +272,7 @@ export const make = Effect.gen(function* () {
     config: OidcSignInSettings,
     returnTo: URL,
     descriptor: ExecutionEnvironmentDescriptor | undefined,
+    clientState: string | null,
     result: { readonly token: string } | { readonly error: string },
   ) => {
     const own = config.redirectUri.origin;
@@ -273,6 +280,7 @@ export const make = Effect.gen(function* () {
     const toSelf = isWebUrl(returnTo) && returnTo.origin === own;
     return buildOidcSignInResultUrl(returnTo, {
       ...(toSelf ? {} : { host: own, ...(descriptor ? { label: descriptor.label } : {}) }),
+      ...(clientState === null ? {} : { clientState }),
       result,
     }).toString();
   };
@@ -286,22 +294,32 @@ export const make = Effect.gen(function* () {
     if (input.prompt !== null && !PROMPTS.has(input.prompt)) {
       return page(400, "This sign-in link asks for an unknown prompt.");
     }
+    if (input.clientState !== null && !CLIENT_STATE.test(input.clientState)) {
+      return page(400, "This sign-in link carries an invalid client state.");
+    }
     const descriptor = yield* environment.getDescriptor;
     return yield* Effect.gen(function* () {
       const document = yield* discover(settings);
-      const [state, nonce, verifier, binding] = yield* Effect.all([
+      const now = yield* Clock.currentTimeMillis;
+      pruneExpired(now);
+      // Unauthenticated starts must not grow memory without bound, nor push out live sign-ins.
+      // A full map sends the client back, so a fan-out moves on instead of stopping on a page.
+      if (pending.size >= MAX_PENDING) return yield* fail("unavailable", "capacity");
+      const [state, nonce, verifier, binding, cookieId] = yield* Effect.all([
         randomToken(32),
         randomToken(32),
         randomToken(64),
         randomToken(32),
+        randomToken(12),
       ]);
       const challenge = Base64Url.encode(
         yield* digest.digest(Digest.sha256, new TextEncoder().encode(verifier)),
       );
-      const now = yield* Clock.currentTimeMillis;
-      pruneExpired(now);
+      const cookie = `${BINDING_COOKIE_PREFIX}${cookieId}`;
       pending.set(state, {
+        cookie,
         binding,
+        clientState: input.clientState,
         nonce,
         verifier,
         returnTo,
@@ -321,14 +339,20 @@ export const make = Effect.gen(function* () {
       })) {
         url.searchParams.set(name, value);
       }
-      return { _tag: "Redirect", location: url.toString(), binding } satisfies OidcSignInStep;
+      return {
+        _tag: "Redirect",
+        location: url.toString(),
+        binding: { cookie, value: binding },
+      } satisfies OidcSignInStep;
     }).pipe(
       Effect.catchTags({
         OidcSignInFailure: (error) =>
-          Effect.logWarning("OIDC sign-in could not start.", { detail: error.detail }).pipe(
+          Effect.logWarning("OIDC sign-in could not start.", { stage: error.stage }).pipe(
             Effect.as<OidcSignInStep>({
               _tag: "Redirect",
-              location: resultUrl(settings, returnTo, descriptor, { error: error.code }),
+              location: resultUrl(settings, returnTo, descriptor, input.clientState, {
+                error: error.code,
+              }),
             }),
           ),
       }),
@@ -345,15 +369,15 @@ export const make = Effect.gen(function* () {
       if (entry === undefined || entry.expiresAt <= now) {
         return page(400, "This sign-in expired or was already used. Start it again.");
       }
-      if (input.binding !== entry.binding) {
+      if (input.cookies[entry.cookie] !== entry.binding) {
         return page(400, "This sign-in was started in another browser. Start it again here.");
       }
       const descriptor = yield* environment.getDescriptor;
       const finish = (result: { readonly token: string } | { readonly error: string }) =>
         ({
           _tag: "Redirect",
-          location: resultUrl(settings, entry.returnTo, descriptor, result),
-          binding: null,
+          location: resultUrl(settings, entry.returnTo, descriptor, entry.clientState, result),
+          binding: { cookie: entry.cookie, value: null },
         }) satisfies OidcSignInStep;
 
       return yield* Effect.gen(function* () {
@@ -361,31 +385,28 @@ export const make = Effect.gen(function* () {
         if (providerError !== null) {
           return yield* fail(
             FORWARDED_PROVIDER_ERRORS.has(providerError) ? providerError : "sign_in_failed",
-            `The provider answered ${providerError}.`,
+            "provider",
           );
         }
         const code = input.params.get("code");
-        if (!code) return yield* fail("sign_in_failed", "The provider sent no code.");
+        if (!code) return yield* fail("sign_in_failed", "callback-code");
         const document = yield* discover(settings);
         // RFC 9207: a provider that names itself must name this one.
         const returnedIssuer = input.params.get("iss");
         if (returnedIssuer !== null && returnedIssuer !== document.issuer) {
-          return yield* fail("sign_in_failed", "The callback names another issuer.");
+          return yield* fail("sign_in_failed", "callback-issuer");
         }
         const tokens = yield* exchangeCode(settings, document, code, entry.verifier);
         const { claims } = yield* verifyIdToken(settings, document, tokens.id_token);
         if (claims.nonce !== entry.nonce) {
-          return yield* fail("sign_in_failed", "The ID token's nonce does not match.");
+          return yield* fail("sign_in_failed", "id-token-nonce");
         }
         const subject = claims.sub;
         if (typeof subject !== "string" || subject === "") {
-          return yield* fail("sign_in_failed", "The ID token has no subject.");
+          return yield* fail("sign_in_failed", "id-token-subject");
         }
         if (!satisfiesClaimRules(settings.require, claims)) {
-          return yield* fail(
-            "not_allowed",
-            `Subject ${subject} does not meet T3CODE_OIDC_REQUIRE.`,
-          );
+          return yield* fail("not_allowed", "claim-rules");
         }
         // The grant pairs the browser the way a pairing link does, so sessions, revocation and
         // `t3 auth session list` stay as they are.
@@ -398,21 +419,18 @@ export const make = Effect.gen(function* () {
           .pipe(
             Effect.mapError((error) =>
               error._tag === "ManagedPolicyRefusedError"
-                ? fail("pairing_disabled", error.message)
-                : fail("sign_in_failed", error.message),
+                ? fail("pairing_disabled", "grant-policy")
+                : fail("sign_in_failed", "grant"),
             ),
           );
-        yield* Effect.logInfo("OIDC sign-in minted a pairing grant.", {
-          subject,
-          email: typeof claims.email === "string" ? claims.email : undefined,
-        });
+        yield* Effect.logInfo("OIDC sign-in minted a pairing grant.");
         return finish({ token: grant.credential });
       }).pipe(
         Effect.catchTags({
           OidcSignInFailure: (error) =>
             Effect.logWarning("OIDC sign-in failed.", {
               code: error.code,
-              detail: error.detail,
+              stage: error.stage,
             }).pipe(Effect.as(finish({ error: error.code }))),
         }),
       );
@@ -448,13 +466,13 @@ const render = Effect.fnUntraced(function* (step: OidcSignInStep, secure: boolea
     );
   }
   const response = HttpServerResponse.redirect(step.location, { headers: NAVIGATION_HEADERS });
-  const cookie = { httpOnly: true, path: BINDING_COOKIE_PATH, sameSite: "lax", secure } as const;
   if (step.binding === undefined) return response;
+  const options = { httpOnly: true, path: BINDING_COOKIE_PATH, sameSite: "lax", secure } as const;
   return yield* (
-    step.binding === null
-      ? HttpServerResponse.expireCookie(response, BINDING_COOKIE, cookie)
-      : HttpServerResponse.setCookie(response, BINDING_COOKIE, step.binding, {
-          ...cookie,
+    step.binding.value === null
+      ? HttpServerResponse.expireCookie(response, step.binding.cookie, options)
+      : HttpServerResponse.setCookie(response, step.binding.cookie, step.binding.value, {
+          ...options,
           maxAge: PENDING_TTL,
         })
   ).pipe(Effect.orDie);
@@ -472,12 +490,16 @@ export const layerHttp = HttpApiBuilder.group(
       .handleRaw("start", ({ request }) => {
         const params = query(request.url);
         return signIn
-          .start({ returnTo: params.get("return_to"), prompt: params.get("prompt") })
+          .start({
+            returnTo: params.get("return_to"),
+            prompt: params.get("prompt"),
+            clientState: params.get("client_state"),
+          })
           .pipe(Effect.flatMap((step) => render(step, secure)));
       })
       .handleRaw("callback", ({ request }) =>
         signIn
-          .callback({ params: query(request.url), binding: request.cookies[BINDING_COOKIE] })
+          .callback({ params: query(request.url), cookies: request.cookies })
           .pipe(Effect.flatMap((step) => render(step, secure))),
       );
   }),

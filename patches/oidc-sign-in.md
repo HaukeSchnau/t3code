@@ -16,9 +16,11 @@ user. Upstream closed OIDC as not planned (pingdotgg/t3code#12278).
   unknown scopes, such as Google, has to sit behind Dex.
 - `apps/server/src/auth/OidcSignIn.ts` is a confidential relying party with PKCE S256, state and
   nonce. `GET /api/auth/oidc/start` accepts a `return_to` that is a `/pair` page on an allowed web
-  origin or an allowed app scheme, and passes `prompt` through. It binds the sign-in to the
-  starting browser with an httpOnly SameSite=Lax cookie scoped to `/api/auth/oidc`. State, nonce
-  and verifier stay in memory for 10 minutes and are spent once.
+  origin or an allowed app scheme, and passes `prompt` through. It binds each sign-in to the
+  starting browser with its own httpOnly SameSite=Lax cookie scoped to `/api/auth/oidc`. State,
+  nonce and verifier stay in memory for 10 minutes and are spent once; at most 256 sign-ins are
+  pending, and a start beyond that returns to `return_to` with `oidc_error=unavailable` instead of
+  pushing one out. An optional `client_state` comes back in the result's fragment.
 - `GET /api/auth/oidc/callback` checks the binding, exchanges the code, verifies the ID token
   (RS256/ES256, issuer, audience, nonce, a 10-minute JWKS cache that refetches for an unknown
   `kid`) and the claim rules. It does not issue a session. It mints a 2-minute pairing grant with
@@ -36,9 +38,12 @@ user. Upstream closed OIDC as not planned (pingdotgg/t3code#12278).
   `/api/auth/session`), and shows `#oidc_error`. The desktop renderer cannot leave for the
   provider and come back, so it keeps pairing with codes. Mobile signs in when Connect has no
   code and is not adding a route to a known machine, through an ephemeral `openAuthSessionAsync`
-  sheet that returns to `<scheme>://oidc`. A shared sheet makes iOS ask for permission on every
-  sign-in. The ephemeral sheet has no cookies, so it is silent only when the provider recognizes
-  the device without one, as the fleet's Tailnet upstream does.
+  sheet that returns to `<scheme>://oidc`. It accepts only a result that carries back the random
+  `client_state` it sent, since another app can open that scheme. The grant itself is not bound
+  to the device; binding it (DPoP) would make every request of the session carry a proof. A
+  shared sheet makes iOS ask for permission on every sign-in. The ephemeral sheet has no cookies,
+  so it is silent only when the provider recognizes the device without one, as the fleet's
+  Tailnet upstream does.
 
 ## Upstream touch points
 

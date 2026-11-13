@@ -230,15 +230,28 @@ const withServer = <A, E>(
     );
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer)));
 
-const startSignIn = (handler: Handler, returnTo: string, prompt?: string) =>
+const startSignIn = (
+  handler: Handler,
+  returnTo: string,
+  options: { readonly prompt?: string; readonly clientState?: string } = {},
+) =>
   handler(
-    `/api/auth/oidc/start?${new URLSearchParams({ return_to: returnTo, ...(prompt ? { prompt } : {}) })}`,
+    `/api/auth/oidc/start?${new URLSearchParams({
+      return_to: returnTo,
+      ...(options.prompt ? { prompt: options.prompt } : {}),
+      ...(options.clientState ? { client_state: options.clientState } : {}),
+    })}`,
   ).pipe(
-    Effect.map((response) => ({
-      response,
-      location: response.headers.get("location") ?? "",
-      cookie: response.headers.getSetCookie().find((value) => value.startsWith("t3_oidc_binding=")),
-    })),
+    Effect.map((response) => {
+      const cookie = response.headers.getSetCookie().find((value) => value.startsWith("t3_oidc_"));
+      return {
+        response,
+        location: response.headers.get("location") ?? "",
+        cookie,
+        /** The `name=value` pair a browser sends back. */
+        cookiePair: cookie?.split(";", 1)[0] ?? "",
+      };
+    }),
   );
 
 /** Signs in through the fake provider and returns where the callback sent the browser. */
@@ -251,7 +264,7 @@ const signIn = (
   Effect.gen(function* () {
     const started = yield* startSignIn(handler, returnTo);
     const callback = yield* handler(issuer.approve(started.location, behavior), {
-      headers: { cookie: started.cookie?.split(";", 1)[0] ?? "" },
+      headers: { cookie: started.cookiePair },
     });
     return new URL(callback.headers.get("location") ?? "about:blank");
   });
@@ -278,7 +291,7 @@ const redeemWithToken = (handler: Handler, credential: string) =>
     }),
   }).pipe(Effect.map((response) => response.status));
 
-it.live("advertises sign-in and starts it with PKCE, state, nonce and a browser binding", () =>
+it.effect("advertises sign-in and starts it with PKCE, state, nonce and a browser binding", () =>
   withServer((handler) =>
     Effect.gen(function* () {
       const session = yield* handler("/api/auth/session");
@@ -286,7 +299,7 @@ it.live("advertises sign-in and starts it with PKCE, state, nonce and a browser 
         auth: { oidc: { label: "Schnau ID", origin: SERVER } },
       });
 
-      const started = yield* startSignIn(handler, `${SERVER}/pair`, "none");
+      const started = yield* startSignIn(handler, `${SERVER}/pair`, { prompt: "none" });
       expect(started.response.status).toBe(302);
       expect(started.response.headers.get("referrer-policy")).toBe("no-referrer");
       const authorize = new URL(started.location);
@@ -309,7 +322,7 @@ it.live("advertises sign-in and starts it with PKCE, state, nonce and a browser 
   ),
 );
 
-it.live("stays off without an issuer", () =>
+it.effect("stays off without an issuer", () =>
   withServer(
     (handler) =>
       Effect.gen(function* () {
@@ -321,7 +334,7 @@ it.live("stays off without an issuer", () =>
   ),
 );
 
-it.live.each([
+it.effect.each([
   `https://evil.example.test/pair`,
   `${SERVER}/elsewhere`,
   `${SERVER}/pair?next=/`,
@@ -339,7 +352,7 @@ it.live.each([
   ),
 );
 
-it.live.each(["browser-session", "token"] as const)(
+it.effect.each(["browser-session", "token"] as const)(
   "mints a pairing grant that redeems once, first through %s",
   (first) =>
     withServer((handler, issuer, auth) =>
@@ -361,7 +374,7 @@ it.live.each(["browser-session", "token"] as const)(
     ),
 );
 
-it.live.each([
+it.effect.each([
   ["another server", "https://other.example.test/pair", "https://other.example.test/pair"],
   ["the app", "t3code://oidc", "t3code://oidc"],
 ] as const)("hands %s the grant with this server's address", ([_name, returnTo, landing]) =>
@@ -376,28 +389,67 @@ it.live.each([
   ),
 );
 
-it.live("refuses a callback from another browser, an unknown state or a reused one", () =>
+it.effect("refuses a callback from another browser, an unknown state or a reused one", () =>
   withServer((handler, issuer) =>
     Effect.gen(function* () {
       const started = yield* startSignIn(handler, `${SERVER}/pair`);
       const callback = issuer.approve(started.location);
-      const elsewhere = yield* handler(callback, { headers: { cookie: "t3_oidc_binding=other" } });
+      const cookieName = started.cookiePair.split("=", 1)[0];
+      const elsewhere = yield* handler(callback, { headers: { cookie: `${cookieName}=other` } });
       expect(elsewhere.status).toBe(400);
       expect(elsewhere.headers.get("location")).toBeNull();
 
       const unknown = yield* handler("/api/auth/oidc/callback?code=x&state=unknown");
       expect(unknown.status).toBe(400);
 
-      const fresh = yield* startSignIn(handler, `${SERVER}/pair`);
-      const freshCallback = issuer.approve(fresh.location);
-      const cookie = { cookie: fresh.cookie?.split(";", 1)[0] ?? "" };
-      expect((yield* handler(freshCallback, { headers: cookie })).status).toBe(302);
-      expect((yield* handler(freshCallback, { headers: cookie })).status).toBe(400);
+      // Two sign-ins in one browser keep their own bindings, whichever finishes first.
+      const first = yield* startSignIn(handler, `${SERVER}/pair`);
+      const second = yield* startSignIn(handler, `${SERVER}/pair`);
+      const both = { cookie: `${first.cookiePair}; ${second.cookiePair}` };
+      const firstCallback = issuer.approve(first.location);
+      const secondCallback = issuer.approve(second.location);
+      expect((yield* handler(secondCallback, { headers: both })).status).toBe(302);
+      expect((yield* handler(firstCallback, { headers: both })).status).toBe(302);
+      expect((yield* handler(firstCallback, { headers: both })).status).toBe(400);
     }),
   ),
 );
 
-it.live.each([
+it.effect("turns new sign-ins away while full, without dropping one in progress", () =>
+  withServer((handler, issuer) =>
+    Effect.gen(function* () {
+      const live = yield* startSignIn(handler, `${SERVER}/pair`);
+      for (let index = 1; index < 256; index++) {
+        expect((yield* startSignIn(handler, `${SERVER}/pair`)).response.status).toBe(302);
+      }
+      const turnedAway = yield* startSignIn(handler, `${SERVER}/pair`);
+      expect(hashParam(new URL(turnedAway.location), "oidc_error")).toBe("unavailable");
+      const callback = yield* handler(issuer.approve(live.location), {
+        headers: { cookie: live.cookiePair },
+      });
+      expect(hashParam(new URL(callback.headers.get("location")!), "token")).toBeDefined();
+    }),
+  ),
+);
+
+it.effect("echoes the app's client state with the result, and refuses a malformed one", () =>
+  withServer((handler, issuer) =>
+    Effect.gen(function* () {
+      const clientState = "attempt-0123456789abcdef";
+      const started = yield* startSignIn(handler, "t3code://oidc", { clientState });
+      const callback = yield* handler(issuer.approve(started.location), {
+        headers: { cookie: started.cookiePair },
+      });
+      const landed = new URL(callback.headers.get("location")!);
+      expect(hashParam(landed, "client_state")).toBe(clientState);
+      expect(hashParam(landed, "token")).toBeDefined();
+      const malformed = yield* startSignIn(handler, "t3code://oidc", { clientState: "short" });
+      expect(malformed.response.status).toBe(400);
+    }),
+  ),
+);
+
+it.effect.each([
   ["a wrong nonce", { nonce: "other" }, "sign_in_failed"],
   ["a wrong audience", { audience: "another-client" }, "sign_in_failed"],
   [
@@ -417,18 +469,20 @@ it.live.each([
   ),
 );
 
-it.live("returns a silent sign-in's login_required to the client", () =>
+it.effect("returns a silent sign-in's login_required to the client", () =>
   withServer((handler) =>
     Effect.gen(function* () {
-      const started = yield* startSignIn(handler, "t3code://oidc", "none");
+      const clientState = "attempt-0123456789abcdef";
+      const started = yield* startSignIn(handler, "t3code://oidc", { prompt: "none", clientState });
       const state = new URL(started.location).searchParams.get("state")!;
       const callback = yield* handler(
         `/api/auth/oidc/callback?${new URLSearchParams({ error: "login_required", state })}`,
-        { headers: { cookie: started.cookie?.split(";", 1)[0] ?? "" } },
+        { headers: { cookie: started.cookiePair } },
       );
       const landed = new URL(callback.headers.get("location")!);
       expect(landed.searchParams.get("host")).toBe(SERVER);
       expect(hashParam(landed, "oidc_error")).toBe("login_required");
+      expect(hashParam(landed, "client_state")).toBe(clientState);
     }),
   ),
 );

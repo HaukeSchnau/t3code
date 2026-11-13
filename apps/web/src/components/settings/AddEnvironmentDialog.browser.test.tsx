@@ -106,6 +106,32 @@ describe("AddEnvironmentDialog", () => {
     expect(mocks.startOidcSignIn).toHaveBeenCalledWith("https://box.example.test");
   });
 
+  it("keeps the offer of the host the field shows when an older lookup answers last", async () => {
+    const answers = new Map<string, (label: string) => void>();
+    const offer = (host: string, label: string) =>
+      AsyncResult.success(Option.some({ origin: `https://${host}`, label }));
+    const answerLater = (host: string) =>
+      new Promise<ReturnType<typeof offer>>((resolve) =>
+        answers.set(host, (label) => resolve(offer(host, label))),
+      );
+    mocks.readOidcSignInOffer.mockImplementationOnce(answerLater);
+    mocks.readOidcSignInOffer.mockImplementationOnce(answerLater);
+    await using _screen = await render(<Owner />);
+
+    const hostField = page.getByPlaceholder("backend.example.com");
+    await userEvent.click(page.getByRole("button", { name: "Add environment" }));
+    await userEvent.type(hostField, "old.example.test");
+    await userEvent.click(page.getByPlaceholder("PAIRCODE"));
+    await userEvent.clear(hostField);
+    await userEvent.type(hostField, "new.example.test");
+    await userEvent.click(page.getByPlaceholder("PAIRCODE"));
+    answers.get("new.example.test")!("New ID");
+    await expect.element(page.getByRole("button", { name: "Sign in with New ID" })).toBeVisible();
+    answers.get("old.example.test")!("Old ID");
+
+    await expect.element(page.getByRole("button", { name: "Sign in with New ID" })).toBeVisible();
+  });
+
   it("reopens on Remote link after adding an SSH environment", async () => {
     using _bridge = setup();
     await using _screen = await render(<Owner />);

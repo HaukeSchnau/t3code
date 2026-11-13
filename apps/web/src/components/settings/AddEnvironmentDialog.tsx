@@ -127,6 +127,8 @@ export function AddEnvironmentDialog({
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const savedBackendSessionRef = useRef(0);
+  // The host field's value now, which a sign-in lookup that finishes late compares against.
+  const savedBackendHostRef = useRef("");
   const isSshDiscoveryActive = desktopBridge !== undefined && open && savedBackendMode === "ssh";
   const desktopSshHosts = useEnvironmentQuery(
     isSshDiscoveryActive ? desktopSshHostsStateAtom : null,
@@ -160,6 +162,7 @@ export function AddEnvironmentDialog({
       savedBackendSessionRef.current += 1;
       setSavedBackendMode("remote");
       setSavedBackendHost("");
+      savedBackendHostRef.current = "";
       setSavedBackendPairingCode("");
       setSignInOffer(null);
       setSavedBackendSshHost("");
@@ -352,6 +355,7 @@ export function AddEnvironmentDialog({
     if (routeTarget !== null || !canSignInWithOidc() || host.trim() === "") return;
     if (signInOffer?.host === host) return;
     const result = await readOidcSignInOffer(host.trim());
+    if (savedBackendHostRef.current !== host) return;
     setSignInOffer(
       result._tag === "Success" && Option.isSome(result.value)
         ? { host, ...result.value.value }
@@ -361,6 +365,7 @@ export function AddEnvironmentDialog({
 
   const handleSavedBackendHostChange = (value: string) => {
     const parsedPairingUrl = parsePairingUrlFields(value);
+    savedBackendHostRef.current = parsedPairingUrl ? parsedPairingUrl.host : value;
     if (parsedPairingUrl) {
       setSavedBackendHost(parsedPairingUrl.host);
       setSavedBackendPairingCode(parsedPairingUrl.pairingCode);
@@ -441,13 +446,14 @@ export function AddEnvironmentDialog({
         </span>
       </div>
       {signInOffer !== null && signInOffer.host === savedBackendHost ? (
-        <Button
-          className="w-full"
-          disabled={isAddingSavedBackend}
-          onClick={() => startOidcSignIn(signInOffer.origin)}
-        >
-          Sign in with {signInOffer.label}
-        </Button>
+        <div className="grid">
+          <Button
+            disabled={isAddingSavedBackend}
+            onClick={() => startOidcSignIn(signInOffer.origin)}
+          >
+            Sign in with {signInOffer.label}
+          </Button>
+        </div>
       ) : null}
     </div>
   );

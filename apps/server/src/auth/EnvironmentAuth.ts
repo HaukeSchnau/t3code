@@ -722,9 +722,14 @@ export const make = Effect.gen(function* () {
   const sessions = yield* SessionStore.SessionStore;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const digest = yield* Digest.Digest;
-  const descriptor = yield* policy.getDescriptor();
   const config = yield* ServerConfig.ServerConfig;
   const managedPolicy = yield* ManagedPolicy.ManagedPolicy;
+  // A sign-in ends in a pairing grant, which a policy without remote clients refuses.
+  const { oidc, ...policyDescriptor } = yield* policy.getDescriptor();
+  const descriptor: ServerAuthDescriptor =
+    oidc && ManagedLimits.allowsRemoteClients(managedPolicy)
+      ? { ...policyDescriptor, oidc }
+      : policyDescriptor;
   const devAuth = resolveReusableDevAuth(config);
 
   const authenticateToken = (

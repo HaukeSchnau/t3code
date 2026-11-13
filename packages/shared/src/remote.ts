@@ -193,15 +193,22 @@ export const readHostedPairingRequest = (url: URL): HostedPairingRequest | null 
 
 const OIDC_SIGN_IN_START_PATH = "/api/auth/oidc/start";
 const OIDC_SIGN_IN_ERROR_PARAM = "oidc_error";
+const OIDC_SIGN_IN_CLIENT_STATE_PARAM = "client_state";
 
 /** Where to start signing in to the server at `httpBaseUrl` through its OpenID Connect provider. */
 export const buildOidcSignInUrl = (
   httpBaseUrl: string,
-  input: { readonly returnTo: string; readonly prompt?: "none" },
+  input: {
+    readonly returnTo: string;
+    readonly prompt?: "none";
+    /** Comes back with the result, so a client can tell its own sign-in's result apart. */
+    readonly clientState?: string;
+  },
 ): string => {
   const url = new URL(OIDC_SIGN_IN_START_PATH, httpBaseUrl);
   url.searchParams.set("return_to", input.returnTo);
   if (input.prompt) url.searchParams.set("prompt", input.prompt);
+  if (input.clientState) url.searchParams.set(OIDC_SIGN_IN_CLIENT_STATE_PARAM, input.clientState);
   return url.toString();
 };
 
@@ -214,19 +221,26 @@ export const buildOidcSignInResultUrl = (
   input: {
     readonly host?: string;
     readonly label?: string;
+    readonly clientState?: string;
     readonly result: { readonly token: string } | { readonly error: string };
   },
 ): URL => {
   const next = new URL(returnTo.toString());
   if (input.host) next.searchParams.set(HOSTED_PAIRING_HOST_PARAM, input.host);
   if (input.host && input.label) next.searchParams.set(HOSTED_PAIRING_LABEL_PARAM, input.label);
-  next.hash = new URLSearchParams(
+  const fragment = new URLSearchParams(
     "token" in input.result
       ? [[PAIRING_TOKEN_PARAM, input.result.token]]
       : [[OIDC_SIGN_IN_ERROR_PARAM, input.result.error]],
-  ).toString();
+  );
+  if (input.clientState) fragment.set(OIDC_SIGN_IN_CLIENT_STATE_PARAM, input.clientState);
+  next.hash = fragment.toString();
   return next;
 };
+
+/** The client state a sign-in result carries back, if its client sent one. */
+export const readOidcSignInClientState = (url: URL): string | null =>
+  readHashParams(url).get(OIDC_SIGN_IN_CLIENT_STATE_PARAM) || null;
 
 export interface OidcSignInFailure {
   /** The server that refused, or empty when the return URL is that server's own page. */
