@@ -39,7 +39,9 @@ that keeps a tidy list of open work with its origin.
 - **A nightly gardener.** A home with `T3CODE_FOLLOW_UP_GARDENER_AT` (local `HH:MM`) launches one
   agent thread a night in the scratch project with the server's default model. It merges
   duplicates, closes finished work, checks conditions, keeps types consistent and reads the threads
-  its members (`T3CODE_FOLLOW_UP_MEMBERS`) settled since the last pass. Its thread's last message
+  its members (`T3CODE_FOLLOW_UP_MEMBERS`) settled since the last pass for work and ideas nobody
+  wrote down, big ideas included. When several open follow-ups share a root cause, it writes down
+  the bigger change that would remove them all as one idea that links to each of them. Its thread's last message
   is the report, and saves from that thread log as the gardener's. Clients can start a pass at once
   (`followUps.runGardener`).
 - **Hints at thread start.** The first turn of a top-level thread a user started (not a scheduled
