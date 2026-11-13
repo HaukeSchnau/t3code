@@ -308,6 +308,13 @@ export const SpeechPostProcessingOptions = Schema.Struct({
 });
 export type SpeechPostProcessingOptions = typeof SpeechPostProcessingOptions.Type;
 
+/**
+ * `command` treats the transcript as an instruction: it rewrites the draft's selection, or
+ * writes new text at the cursor. Servers without the `voiceCommands` capability ignore it.
+ */
+export const SpeechPostProcessingIntent = Schema.Literals(["dictate", "command"]);
+export type SpeechPostProcessingIntent = typeof SpeechPostProcessingIntent.Type;
+
 export const EnvironmentSpeechPostProcessingRequest = Schema.Struct({
   options: SpeechPostProcessingOptions,
   transcript: Schema.String.check(Schema.isMaxLength(100_000)),
@@ -315,6 +322,9 @@ export const EnvironmentSpeechPostProcessingRequest = Schema.Struct({
     text: Schema.String.check(Schema.isMaxLength(100_000)),
     selection: Schema.Struct({ start: Schema.Number, end: Schema.Number }),
   }),
+  intent: Schema.optionalKey(SpeechPostProcessingIntent),
+  /** The app outside T3 that receives the text, such as "Slack". */
+  targetApp: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
 });
 export type EnvironmentSpeechPostProcessingRequest =
   typeof EnvironmentSpeechPostProcessingRequest.Type;

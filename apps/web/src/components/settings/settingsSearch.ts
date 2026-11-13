@@ -548,6 +548,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["speech voice keyboard hotkey hold toggle auto"],
   },
   {
+    id: "dictation-key",
+    title: "Dictation key",
+    to: "/settings/voice",
+    searchTerms: ["fn globe function right option command push to talk dictate anywhere"],
+  },
+  {
+    id: "dictation-in-other-apps",
+    title: "Use the key in other apps",
+    to: "/settings/voice",
+    searchTerms: ["dictate anywhere global paste accessibility system wide"],
+  },
+  {
+    id: "dictation-reads-field",
+    title: "Read the text around the cursor",
+    to: "/settings/voice",
+    searchTerms: ["context cleanup privacy field selection"],
+  },
+  {
     id: "speech-language",
     title: "Transcription language",
     to: "/settings/voice",

@@ -108,6 +108,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { MicrophoneTest } from "./MicrophoneTest";
 import { CloudVoiceConfiguration } from "./CloudVoiceConfiguration";
+import { DictationKeySettings } from "./DictationKeySettings";
 import { LanguageRow, ModelBenchmarks, orderSpeechLanguages } from "./SpeechModelComparison";
 import { languageLabel, SpeechLanguageSelect } from "./SpeechLanguageSelect";
 import { filterSpeechModels, type SpeechModelSort } from "./speechModelBrowser";
@@ -1333,6 +1334,7 @@ export function VoiceSettingsPanel() {
             </Select>
           }
         />
+        <DictationKeySettings />
       </SettingsSection>
 
       <SettingsSection id="voice-transcription" title="Transcription">

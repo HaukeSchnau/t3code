@@ -1,5 +1,5 @@
 import type { VoiceInputState } from "@t3tools/client-runtime/voice-input";
-import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { ResolvedKeybindingsConfig, SpeechPostProcessingIntent } from "@t3tools/contracts";
 import { useEffect, useRef, type RefObject } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -16,9 +16,10 @@ function shouldFinishDictationOnRelease(mode: "auto" | "hold" | "toggle", elapse
 type SpeechActions = {
   available: boolean;
   state: VoiceInputState;
-  start(): Promise<void>;
+  start(options?: { readonly intent?: SpeechPostProcessingIntent }): Promise<void>;
   stop(): Promise<void>;
   cancel(): void;
+  retarget?(intent: SpeechPostProcessingIntent): void;
 };
 
 export type DictationKeyHandlers = {
@@ -58,6 +59,21 @@ function ownsShortcut(id: symbol) {
     entries.find(([, read]) => read().targetRef?.current?.contains(document.activeElement));
   if (focused) return focused[0] === id;
   return entries.find(([, read]) => !read().targetRef && !read().ownsFocus)?.[0] === id;
+}
+
+/** The editor the desktop dictation key drives, chosen as the chord chooses one. */
+export function readDictationShortcutOwner(): Pick<ShortcutInput, "speech" | "disabled"> | null {
+  for (const [id, read] of shortcutTargets) {
+    if (ownsShortcut(id)) return read();
+  }
+  return null;
+}
+
+export function isDictationShortcutBusy() {
+  return [...shortcutTargets.values()].some((read) => {
+    const phase = read().speech.state.phase;
+    return phase !== "idle" && phase !== "error";
+  });
 }
 
 export function useDictationShortcut(input: ShortcutInput) {

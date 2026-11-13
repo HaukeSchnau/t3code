@@ -1032,6 +1032,94 @@ export type DesktopMediaRead = typeof DesktopMediaReadSchema.Type;
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+/**
+ * A press of the dictation key, classified by the desktop app. `t3` presses began while a T3
+ * window was focused and dictate into its composer; `app` presses began in another app and paste
+ * there. Fn+Shift is `draft`, Fn+Control is `command`; the gesture can change during a hold.
+ */
+export const DesktopDictationGesture = Schema.Literals(["dictate", "draft", "command"]);
+export type DesktopDictationGesture = typeof DesktopDictationGesture.Type;
+export type DesktopDictationEvent =
+  | {
+      readonly type: "tap" | "hold";
+      readonly pressId: number;
+      readonly gesture: DesktopDictationGesture;
+      readonly target: "t3" | "app";
+    }
+  | {
+      readonly type: "gesture";
+      readonly pressId: number;
+      readonly gesture: DesktopDictationGesture;
+    }
+  | { readonly type: "release" | "cancel"; readonly pressId: number }
+  | { readonly type: "escape" | "pill-click" };
+
+export const DesktopDictationPrepareRequest = Schema.Struct({
+  pressId: Schema.Number,
+  selection: Schema.Boolean,
+});
+export type DesktopDictationPrepareRequest = typeof DesktopDictationPrepareRequest.Type;
+/** The app a press began in and, when readable, the text around its cursor. */
+export const DesktopDictationTarget = Schema.Struct({
+  app: Schema.NullOr(Schema.String),
+  draft: Schema.NullOr(
+    Schema.Struct({
+      text: Schema.String,
+      selection: Schema.Struct({ start: Schema.Number, end: Schema.Number }),
+    }),
+  ),
+});
+export type DesktopDictationTarget = typeof DesktopDictationTarget.Type;
+
+export const DesktopDictationDeliverRequest = Schema.Struct({
+  pressId: Schema.Number,
+  text: Schema.String.check(Schema.isMaxLength(100_000)),
+});
+export type DesktopDictationDeliverRequest = typeof DesktopDictationDeliverRequest.Type;
+/** `copied` means the app was no longer in front, or T3 may not type into it. */
+export const DesktopDictationDelivery = Schema.Literals(["pasted", "copied", "failed"]);
+export type DesktopDictationDelivery = typeof DesktopDictationDelivery.Type;
+
+export const DesktopDictationPill = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("listening"),
+    gesture: DesktopDictationGesture,
+    level: Schema.Number,
+    preview: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2_000))),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("working"),
+    gesture: DesktopDictationGesture,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("notice"),
+    tone: Schema.Literals(["info", "error"]),
+    message: Schema.String.check(Schema.isMaxLength(500)),
+    clickable: Schema.Boolean,
+  }),
+]);
+export type DesktopDictationPill = typeof DesktopDictationPill.Type;
+
+export const DesktopDictationStatus = Schema.Struct({
+  supported: Schema.Boolean,
+  listening: Schema.Boolean,
+  accessibility: Schema.Boolean,
+  /** What macOS does when the Globe key is pressed alone; anything but `none` also fires on Fn. */
+  globeKey: Schema.NullOr(Schema.Literals(["none", "input-source", "emoji", "dictation"])),
+  message: Schema.NullOr(Schema.String),
+});
+export type DesktopDictationStatus = typeof DesktopDictationStatus.Type;
+
+export interface DesktopDictationBridge {
+  getStatus: () => Promise<DesktopDictationStatus>;
+  onEvent: (listener: (event: DesktopDictationEvent) => void) => () => void;
+  prepare: (request: DesktopDictationPrepareRequest) => Promise<DesktopDictationTarget>;
+  deliver: (request: DesktopDictationDeliverRequest) => Promise<DesktopDictationDelivery>;
+  setPill: (pill: DesktopDictationPill | null) => Promise<void>;
+  /** Opens Accessibility settings with T3's helper, so T3 can read fields and paste in other apps. */
+  requestAccessibility: () => Promise<void>;
+}
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled: () => boolean;
@@ -1159,6 +1247,7 @@ export interface DesktopBridge {
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
   };
   preview: DesktopPreviewBridge;
+  dictation: DesktopDictationBridge;
 }
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
