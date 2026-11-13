@@ -11,9 +11,14 @@ keeps the visible meter and reads only upstream's provider snapshots.
 
 ## Requirements
 
-- The composer footer shows the selected provider's session and weekly windows as small bars with
-  the quota left. Providers with other windows fill the two rows in their
-  reported order.
+- The composer footer shows the selected provider's session window and its all-models weekly
+  window as small bars with the quota left. Providers with other windows fill the two rows in
+  their reported order. Claude no longer has a session window, so it shows its weekly and
+  whatever else it reports.
+- A weekly window scoped to one model, such as Claude's Fable weekly, shows only while the composer
+  has that model selected, labelled with the model's name instead of `1w`. Upstream's contract has
+  no model scope on a window, so the meter reads Claude's `Weekly · <model>` label and matches the
+  model's words against the selected slug.
 - A bar turns amber when spending runs ahead of the window (upstream's `paceOf`) and red with 10% or
   less left. Hovering opens upstream's `LimitWindows` for every window, with reset times.
 - A provider that cannot report its own windows, such as Claude sending through a CLIProxyAPI hub
@@ -29,7 +34,7 @@ keeps the visible meter and reads only upstream's provider snapshots.
 
 `apps/web/src/components/chat/ComposerUsageMeter.tsx` and its `.logic.ts` are fork-owned.
 `ChatView.tsx` passes the environment's `usageLimitSources` to `ChatComposer.tsx`, which passes
-them with `selectedProviderStatus` to `ComposerFooterPrimaryActions` in
+them with `selectedProviderStatus` and `selectedModel` to `ComposerFooterPrimaryActions` in
 `chat/ComposerFooterControls.tsx`, which renders the meter before the primary actions.
 `ChatComposer.tsx` keeps an `isComposerFooterCompact` state beside upstream's
 `isComposerPrimaryActionsCompact` for the hide rule. The pooled fallback hands `collectLimitAccounts` from `packages/shared/src/usageLimits.ts`
@@ -37,4 +42,5 @@ a presentation with no providers, so only the hub accounts count.
 
 ## Removal
 
-Drop this patch if upstream adds an always-visible limits indicator to the composer.
+Drop this patch if upstream adds an always-visible limits indicator to the composer. Replace the
+label match with a structural field if upstream adds a model scope to `ServerProviderUsageWindow`.
