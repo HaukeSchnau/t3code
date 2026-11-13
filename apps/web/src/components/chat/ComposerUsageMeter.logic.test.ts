@@ -83,7 +83,7 @@ describe("meterSource", () => {
     const apiKey = provider({ checkedAt, windows: [], unavailable: { reason: "unsupported" } });
     const source = meterSource(environmentId, apiKey, hub, now);
     expect(source?.kind === "pool" ? source.pool.accounts.length : null).toBe(2);
-    expect(meterRows(source!, now)).toEqual([
+    expect(meterRows(source!, null, now)).toEqual([
       { id: "five_hour", label: "Session", shortLabel: "Session", remaining: 30, tone: "normal" },
     ]);
   });
@@ -101,13 +101,22 @@ describe("meterWindows", () => {
     const weekly = window({ id: "seven_day", kind: "weekly" });
     const opus = window({ id: "seven_day_opus", kind: "weekly" });
     const session = window({ id: "five_hour", kind: "session" });
-    expect(meterWindows([weekly, opus, session])).toEqual([session, weekly]);
+    expect(meterWindows([weekly, opus, session], null)).toEqual([session, weekly]);
   });
 
   it("fills in with the remaining windows when there is no session window", () => {
     const monthly = window({ id: "zai_mcp", kind: "monthly" });
     const weekly = window({ id: "zai_weekly", kind: "weekly" });
-    expect(meterWindows([monthly, weekly])).toEqual([weekly, monthly]);
+    expect(meterWindows([monthly, weekly], null)).toEqual([weekly, monthly]);
+  });
+
+  it("shows a model's own weekly only while that model is selected", () => {
+    const weekly = window({ id: "seven_day", kind: "weekly", label: "Weekly" });
+    const fable = window({ id: "seven_day_fable", kind: "weekly", label: "Weekly · Fable" });
+    const spend = window({ id: "monthly_spend", kind: "monthly", label: "Monthly spend" });
+    expect(meterWindows([weekly, fable], "claude-opus-5-5")).toEqual([weekly]);
+    expect(meterWindows([weekly, spend, fable], "claude-fable-5-2")).toEqual([weekly, fable]);
+    expect(meterWindows([fable, weekly], "fable")).toEqual([weekly, fable]);
   });
 });
 
@@ -117,6 +126,9 @@ describe("windowShortLabel", () => {
     expect(windowShortLabel(window({ windowDurationMins: 7 * 24 * 60 }))).toBe("1w");
     expect(windowShortLabel(window({ windowDurationMins: 30 * 24 * 60 }))).toBe("30d");
     expect(windowShortLabel(window({ label: "Credits" }))).toBe("Credits");
+    expect(
+      windowShortLabel(window({ label: "Weekly · Fable", windowDurationMins: 7 * 24 * 60 })),
+    ).toBe("Fable");
   });
 });
 
@@ -126,7 +138,7 @@ describe("meter tone", () => {
   const resetsAt = new Date(now + 4 * HOUR).toISOString();
   const tone = (overrides: Partial<ServerProviderUsageWindow>) => {
     const source: MeterSource = { kind: "account", windows: [window(overrides)] };
-    return meterRows(source, now)[0]?.tone;
+    return meterRows(source, null, now)[0]?.tone;
   };
 
   it("stays normal while spending keeps pace with the window", () => {
