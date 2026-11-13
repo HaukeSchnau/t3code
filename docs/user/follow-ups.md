@@ -7,6 +7,10 @@ Each follow-up links back to the thread and message it came from.
 Open **Follow-ups** from the sidebar or the command palette. On mobile, choose **Follow-ups** in
 the workspace navigation.
 
+When an agent mentions a follow-up in a chat, it shows as a chip with the follow-up's current title
+and, once it's no longer open, its status. Click or tap it to open the follow-up. A follow-up kept
+on an environment you aren't connected to shows as a plain link.
+
 ## Work with a follow-up
 
 - **Start a thread** opens a new thread seeded with the follow-up and a link to where it came

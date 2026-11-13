@@ -33,15 +33,21 @@ const shared = {
   ],
 };
 
+/** `link` names the home, so a forwarded result opens in the store that keeps it. */
+export const LinkedFollowUp = Schema.Struct({
+  ...FollowUp.fields,
+  link: Schema.optional(Schema.String),
+});
+
 export const FollowUpsResult = Schema.Struct({
-  followUps: Schema.Array(FollowUp),
+  followUps: Schema.Array(LinkedFollowUp),
   types: Schema.Array(FollowUpType),
 });
 
 export const FollowUpsTool = Tool.make("follow_ups", {
   ...shared,
   description:
-    "Follow-ups are things worth doing later, kept for the user across threads and machines. Search before you write one, so you update it instead of adding a duplicate. Words in `query` match title, tags, type and body; `ids` reads exact ones. `status` defaults to open and picked_up. The result also lists the follow-up types agents defined.",
+    "Follow-ups are things worth doing later, kept for the user across threads and machines. Search before you write one, so you update it instead of adding a duplicate. Words in `query` match title, tags, type and body; `ids` reads exact ones. `status` defaults to open and picked_up. The result also lists the follow-up types agents defined. In your reply, name a follow-up by its `link` verbatim.",
   parameters: Schema.Struct({
     query: Schema.optional(Schema.String),
     ids: Schema.optional(Schema.Array(FollowUpId)),
@@ -64,14 +70,14 @@ export const FollowUpFromThread = Schema.Struct({
 });
 
 export const FollowUpSaveResult = Schema.Struct({
-  followUp: Schema.optional(FollowUp),
+  followUp: Schema.optional(LinkedFollowUp),
   type: Schema.optional(FollowUpType),
 });
 
 export const FollowUpSaveTool = Tool.make("follow_up_save", {
   ...shared,
   description:
-    "Write down a follow-up so it doesn't depend on the user's memory, or change one (`id`). Updating one or writing nothing are normal outcomes. The body stands on its own. T3 records this thread as its origin; `fromThread` names another thread it came from. `dueAt` brings it back to the user's inbox then; `condition` is a moment in plain words a nightly pass checks. Tags are loose, projects included. Reuse a type, or define one with its fields in `defineType`. Close with `status` done or dropped and a `result`, or merge a duplicate with `mergeInto`. `picked_up` means this thread works on it.",
+    "Write down a follow-up so it doesn't depend on the user's memory, or change one (`id`). Updating one or writing nothing are normal outcomes. The body stands on its own. T3 records this thread as its origin; `fromThread` names another thread it came from. `dueAt` brings it back to the user's inbox then; `condition` is a moment in plain words a nightly pass checks. Tags are loose, projects included. Reuse a type, or define one with its fields in `defineType`. Close with `status` done or dropped and a `result`, or merge a duplicate with `mergeInto`. `picked_up` means this thread works on it. In your reply, name it by its `link` verbatim.",
   parameters: Schema.Struct({
     id: Schema.optional(FollowUpId),
     title: Schema.optional(TrimmedNonEmptyString),

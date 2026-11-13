@@ -117,7 +117,8 @@ function threadLinkHref(link: ThreadLink): string {
     : `${V2_PREFIX}${link.environmentId}/${link.threadId}`;
 }
 
-const linkLabel = (label: string | undefined) =>
+/** A Markdown link's text: one line, without the brackets that would end it. */
+export const markdownLinkLabel = (label: string | undefined) =>
   label
     ?.replace(/[[\]\\\r\n]/g, " ")
     .replace(/\s+/g, " ")
@@ -125,7 +126,7 @@ const linkLabel = (label: string | undefined) =>
 
 /** Without a label, an autolink: clients show the thread's current title. */
 export function formatThreadLink(ref: ThreadLink, label?: string): string {
-  const cleaned = linkLabel(label);
+  const cleaned = markdownLinkLabel(label);
   const href = threadLinkHref(ref);
   const destination = /[()]/.test(href) ? `<${href}>` : href;
   return cleaned ? `[${cleaned}](${destination})` : `<${href}>`;
@@ -138,7 +139,7 @@ export function formatHostedThreadLink(
   origin?: string,
 ): string {
   const href = hostedThreadLink(ref, origin);
-  const cleaned = linkLabel(label);
+  const cleaned = markdownLinkLabel(label);
   return cleaned ? `[${cleaned}](${href})` : href;
 }
 
