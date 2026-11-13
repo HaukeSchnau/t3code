@@ -18,6 +18,7 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -31,6 +32,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as FollowUpHints from "../followUps/FollowUpHints.ts";
 import * as SkillPacks from "../skills/SkillPacks.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
@@ -164,6 +166,8 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     // Optional so focused tests need no catalog (patches/skill-packs.md).
     const skillPacks = yield* Effect.serviceOption(SkillPacks.SkillPacks);
+    // Optional like skill packs (patches/follow-ups.md).
+    const followUpHints = yield* Effect.serviceOption(FollowUpHints.FollowUpHints);
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     const resolveRecreateBase = Effect.fn("ProviderTurnStartService.resolveRecreateBase")(
@@ -715,6 +719,18 @@ export const layer: Layer.Layer<
       }
       const resolvedRuntimePolicy = resolvedPolicy.success;
       if (!(yield* isCurrentAttemptInStatus("starting"))) return;
+      // A user's new thread hears about an open follow-up it clearly continues. The lookup may
+      // ask the home over a peer link, so it runs while the session opens.
+      const followUpHintFiber = yield* (
+        Option.isSome(followUpHints) &&
+        run.ordinal === 1 &&
+        projection.thread.createdBy === "user" &&
+        projection.thread.lineage.parentThreadId === null &&
+        message.scheduledTaskId === undefined &&
+        parseGoalCommand(message) === null
+          ? followUpHints.value.forFirstMessage(message.text)
+          : Effect.succeed("")
+      ).pipe(Effect.forkChild({ startImmediately: true }));
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
@@ -878,6 +894,7 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      const followUpHint = yield* Fiber.join(followUpHintFiber);
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1608,7 +1625,7 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          const context = [delivery.context, sideChatContext, restartNote, followUpHint]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1676,6 +1693,7 @@ export const layer: Layer.Layer<
         retryHandoff.length === 0 &&
         sideChatHandoff === undefined &&
         restartNote === "" &&
+        followUpHint === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

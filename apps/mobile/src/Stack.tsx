@@ -1,5 +1,6 @@
 import { isDraftThreadRoute } from "./features/threads/thread-route-state";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
+import { FollowUpCaptureRouteScreen } from "./features/follow-ups/FollowUpCaptureScreen";
 import { FollowUpRouteScreen } from "./features/follow-ups/FollowUpRouteScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
 import { PullRequestInlineCommentScreen } from "./features/pull-requests/PullRequestInlineCommentScreen";
@@ -513,6 +514,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: FollowUpRouteScreen,
       linking: "follow-ups/:environmentId/:followUpId",
       options: pageRoute(),
+    }),
+    FollowUpCapture: createNativeStackScreen({
+      screen: FollowUpCaptureRouteScreen,
+      linking: "follow-ups/new",
+      options: sheetRoute({ detent: 0.75, android: "fullScreen" }),
     }),
     PullRequestGuideStop: createNativeStackScreen({
       screen: PullRequestGuideStopScreen,

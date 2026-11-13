@@ -12,6 +12,7 @@ export type {
   MarkdownImageRequest,
   MarkdownImageSourceResolver,
   MarkdownLinkCustomization,
+  MarkdownSelectionMenuItem,
   NativeMarkdownTextStyle,
   SelectableMarkdownSkill,
 } from "./SelectableMarkdownText.types";

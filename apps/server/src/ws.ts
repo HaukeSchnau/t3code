@@ -133,6 +133,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SkillPacks from "./skills/SkillPacks.ts";
 import * as FollowUps from "./followUps/FollowUps.ts";
+import * as FollowUpGardener from "./followUps/FollowUpGardener.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
@@ -691,6 +692,7 @@ const ServerUpstreamWsRpcGroup = ServerWsRpcGroup.omit(
   FOLLOW_UP_WS_METHODS.subscribe,
   FOLLOW_UP_WS_METHODS.save,
   FOLLOW_UP_WS_METHODS.history,
+  FOLLOW_UP_WS_METHODS.runGardener,
   WS_METHODS.artifactsReadMarkdown,
   WS_METHODS.vcsJjRunAction,
   WS_METHODS.vcsJjAssignPaths,
@@ -705,6 +707,7 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
     const jjTurns = yield* JjTurnService.JjTurnService;
     const jjThreadWork = yield* JjThreadWork.JjThreadWork;
     const followUps = yield* FollowUps.FollowUps;
+    const gardener = yield* FollowUpGardener.FollowUpGardener;
     return ServerForkWsRpcGroup.of({
       [WS_METHODS.agentAwarenessRegisterDevice]: (input) =>
         localAgentAwareness.registerDevice(input),
@@ -720,6 +723,7 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
       [FOLLOW_UP_WS_METHODS.save]: (input) => followUps.save(input, { kind: "user", thread: null }),
       [FOLLOW_UP_WS_METHODS.history]: (input) =>
         followUps.history(input.id).pipe(Effect.map((changes) => ({ changes }))),
+      [FOLLOW_UP_WS_METHODS.runGardener]: () => gardener.runNow,
       [WS_METHODS.artifactsReadMarkdown]: (input) => readArtifactMarkdown(input.url),
       [WS_METHODS.vcsJjRunAction]: (input) => jjWorkflow.runAction(input),
       [WS_METHODS.vcsJjThreadWork]: (input) =>

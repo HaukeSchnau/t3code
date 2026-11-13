@@ -88,6 +88,8 @@ import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
 import * as AgentWatches from "./watches/AgentWatches.ts";
 import * as WaitWatchdog from "./watches/WaitWatchdog.ts";
 import * as FollowUps from "./followUps/FollowUps.ts";
+import * as FollowUpGardener from "./followUps/FollowUpGardener.ts";
+import * as FollowUpHints from "./followUps/FollowUpHints.ts";
 import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
@@ -734,12 +736,20 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
   Layer.provideMerge(
-    Layer.merge(AgentWatches.layer, FollowUps.layer.pipe(Layer.provide(Scheduler.layer))),
+    Layer.merge(
+      AgentWatches.layer,
+      FollowUpGardener.layer.pipe(
+        Layer.provideMerge(FollowUps.layer),
+        Layer.provide(Scheduler.layer),
+      ),
+    ),
   ),
   Layer.provideMerge(layerOrchestrationApplication),
   // References read by request fibers too (revert admission, session opens),
   // so they join the runtime context rather than one layer's construction.
-  Layer.provideMerge(Layer.merge(JjTurnHooks.layer, ProviderThreadEnvironment.layer)),
+  Layer.provideMerge(
+    Layer.mergeAll(JjTurnHooks.layer, ProviderThreadEnvironment.layer, FollowUpHints.layer),
+  ),
   Layer.provideMerge(layerJj),
   Layer.provideMerge(ManagedWorkspaces.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
@@ -879,6 +889,8 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Turn start asks for follow-up hints; only this side reaches the home over its peer link.
+  FollowUpHints.layerLookup,
 ).pipe(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),

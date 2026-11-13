@@ -1,5 +1,12 @@
+import { isFollowUpClosed } from "@t3tools/client-runtime/state/follow-ups";
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, FollowUp, FollowUpId, FollowUpType } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  FollowUp,
+  FollowUpGardenerRun,
+  FollowUpId,
+  FollowUpType,
+} from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ListTodoIcon, PlugZapIcon } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
@@ -22,6 +29,7 @@ import { Separator } from "../ui/separator";
 import { SidebarInset } from "../ui/sidebar";
 import { Skeleton } from "../ui/skeleton";
 import { Switch } from "../ui/switch";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -31,11 +39,14 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { FollowUpDetail } from "./FollowUpDetail";
-import { followUpSections, followUpWhenLabel } from "./followUps.logic";
+import { FollowUpGardenerStatus } from "./FollowUpGardenerStatus";
+import { FollowUpGraphView } from "./FollowUpGraphView";
+import { followUpGraphKey, followUpSections, followUpWhenLabel } from "./followUps.logic";
 
 export interface FollowUpsSearch {
   readonly id?: string;
   readonly closed?: true;
+  readonly view?: "graph";
 }
 
 interface FollowUpStore {
@@ -46,6 +57,7 @@ interface FollowUpStore {
   readonly error: string | null;
   readonly followUps: ReadonlyArray<FollowUp>;
   readonly types: ReadonlyArray<FollowUpType>;
+  readonly lastGardenerRun: FollowUpGardenerRun | null;
 }
 
 /**
@@ -79,6 +91,7 @@ function useFollowUpStores(selectedId: string | undefined, showClosed: boolean) 
         error: null,
         followUps: [],
         types: [],
+        lastGardenerRun: null,
       };
     }
     // While closed ones load, the open ones stay on screen.
@@ -92,6 +105,7 @@ function useFollowUpStores(selectedId: string | undefined, showClosed: boolean) 
       error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
       followUps: snapshot?.followUps ?? [],
       types: snapshot?.types ?? [],
+      lastGardenerRun: snapshot?.lastGardenerRun ?? null,
     };
   });
   return { stores, loadingClosed: wantClosed && all.some((result) => result._tag === "Initial") };
@@ -142,6 +156,51 @@ function FollowUpRow(props: {
   );
 }
 
+function storeNote(store: FollowUpStore): string | null {
+  if (!store.connected) return `${store.label} is not connected, so its follow-ups are not shown.`;
+  return store.error === null
+    ? null
+    : `Could not load follow-ups from ${store.label}: ${store.error}`;
+}
+
+/** The store's name when several show, its nightly pass, and why it shows nothing. */
+function FollowUpStoreHeader(props: {
+  readonly store: FollowUpStore;
+  readonly showLabel: boolean;
+}) {
+  const { store } = props;
+  const note = storeNote(store);
+  const gardener = note === null && !store.loading;
+  return (
+    <>
+      {props.showLabel || gardener ? (
+        <div className="flex min-w-0 items-center gap-2 px-3 text-xs font-medium text-muted-foreground">
+          {props.showLabel ? (
+            <>
+              <h2 className="shrink-0">{store.label}</h2>
+              <Separator className="min-w-2 flex-1" />
+            </>
+          ) : (
+            <div className="flex-1" />
+          )}
+          {gardener ? (
+            <FollowUpGardenerStatus
+              homeEnvironmentId={store.environmentId}
+              lastRun={store.lastGardenerRun}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {note !== null ? (
+        <p className="flex items-center gap-2 px-3 text-sm text-muted-foreground">
+          <PlugZapIcon aria-hidden className="size-4 shrink-0" />
+          {note}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 function FollowUpStoreList(props: {
   readonly store: FollowUpStore;
   readonly showLabel: boolean;
@@ -151,25 +210,10 @@ function FollowUpStoreList(props: {
 }) {
   const { store } = props;
   const sections = followUpSections(store.followUps, props.showClosed);
-  const note = !store.connected
-    ? `${store.label} is not connected, so its follow-ups are not shown.`
-    : store.error !== null
-      ? `Could not load follow-ups from ${store.label}: ${store.error}`
-      : null;
   return (
     <section className="flex flex-col gap-3">
-      {props.showLabel ? (
-        <div className="flex items-center gap-2 px-3 text-xs font-medium text-muted-foreground">
-          <h2 className="shrink-0">{store.label}</h2>
-          <Separator className="min-w-2 flex-1" />
-        </div>
-      ) : null}
-      {note !== null ? (
-        <p className="flex items-center gap-2 px-3 text-sm text-muted-foreground">
-          <PlugZapIcon aria-hidden className="size-4 shrink-0" />
-          {note}
-        </p>
-      ) : store.loading ? (
+      <FollowUpStoreHeader store={store} showLabel={props.showLabel} />
+      {storeNote(store) !== null ? null : store.loading ? (
         <div className="flex flex-col gap-2 px-3">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />
@@ -221,19 +265,23 @@ export function FollowUpsPage() {
     !loadingClosed &&
     stores.every((store) => !store.loading);
   const select = (id: FollowUpId) => void navigate({ search: (previous) => ({ ...previous, id }) });
+  const graph = search.view === "graph";
+  const noStores = (
+    <Empty size="compact">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <ListTodoIcon />
+        </EmptyMedia>
+        <EmptyTitle>No follow-up store connected</EmptyTitle>
+        <EmptyDescription>
+          None of the environments connected in this mode keeps follow-ups.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
   const listBody =
     stores.length === 0 ? (
-      <Empty size="compact">
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <ListTodoIcon />
-          </EmptyMedia>
-          <EmptyTitle>No follow-up store connected</EmptyTitle>
-          <EmptyDescription>
-            None of the environments connected in this mode keeps follow-ups.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      noStores
     ) : (
       <div className="flex flex-col gap-6">
         {stores.map((store) => (
@@ -248,7 +296,77 @@ export function FollowUpsPage() {
         ))}
       </div>
     );
+  const loadedStores = stores.filter((store) => !store.loading && storeNote(store) === null);
+  const graphHasNodes = loadedStores.some((store) =>
+    store.followUps.some((followUp) => showClosed || !isFollowUpClosed(followUp)),
+  );
+  const graphBody =
+    stores.length === 0 ? (
+      <div className="p-6">{noStores}</div>
+    ) : (
+      <>
+        <div className="flex shrink-0 flex-col gap-2 px-2 pt-3">
+          {stores.map((store) => (
+            <FollowUpStoreHeader
+              key={store.environmentId}
+              store={store}
+              showLabel={stores.length > 1}
+            />
+          ))}
+        </div>
+        {graphHasNodes ? (
+          <div className="min-h-0 flex-1">
+            <FollowUpGraphView
+              stores={loadedStores}
+              showClosed={showClosed}
+              selectedKey={
+                selected === null
+                  ? null
+                  : followUpGraphKey(selected.store.environmentId, selected.followUp.id)
+              }
+              onSelectFollowUp={select}
+            />
+          </div>
+        ) : stores.some((store) => store.loading) ? (
+          <div className="flex flex-col gap-2 p-5">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        ) : (
+          <p className="p-5 text-sm text-muted-foreground">
+            Nothing to follow up on. Agents add follow-ups here as they work.
+          </p>
+        )}
+      </>
+    );
   const detailOpen = search.id !== undefined;
+  const detailBody =
+    selected !== null ? (
+      <FollowUpDetail
+        key={`${selected.store.environmentId}:${selected.followUp.id}`}
+        homeEnvironmentId={selected.store.environmentId}
+        followUp={selected.followUp}
+        types={selected.store.types}
+        titleOf={(id) =>
+          selected.store.followUps.find((followUp) => followUp.id === id)?.title ?? null
+        }
+        onOpenFollowUp={select}
+      />
+    ) : selectedMissing ? (
+      <Empty size="compact">
+        <EmptyHeader>
+          <EmptyTitle>Follow-up not found</EmptyTitle>
+          <EmptyDescription>
+            It may live in an environment that is not connected in this mode.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    ) : (
+      <div className="flex flex-col gap-3">
+        <Skeleton className="h-6 w-2/3" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
@@ -257,7 +375,13 @@ export function FollowUpsPage() {
           <WorkspaceBreadcrumb ariaLabel="Follow-ups breadcrumb">
             <WorkspaceBreadcrumbItem current={!detailOpen}>
               {detailOpen ? (
-                <Link to="/follow-ups" search={showClosed ? { closed: true } : {}}>
+                <Link
+                  to="/follow-ups"
+                  search={{
+                    ...(showClosed ? { closed: true as const } : {}),
+                    ...(graph ? { view: "graph" as const } : {}),
+                  }}
+                >
                   <WorkspaceBreadcrumbText>Follow-ups</WorkspaceBreadcrumbText>
                 </Link>
               ) : (
@@ -274,6 +398,28 @@ export function FollowUpsPage() {
             ) : null}
           </WorkspaceBreadcrumb>
           <div className="min-w-0 flex-1" />
+          <div className="shrink-0 [-webkit-app-region:no-drag]">
+            <ToggleGroup
+              aria-label="Follow-ups view"
+              size="segmented"
+              variant="segmented"
+              value={[graph ? "graph" : "list"]}
+              onValueChange={(next) => {
+                const view = next[0];
+                if (view !== "list" && view !== "graph") return;
+                void navigate({
+                  search: (previous) => ({
+                    ...(previous.id === undefined ? {} : { id: previous.id }),
+                    ...(previous.closed ? { closed: true as const } : {}),
+                    ...(view === "graph" ? { view: "graph" as const } : {}),
+                  }),
+                });
+              }}
+            >
+              <Toggle value="list">List</Toggle>
+              <Toggle value="graph">Graph</Toggle>
+            </ToggleGroup>
+          </div>
           <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground [-webkit-app-region:no-drag]">
             <Switch
               size="sm"
@@ -283,6 +429,7 @@ export function FollowUpsPage() {
                   search: (previous) => ({
                     ...(previous.id === undefined ? {} : { id: previous.id }),
                     ...(checked ? { closed: true as const } : {}),
+                    ...(previous.view === undefined ? {} : { view: previous.view }),
                   }),
                 })
               }
@@ -290,40 +437,29 @@ export function FollowUpsPage() {
             Show closed
           </label>
         </WorkspacePageHeader>
-        {detailOpen ? (
+        {graph ? (
+          <div className="flex min-h-0 flex-1">
+            <div
+              className={cn(
+                "min-w-0 flex-1 flex-col",
+                detailOpen ? "hidden @4xl/follow-ups:flex" : "flex",
+              )}
+            >
+              {graphBody}
+            </div>
+            {detailOpen ? (
+              <div className="min-w-0 flex-1 overflow-y-auto @4xl/follow-ups:w-120 @4xl/follow-ups:flex-none @4xl/follow-ups:border-l @4xl/follow-ups:border-border">
+                <WorkspacePageContainer>{detailBody}</WorkspacePageContainer>
+              </div>
+            ) : null}
+          </div>
+        ) : detailOpen ? (
           <div className="flex min-h-0 flex-1">
             <div className="hidden w-88 shrink-0 overflow-y-auto border-r border-border px-2 pt-4 pb-12 @4xl/follow-ups:block">
               {listBody}
             </div>
             <div className="min-w-0 flex-1 overflow-y-auto">
-              <WorkspacePageContainer>
-                {selected !== null ? (
-                  <FollowUpDetail
-                    key={`${selected.store.environmentId}:${selected.followUp.id}`}
-                    homeEnvironmentId={selected.store.environmentId}
-                    followUp={selected.followUp}
-                    types={selected.store.types}
-                    titleOf={(id) =>
-                      selected.store.followUps.find((followUp) => followUp.id === id)?.title ?? null
-                    }
-                    onOpenFollowUp={select}
-                  />
-                ) : selectedMissing ? (
-                  <Empty size="compact">
-                    <EmptyHeader>
-                      <EmptyTitle>Follow-up not found</EmptyTitle>
-                      <EmptyDescription>
-                        It may live in an environment that is not connected in this mode.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                ) : (
-                  <div className="flex flex-col gap-3">
-                    <Skeleton className="h-6 w-2/3" />
-                    <Skeleton className="h-24 w-full" />
-                  </div>
-                )}
-              </WorkspacePageContainer>
+              <WorkspacePageContainer>{detailBody}</WorkspacePageContainer>
             </div>
           </div>
         ) : (

@@ -44,6 +44,13 @@ export const followUpHomesAtom = Atom.make((get) => {
     : next;
 }).pipe(Atom.withLabel("mobile:follow-up-homes"));
 
+/** The home that keeps an environment's follow-ups, or null when its server has none. */
+export const environmentFollowUpHomeAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) => get(serverEnvironment.configValueAtom(environmentId))?.followUpHome ?? null,
+  ).pipe(Atom.withLabel(`mobile:follow-up-home:${environmentId}`)),
+);
+
 export interface InboxFollowUp {
   readonly homeEnvironmentId: EnvironmentId;
   readonly followUp: FollowUp;

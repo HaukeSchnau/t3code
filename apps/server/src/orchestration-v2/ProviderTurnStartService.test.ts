@@ -50,6 +50,7 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as FollowUpHints from "../followUps/FollowUpHints.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
@@ -299,6 +300,9 @@ function makeLocalCommandHarness(input: {
    * the provider, or an earlier run that delivered it. `nativeForkFrom` plans a native fork of the
    * parent. `switchedProvider` puts the earlier run and its context on another provider thread.
    */
+  /** Makes this the thread's first run, with this follow-up hint for it. */
+  readonly followUpHint?: string;
+  readonly threadCreatedBy?: OrchestrationV2ThreadProjection["thread"]["createdBy"];
   readonly sideChat?: {
     readonly contextRun: "current" | "failed" | "cancelled" | "delivered";
     readonly nativeForkFrom?: "idle" | "busy";
@@ -322,7 +326,7 @@ function makeLocalCommandHarness(input: {
   const run: OrchestrationV2ThreadProjection["runs"][number] = {
     id: runId,
     threadId,
-    ordinal: 2,
+    ordinal: input.followUpHint === undefined ? 2 : 1,
     providerInstanceId: newInstanceId,
     modelSelection: { instanceId: newInstanceId, model: "gpt-5.4" },
     providerThreadId,
@@ -375,6 +379,7 @@ function makeLocalCommandHarness(input: {
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
       lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      createdBy: input.threadCreatedBy ?? "user",
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -811,7 +816,7 @@ function makeLocalCommandHarness(input: {
     startTurn,
   };
   const open = vi.fn(() =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.followUpHint !== undefined
       ? Effect.succeed(sideChatSession as never)
       : input.interruptOpen === true
         ? Effect.interrupt
@@ -845,7 +850,7 @@ function makeLocalCommandHarness(input: {
   const startRootRun = vi.fn<
     (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
   >((runInput) =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.followUpHint !== undefined
       ? runInput.session.startTurn(runInput as never).pipe(Effect.orDie)
       : input.failReadsAfterRunning === true || input.previousTurn !== undefined
         ? Effect.suspend(() =>
@@ -934,6 +939,10 @@ function makeLocalCommandHarness(input: {
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.succeed(FollowUpHints.FollowUpHints, {
+          register: () => Effect.void,
+          forFirstMessage: () => Effect.succeed(input.followUpHint ?? ""),
+        }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: (handoff) =>
             input.sideChat?.nativeForkFrom === undefined
@@ -1369,6 +1378,24 @@ effectIt.effect.each([false, true])(
       expect(harness.startTurn.mock.calls[0]?.[0].message.text.includes("SIDE_CHAT_CONTEXT")).toBe(
         !nativeGoals,
       );
+    }),
+);
+
+effectIt.effect.each([
+  { threadCreatedBy: "user", hinted: true },
+  { threadCreatedBy: "agent", hinted: false },
+  { threadCreatedBy: "system", hinted: false },
+] as const)(
+  "a user's new thread hears about the open follow-up it continues: %j",
+  ({ threadCreatedBy, hinted }) =>
+    Effect.gen(function* () {
+      const hint = 'This may continue the open follow-up "Check the M2 forwarder" (fu-1).';
+      const text = "Why did the forwarder check fail?";
+      const harness = makeLocalCommandHarness({ text, followUpHint: hint, threadCreatedBy });
+      yield* harness.start;
+      expect(harness.startTurn.mock.calls.map(([turn]) => turn.message.text)).toEqual([
+        hinted ? withInlineContext(hint, text) : text,
+      ]);
     }),
 );
 

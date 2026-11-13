@@ -32,17 +32,23 @@ describe("withRecentThreadShortcut", () => {
 
 describe("buildShortcutActions", () => {
   it("deep-links threads with encoded route params", () => {
-    const actions = buildShortcutActions([
-      { environmentId: "env 1", threadId: "thread/2", title: "Spaced out" },
-    ]);
-    expect(actions[1]?.params?.href).toBe("/threads/env%201/thread%2F2");
-    expect(actions[1]?.title).toBe("Spaced out");
+    const actions = buildShortcutActions(
+      [{ environmentId: "env 1", threadId: "thread/2", title: "Spaced out" }],
+      "android",
+    );
+    const hrefs = actions.map((action) => action.params?.href);
+    expect(hrefs).toEqual(["/new", "/follow-ups/new", "/threads/env%201/thread%2F2"]);
+    expect(actions.map(shortcutHref)).toEqual(hrefs);
+    expect(actions[2]?.title).toBe("Spaced out");
   });
 });
 
 describe("shortcutHref", () => {
   it("accepts exactly the destinations shortcuts can produce", () => {
     expect(shortcutHref({ id: "x", title: "x", params: { href: "/new" } })).toBe("/new");
+    expect(shortcutHref({ id: "x", title: "x", params: { href: "/follow-ups/new" } })).toBe(
+      "/follow-ups/new",
+    );
     expect(shortcutHref({ id: "x", title: "x", params: { href: "/threads/env-1/thread-2" } })).toBe(
       "/threads/env-1/thread-2",
     );
@@ -62,6 +68,7 @@ describe("shortcutHref", () => {
       "/threads/a/b?x=1",
       "/threads/a/b#frag",
       "/new/extra",
+      "/follow-ups/new?quote=x",
     ]) {
       expect(shortcutHref({ id: "x", title: "x", params: { href } })).toBe(null);
     }
@@ -91,8 +98,14 @@ describe("activeThreadRef", () => {
 
 describe("launcher shortcut ids", () => {
   it("cannot collide across different env/thread pairs", () => {
-    const a = buildShortcutActions([{ environmentId: "a-b", threadId: "c", title: "x" }]);
-    const b = buildShortcutActions([{ environmentId: "a", threadId: "b-c", title: "x" }]);
-    expect(a[1]?.id).not.toBe(b[1]?.id);
+    const a = buildShortcutActions(
+      [{ environmentId: "a-b", threadId: "c", title: "x" }],
+      "android",
+    );
+    const b = buildShortcutActions(
+      [{ environmentId: "a", threadId: "b-c", title: "x" }],
+      "android",
+    );
+    expect(a[2]?.id).not.toBe(b[2]?.id);
   });
 });

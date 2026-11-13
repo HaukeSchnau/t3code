@@ -95,6 +95,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   environments: "desktopcomputer",
   usage: "chart.bar.xaxis",
   followUps: FOLLOW_UP_ICON,
+  newFollowUp: "plus",
   archive: "archivebox",
   files: "doc.text",
   terminal: "terminal",
@@ -340,6 +341,13 @@ export function CommandPalette(props: {
         title: "Follow-ups",
         searchTerms: ["later", "todo", "inbox", "reminders"],
         run: () => selectTab("followUps"),
+      },
+      {
+        key: "newFollowUp",
+        kind: "action",
+        title: "New follow-up",
+        searchTerms: ["later", "todo", "capture", "note", "remember"],
+        run: () => navigation.navigate("FollowUpCapture"),
       },
       {
         key: "usage",
