@@ -78,7 +78,7 @@ class SettingsBusyError extends Schema.TaggedError<SettingsBusyError>()("Setting
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
-    return `${this.detail} Try again, or pass --wait <duration>.`;
+    return this.detail;
   }
 }
 
@@ -178,7 +178,7 @@ const offlineLayer = ServerSettingsService.layer.pipe(
 );
 
 const runWithSettings = Effect.fn("cli.settings.run")(function* <A>(
-  flags: CliAuthLocationFlags,
+  flags: CliAuthLocationFlags & { readonly liveOnly: boolean },
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   use: (session: SettingsSession) => Effect.Effect<A, SettingsCommandError>,
 ) {
@@ -225,6 +225,9 @@ const runWithSettings = Effect.fn("cli.settings.run")(function* <A>(
       if (Option.isSome(live)) return live.value;
     }
 
+    if (flags.liveOnly) {
+      return yield* new SettingsBusyError({ detail: "No running T3 Code server answered." });
+    }
     // An unreachable server may still be running or starting; the lock refuses to write behind it.
     yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath).pipe(
       Effect.provide(ProcessRunner.layer),
@@ -360,31 +363,49 @@ const readInput = <A>(source: string, schema: Schema.Codec<A, string, never, nev
 const decodePatchJson = Schema.fromJsonString(ServerSettingsPatch);
 const decodeDocumentJson = Schema.fromJsonString(StoredSettingsDocument);
 
-// Stdout carries only results; temporary failures exit 75 so callers can tell them from bad input.
-const runCommand = <A, E, R>(
+const retryWhileBusy = <A, E, R>(
   wait: Option.Option<Duration.Duration>,
   effect: Effect.Effect<A, E, R>,
 ) =>
-  (Option.isNone(wait)
+  Option.isNone(wait)
     ? effect
     : effect.pipe(
         Effect.retry({
           while: (error) => hasTag(error, "SettingsBusyError"),
           schedule: Schedule.spaced(WAIT_INTERVAL).pipe(Schedule.upTo({ duration: wait.value })),
         }),
-      )
-  ).pipe(
-    Effect.catch((error) =>
-      Console.error(failureDetail(error)).pipe(
+      );
+
+// Stdout carries only results; temporary failures exit 75 so callers can tell them from bad input.
+const reportFailure = <A, E, R>(
+  wait: Option.Option<Duration.Duration>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  effect.pipe(
+    Effect.catch((error) => {
+      const busy = hasTag(error, "SettingsBusyError");
+      const hint = !busy
+        ? ""
+        : Option.isSome(wait)
+          ? ` Gave up after waiting ${Duration.format(wait.value)}.`
+          : " Try again, or pass --wait <duration>.";
+      return Console.error(`${failureDetail(error)}${hint}`).pipe(
         Effect.andThen(
           Effect.sync(() => {
-            process.exitCode = hasTag(error, "SettingsBusyError") ? SETTINGS_EXIT_TEMPORARY : 1;
+            process.exitCode = busy ? SETTINGS_EXIT_TEMPORARY : 1;
           }),
         ),
-      ),
-    ),
+      );
+    }),
     Effect.provideService(References.LogToStderr, true),
   );
+
+const liveOnlyFlag = Flag.Boolean("live-only").pipe(
+  Flag.withDescription(
+    "Exit 75 instead of opening the T3 home directly when no running server answers.",
+  ),
+  Flag.withDefault(false),
+);
 
 const settingsGetCommand = Command.make("get", {
   ...authLocationFlags,
@@ -396,19 +417,23 @@ const settingsGetCommand = Command.make("get", {
     Flag.withDefault(false),
   ),
   wait: waitFlag,
+  liveOnly: liveOnlyFlag,
 }).pipe(
   Command.withDescription(
     "Print the effective server settings, defaults included, with secrets redacted.",
   ),
   Command.withHandler((flags) =>
-    runCommand(
+    reportFailure(
       flags.wait,
-      runWithSettings(flags, [AuthOrchestrationReadScope], (session) =>
-        Console.log(
-          formatSettings(
-            session,
-            flags.sparse ? session.snapshot.stored : session.snapshot.settings,
-            { json: flags.json },
+      retryWhileBusy(
+        flags.wait,
+        runWithSettings(flags, [AuthOrchestrationReadScope], (session) =>
+          Console.log(
+            formatSettings(
+              session,
+              flags.sparse ? session.snapshot.stored : session.snapshot.settings,
+              { json: flags.json },
+            ),
           ),
         ),
       ),
@@ -420,6 +445,7 @@ const settingsPatchCommand = Command.make("patch", {
   ...authLocationFlags,
   json: jsonFlag,
   wait: waitFlag,
+  liveOnly: liveOnlyFlag,
   source: Argument.String("file").pipe(
     Argument.withDescription("JSON file holding a settings patch, or - to read it from stdin."),
   ),
@@ -428,19 +454,23 @@ const settingsPatchCommand = Command.make("patch", {
     "Apply a settings patch the way the settings UI does, then print what changed.",
   ),
   Command.withHandler((flags) =>
-    runCommand(
+    reportFailure(
       flags.wait,
       Effect.gen(function* () {
+        // Read once: a retry must not read a consumed stdin again.
         const patch = yield* readInput(flags.source, decodePatchJson);
         const scopes = [AuthOrchestrationReadScope, ...requiredScopesForServerSettingsPatch(patch)];
-        yield* runWithSettings(flags, scopes, (session) =>
-          session
-            .patch(patch)
-            .pipe(
-              Effect.flatMap((result) =>
-                Console.log(formatResult(session, result, { json: flags.json, dryRun: false })),
+        yield* retryWhileBusy(
+          flags.wait,
+          runWithSettings(flags, scopes, (session) =>
+            session
+              .patch(patch)
+              .pipe(
+                Effect.flatMap((result) =>
+                  Console.log(formatResult(session, result, { json: flags.json, dryRun: false })),
+                ),
               ),
-            ),
+          ),
         );
       }),
     ),
@@ -451,6 +481,7 @@ const settingsApplyCommand = Command.make("apply", {
   ...authLocationFlags,
   json: jsonFlag,
   wait: waitFlag,
+  liveOnly: liveOnlyFlag,
   dryRun: Flag.Boolean("dry-run").pipe(
     Flag.withDescription("Print the changes without writing anything."),
     Flag.withDefault(false),
@@ -469,9 +500,10 @@ const settingsApplyCommand = Command.make("apply", {
 }).pipe(
   Command.withDescription("Make the stored settings match a document, then print what changed."),
   Command.withHandler((flags) =>
-    runCommand(
+    reportFailure(
       flags.wait,
       Effect.gen(function* () {
+        // Read once: a retry must not read a consumed stdin again.
         const desired = yield* readInput(flags.source, decodeDocumentJson);
         const base = Option.isSome(flags.base)
           ? yield* readInput(flags.base.value, decodeDocumentJson)
@@ -481,16 +513,19 @@ const settingsApplyCommand = Command.make("apply", {
           AuthSettingsWriteScope,
           AuthProvidersManageScope,
         ];
-        yield* runWithSettings(flags, scopes, (session) =>
-          session
-            .apply({ desired, ...(base === undefined ? {} : { base }), dryRun: flags.dryRun })
-            .pipe(
-              Effect.flatMap((result) =>
-                Console.log(
-                  formatResult(session, result, { json: flags.json, dryRun: flags.dryRun }),
+        yield* retryWhileBusy(
+          flags.wait,
+          runWithSettings(flags, scopes, (session) =>
+            session
+              .apply({ desired, ...(base === undefined ? {} : { base }), dryRun: flags.dryRun })
+              .pipe(
+                Effect.flatMap((result) =>
+                  Console.log(
+                    formatResult(session, result, { json: flags.json, dryRun: flags.dryRun }),
+                  ),
                 ),
               ),
-            ),
+          ),
         );
       }),
     ),

@@ -90,9 +90,10 @@ and what differs from the defaults.
 `t3 settings apply desired.json` makes the settings match a document in that
 form, resetting whatever the document leaves out. With `--base previous.json`,
 the document you applied last time, it changes only what you changed since, and
-keeps edits made in the Settings page meanwhile. `--dry-run` shows the changes
-without making them. Sensitive environment variables marked `valueRedacted`
-keep their stored value.
+keeps edits made in the Settings page meanwhile, including saved secrets.
+`--dry-run` shows the changes without making them. Sensitive environment
+variables marked `valueRedacted` keep their stored value. A document can't remove
+a source control host; clear that in the Settings page.
 
 `t3 settings patch patch.json` applies a partial settings object instead, as the
 Settings page does. Provider instances are replaced as a whole map, so include
@@ -105,7 +106,8 @@ and changes nothing. If T3 Code is starting, busy, or older than the `t3`
 command, the command exits 75; `--wait 2m` keeps retrying for up to two minutes.
 
 The commands talk to the running server when there is one. Otherwise they work
-on the T3 home directly, and refuse while another server owns it.
+on the T3 home directly, and refuse while another server owns it. `--live-only`
+exits 75 instead of touching the T3 home.
 
 ## Platform support
 

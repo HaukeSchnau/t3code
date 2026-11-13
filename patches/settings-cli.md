@@ -33,37 +33,56 @@ paired client. It has no settings command and no HTTP route for settings.
   when `settings.json` does not decode, rather than print the defaults the server falls back to.
 - **`t3 settings patch`** decodes a `ServerSettingsPatch` and rejects unknown keys. It applies the
   patch through `applyServerSettingsPatch`, the UI's path.
-- **`t3 settings apply`** makes the stored document equal a desired one. Without `--base`, it
-  changes every document path that differs. With `--base`, it changes only the paths where the
-  desired document differs from the base, so a UI edit elsewhere survives until infra's reconciler
-  captures it. Either way it turns the difference into a patch under the settings write lock:
-  - Most keys are set whole.
-  - Map entries such as `projectSettingsOverrides` are set or removed one by one.
-  - `providerInstances` is replaced whole.
-
-  It then checks that the patched result equals the target before anything is written. A patch
-  merges some values, for example `sourceControlHosts` fields or the background activity base
-  profile, so a target the merge cannot reach fails instead of being stored half. `--dry-run`
-  runs everything except the write.
-
+- **`t3 settings apply`** makes the stored document equal a desired one.
+  - **Without `--base`**, it changes every document path that differs.
+  - **With `--base`**, it changes only the paths where the desired document differs from the base,
+    leaf by leaf. A UI edit beside them, even inside the same provider instance, survives until
+    infra's reconciler captures it. Arrays, atomic settings such as model selections, and secret
+    references count as one leaf. An entry the desired document drops from a map is dropped whole.
+    It refuses to remove a secret that neither document names, because the reconciler can only ever
+    capture a secret's `valueRedacted` marker, so such a removal could never be undone.
+  - **Patch.** Either way it turns the target into a patch under the settings write lock:
+    - Most keys are set whole.
+    - `providerInstances` is replaced whole.
+    - Other map entries, such as `projectSettingsOverrides`, are set or removed one by one.
+    - `sourceControlHosts` entries cannot be removed, because their patch merges each host's
+      fields; apply refuses.
+  - **Like the UI.** As in the UI, it leaves out SSH device hosts that are this machine.
+  - **Refusals.** It refuses a `valueRedacted` marker for a secret this host does not hold.
+  - **Check.** It checks that the patched result equals the target before anything is written. A
+    patch merges some values, for example `sourceControlHosts` fields or the background activity
+    base profile, so a target the merge cannot reach fails, naming each path, instead of being
+    stored half.
+  - **`--dry-run`** runs everything except the write.
 - **Report.** Both write commands print the document paths that changed, and every secret written
   or removed. When nothing changes, the server writes nothing and notifies no client
-  (`StoredServerSettings.update`). That applies to every settings save, including the UI's.
+  (`StoredServerSettings.update`). That applies to every settings save, including the UI's. A write
+  that timed out on the client but finished on the server is retried under `--wait` and then
+  reports no change.
 - **Live and offline.** Like `t3 project`, the command uses the running server when
   `server-runtime.json` names one that answers. It calls the fork routes `GET /api/server/settings`
   and `POST /api/server/settings` and `/api/server/settings/apply` (`status/http.ts`), with a
   two-minute local session that it revokes afterwards. The patch route requires the RPC's scopes,
   and apply requires `settings:write` and `providers:manage`. When no server answers, the command
-  takes the server ownership lock and runs the same code against the state directory.
+  takes the server ownership lock and runs the same code against the state directory, unless
+  `--live-only` is set.
 - **Offline `get` is not read-only.** It holds the ownership lock while it reads and may migrate
   the database, as the server does at start. A server that starts during those moments exits
-  because the directory is owned. Callers that only read, such as the reconciler, use the live
-  route.
+  because the directory is owned. Callers that only read, such as the reconciler, pass
+  `--live-only` or call the route.
 - **Exit codes.** Failures print one message to stderr and leave stdout empty. A failure that may
-  pass exits 75. That covers a held lock (a server starting or not answering), a timeout, and HTTP
-  404, 502, 503 or 504 or an unreadable answer (a server older than the CLI). Any other failure
-  exits 1. `--wait <duration>` retries the temporary ones. Infra's deploy hook is a post-switch
-  oneshot that runs `apply --wait`, because T3 does not restart on settings-only deploys.
+  pass exits 75:
+  - a held lock (a server starting or not answering)
+  - a timeout
+  - HTTP 404, 502, 503 or 504, or an unreadable answer (a server older than the CLI)
+  - `--live-only` with no server answering
+
+  Any other failure exits 1. `--wait <duration>` retries the temporary ones.
+
+- **Callers.** Infra's deploy hook is a post-switch oneshot that runs `apply --wait`, because T3
+  does not restart on settings-only deploys. The deploy that first ships this command still runs
+  the old server, which answers 404, so the hook also has to run when T3 starts. Its `--base` is
+  the last document that applied successfully.
 
 ## Upstream touch points
 

@@ -356,3 +356,101 @@ it.effect("apply makes the document true; with --base it leaves paths the repo d
     assert.match(rejected.stderr, /cannot set: compactIdleThreads/);
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
+
+it.effect("apply --base keeps a secret the UI added to an instance the repository changes", () =>
+  Effect.gen(function* () {
+    const home = yield* makeHome();
+    const codex = (enabled: boolean) => ({ driver: "codex", enabled });
+    const base = home.file("base.json", { providerInstances: { codex: codex(true) } });
+    yield* home.settings("apply", base);
+    yield* home.settings(
+      "patch",
+      home.file("ui.json", {
+        providerInstances: {
+          codex: {
+            ...codex(true),
+            environment: [{ name: "OPENAI_API_KEY", value: "sk-ui", sensitive: true }],
+          },
+        },
+      }),
+    );
+    const secrets = NodeFS.readdirSync(NodePath.join(home.baseDir, "userdata", "secrets"));
+
+    const desired = home.file("desired.json", { providerInstances: { codex: codex(false) } });
+    const rebased = JSON.parse(
+      (yield* home.settings("apply", desired, "--base", base, "--json")).stdout,
+    );
+    assert.deepInclude(rebased, { secrets: [], written: true });
+    assert.deepEqual(
+      NodeFS.readdirSync(NodePath.join(home.baseDir, "userdata", "secrets")),
+      secrets,
+    );
+    const after = JSON.parse((yield* home.settings("get", "--sparse", "--json")).stdout).settings;
+    assert.equal(after.providerInstances.codex.enabled, false);
+    assert.equal(after.providerInstances.codex.environment[0].valueRedacted, true);
+
+    // Without --base the document is the whole truth, so the secret goes with the variable.
+    const replaced = JSON.parse((yield* home.settings("apply", desired, "--json")).stdout);
+    assert.deepEqual(replaced.secrets, [
+      { secret: "providerInstances.codex.environment.OPENAI_API_KEY", change: "removed" },
+    ]);
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.effect.each([
+  {
+    label: "a field the per-host merge keeps",
+    stored: { sourceControlHosts: { github: { preferSsh: true, accountPin: "me" } } },
+    desired: { sourceControlHosts: { github: { preferSsh: true } } },
+    error: /cannot reach the document[\s\S]*sourceControlHosts\.github\.accountPin/,
+  },
+  {
+    label: "a source control host",
+    stored: { sourceControlHosts: { github: { preferSsh: true } } },
+    desired: {},
+    error: /cannot remove sourceControlHosts entries: github/,
+  },
+  {
+    label: "a saved-secret marker this host does not hold",
+    stored: {},
+    desired: {
+      providerInstances: {
+        codex: {
+          driver: "codex",
+          environment: [
+            { name: "OPENAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+          ],
+        },
+      },
+    },
+    error: /marks secrets as saved that this host does not hold: providerInstances\.codex/,
+  },
+])("apply refuses $label and writes nothing", ({ stored, desired, error }) =>
+  Effect.gen(function* () {
+    const home = yield* makeHome();
+    yield* home.settings("patch", home.file("stored.json", stored));
+    const before = NodeFS.existsSync(home.settingsPath)
+      ? NodeFS.readFileSync(home.settingsPath, "utf8")
+      : undefined;
+
+    const result = yield* home.settings("apply", home.file("desired.json", desired));
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, error);
+    const after = NodeFS.existsSync(home.settingsPath)
+      ? NodeFS.readFileSync(home.settingsPath, "utf8")
+      : undefined;
+    assert.equal(after, before);
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.effect("--live-only exits 75 instead of opening the T3 home", () =>
+  Effect.gen(function* () {
+    const home = yield* makeHome();
+    const result = yield* home.settings("get", "--live-only");
+    assert.equal(result.exitCode, 75);
+    assert.match(result.stderr, /No running T3 Code server answered/);
+    assert.isFalse(
+      NodeFS.existsSync(NodePath.join(home.baseDir, "userdata", "server-owner.sqlite")),
+    );
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);

@@ -1,4 +1,5 @@
 import {
+  isSecretReference,
   type ProviderInstanceMutation,
   ServerSettings,
   type ServerSettingsApplyInput,
@@ -18,12 +19,12 @@ import {
   ATOMIC_SETTINGS_KEYS,
   redactServerSettingsForClient,
   ServerSettingsService,
-  type SettingsSecretWrite,
   type SettingsUpdatePlan,
   type SettingsUpdateReport,
   StoredServerSettings,
   stripDefaultServerSettings,
 } from "./serverSettings.ts";
+import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 
 export class SettingsDocumentError extends Schema.TaggedError<SettingsDocumentError>()(
   "SettingsDocumentError",
@@ -60,7 +61,7 @@ const ENTRY_PATCH_KEYS: ReadonlySet<string> = new Set([
   "usageModelAliases",
   "sourceControlHosts",
 ]);
-// Changes compare the entries of these maps whole.
+// A document that drops an entry of these maps drops it whole.
 const ENTRY_KEYS: ReadonlySet<string> = new Set([
   ...ENTRY_PATCH_KEYS,
   "providerInstances",
@@ -69,10 +70,6 @@ const ENTRY_KEYS: ReadonlySet<string> = new Set([
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isAtomicPath = (path: ReadonlyArray<string>) =>
-  (path.length === 1 && ATOMIC_SETTINGS_KEYS.has(path[0]!)) ||
-  (path.length === 2 && ENTRY_KEYS.has(path[0]!));
 
 const pickDocumentKeys = (settings: unknown): Record<string, unknown> =>
   isPlainRecord(settings)
@@ -94,14 +91,22 @@ const settingsDocument = (settings: ServerSettings, defaults: ServerSettings) =>
     Effect.orDie,
   );
 
-/** The paths whose values differ, in key order; arrays, atomic settings and map entries compare whole. */
+/**
+ * The paths whose values differ, in key order, leaf by leaf so a rebase keeps edits beside them.
+ * Arrays, atomic settings and secret references compare whole, as does a map entry one side lacks.
+ */
 function documentChanges(
   before: unknown,
   after: unknown,
   path: ReadonlyArray<string> = [],
 ): ReadonlyArray<StoredSettingsChange> {
+  const whole =
+    (path.length === 1 && ATOMIC_SETTINGS_KEYS.has(path[0]!)) ||
+    (path.length === 2 && ENTRY_KEYS.has(path[0]!) && after === undefined) ||
+    isSecretReference(before) ||
+    isSecretReference(after);
   const recurse =
-    !isAtomicPath(path) &&
+    !whole &&
     (isPlainRecord(before) || before === undefined) &&
     (isPlainRecord(after) || after === undefined) &&
     (before !== undefined || after !== undefined);
@@ -170,6 +175,18 @@ const patchToward = (current: ServerSettings, target: ServerSettings) => {
     }
     const fromEntries = isPlainRecord(from) ? from : {};
     const toEntries = isPlainRecord(to) ? to : {};
+    // Its patch merges each host's fields and has no way to remove a host.
+    const unremovable =
+      key === "sourceControlHosts"
+        ? Object.keys(fromEntries).filter((id) => toEntries[id] === undefined)
+        : [];
+    if (unremovable.length > 0) {
+      return Effect.fail(
+        new SettingsDocumentError({
+          detail: `A settings patch cannot remove sourceControlHosts entries: ${unremovable.join(", ")}. Nothing was changed. Keep them in the document, or clear them in the Settings page.`,
+        }),
+      );
+    }
     patch[key] = Object.fromEntries(
       [...new Set([...Object.keys(fromEntries), ...Object.keys(toEntries)])].flatMap((id) =>
         Equal.equals(fromEntries[id], toEntries[id]) ? [] : [[id, toEntries[id] ?? null]],
@@ -191,10 +208,43 @@ export function settingsErrorMessage(error: ServerSettingsError): string {
   return cause === undefined || cause.length === 0 ? error.message : `${error.message}\n${cause}`;
 }
 
-const secretLocation = (write: SettingsSecretWrite) =>
-  write.providerInstanceId !== undefined && write.environmentVariable !== undefined
-    ? `providerInstances.${write.providerInstanceId}.environment.${write.environmentVariable}`
-    : write.secretName;
+const secretLocation = (
+  secret: Pick<SettingsSecret, "secretName" | "providerInstanceId" | "environmentVariable">,
+) =>
+  secret.providerInstanceId !== undefined && secret.environmentVariable !== undefined
+    ? `providerInstances.${secret.providerInstanceId}.environment.${secret.environmentVariable}`
+    : secret.secretName;
+
+/** Sensitive secret slots by name: those with a value or a saved-secret marker, and all named. */
+function secretSlots(settings: ServerSettings) {
+  const held = new Map<string, string>();
+  const marked = new Map<string, string>();
+  const named = new Set<string>();
+  mapSettingsSecrets(settings, (secret) => {
+    if (secret.sensitive) {
+      named.add(secret.secretName);
+      if (secret.redacted) marked.set(secret.secretName, secretLocation(secret));
+      if (secret.redacted || secret.value.length > 0) {
+        held.set(secret.secretName, secretLocation(secret));
+      }
+    }
+    return secret;
+  });
+  return { held, marked, named };
+}
+
+const describeValue = (value: unknown) =>
+  value === undefined ? "the default" : JSON.stringify(value);
+
+function unreachableMessage(changes: ReadonlyArray<StoredSettingsChange>): string {
+  return [
+    "A settings patch cannot reach the document. Nothing was changed.",
+    ...changes.map(
+      (change) =>
+        `  ${change.path.join(".")}: would store ${describeValue(change.before)}, the document says ${describeValue(change.after)}`,
+    ),
+  ].join("\n");
+}
 
 const updateResult = Effect.fn("settingsAccess.updateResult")(function* (
   report: SettingsUpdateReport,
@@ -274,12 +324,24 @@ export const applyStoredSettings = Effect.fn("settingsAccess.apply")(function* (
           ),
         );
   };
-  yield* decodeDocument("The desired document", input.desired);
-  if (input.base !== undefined) yield* decodeDocument("The base document", input.base);
+  const desired = yield* decodeDocument("The desired document", input.desired);
+  const base =
+    input.base === undefined ? undefined : yield* decodeDocument("The base document", input.base);
+  // A rebase must not delete a secret the repository never knew about, such as one set in the UI.
+  const namedSecrets =
+    base === undefined
+      ? undefined
+      : new Set([...secretSlots(base).named, ...secretSlots(desired).named]);
+  const deviceHostContext =
+    yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
 
-  let expected: { readonly target: ServerSettings; readonly defaults: ServerSettings } | undefined;
-  const documentValues = (settings: ServerSettings, defaults: ServerSettings) =>
-    pickDocumentKeys(stripDefaultServerSettings(settings, defaults));
+  let expected:
+    | {
+        readonly current: ServerSettings;
+        readonly target: ServerSettings;
+        readonly defaults: ServerSettings;
+      }
+    | undefined;
   const report = yield* stored.update<SettingsDocumentError>({
     dryRun: input.dryRun,
     plan: Effect.fn("settingsAccess.applyPlan")(function* (
@@ -290,24 +352,48 @@ export const applyStoredSettings = Effect.fn("settingsAccess.apply")(function* (
         input.base === undefined
           ? input.desired
           : rebaseDocument(yield* settingsDocument(current, defaults), input.base, input.desired);
-      const target = yield* decodeDocument("The resulting document", document);
-      expected = { target, defaults };
+      const decoded = yield* decodeDocument("The resulting document", document);
+      // As in the settings UI, an SSH device host that is this machine is left out.
+      const target = {
+        ...decoded,
+        deviceHosts: yield* remoteSshDeviceHosts(decoded.deviceHosts).pipe(
+          Effect.provide(deviceHostContext),
+        ),
+      };
+      const held = secretSlots(current).held;
+      const unheld = [...secretSlots(target).marked]
+        .filter(([name]) => !held.has(name))
+        .map(([, location]) => location);
+      if (unheld.length > 0) {
+        return yield* new SettingsDocumentError({
+          detail: `The document marks secrets as saved that this host does not hold: ${unheld.join(", ")}. Nothing was changed. Put their values in the document instead.`,
+        });
+      }
+      expected = { current, target, defaults };
       return { patch: yield* patchToward(current, target) };
     }),
-    // A patch merges some values; refuse rather than store something other than the document.
-    check: (next) => {
-      if (expected === undefined) return Effect.void;
-      const want = documentValues(expected.target, expected.defaults);
-      const got = documentValues(next, expected.defaults);
-      const missed = DOCUMENT_KEYS.filter((key) => !Equal.equals(want[key], got[key]));
-      return missed.length === 0
-        ? Effect.void
-        : Effect.fail(
-            new SettingsDocumentError({
-              detail: `A settings patch cannot reach the document for: ${missed.join(", ")}. Nothing was changed.`,
-            }),
-          );
-    },
+    check: Effect.fn("settingsAccess.applyCheck")(function* (next: ServerSettings) {
+      if (expected === undefined) return;
+      if (namedSecrets !== undefined) {
+        const kept = secretSlots(next).held;
+        const dropped = [...secretSlots(expected.current).held]
+          .filter(([name]) => !kept.has(name) && !namedSecrets.has(name))
+          .map(([, location]) => location);
+        if (dropped.length > 0) {
+          return yield* new SettingsDocumentError({
+            detail: `This would remove secrets neither document names: ${dropped.join(", ")}. Nothing was changed. Capture them into the documents first, or remove them in the Settings page.`,
+          });
+        }
+      }
+      // A patch merges some values; refuse rather than store something other than the document.
+      const missed = documentChanges(
+        yield* settingsDocument(next, expected.defaults),
+        yield* settingsDocument(expected.target, expected.defaults),
+      );
+      if (missed.length > 0) {
+        return yield* new SettingsDocumentError({ detail: unreachableMessage(missed) });
+      }
+    }),
   });
   return yield* updateResult(report);
 });
