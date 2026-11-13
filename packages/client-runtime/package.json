@@ -83,6 +83,10 @@
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
     },
+    "./scheduled-task-workspace": {
+      "types": "./src/scheduledTaskWorkspace.ts",
+      "default": "./src/scheduledTaskWorkspace.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"
