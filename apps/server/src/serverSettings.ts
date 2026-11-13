@@ -554,7 +554,10 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   ),
 ]);
 
-function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
+export function stripDefaultServerSettings(
+  current: unknown,
+  defaults: unknown,
+): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
     return Equal.equals(current, defaults) ? undefined : current;
   }

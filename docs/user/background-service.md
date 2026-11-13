@@ -81,6 +81,21 @@ A missing file is ignored; other read failures stop service startup.
 If the file contains credentials, restrict access to that file with `chmod 600`
 (for the default T3 home, `chmod 600 ~/.t3/service.env`).
 
+## Change settings from a script
+
+`t3 settings get` prints the server's settings, defaults included, with secrets
+hidden. `--sparse` prints only what differs from the defaults.
+
+`t3 settings patch settings.json` (or `-` for stdin) applies a partial settings
+object, checks it like the Settings page does, and prints what changed. A
+misspelled key or a bad value fails with exit code 1 and changes nothing. Values
+of sensitive environment variables go to the server's secret store. Provider
+instances are replaced as a whole map, so include every instance you keep.
+
+Both commands talk to the running server when there is one. Otherwise they read
+and write the settings in the T3 home directly, and refuse while another server
+owns it. Add `--json` for one JSON object on stdout.
+
 ## Platform support
 
 Linux needs systemd user services. Setup enables lingering so T3 Code starts at

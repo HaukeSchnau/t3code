@@ -81,6 +81,7 @@ import {
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import { ServerIdleStatus } from "./server.ts";
+import { ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -816,13 +817,34 @@ class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
   ) {}
 
 // Fork: deploys wait for an idle server before promoting a release. See patches/nix-flake-packaging.md.
-class EnvironmentServerHttpApi extends HttpApiGroup.make("server").add(
-  HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
-    headers: OptionalBearerHeaders,
-    success: ServerIdleStatus,
-    error: [EnvironmentScopeRequiredError, EnvironmentInternalError],
-  }).middleware(EnvironmentAuthenticatedAuth),
-) {}
+// The settings endpoints serve `t3 settings`. See patches/settings-cli.md.
+class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
+  .add(
+    HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
+      headers: OptionalBearerHeaders,
+      success: ServerIdleStatus,
+      error: [EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("settings", "/api/server/settings", {
+      headers: OptionalBearerHeaders,
+      success: ServerSettings,
+      error: [EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("updateSettings", "/api/server/settings", {
+      headers: OptionalBearerHeaders,
+      payload: Schema.Struct({ patch: ServerSettingsPatch }),
+      success: ServerSettings,
+      error: [
+        EnvironmentHttpBadRequestError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
 
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
