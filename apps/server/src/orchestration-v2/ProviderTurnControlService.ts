@@ -247,7 +247,12 @@ export const layer: Layer.Layer<
               loaded.providerTurn.status === "running" &&
               (yield* Clock.currentTimeMillis) < deadline
             ) {
-              const current = yield* projections.getProviderControlContext(input.threadId, input);
+              // The run ends with its attempt, in an event that can land after the turn's own.
+              const attemptId = loaded.providerTurn.runAttemptId;
+              const current = yield* projections.getProviderControlContext(input.threadId, {
+                ...input,
+                ...(attemptId === null ? {} : { attemptId }),
+              });
               if (
                 current.providerTurn?.status !== "running" &&
                 current.attempt?.status !== "running"
