@@ -71,6 +71,10 @@ const ENTRY_KEYS: ReadonlySet<string> = new Set([
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+// Variable names such as `constructor` must not read Object.prototype.
+const own = (record: Record<string, unknown>, key: string) =>
+  Object.hasOwn(record, key) ? record[key] : undefined;
+
 const pickDocumentKeys = (settings: unknown): Record<string, unknown> =>
   isPlainRecord(settings)
     ? Object.fromEntries(
@@ -131,7 +135,7 @@ function documentChanges(
     const toRecord = isPlainRecord(to) ? to : {};
     return [...new Set([...Object.keys(fromRecord), ...Object.keys(toRecord)])]
       .toSorted()
-      .flatMap((key) => documentChanges(fromRecord[key], toRecord[key], [...path, key]));
+      .flatMap((key) => documentChanges(own(fromRecord, key), own(toRecord, key), [...path, key]));
   }
   if (Equal.equals(before, after)) return [];
   return [
@@ -172,7 +176,32 @@ function setDocumentPath(
 }
 
 const getDocumentPath = (document: unknown, path: ReadonlyArray<string>) =>
-  path.reduce<unknown>((value, key) => (isPlainRecord(value) ? value[key] : undefined), document);
+  path.reduce<unknown>(
+    (value, key) => (isPlainRecord(value) ? own(value, key) : undefined),
+    document,
+  );
+
+const isEmpty = (value: unknown) =>
+  Array.isArray(value)
+    ? value.length === 0
+    : isPlainRecord(value) && Object.keys(value).length === 0;
+
+/** Drops the containers a removal emptied, unless the desired document has them. */
+function pruneEmptied(
+  document: Record<string, unknown>,
+  path: ReadonlyArray<string>,
+  desired: StoredSettingsDocument,
+) {
+  let next = document;
+  for (let depth = path.length - 1; depth > 0; depth--) {
+    const parent = path.slice(0, depth);
+    if (!isEmpty(getDocumentPath(next, parent)) || getDocumentPath(desired, parent) !== undefined) {
+      break;
+    }
+    next = setDocumentPath(next, parent, undefined);
+  }
+  return next;
+}
 
 /**
  * `current` with only the paths where `desired` differs from `base` changed. A change inside a
@@ -186,11 +215,15 @@ const rebaseDocument = (
   documentChanges(base, desired).reduce(
     (document, change) => {
       const entry = change.path.slice(0, 2);
-      return change.path.length > 2 &&
+      if (
+        change.path.length > 2 &&
         ENTRY_KEYS.has(change.path[0]!) &&
         getDocumentPath(document, entry) === undefined
-        ? setDocumentPath(document, entry, getDocumentPath(desired, entry))
-        : setDocumentPath(document, change.path, change.after);
+      ) {
+        return setDocumentPath(document, entry, getDocumentPath(desired, entry));
+      }
+      const next = setDocumentPath(document, change.path, change.after);
+      return change.after === undefined ? pruneEmptied(next, change.path, desired) : next;
     },
     current as Record<string, unknown>,
   );

@@ -399,6 +399,17 @@ it.effect.each([
     ui: easHost({ accessToken: "expo-ui-token" }),
     desired: easHost({ maxSessionMinutes: 40 }),
     expected: { easDeviceHosts: [{ accessToken: "••••••", maxSessionMinutes: 40 }] },
+    subset: true,
+  },
+  {
+    label: "a UI edit on an instance whose last variable the repository removes",
+    base: codex({ environment: [{ name: "constructor", value: "1", sensitive: false }] }),
+    ui: codex({
+      enabled: false,
+      environment: [{ name: "constructor", value: "1", sensitive: false }],
+    }),
+    desired: codex({}),
+    expected: codex({ enabled: false }),
   },
   {
     label: "an entry the UI deleted and the repository changed",
@@ -407,7 +418,7 @@ it.effect.each([
     desired: codex({ enabled: false }),
     expected: codex({ enabled: false }),
   },
-])("apply --base keeps $label", ({ base, ui, desired, expected }) =>
+])("apply --base keeps $label", ({ base, ui, desired, expected, subset }) =>
   Effect.gen(function* () {
     const home = yield* makeHome();
     const basePath = home.file("base.json", base);
@@ -423,7 +434,8 @@ it.effect.each([
     );
     assert.deepInclude(JSON.parse(result.stdout), { secrets: [], written: true });
     const after = JSON.parse((yield* home.settings("get", "--sparse", "--json")).stdout).settings;
-    assert.containSubset(after, expected);
+    if (subset) assert.containSubset(after, expected);
+    else assert.deepEqual(after, expected);
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 

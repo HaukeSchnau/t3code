@@ -90,7 +90,9 @@ and what differs from the defaults.
 `t3 settings apply desired.json` makes the settings match a document in that
 form, resetting whatever the document leaves out. With `--base previous.json`,
 the document you applied last time, it changes only what you changed since, and
-keeps edits made in the Settings page meanwhile, including saved secrets.
+keeps edits made in the Settings page meanwhile, including saved secrets. For a
+first run on a server that already has settings, pass an empty document (`{}`)
+as the base.
 `--dry-run` shows the changes without making them. Sensitive environment
 variables marked `valueRedacted` keep their stored value. A document can't remove
 a source control host; clear that in the Settings page.
@@ -107,7 +109,7 @@ command, the command exits 75; `--wait 2m` keeps retrying for up to two minutes.
 
 The commands talk to the running server when there is one. Otherwise they work
 on the T3 home directly, and refuse while another server owns it. `--live-only`
-exits 75 instead of opening the T3 home's database.
+exits 75 instead of working on the T3 home itself.
 
 ## Platform support
 

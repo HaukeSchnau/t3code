@@ -71,7 +71,8 @@ paired client. It has no settings command and no HTTP route for settings.
   two-minute local session that it revokes afterwards. The patch route requires the RPC's scopes,
   and apply requires `settings:write` and `providers:manage`. When no server answers, the command
   takes the server ownership lock and runs the same code against the state directory. With
-  `--live-only` it exits 75 instead, before opening the database or keys.
+  `--live-only` it exits 75 instead. It still attaches to the database to issue its session when a
+  stale `server-runtime.json` names a server that is gone, but never takes the lock or migrates.
 - **Offline `get` is not read-only.** It holds the ownership lock while it reads and may migrate
   the database, as the server does at start. A server that starts during those moments exits
   because the directory is owned. Callers that only read, such as the reconciler, pass
@@ -85,12 +86,19 @@ paired client. It has no settings command and no HTTP route for settings.
 
   Any other failure exits 1. `--wait <duration>` retries the temporary ones.
 
-- **Callers.** Infra's deploy hook is a post-switch oneshot that runs `apply --wait`, because T3
-  does not restart on settings-only deploys. The deploy that first ships this command still runs
-  the old server, which answers 404, so the hook also has to run when T3 starts. Its `--base` is
-  the last document that applied successfully. Apply refuses a `valueRedacted` marker for a secret
-  the host does not hold, so the reconciler puts captured values that carry a secret marker in the
-  host's file, never in the fleet file.
+- **Callers.**
+  - **Deploy hook.** Infra's deploy hook is a post-switch oneshot that runs `apply --wait`, because
+    T3 does not restart on settings-only deploys. The deploy that first ships this command still
+    runs the old server, which answers 404, so the hook also has to run when T3 starts.
+  - **`--base`.** It is the last document that applied successfully. The first run on a host uses
+    `--base {}`. Without `--base`, the document is the whole truth and removes every UI setting and
+    secret it does not hold.
+  - **Blocked deploys.** A repository change to a slot that holds a UI secret is refused until the
+    reconciler has captured that secret, which blocks that host's deploys. Examples are a secret
+    reference over it, the variable made non-sensitive, or the instance's driver changed.
+  - **Captured markers.** Apply refuses a `valueRedacted` marker for a secret the host does not
+    hold. So the reconciler puts captured values that carry a secret marker in the host's file,
+    never in the fleet file.
 
 ## Upstream touch points
 
