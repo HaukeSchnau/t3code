@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   createFollowUpEnvironmentAtoms,
+  createLinkedFollowUpAtomFamily,
   type FollowUpHome,
   followUpHomes,
   returnedFollowUps,
@@ -16,6 +17,12 @@ import { serverEnvironment } from "./server";
 
 /** Follow-ups (patches/follow-ups.md). */
 export const followUpEnvironment = createFollowUpEnvironmentAtoms(connectionAtomRuntime);
+
+/** A chat's link to a follow-up, by href. */
+export const linkedFollowUpAtom = createLinkedFollowUpAtomFamily(
+  followUpEnvironment.snapshot,
+  environmentSummaries.connectedEnvironmentIdsAtom,
+);
 
 // The inbox and the page read the same open-only subscription.
 const OPEN_FOLLOW_UPS: FollowUpsSubscribeInput = {};

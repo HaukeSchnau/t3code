@@ -1,10 +1,14 @@
 import {
   createFollowUpEnvironmentAtoms,
+  createLinkedFollowUpAtomFamily,
   followUpHomes,
   returnedFollowUps,
   type FollowUpHome,
+  type LinkedFollowUp,
 } from "@t3tools/client-runtime/state/follow-ups";
 import type { EnvironmentId, FollowUp } from "@t3tools/contracts";
+import { followUpLinkHrefs } from "@t3tools/shared/followUpLinks";
+import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -22,6 +26,31 @@ export function openFollowUpsAtom(environmentId: EnvironmentId) {
 
 export function allFollowUpsAtom(environmentId: EnvironmentId) {
   return followUpEnvironment.snapshot({ environmentId, input: { includeClosed: true } });
+}
+
+const linkedFollowUpAtom = createLinkedFollowUpAtomFamily(
+  followUpEnvironment.snapshot,
+  connectedEnvironmentIdsAtom,
+);
+
+const NO_LINKED_FOLLOW_UPS = Atom.make<ReadonlyMap<string, LinkedFollowUp>>(new Map()).pipe(
+  Atom.withLabel("mobile:linked-follow-ups:empty"),
+);
+// Keyed by the hrefs joined with spaces, which a follow-up link never contains.
+const linkedFollowUpsAtom = Atom.family((key: string) => {
+  const hrefs = key.split(" ");
+  return Atom.make(
+    (get): ReadonlyMap<string, LinkedFollowUp> =>
+      new Map(hrefs.map((href) => [href, get(linkedFollowUpAtom(href))])),
+  ).pipe(Atom.withLabel(`mobile:linked-follow-ups:${key}`));
+});
+
+/** The follow-ups a message links to, by href, for its chips. */
+export function useLinkedFollowUps(markdown: string): ReadonlyMap<string, LinkedFollowUp> {
+  const hrefs = followUpLinkHrefs(markdown);
+  return useAtomValue(
+    hrefs.length === 0 ? NO_LINKED_FOLLOW_UPS : linkedFollowUpsAtom(hrefs.join(" ")),
+  );
 }
 
 /** The homes of the switched-on environments. A server without the feature advertises none. */

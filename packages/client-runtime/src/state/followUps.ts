@@ -3,10 +3,14 @@ import {
   FOLLOW_UP_WS_METHODS,
   type FollowUp,
   type FollowUpOrigin,
+  type FollowUpsSnapshot,
+  type FollowUpsSubscribeInput,
   type FollowUpStatus,
 } from "@t3tools/contracts";
+import { formatFollowUpLink, parseFollowUpLinkHref } from "@t3tools/shared/followUpLinks";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
-import type { Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
@@ -69,6 +73,50 @@ export function followUpHomes(
   }));
 }
 
+/** What a link to a follow-up shows. `missing` covers an unreachable home and a deleted one. */
+export type LinkedFollowUp =
+  | { readonly state: "found"; readonly title: string; readonly status: FollowUpStatus }
+  | { readonly state: "loading" }
+  | { readonly state: "missing" };
+
+const LINKED_LOADING: LinkedFollowUp = { state: "loading" };
+const LINKED_MISSING: LinkedFollowUp = { state: "missing" };
+
+/**
+ * Links to follow-ups by href. The home's open list answers most; the closed list loads only for
+ * a link the open one lacks. A chip re-renders only when its own title or status changes.
+ */
+export function createLinkedFollowUpAtomFamily<E>(
+  snapshot: (key: {
+    readonly environmentId: EnvironmentId;
+    readonly input: FollowUpsSubscribeInput;
+  }) => Atom.Atom<AsyncResult.AsyncResult<FollowUpsSnapshot, E>>,
+  connectedEnvironmentIds: Atom.Atom<ReadonlyArray<EnvironmentId>>,
+) {
+  return Atom.family((href: string) => {
+    const ref = parseFollowUpLinkHref(href);
+    return Atom.make((get): LinkedFollowUp => {
+      if (ref === null || !get(connectedEnvironmentIds).includes(ref.environmentId)) {
+        return LINKED_MISSING;
+      }
+      const find = (input: FollowUpsSubscribeInput) => {
+        const result = get(snapshot({ environmentId: ref.environmentId, input }));
+        if (result._tag === "Failure") return LINKED_MISSING;
+        if (result._tag === "Initial") return LINKED_LOADING;
+        return result.value.followUps.find((followUp) => followUp.id === ref.followUpId) ?? null;
+      };
+      const found = find({}) ?? find({ includeClosed: true }) ?? LINKED_MISSING;
+      if (!("id" in found)) return found;
+      const previous = Option.getOrNull(get.self<LinkedFollowUp>());
+      return previous?.state === "found" &&
+        previous.title === found.title &&
+        previous.status === found.status
+        ? previous
+        : { state: "found", title: found.title, status: found.status };
+    }).pipe(Atom.withLabel(`follow-up-link:${href}`));
+  });
+}
+
 const CLOSED_STATUSES: ReadonlySet<FollowUpStatus> = new Set(["done", "dropped", "merged"]);
 
 export function isFollowUpClosed(followUp: Pick<FollowUp, "status">): boolean {
@@ -115,9 +163,13 @@ function originThreadLink(origin: FollowUpOrigin): string {
   );
 }
 
-/** The first message of a thread that picks a follow-up up. */
-export function followUpSeedMessage(followUp: FollowUp): string {
-  const lines = [`Pick up follow-up ${followUp.id}: ${followUp.title}`];
+/** The first message of a thread that picks a follow-up up; its link names the home. */
+export function followUpSeedMessage(followUp: FollowUp, homeEnvironmentId: EnvironmentId): string {
+  const link = formatFollowUpLink(
+    { environmentId: homeEnvironmentId, followUpId: followUp.id },
+    followUp.title,
+  );
+  const lines = [`Pick up follow-up ${link}`];
   if (followUp.body.trim() !== "") lines.push("", followUp.body.trim());
   if (followUp.origin !== null) {
     lines.push("", `It came from ${originThreadLink(followUp.origin)}.`);

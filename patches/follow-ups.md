@@ -36,6 +36,14 @@ that keeps a tidy list of open work with its origin.
   passes; moving the date clears it. Clients merge returned follow-ups into the inbox section of
   the thread list. `dueAt` is stored as UTC ISO text so the scan compares strings.
 
+- **Links, not ids.** Both tools return each follow-up's `link`, `t3-follow-up://<home>/<id>`
+  with its title as the label, and their descriptions tell agents to name follow-ups by it. A
+  forwarding environment rebuilds the links of the home's answer, so they name the home whatever
+  the home sent. Outside MCP clients get no link: no hosted page opens a follow-up, unlike the
+  hosted thread links they get. Clients render the links as chips with the current title and
+  status, read from the home's open list, and its closed list only when the open one lacks the
+  link. A link whose home isn't connected, or whose follow-up is gone, stays a plain link with the
+  agent's label. Web opens `/follow-ups?home=<home>&id=<id>`, mobile the `FollowUp` route.
 - **A nightly gardener.** A home with `T3CODE_FOLLOW_UP_GARDENER_AT` (local `HH:MM`) launches one
   agent thread a night in the scratch project with the server's default model. It merges
   duplicates, closes finished work, checks conditions, keeps types consistent and reads the threads
@@ -60,6 +68,10 @@ that keeps a tidy list of open work with its origin.
 - Web: the inbox rows in `Sidebar.tsx`, `Sidebar.logic.ts` and `Sidebar.drag.ts` (a follow-up row
   kind that never drags but holds its place), the sidebar utility menu, `mainAppLocation.ts`, the
   command palette, and `CustomSnoozeDialog.tsx` (optional wording for Later).
+- Links: `packages/shared/src/markdownPipeline.ts` (the scheme passes sanitizing),
+  `mcp/McpInvocationContext.ts`, the web `ChatMarkdown.tsx` anchor and `ContextChip.tsx` (a
+  `follow-up` kind and accent), and on mobile `ThreadFeed.tsx`, `markdownLinks.ts`,
+  `enrichedLinkPresentation.ts`, `useEnrichedLinkVariants.ts` and a `list-todo` chip icon.
 - Mobile: a fourth workspace tab across `navigation-tab-order.ts`, `workspace-tabs-state.ts`, the
   root screens, `WorkspaceExtraTab.tsx` and the native tab bars (`T3SidebarTabBarView.swift`,
   `T3WorkspaceNavigationModule.kt`, so a new tab needs a native build); inbox rows in

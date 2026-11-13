@@ -66,6 +66,9 @@ const towerLinkOnHome: McpInvocationContext.McpInvocationScope = {
   capabilities: new Set(["orchestration"]),
 };
 
+const linkOf = (result: { readonly structuredContent?: unknown }) =>
+  (result.structuredContent as { followUp?: { link?: string } } | undefined)?.followUp?.link;
+
 const stored = (input: FollowUpSaveInput, actor: FollowUpActor): FollowUp => ({
   id: FollowUpId.make("fu-1"),
   title: input.title ?? "",
@@ -156,7 +159,14 @@ it.effect(
       }),
     ]).pipe(
       Effect.tap((results) =>
-        Effect.sync(() => expect(results.map((result) => result.isError)).not.toContain(true)),
+        Effect.sync(() => {
+          expect(results.map((result) => result.isError)).not.toContain(true);
+          // The home's answer carries no link of its own here; tower names the home.
+          expect(results.map(linkOf)).toEqual([
+            "[forwarded](t3-follow-up://env:srv-2/fu-1)",
+            "[forwarded](t3-follow-up://env:srv-2/fu-1)",
+          ]);
+        }),
       ),
       Effect.andThen(
         Effect.sync(() =>
@@ -191,7 +201,12 @@ it.effect("the home records a linked peer's thread as origin and actor", () => {
     title: "Check the M2 forwarder",
     fromThread: { threadId, environmentId: peer, messageId },
   }).pipe(
-    Effect.tap((result) => Effect.sync(() => expect(result.isError).not.toBe(true))),
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        expect(result.isError).not.toBe(true);
+        expect(linkOf(result)).toBe("[Check the M2 forwarder](t3-follow-up://env:srv-2/fu-1)");
+      }),
+    ),
     Effect.andThen(
       Effect.sync(() =>
         expect(calls).toEqual([
@@ -207,5 +222,26 @@ it.effect("the home records a linked peer's thread as origin and actor", () => {
     ),
     // The home may name itself, as every host in its space does.
     Effect.provide(serve(towerLinkOnHome, { followUpHome: home }, (entry) => calls.push(entry))),
+  );
+});
+
+it.effect("an outside client, which cannot open follow-up links, gets none", () => {
+  const outside: McpInvocationContext.McpInvocationScope = {
+    ...towerLinkOnHome,
+    client: {
+      sessionId: "claude-desktop",
+      label: "Claude",
+      access: "full-access",
+      hostedAppUrl: "https://app.t3.codes",
+    },
+  };
+  return callSave(outside, { title: "Check the M2 forwarder" }).pipe(
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        expect(result.isError).not.toBe(true);
+        expect(linkOf(result)).toBeUndefined();
+      }),
+    ),
+    Effect.provide(serve(outside, { followUpHome: home }, () => {})),
   );
 });

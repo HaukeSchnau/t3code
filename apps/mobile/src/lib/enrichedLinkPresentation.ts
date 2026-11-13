@@ -21,6 +21,8 @@ import {
   resolveInlineCodeWebLink,
 } from "@t3tools/shared/markdownLinks";
 import { hasThreadLinks, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
+import type { LinkedFollowUp } from "@t3tools/client-runtime/state/follow-ups";
+import { FOLLOW_UP_STATUS_LABELS } from "../features/follow-ups/followUpPresentation";
 
 export function enrichedContextLinkPresentation(
   href: string,
@@ -49,6 +51,26 @@ export function enrichedThreadLinkPresentation(
   return {
     ...(presentation.accent ? { accent: presentation.accent } : {}),
     icon: contextChipIcon(presentation, ""),
+  };
+}
+
+/**
+ * A chip with the follow-up's current title and status. One that is gone, or whose home isn't
+ * connected, stays a plain link with the text the agent wrote.
+ */
+export function enrichedFollowUpLinkPresentation(
+  linked: LinkedFollowUp | undefined,
+): { accent?: string; icon: ContextChipIconRef; label?: string } | undefined {
+  if (linked === undefined || linked.state === "missing") return undefined;
+  const presentation = contextChipPresentation("follow-up");
+  const label =
+    linked.state === "found"
+      ? `${linked.title.trim()}${linked.status === "open" ? "" : ` · ${FOLLOW_UP_STATUS_LABELS[linked.status]}`}`
+      : "";
+  return {
+    ...(presentation.accent ? { accent: presentation.accent } : {}),
+    icon: contextChipIcon(presentation, ""),
+    ...(label.trim() ? { label } : {}),
   };
 }
 

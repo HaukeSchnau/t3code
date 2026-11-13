@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { Image } from "react-native";
 import type { LinkPillContent, MarkdownStyle } from "react-native-enriched-markdown";
 import type { ComposerContextRecord } from "@t3tools/contracts";
+import type { LinkedFollowUp } from "@t3tools/client-runtime/state/follow-ups";
 import { contextChipAccent, contextChipPresentation } from "../lib/composerChipPresentation";
 import { CONTEXT_CHIP_ICON_SOURCES } from "../lib/contextChipIcons.generated";
 import { FONT_FAMILIES } from "../lib/fontFamilies";
@@ -17,6 +18,7 @@ import type {
 } from "./SelectableMarkdownText.types";
 import {
   enrichedContextLinkPresentation,
+  enrichedFollowUpLinkPresentation,
   enrichedLinkUrl,
   enrichedLinkVariantPattern,
   enrichedModelReference,
@@ -45,6 +47,10 @@ export function enrichedContextLinkCustomization(
 
 export function enrichedThreadLinkCustomization(href: string) {
   return chipCustomization(enrichedThreadLinkPresentation(href));
+}
+
+export function enrichedFollowUpLinkCustomization(linked: LinkedFollowUp | undefined) {
+  return chipCustomization(enrichedFollowUpLinkPresentation(linked));
 }
 
 export function withChipIcon(
