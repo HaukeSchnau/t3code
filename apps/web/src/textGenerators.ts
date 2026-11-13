@@ -3,6 +3,7 @@ import { providerClients } from "@t3tools/client-runtime/provider-clients";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import {
   type EnvironmentId,
+  type ModelCapabilities,
   type ModelSelection,
   type ProjectId,
   ProviderDriverKind,
@@ -231,9 +232,28 @@ export function useTextGeneratorModels(
   );
 }
 
-function toProviderModel(model: TextGeneratorModel): ServerProviderModel {
-  return { slug: model.id, name: model.name, isCustom: false, capabilities: null };
-}
+/** The server sends these as the Responses API's `reasoning.effort` and `service_tier`. */
+const RESPONSES_MODEL_CAPABILITIES: ModelCapabilities = {
+  optionDescriptors: [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: "low", label: "Low", isDefault: true },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
+    },
+    {
+      id: "fastMode",
+      label: "Fast Mode",
+      type: "boolean",
+      description:
+        "Priority processing. Costs more per token on an API key, or uses more of a plan's limits.",
+    },
+  ],
+};
 
 /** Picker stand-in for a text generator. It never leaves the settings pickers. */
 function textGeneratorSnapshot(
@@ -242,15 +262,18 @@ function textGeneratorSnapshot(
   result: AsyncResult.AsyncResult<ReadonlyArray<TextGeneratorModel>, string>,
   selectedModels: ReadonlyArray<string>,
 ): ServerProvider {
-  const discovered = AsyncResult.isSuccess(result) ? result.value.map(toProviderModel) : [];
+  const capabilities = config.responsesApi === true ? RESPONSES_MODEL_CAPABILITIES : null;
+  const discovered = AsyncResult.isSuccess(result)
+    ? result.value.map((model): ServerProviderModel => ({
+        slug: model.id,
+        name: model.name,
+        isCustom: false,
+        capabilities,
+      }))
+    : [];
   const missing = [...new Set(selectedModels)]
     .filter((slug) => !discovered.some((model) => model.slug === slug))
-    .map((slug): ServerProviderModel => ({
-      slug,
-      name: slug,
-      isCustom: false,
-      capabilities: null,
-    }));
+    .map((slug): ServerProviderModel => ({ slug, name: slug, isCustom: false, capabilities }));
   const failure = Option.getOrUndefined(AsyncResult.error(result));
   return {
     instanceId: id,

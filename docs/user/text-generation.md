@@ -18,6 +18,11 @@ Go to **Settings → Providers → Text generators** and choose **Add generator*
   `http://localhost:11434/v1` or LM Studio. Local endpoints usually need no key. The environment's
   server makes the requests, so on a remote environment `localhost` means that machine, not yours.
 
+Turn on **Responses API** for an OpenAI-compatible endpoint that serves reasoning models through
+OpenAI's Responses API, such as a proxy for a ChatGPT subscription. Next to each task's model you can
+then set a reasoning effort and **Fast Mode**, which answers sooner but costs more per token on an API
+key, or uses more of your plan's limits on a subscription.
+
 Give it a name if you add more than one from the same service. Your key is stored on the
 environment, like other [secrets](./secrets.md), and can come from a secret provider instead of
 being typed in.
