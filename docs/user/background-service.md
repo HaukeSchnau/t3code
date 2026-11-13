@@ -107,7 +107,7 @@ command, the command exits 75; `--wait 2m` keeps retrying for up to two minutes.
 
 The commands talk to the running server when there is one. Otherwise they work
 on the T3 home directly, and refuse while another server owns it. `--live-only`
-exits 75 instead of touching the T3 home.
+exits 75 instead of opening the T3 home's database.
 
 ## Platform support
 

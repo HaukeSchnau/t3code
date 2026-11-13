@@ -185,10 +185,14 @@ const runWithSettings = Effect.fn("cli.settings.run")(function* <A>(
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel, { quietLogs: true });
   const minimumLogLevel = Option.isSome(logLevel) ? config.logLevel : "Error";
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  // Before the auth layer, which would set up a T3 home that does not exist yet.
+  if (flags.liveOnly && Option.isNone(runtimeState)) {
+    return yield* new SettingsBusyError({ detail: "No running T3 Code server answered." });
+  }
 
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
     if (Option.isSome(runtimeState)) {
       const origin = runtimeState.value.origin;
       const live = yield* withLiveSession(environmentAuth, scopes, (token) =>
@@ -503,6 +507,12 @@ const settingsApplyCommand = Command.make("apply", {
     reportFailure(
       flags.wait,
       Effect.gen(function* () {
+        if (flags.source === "-" && Option.getOrUndefined(flags.base) === "-") {
+          return yield* new SettingsInputError({
+            source: "stdin",
+            detail: "Only one of the desired and base documents can come from stdin.",
+          });
+        }
         // Read once: a retry must not read a consumed stdin again.
         const desired = yield* readInput(flags.source, decodeDocumentJson);
         const base = Option.isSome(flags.base)

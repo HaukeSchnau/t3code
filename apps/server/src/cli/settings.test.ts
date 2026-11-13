@@ -357,40 +357,93 @@ it.effect("apply makes the document true; with --base it leaves paths the repo d
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
-it.effect("apply --base keeps a secret the UI added to an instance the repository changes", () =>
+const codex = (fields: Record<string, unknown>) => ({
+  providerInstances: { codex: { driver: "codex", ...fields } },
+});
+const easHost = (fields: Record<string, unknown>) => ({
+  easDeviceHosts: [{ kind: "eas", id: "e1", label: "EAS", ...fields }],
+});
+const uiSecret = { name: "OPENAI_API_KEY", value: "sk-ui", sensitive: true };
+
+it.effect.each([
+  {
+    label: "a secret the UI added to an instance the repository changes",
+    base: codex({ enabled: true }),
+    ui: codex({ enabled: true, environment: [uiSecret] }),
+    desired: codex({ enabled: false }),
+    expected: codex({
+      enabled: false,
+      environment: [{ ...uiSecret, value: "", valueRedacted: true }],
+    }),
+  },
+  {
+    label: "a variable the UI added to an environment the repository changes",
+    base: codex({ environment: [{ name: "A", value: "1", sensitive: false }] }),
+    ui: codex({
+      environment: [
+        { name: "A", value: "1", sensitive: false },
+        { name: "UI_FLAG", value: "on", sensitive: false },
+      ],
+    }),
+    desired: codex({ environment: [{ name: "A", value: "2", sensitive: false }] }),
+    expected: codex({
+      environment: [
+        { name: "A", value: "2", sensitive: false },
+        { name: "UI_FLAG", value: "on", sensitive: false },
+      ],
+    }),
+  },
+  {
+    label: "a token the UI set on a device host whose list the repository replaces",
+    base: easHost({}),
+    ui: easHost({ accessToken: "expo-ui-token" }),
+    desired: easHost({ maxSessionMinutes: 40 }),
+    expected: { easDeviceHosts: [{ accessToken: "••••••", maxSessionMinutes: 40 }] },
+  },
+  {
+    label: "an entry the UI deleted and the repository changed",
+    base: codex({ enabled: true }),
+    ui: { providerInstances: {} },
+    desired: codex({ enabled: false }),
+    expected: codex({ enabled: false }),
+  },
+])("apply --base keeps $label", ({ base, ui, desired, expected }) =>
   Effect.gen(function* () {
     const home = yield* makeHome();
-    const codex = (enabled: boolean) => ({ driver: "codex", enabled });
-    const base = home.file("base.json", { providerInstances: { codex: codex(true) } });
-    yield* home.settings("apply", base);
-    yield* home.settings(
-      "patch",
-      home.file("ui.json", {
-        providerInstances: {
-          codex: {
-            ...codex(true),
-            environment: [{ name: "OPENAI_API_KEY", value: "sk-ui", sensitive: true }],
-          },
-        },
-      }),
-    );
-    const secrets = NodeFS.readdirSync(NodePath.join(home.baseDir, "userdata", "secrets"));
+    const basePath = home.file("base.json", base);
+    yield* home.settings("apply", basePath);
+    yield* home.settings("patch", home.file("ui.json", ui));
 
-    const desired = home.file("desired.json", { providerInstances: { codex: codex(false) } });
-    const rebased = JSON.parse(
-      (yield* home.settings("apply", desired, "--base", base, "--json")).stdout,
+    const result = yield* home.settings(
+      "apply",
+      home.file("desired.json", desired),
+      "--base",
+      basePath,
+      "--json",
     );
-    assert.deepInclude(rebased, { secrets: [], written: true });
-    assert.deepEqual(
-      NodeFS.readdirSync(NodePath.join(home.baseDir, "userdata", "secrets")),
-      secrets,
-    );
+    assert.deepInclude(JSON.parse(result.stdout), { secrets: [], written: true });
     const after = JSON.parse((yield* home.settings("get", "--sparse", "--json")).stdout).settings;
-    assert.equal(after.providerInstances.codex.enabled, false);
-    assert.equal(after.providerInstances.codex.environment[0].valueRedacted, true);
+    assert.containSubset(after, expected);
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
 
-    // Without --base the document is the whole truth, so the secret goes with the variable.
-    const replaced = JSON.parse((yield* home.settings("apply", desired, "--json")).stdout);
+it.effect("apply --base refuses to drop a secret set outside the documents", () =>
+  Effect.gen(function* () {
+    const home = yield* makeHome();
+    const base = home.file("base.json", codex({ enabled: true }));
+    yield* home.settings("apply", base);
+    yield* home.settings("patch", home.file("ui.json", codex({ environment: [uiSecret] })));
+    const stored = NodeFS.readFileSync(home.settingsPath, "utf8");
+
+    const result = yield* home.settings("apply", home.file("desired.json", {}), "--base", base);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /secrets set outside the documents: providerInstances\.codex/);
+    assert.equal(NodeFS.readFileSync(home.settingsPath, "utf8"), stored);
+
+    // Without --base the document is the whole truth, so the secret goes with the instance.
+    const replaced = JSON.parse(
+      (yield* home.settings("apply", home.file("empty.json", {}), "--json")).stdout,
+    );
     assert.deepEqual(replaced.secrets, [
       { secret: "providerInstances.codex.environment.OPENAI_API_KEY", change: "removed" },
     ]);
@@ -443,14 +496,15 @@ it.effect.each([
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
-it.effect("--live-only exits 75 instead of opening the T3 home", () =>
+it.effect("--live-only exits 75 without opening the database or keys", () =>
   Effect.gen(function* () {
     const home = yield* makeHome();
     const result = yield* home.settings("get", "--live-only");
     assert.equal(result.exitCode, 75);
     assert.match(result.stderr, /No running T3 Code server answered/);
-    assert.isFalse(
-      NodeFS.existsSync(NodePath.join(home.baseDir, "userdata", "server-owner.sqlite")),
-    );
+    const userdata = NodePath.join(home.baseDir, "userdata");
+    for (const created of ["statev2.sqlite", "state.sqlite", "server-owner.sqlite", "secrets"]) {
+      assert.isFalse(NodeFS.existsSync(NodePath.join(userdata, created)), created);
+    }
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );

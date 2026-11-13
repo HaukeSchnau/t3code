@@ -36,11 +36,17 @@ paired client. It has no settings command and no HTTP route for settings.
 - **`t3 settings apply`** makes the stored document equal a desired one.
   - **Without `--base`**, it changes every document path that differs.
   - **With `--base`**, it changes only the paths where the desired document differs from the base,
-    leaf by leaf. A UI edit beside them, even inside the same provider instance, survives until
-    infra's reconciler captures it. Arrays, atomic settings such as model selections, and secret
-    references count as one leaf. An entry the desired document drops from a map is dropped whole.
-    It refuses to remove a secret that neither document names, because the reconciler can only ever
-    capture a secret's `valueRedacted` marker, so such a removal could never be undone.
+    leaf by leaf, so a UI edit beside them survives until infra's reconciler captures it:
+    - Arrays, atomic settings such as model selections, and secret references count as one leaf.
+    - A provider's environment variables are matched by name.
+    - An entry the desired document drops from a map is dropped whole.
+    - A change inside an entry the UI deleted brings back the whole desired entry.
+
+    **Secrets.** A secret the host holds that neither document holds was set in the UI. The
+    reconciler can only ever capture its `valueRedacted` marker, so apply keeps it: a replaced value
+    such as a device host list gets the marker back. If the slot is gone from the result, apply
+    refuses. Only a secret the base held can be removed.
+
   - **Patch.** Either way it turns the target into a patch under the settings write lock:
     - Most keys are set whole.
     - `providerInstances` is replaced whole.
@@ -64,8 +70,8 @@ paired client. It has no settings command and no HTTP route for settings.
   and `POST /api/server/settings` and `/api/server/settings/apply` (`status/http.ts`), with a
   two-minute local session that it revokes afterwards. The patch route requires the RPC's scopes,
   and apply requires `settings:write` and `providers:manage`. When no server answers, the command
-  takes the server ownership lock and runs the same code against the state directory, unless
-  `--live-only` is set.
+  takes the server ownership lock and runs the same code against the state directory. With
+  `--live-only` it exits 75 instead, before opening the database or keys.
 - **Offline `get` is not read-only.** It holds the ownership lock while it reads and may migrate
   the database, as the server does at start. A server that starts during those moments exits
   because the directory is owned. Callers that only read, such as the reconciler, pass
@@ -82,7 +88,9 @@ paired client. It has no settings command and no HTTP route for settings.
 - **Callers.** Infra's deploy hook is a post-switch oneshot that runs `apply --wait`, because T3
   does not restart on settings-only deploys. The deploy that first ships this command still runs
   the old server, which answers 404, so the hook also has to run when T3 starts. Its `--base` is
-  the last document that applied successfully.
+  the last document that applied successfully. Apply refuses a `valueRedacted` marker for a secret
+  the host does not hold, so the reconciler puts captured values that carry a secret marker in the
+  host's file, never in the fleet file.
 
 ## Upstream touch points
 

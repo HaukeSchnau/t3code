@@ -91,31 +91,47 @@ const settingsDocument = (settings: ServerSettings, defaults: ServerSettings) =>
     Effect.orDie,
   );
 
+// A provider's environment is a list, but its variables are compared and rebased by name.
+const isKeyedArrayPath = (path: ReadonlyArray<string>) =>
+  path.length === 3 && path[0] === "providerInstances" && path[2] === "environment";
+
+const byName = (value: unknown): Record<string, unknown> | undefined =>
+  Array.isArray(value)
+    ? Object.fromEntries(
+        value.map((entry) => [isPlainRecord(entry) ? String(entry.name) : "", entry]),
+      )
+    : undefined;
+
 /**
  * The paths whose values differ, in key order, leaf by leaf so a rebase keeps edits beside them.
- * Arrays, atomic settings and secret references compare whole, as does a map entry one side lacks.
+ * Arrays, atomic settings, secret references and environment variables compare whole, as does a
+ * map entry one side lacks.
  */
 function documentChanges(
   before: unknown,
   after: unknown,
   path: ReadonlyArray<string> = [],
 ): ReadonlyArray<StoredSettingsChange> {
+  const keyed = isKeyedArrayPath(path);
+  const from = keyed ? (byName(before) ?? before) : before;
+  const to = keyed ? (byName(after) ?? after) : after;
   const whole =
     (path.length === 1 && ATOMIC_SETTINGS_KEYS.has(path[0]!)) ||
     (path.length === 2 && ENTRY_KEYS.has(path[0]!) && after === undefined) ||
+    isKeyedArrayPath(path.slice(0, -1)) ||
     isSecretReference(before) ||
     isSecretReference(after);
   const recurse =
     !whole &&
-    (isPlainRecord(before) || before === undefined) &&
-    (isPlainRecord(after) || after === undefined) &&
-    (before !== undefined || after !== undefined);
+    (isPlainRecord(from) || from === undefined) &&
+    (isPlainRecord(to) || to === undefined) &&
+    (from !== undefined || to !== undefined);
   if (recurse) {
-    const from = isPlainRecord(before) ? before : {};
-    const to = isPlainRecord(after) ? after : {};
-    return [...new Set([...Object.keys(from), ...Object.keys(to)])]
+    const fromRecord = isPlainRecord(from) ? from : {};
+    const toRecord = isPlainRecord(to) ? to : {};
+    return [...new Set([...Object.keys(fromRecord), ...Object.keys(toRecord)])]
       .toSorted()
-      .flatMap((key) => documentChanges(from[key], to[key], [...path, key]));
+      .flatMap((key) => documentChanges(fromRecord[key], toRecord[key], [...path, key]));
   }
   if (Equal.equals(before, after)) return [];
   return [
@@ -127,36 +143,55 @@ function documentChanges(
   ];
 }
 
+function setKeyedEntry(entries: ReadonlyArray<unknown>, name: string, value: unknown) {
+  const index = entries.findIndex((entry) => isPlainRecord(entry) && entry.name === name);
+  if (value === undefined) return entries.filter((_, at) => at !== index);
+  return index === -1
+    ? [...entries, value]
+    : entries.map((entry, at) => (at === index ? value : entry));
+}
+
 function setDocumentPath(
   document: Record<string, unknown>,
   [key, ...rest]: ReadonlyArray<string>,
   value: unknown,
+  prefix: ReadonlyArray<string> = [],
 ): Record<string, unknown> {
   const next = { ...document };
   const existing = next[key!];
+  const here = [...prefix, key!];
   const child =
     rest.length === 0
       ? value
-      : setDocumentPath(isPlainRecord(existing) ? existing : {}, rest, value);
-  if (
-    child === undefined ||
-    (isPlainRecord(child) && rest.length > 0 && Object.keys(child).length === 0)
-  ) {
-    delete next[key!];
-  } else {
-    next[key!] = child;
-  }
+      : isKeyedArrayPath(here) && rest.length === 1
+        ? setKeyedEntry(Array.isArray(existing) ? existing : [], rest[0]!, value)
+        : setDocumentPath(isPlainRecord(existing) ? existing : {}, rest, value, here);
+  if (child === undefined) delete next[key!];
+  else next[key!] = child;
   return next;
 }
 
-/** `current` with only the paths where `desired` differs from `base` changed. */
+const getDocumentPath = (document: unknown, path: ReadonlyArray<string>) =>
+  path.reduce<unknown>((value, key) => (isPlainRecord(value) ? value[key] : undefined), document);
+
+/**
+ * `current` with only the paths where `desired` differs from `base` changed. A change inside a
+ * map entry that `current` no longer has brings the whole desired entry back.
+ */
 const rebaseDocument = (
   current: StoredSettingsDocument,
   base: StoredSettingsDocument,
   desired: StoredSettingsDocument,
 ) =>
   documentChanges(base, desired).reduce(
-    (document, change) => setDocumentPath(document, change.path, change.after),
+    (document, change) => {
+      const entry = change.path.slice(0, 2);
+      return change.path.length > 2 &&
+        ENTRY_KEYS.has(change.path[0]!) &&
+        getDocumentPath(document, entry) === undefined
+        ? setDocumentPath(document, entry, getDocumentPath(desired, entry))
+        : setDocumentPath(document, change.path, change.after);
+    },
     current as Record<string, unknown>,
   );
 
@@ -215,14 +250,12 @@ const secretLocation = (
     ? `providerInstances.${secret.providerInstanceId}.environment.${secret.environmentVariable}`
     : secret.secretName;
 
-/** Sensitive secret slots by name: those with a value or a saved-secret marker, and all named. */
+/** Sensitive secret slots by name that hold a value or a saved-secret marker. */
 function secretSlots(settings: ServerSettings) {
   const held = new Map<string, string>();
   const marked = new Map<string, string>();
-  const named = new Set<string>();
   mapSettingsSecrets(settings, (secret) => {
     if (secret.sensitive) {
-      named.add(secret.secretName);
       if (secret.redacted) marked.set(secret.secretName, secretLocation(secret));
       if (secret.redacted || secret.value.length > 0) {
         held.set(secret.secretName, secretLocation(secret));
@@ -230,7 +263,7 @@ function secretSlots(settings: ServerSettings) {
     }
     return secret;
   });
-  return { held, marked, named };
+  return { held, marked };
 }
 
 const describeValue = (value: unknown) =>
@@ -327,11 +360,12 @@ export const applyStoredSettings = Effect.fn("settingsAccess.apply")(function* (
   const desired = yield* decodeDocument("The desired document", input.desired);
   const base =
     input.base === undefined ? undefined : yield* decodeDocument("The base document", input.base);
-  // A rebase must not delete a secret the repository never knew about, such as one set in the UI.
-  const namedSecrets =
+  // With --base, a secret the host holds that neither document holds was set in the UI. Only the
+  // repository can remove its own secrets; the reconciler only ever captures a secret's marker.
+  const repositorySecrets =
     base === undefined
       ? undefined
-      : new Set([...secretSlots(base).named, ...secretSlots(desired).named]);
+      : new Set([...secretSlots(base).held.keys(), ...secretSlots(desired).held.keys()]);
   const deviceHostContext =
     yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
 
@@ -353,14 +387,21 @@ export const applyStoredSettings = Effect.fn("settingsAccess.apply")(function* (
           ? input.desired
           : rebaseDocument(yield* settingsDocument(current, defaults), input.base, input.desired);
       const decoded = yield* decodeDocument("The resulting document", document);
+      const held = secretSlots(current).held;
+      const keep = new Set(
+        repositorySecrets === undefined
+          ? []
+          : [...held.keys()].filter((name) => !repositorySecrets.has(name)),
+      );
       // As in the settings UI, an SSH device host that is this machine is left out.
       const target = {
-        ...decoded,
+        ...mapSettingsSecrets(decoded, (secret) =>
+          keep.has(secret.secretName) ? { value: "", redacted: true } : secret,
+        ),
         deviceHosts: yield* remoteSshDeviceHosts(decoded.deviceHosts).pipe(
           Effect.provide(deviceHostContext),
         ),
       };
-      const held = secretSlots(current).held;
       const unheld = [...secretSlots(target).marked]
         .filter(([name]) => !held.has(name))
         .map(([, location]) => location);
@@ -374,14 +415,14 @@ export const applyStoredSettings = Effect.fn("settingsAccess.apply")(function* (
     }),
     check: Effect.fn("settingsAccess.applyCheck")(function* (next: ServerSettings) {
       if (expected === undefined) return;
-      if (namedSecrets !== undefined) {
+      if (repositorySecrets !== undefined) {
         const kept = secretSlots(next).held;
         const dropped = [...secretSlots(expected.current).held]
-          .filter(([name]) => !kept.has(name) && !namedSecrets.has(name))
+          .filter(([name]) => !kept.has(name) && !repositorySecrets.has(name))
           .map(([, location]) => location);
         if (dropped.length > 0) {
           return yield* new SettingsDocumentError({
-            detail: `This would remove secrets neither document names: ${dropped.join(", ")}. Nothing was changed. Capture them into the documents first, or remove them in the Settings page.`,
+            detail: `This would remove secrets set outside the documents: ${dropped.join(", ")}. Nothing was changed. Capture them into the documents first, or remove them in the Settings page.`,
           });
         }
       }
