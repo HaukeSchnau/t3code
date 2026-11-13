@@ -104,11 +104,16 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
   };
 }
 
+/** Tests point Claude's machine-wide settings away from the host's (testUtils/managedServiceEnv.setup.ts). */
+const claudeManagedSettingsDirectoryOverride = () => process.env.T3CODE_CLAUDE_MANAGED_SETTINGS_DIR;
+
 function claudeManagedSettingsPath(
   path: Path.Path,
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv,
 ): string | undefined {
+  const override = claudeManagedSettingsDirectoryOverride();
+  if (override !== undefined) return path.join(override, "managed-settings.json");
   if (platform === "darwin") {
     return "/Library/Application Support/ClaudeCode/managed-settings.json";
   }
