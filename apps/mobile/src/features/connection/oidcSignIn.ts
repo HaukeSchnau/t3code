@@ -132,6 +132,8 @@ export function installPeerFanOut(): () => void {
   const run = async () => {
     const connected = appAtomRegistry.get(connectedEnvironmentIdsAtom);
     const key = connected.join(",");
+    // After everything disconnects, the same set reconnecting is a new chance to run.
+    if (connected.length === 0) lastRun = "";
     if (disposed || running || connected.length === 0 || key === lastRun) return;
     running = true;
     lastRun = key;

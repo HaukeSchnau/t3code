@@ -22,19 +22,20 @@ interface PeerFanOutQueue {
 // Set once a step's navigation starts; the page lives on until the provider answers.
 let leaving = false;
 
-function readJson<A>(storage: Storage, key: string): A | null {
+// Reading `localStorage` itself throws where the browser blocks storage, so callers pass a getter.
+function readJson<A>(storage: () => Storage, key: string): A | null {
   try {
-    const raw = storage.getItem(key);
+    const raw = storage().getItem(key);
     return raw === null ? null : (JSON.parse(raw) as A);
   } catch {
     return null;
   }
 }
 
-function writeJson(storage: Storage, key: string, value: unknown): boolean {
+function writeJson(storage: () => Storage, key: string, value: unknown): boolean {
   try {
-    if (value === null) storage.removeItem(key);
-    else storage.setItem(key, JSON.stringify(value));
+    if (value === null) storage().removeItem(key);
+    else storage().setItem(key, JSON.stringify(value));
     return true;
   } catch {
     return false;
@@ -42,7 +43,7 @@ function writeJson(storage: Storage, key: string, value: unknown): boolean {
 }
 
 function triedPeers(): ReadonlySet<EnvironmentId> {
-  const tried = readJson<Record<string, number>>(localStorage, TRIED_KEY) ?? {};
+  const tried = readJson<Record<string, number>>(() => localStorage, TRIED_KEY) ?? {};
   const now = Date.now();
   return new Set(
     Object.entries(tried)
@@ -56,13 +57,16 @@ function triedPeers(): ReadonlySet<EnvironmentId> {
  * tried again soon. Without that record the fan-out could redirect on every load, so it stops.
  */
 function signInSilently(queue: PeerFanOutQueue): boolean {
-  const tried = readJson<Record<string, number>>(localStorage, TRIED_KEY) ?? {};
+  const tried = readJson<Record<string, number>>(() => localStorage, TRIED_KEY) ?? {};
   if (
-    !writeJson(localStorage, TRIED_KEY, { ...tried, [queue.current.environmentId]: Date.now() })
+    !writeJson(() => localStorage, TRIED_KEY, {
+      ...tried,
+      [queue.current.environmentId]: Date.now(),
+    })
   ) {
     return false;
   }
-  if (!writeJson(sessionStorage, QUEUE_KEY, queue)) return false;
+  if (!writeJson(() => sessionStorage, QUEUE_KEY, queue)) return false;
   leaving = true;
   window.location.replace(
     buildOidcSignInUrl(queue.current.origin, {
@@ -75,7 +79,7 @@ function signInSilently(queue: PeerFanOutQueue): boolean {
 
 /** The fan-out's peer that `host` names, when this page is a step of one. */
 export function peerFanOutStep(host: string): PeerFanOut.PeerSignIn | null {
-  const queue = readJson<PeerFanOutQueue>(sessionStorage, QUEUE_KEY);
+  const queue = readJson<PeerFanOutQueue>(() => sessionStorage, QUEUE_KEY);
   if (queue === null || !URL.canParse(host)) return null;
   return new URL(host).origin === new URL(queue.current.origin).origin ? queue.current : null;
 }
@@ -85,11 +89,11 @@ export function peerFanOutStep(host: string): PeerFanOut.PeerSignIn | null {
  * that is no longer current was already finished, so finishing it again does nothing.
  */
 export function continuePeerFanOut(step: PeerFanOut.PeerSignIn): void {
-  const queue = readJson<PeerFanOutQueue>(sessionStorage, QUEUE_KEY);
+  const queue = readJson<PeerFanOutQueue>(() => sessionStorage, QUEUE_KEY);
   if (queue === null || queue.current.environmentId !== step.environmentId) return;
   const [next, ...pending] = queue.pending;
   if (next !== undefined && signInSilently({ ...queue, current: next, pending })) return;
-  writeJson(sessionStorage, QUEUE_KEY, null);
+  writeJson(() => sessionStorage, QUEUE_KEY, null);
   window.location.replace(queue.returnTo);
 }
 
@@ -104,7 +108,7 @@ export function usePeerFanOut(): void {
     if (leaving || connected.length === 0 || !canSignInWithOidc()) return undefined;
     // Each step ends on /pair, so the app loading mid-queue means a step was abandoned; its
     // peer is already recorded.
-    writeJson(sessionStorage, QUEUE_KEY, null);
+    writeJson(() => sessionStorage, QUEUE_KEY, null);
     let cancelled = false;
     void find({ connected, skip: triedPeers() }).then((result) => {
       if (cancelled || leaving || result._tag !== "Success") return;

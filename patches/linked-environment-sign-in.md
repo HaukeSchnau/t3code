@@ -16,7 +16,8 @@ MacBook and the iPhone without a tap.
   answers as the linked environment. `runPeerFanOut` records each peer as tried, signs in through a
   platform hook and registers it with `ConnectionOnboarding.registerPairing` and the expected
   environment id. Recording before the sign-in covers the ones that fail, are dismissed or never
-  come back. A cancelled sign-in ends the run.
+  come back. A cancelled sign-in, or a sheet that cannot open because another is up, ends the
+  run.
 - Web (`apps/web/src/peerFanOut.ts`) signs in with `prompt=none` through top-level redirects, since
   a page cannot open a provider's page in the background. The queue lives in `sessionStorage`; each
   step returns to `/pair`, which pairs with the expected id and moves on, and the last step returns
