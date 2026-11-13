@@ -16,6 +16,11 @@ import {
 } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
+  scheduledTaskWorkspaceChoice,
+  scheduledTaskWorkspaceStrategy,
+  type ScheduledTaskWorkspaceChoice,
+} from "@t3tools/client-runtime/scheduled-task-workspace";
+import {
   parseMaxDeliveryAge,
   parseWebhookFilterDrafts,
   webhookFilterDrafts,
@@ -57,7 +62,7 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
 }
 
 export type ScheduleMode = "fixed" | "once" | "interval" | "webhook";
-export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
+export type WorkspaceMode = ScheduledTaskWorkspaceChoice["mode"];
 
 export interface DraftState {
   readonly editingId: string | null;
@@ -79,6 +84,7 @@ export interface DraftState {
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
   readonly existingWorktreePath: string;
+  readonly savedWorkspaceStrategy: ScheduledTask["workspaceStrategy"] | null;
   readonly modelKey: string;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -240,6 +246,7 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
 
 export function taskToDraft(task: ScheduledTask): DraftState {
   const schedule = task.schedule;
+  const workspace = scheduledTaskWorkspaceChoice(task.workspaceStrategy);
   const filters = webhookFilterDrafts(schedule.type === "webhook" ? schedule.filters : undefined);
   const weekdays =
     schedule.type === "fixed_time" && schedule.weekdays && schedule.weekdays.length > 0
@@ -261,18 +268,11 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     projectId: task.projectId,
     threadId: task.threadId ?? "",
     threadMode: scheduledTaskThreadMode(task),
-    // A managed workspace edits as a new worktree; the server picks the backend.
-    workspaceMode:
-      task.workspaceStrategy.type === "workspace" ? "worktree" : task.workspaceStrategy.type,
-    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
-    startFromOrigin:
-      task.workspaceStrategy.type === "worktree"
-        ? (task.workspaceStrategy.startFromOrigin ?? false)
-        : true,
-    existingWorktreePath:
-      task.workspaceStrategy.type === "existing_worktree"
-        ? task.workspaceStrategy.worktreePath
-        : "",
+    workspaceMode: workspace.mode,
+    baseRef: workspace.baseRef,
+    startFromOrigin: workspace.startFromOrigin,
+    existingWorktreePath: workspace.checkoutPath,
+    savedWorkspaceStrategy: task.workspaceStrategy,
     modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
@@ -407,5 +407,17 @@ export function defaultScheduledTaskProjectId<
       open[0] ??
       (scopedToProject ? scopedProjects[0] : undefined)
     )?.id ?? ""
+  );
+}
+
+export function workspaceStrategyFromDraft(draft: DraftState): ScheduledTask["workspaceStrategy"] {
+  return scheduledTaskWorkspaceStrategy(
+    {
+      mode: draft.workspaceMode,
+      baseRef: draft.baseRef,
+      startFromOrigin: draft.startFromOrigin,
+      checkoutPath: draft.existingWorktreePath,
+    },
+    draft.savedWorkspaceStrategy,
   );
 }
