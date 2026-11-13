@@ -20,6 +20,11 @@ import {
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
+  scheduledTaskWorkspaceChoice,
+  scheduledTaskWorkspaceStrategy,
+  type ScheduledTaskWorkspaceChoice,
+} from "@t3tools/client-runtime/scheduled-task-workspace";
+import {
   resolveProjectSettings,
   type LegacyProjectSettingsFields,
 } from "@t3tools/shared/projectSettings";
@@ -197,7 +202,6 @@ export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSche
   };
 }
 
-type Workspace = "worktree" | "root" | "existing_worktree";
 export type ScheduledTaskDraft = {
   readonly task: ScheduledTask | null;
   readonly title: string;
@@ -208,7 +212,7 @@ export type ScheduledTaskDraft = {
   readonly modelSelectionIsExplicit: boolean;
   readonly schedule: ScheduleDraft;
   readonly threadMode: ScheduledTaskThreadMode;
-  readonly workspace: Workspace;
+  readonly workspace: ScheduledTaskWorkspaceChoice["mode"];
   readonly baseRef: string;
   readonly checkoutPath: string;
   readonly enabled: boolean;
@@ -310,6 +314,7 @@ export function createDraft(
 }
 
 export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
+  const workspace = scheduledTaskWorkspaceChoice(task.workspaceStrategy);
   return {
     task,
     title: task.title,
@@ -320,19 +325,25 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
     modelSelectionIsExplicit: true,
     schedule: scheduleDraftForTask(task),
     threadMode: scheduledTaskThreadMode(task),
-    // A managed workspace edits as a new worktree; the server picks the backend.
-    workspace:
-      task.workspaceStrategy.type === "workspace" ? "worktree" : task.workspaceStrategy.type,
-    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
-    checkoutPath:
-      task.workspaceStrategy.type === "existing_worktree"
-        ? task.workspaceStrategy.worktreePath
-        : "",
+    workspace: workspace.mode,
+    baseRef: workspace.baseRef,
+    checkoutPath: workspace.checkoutPath,
     enabled: task.enabled,
-    startFromOrigin:
-      task.workspaceStrategy.type === "worktree"
-        ? (task.workspaceStrategy.startFromOrigin ?? false)
-        : true,
+    startFromOrigin: workspace.startFromOrigin,
     runtimeMode: task.runtimeMode,
   };
+}
+
+export function workspaceStrategyFromDraft(
+  draft: ScheduledTaskDraft,
+): ScheduledTask["workspaceStrategy"] {
+  return scheduledTaskWorkspaceStrategy(
+    {
+      mode: draft.workspace,
+      baseRef: draft.baseRef,
+      startFromOrigin: draft.startFromOrigin,
+      checkoutPath: draft.checkoutPath,
+    },
+    draft.task?.workspaceStrategy ?? null,
+  );
 }
