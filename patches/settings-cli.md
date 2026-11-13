@@ -91,7 +91,7 @@ paired client. It has no settings command and no HTTP route for settings.
     T3 does not restart on settings-only deploys. The deploy that first ships this command still
     runs the old server, which answers 404, so the hook also has to run when T3 starts.
   - **`--base`.** It is the last document that applied successfully. The first run on a host uses
-    `--base {}`. Without `--base`, the document is the whole truth and removes every UI setting and
+    a base file holding `{}`. Without `--base`, the document is the whole truth and removes every UI setting and
     secret it does not hold.
   - **Blocked deploys.** A repository change to a slot that holds a UI secret is refused until the
     reconciler has captured that secret, which blocks that host's deploys. Examples are a secret
