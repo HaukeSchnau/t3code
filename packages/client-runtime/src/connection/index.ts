@@ -10,6 +10,7 @@ export * from "./hostFreeze.ts";
 export * as Connection from "./layer.ts";
 export * from "./model.ts";
 export * as ConnectionOnboarding from "./onboarding.ts";
+export * as PeerFanOut from "./peerFanOut.ts";
 export * from "./presentation.ts";
 export * as ProfileStore from "./profileStore.ts";
 export * from "./routes.ts";

@@ -1,4 +1,4 @@
-import { ConnectionOnboarding } from "@t3tools/client-runtime/connection";
+import { ConnectionOnboarding, PeerFanOut } from "@t3tools/client-runtime/connection";
 import {
   createAtomCommandScheduler,
   createRuntimeCommand,
@@ -41,4 +41,12 @@ export const readOidcSignInOffer = createRuntimeCommand(connectionAtomRuntime, {
   scheduler: onboardingScheduler,
   concurrency: { mode: "singleFlight", key: (host: string) => host },
   execute: (host: string) => ConnectionOnboarding.readOidcSignInOffer(host),
+});
+
+export const findPeerSignIns = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:connection:find-peer-sign-ins",
+  scheduler: onboardingScheduler,
+  concurrency: { mode: "latest", key: () => "find-peer-sign-ins" },
+  execute: (input: Parameters<typeof PeerFanOut.findPeerSignIns>[0]) =>
+    PeerFanOut.findPeerSignIns(input),
 });

@@ -1,17 +1,22 @@
+import { useAtomValue } from "@effect/atom-react";
 import { offersLinkedEnvironments } from "@t3tools/client-runtime/link-request";
 import { peerLinkHealth } from "@t3tools/client-runtime/state/peerLinks";
 import { useFocusEffect } from "@react-navigation/native";
-import { AuthAccessReadScope, type EnvironmentId } from "@t3tools/contracts";
+import { AuthAccessReadScope, type EnvironmentId, type PeerLinkSummary } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { useCallback, useState } from "react";
 import { AppState, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import * as Dialog from "../../components/ui/Dialog";
+import { ListActionRow } from "../../components/ui/ListActionRow";
+import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { peerLinkEnvironment } from "../../state/peerLinks";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope } from "../../state/session";
 import { SettingsSection } from "../settings/components/SettingsSection";
+import { addLinkedEnvironment } from "./oidcSignIn";
 
 export function LinkedEnvironmentsSection(props: {
   readonly environmentId: EnvironmentId;
@@ -24,6 +29,17 @@ export function LinkedEnvironmentsSection(props: {
     supported ? peerLinkEnvironment.list({ environmentId: props.environmentId, input: {} }) : null,
   );
   const [nowMs, setNowMs] = useState(Date.now);
+  const saved = useAtomValue(environmentCatalog.catalogValueAtom).entries;
+  const [adding, setAdding] = useState<EnvironmentId | null>(null);
+  const add = (link: PeerLinkSummary) => {
+    setAdding(link.environmentId);
+    void addLinkedEnvironment(link)
+      .then((outcome) => {
+        if (!outcome.ok && outcome.error)
+          Dialog.alert(`Could not add ${link.label}`, outcome.error);
+      })
+      .finally(() => setAdding(null));
+  };
   const hasLinks = supported && (links.data?.links.length ?? 0) > 0;
   useFocusEffect(
     useCallback(() => {
@@ -58,18 +74,29 @@ export function LinkedEnvironmentsSection(props: {
                     ? `Expires in ${health.expiresInDays} ${health.expiresInDays === 1 ? "day" : "days"}`
                     : "Reachable";
           return (
-            <View key={link.environmentId} className="gap-0.5 p-4">
-              <Text className="text-base font-t3-bold text-foreground">{link.label}</Text>
-              <Text
-                className={
-                  health.kind === "reachable" && health.expiresInDays === null
-                    ? "text-xs text-foreground-muted"
-                    : "text-xs text-danger-foreground"
-                }
-                numberOfLines={2}
-              >
-                {status}
-              </Text>
+            <View key={link.environmentId}>
+              <View className="gap-0.5 p-4">
+                <Text className="text-base font-t3-bold text-foreground">{link.label}</Text>
+                <Text
+                  className={
+                    health.kind === "reachable" && health.expiresInDays === null
+                      ? "text-xs text-foreground-muted"
+                      : "text-xs text-danger-foreground"
+                  }
+                  numberOfLines={2}
+                >
+                  {status}
+                </Text>
+              </View>
+              {health.kind !== "expired" && !saved.has(link.environmentId) ? (
+                <ListActionRow
+                  icon="plus"
+                  label="Add to this device"
+                  loading={adding === link.environmentId}
+                  disabled={adding !== null}
+                  onPress={() => add(link)}
+                />
+              ) : null}
             </View>
           );
         })}

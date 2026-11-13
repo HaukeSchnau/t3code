@@ -129,6 +129,14 @@ tap Connect. The desktop app still pairs with codes. A sign-in pairs the device
 the way a pairing link does, so its session shows in `t3 auth session list`
 with the subject `oidc:<sub>`, and you revoke it the same way.
 
+Once a browser or the mobile app is connected to one such server, it also signs in
+to the environments that server [links to](#link-another-environment), without a
+click, as long as the provider recognizes the device without asking. A sign-in that
+needs your input is skipped for a day. On mobile, **Settings → Environments →
+Linked from …** has **Add to this device** to sign in to one by hand. A removed
+environment comes back while another one still links to it, so turn it off instead
+to keep it off a device.
+
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, another VPN, a public
