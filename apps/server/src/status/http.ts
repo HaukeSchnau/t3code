@@ -21,9 +21,12 @@ import {
 } from "../settingsAccess.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
-// Only the error's own message: a cause can hold payload fragments or provider diagnostics.
-const badRequest = (message: string) =>
-  Effect.fail(new EnvironmentHttpBadRequestError({ message }));
+// Clients get the error's own message; its cause can hold payload fragments or provider
+// diagnostics, so only the server log sees it.
+const rejected = (error: Error) =>
+  Effect.logWarning("settings request rejected", { cause: error }).pipe(
+    Effect.andThen(Effect.fail(new EnvironmentHttpBadRequestError({ message: error.message }))),
+  );
 
 export const layer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -47,7 +50,7 @@ export const layer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* readSettingsSnapshot().pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) => badRequest(error.message),
+              ServerSettingsError: rejected,
             }),
           );
         }),
@@ -61,7 +64,7 @@ export const layer = HttpApiBuilder.group(
           }
           return yield* patchStoredSettings(args.payload.patch).pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) => badRequest(error.message),
+              ServerSettingsError: rejected,
             }),
           );
         }),
@@ -74,8 +77,8 @@ export const layer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthProvidersManageScope);
           return yield* applyStoredSettings(args.payload).pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) => badRequest(error.message),
-              SettingsDocumentError: (error) => badRequest(error.message),
+              ServerSettingsError: rejected,
+              SettingsDocumentError: rejected,
             }),
           );
         }),
