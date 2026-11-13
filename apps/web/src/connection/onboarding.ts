@@ -35,3 +35,10 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
       Effect.flatMap((onboarding) => onboarding.registerSsh(input)),
     ),
 });
+
+export const readOidcSignInOffer = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:connection:read-oidc-sign-in-offer",
+  scheduler: onboardingScheduler,
+  concurrency: { mode: "singleFlight", key: (host: string) => host },
+  execute: (host: string) => ConnectionOnboarding.readOidcSignInOffer(host),
+});

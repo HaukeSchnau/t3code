@@ -31,11 +31,14 @@ const shell = (title: string, body: string) => `<!doctype html>
   </body>
 </html>`;
 
-export function renderErrorPage(description: string): string {
+export function renderErrorPage(
+  description: string,
+  next = "Close this page and start the sign-in again from your agent.",
+): string {
   return shell(
     "Sign-in failed",
     `<h1>This sign-in cannot continue</h1>
     <p>${escapeHtml(description)}</p>
-    <p>Close this page and start the sign-in again from your agent.</p>`,
+    <p>${escapeHtml(next)}</p>`,
   );
 }

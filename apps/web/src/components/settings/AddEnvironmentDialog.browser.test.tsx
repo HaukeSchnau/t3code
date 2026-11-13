@@ -1,5 +1,6 @@
 import { Atom, AsyncResult } from "effect/reactivity";
 import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { useState } from "react";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -13,6 +14,10 @@ const mocks = vi.hoisted(() => ({
     AsyncResult.success(undefined),
   ),
   refresh: () => {},
+  readOidcSignInOffer: vi.fn(async (_host: string) =>
+    AsyncResult.success(Option.some({ origin: "https://box.example.test", label: "Schnau ID" })),
+  ),
+  startOidcSignIn: vi.fn((_origin: string) => {}),
 }));
 
 vi.mock(import("../../state/use-atom-command"), async (original) => ({
@@ -22,6 +27,11 @@ vi.mock(import("../../state/use-atom-command"), async (original) => ({
 vi.mock(import("~/connection/onboarding"), async (original) => ({
   ...(await original()),
   connectSshEnvironment: mocks.connectSshEnvironment as never,
+  readOidcSignInOffer: mocks.readOidcSignInOffer as never,
+}));
+vi.mock(import("~/oidcSignIn"), async (original) => ({
+  ...(await original()),
+  startOidcSignIn: mocks.startOidcSignIn,
 }));
 vi.mock(import("~/state/query"), async (original) => ({
   ...(await original()),
@@ -83,6 +93,19 @@ async function expectDefaultModeAfterReopen() {
 }
 
 describe("AddEnvironmentDialog", () => {
+  it("offers the sign-in a host advertises and starts it there", async () => {
+    mocks.startOidcSignIn.mockClear();
+    await using _screen = await render(<Owner />);
+
+    await userEvent.click(page.getByRole("button", { name: "Add environment" }));
+    await userEvent.type(page.getByPlaceholder("backend.example.com"), "box.example.test");
+    await userEvent.click(page.getByPlaceholder("PAIRCODE"));
+    await userEvent.click(page.getByRole("button", { name: "Sign in with Schnau ID" }));
+
+    expect(mocks.readOidcSignInOffer).toHaveBeenCalledWith("box.example.test");
+    expect(mocks.startOidcSignIn).toHaveBeenCalledWith("https://box.example.test");
+  });
+
   it("reopens on Remote link after adding an SSH environment", async () => {
     using _bridge = setup();
     await using _screen = await render(<Owner />);

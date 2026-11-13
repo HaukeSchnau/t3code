@@ -76,6 +76,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         const pairingLinks = yield* PairingGrantStore.PairingGrantStore;
         const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const phone = yield* sessions.issue({ subject: "one-time-token" });
+        const signedIn = yield* sessions.issue({ subject: "oidc:user-1" });
         const bot = yield* sessions.issue({ subject: "cli-issued-session" });
         const startup = (ipAddress: string) =>
           sessions.issue({
@@ -86,6 +87,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         const startupBrowser = yield* startup("127.0.0.1");
         yield* environmentAuth.createPairingLink({ subject: "one-time-token" });
         yield* environmentAuth.issuePairingCredential({ access: "auto" });
+        yield* environmentAuth.createPairingLink({ subject: "oidc:user-1" });
 
         yield* EnvironmentAuth.make.pipe(
           Effect.provide(
@@ -95,6 +97,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
 
         const remaining = (yield* sessions.listActive()).map((session) => session.sessionId);
         assert.notInclude(remaining, phone.sessionId);
+        assert.notInclude(remaining, signedIn.sessionId);
         assert.notInclude(remaining, startupPhone.sessionId);
         assert.include(remaining, startupBrowser.sessionId);
         assert.include(remaining, bot.sessionId);
@@ -136,8 +139,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
           subject: "one-time-token",
           label: "CI phone",
         });
-        // An app approval code is never listed.
+        // App approval codes and sign-in grants are never listed.
         yield* environmentAuth.issuePairingCredential({ access: "auto" });
+        yield* environmentAuth.createPairingLink({ subject: "oidc:user-1" });
         const listedBeforeRevoke = yield* environmentAuth.listPairingLinks();
         const revoked = yield* environmentAuth.revokePairingLink(created.id);
         const listedAfterRevoke = yield* environmentAuth.listPairingLinks();

@@ -1,5 +1,5 @@
 import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@t3tools/contracts";
-import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
+import { resolveRemoteHttpBaseUrl, resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/http/HttpClient";
 
-import { bootstrapRemoteBearerSession } from "../authorization/remote.ts";
+import { bootstrapRemoteBearerSession, fetchRemoteSessionState } from "../authorization/remote.ts";
 import { deriveWsBaseUrl, normalizeHttpBaseUrl } from "../environment/endpoint.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -86,6 +86,32 @@ const resolvePairingTarget = Effect.fn("clientRuntime.connection.onboarding.reso
     });
   },
 );
+
+export interface OidcSignInOffer {
+  /** Where the sign-in starts and ends, which may differ from the address the user typed. */
+  readonly origin: string;
+  readonly label: string;
+}
+
+/** The OpenID Connect sign-in the server at `host` offers, read without credentials. */
+export const readOidcSignInOffer = Effect.fn(
+  "clientRuntime.connection.onboarding.readOidcSignInOffer",
+)(function* (host: string) {
+  const httpBaseUrl = yield* Effect.try({
+    try: () => resolveRemoteHttpBaseUrl(host),
+    catch: (cause) =>
+      new ConnectionBlockedError({
+        reason: "configuration",
+        detail: cause instanceof Error ? cause.message : "The host is invalid.",
+      }),
+  });
+  const state = yield* fetchRemoteSessionState({ httpBaseUrl }).pipe(
+    Effect.mapError(mapRemoteEnvironmentError),
+  );
+  return Option.fromUndefinedOr(state.auth.oidc).pipe(
+    Option.map((oidc): OidcSignInOffer => ({ origin: oidc.origin, label: oidc.label })),
+  );
+});
 
 function bearerConnectionId(environmentId: EnvironmentId, httpBaseUrl: string): string {
   return `bearer:${environmentId}:${new URL(httpBaseUrl).origin}`;

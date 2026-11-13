@@ -53,6 +53,8 @@ import { requestUrl } from "../requestUrl.ts";
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+/** Subjects of grants and sessions an OpenID Connect sign-in created, as `oidc:<sub>`. */
+export const OIDC_SUBJECT_PREFIX = "oidc:";
 
 export interface IssuedPairingLink {
   readonly id: string;
@@ -1077,7 +1079,9 @@ export const make = Effect.gen(function* () {
           .filter(
             (pairingLink) =>
               !excludedSubjects.includes(pairingLink.subject) &&
-              !pairingLink.subject.startsWith(MCP_APPROVAL_SUBJECT_PREFIX),
+              !pairingLink.subject.startsWith(MCP_APPROVAL_SUBJECT_PREFIX) &&
+              // A sign-in hands its grant straight to the browser; nobody shares it.
+              !pairingLink.subject.startsWith(OIDC_SUBJECT_PREFIX),
           )
           .map((link) => ({ ...link, ...authScopeResponse(link.scopes) }))
           .toSorted(
@@ -1448,6 +1452,7 @@ const revokePairedClientsThePolicyDisallows = Effect.fn(
   const sessions = (yield* stores.sessions.listActive()).filter(
     (session) =>
       disallowed.has(session.subject) ||
+      (!remoteAllowed && session.subject.startsWith(OIDC_SUBJECT_PREFIX)) ||
       // The startup link also pairs browsers on this machine; only a device elsewhere goes.
       (!remoteAllowed &&
         session.subject === INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT &&
@@ -1457,8 +1462,10 @@ const revokePairedClientsThePolicyDisallows = Effect.fn(
   const links = (yield* stores.pairingLinks.listActive()).filter(
     (link) =>
       disallowed.has(link.subject) ||
-      // Approval codes let an agent elsewhere sign in, as plain codes do.
-      (!remoteAllowed && link.subject.startsWith(MCP_APPROVAL_SUBJECT_PREFIX)),
+      // Approval codes and sign-in grants let a client elsewhere in, as plain codes do.
+      (!remoteAllowed &&
+        (link.subject.startsWith(MCP_APPROVAL_SUBJECT_PREFIX) ||
+          link.subject.startsWith(OIDC_SUBJECT_PREFIX))),
   );
   yield* Effect.forEach(sessions, (session) => stores.sessions.revoke(session.sessionId), {
     discard: true,

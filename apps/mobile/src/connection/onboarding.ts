@@ -44,3 +44,10 @@ export const updateBearerConnection = createRuntimeCommand(connectionAtomRuntime
       Effect.flatMap((onboarding) => onboarding.updateBearer(input)),
     ),
 });
+
+export const readOidcSignInOffer = createRuntimeCommand(connectionAtomRuntime, {
+  label: "mobile:connection:read-oidc-sign-in-offer",
+  scheduler: onboardingScheduler,
+  concurrency: { mode: "singleFlight", key: (host: string) => host },
+  execute: (host: string) => ConnectionOnboarding.readOidcSignInOffer(host),
+});

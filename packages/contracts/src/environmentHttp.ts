@@ -687,6 +687,11 @@ class EnvironmentMcpOAuthHttpApi extends HttpApiGroup.make("mcpOAuth")
     }),
   ) {}
 
+// Browser navigations that answer with redirects, so neither declares a payload or success.
+class EnvironmentOidcHttpApi extends HttpApiGroup.make("oidc")
+  .add(HttpApiEndpoint.get("start", "/api/auth/oidc/start"))
+  .add(HttpApiEndpoint.get("callback", "/api/auth/oidc/callback")) {}
+
 const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
@@ -1071,6 +1076,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
+  .add(EnvironmentOidcHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentThreadControlHttpApi)
   .add(EnvironmentServerHttpApi)

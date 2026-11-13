@@ -131,6 +131,10 @@ const toWsBaseUrl = (url: URL): string => {
   return next.toString();
 };
 
+/** The HTTP base URL of a backend the user typed, as a host or a URL. */
+export const resolveRemoteHttpBaseUrl = (host: string): string =>
+  toHttpBaseUrl(normalizeRemoteBaseUrl(host, "direct-host"));
+
 export interface ResolvedRemotePairingTarget {
   readonly credential: string;
   readonly httpBaseUrl: string;
@@ -185,6 +189,83 @@ export const readHostedPairingRequest = (url: URL): HostedPairingRequest | null 
     token,
     label,
   };
+};
+
+const OIDC_SIGN_IN_START_PATH = "/api/auth/oidc/start";
+const OIDC_SIGN_IN_ERROR_PARAM = "oidc_error";
+
+/** Where to start signing in to the server at `httpBaseUrl` through its OpenID Connect provider. */
+export const buildOidcSignInUrl = (
+  httpBaseUrl: string,
+  input: { readonly returnTo: string; readonly prompt?: "none" },
+): string => {
+  const url = new URL(OIDC_SIGN_IN_START_PATH, httpBaseUrl);
+  url.searchParams.set("return_to", input.returnTo);
+  if (input.prompt) url.searchParams.set("prompt", input.prompt);
+  return url.toString();
+};
+
+/**
+ * The URL a sign-in returns to. `host` names the server that signed in when the return URL
+ * belongs to another client; the result travels in the fragment, so it never reaches a server.
+ */
+export const buildOidcSignInResultUrl = (
+  returnTo: URL,
+  input: {
+    readonly host?: string;
+    readonly label?: string;
+    readonly result: { readonly token: string } | { readonly error: string };
+  },
+): URL => {
+  const next = new URL(returnTo.toString());
+  if (input.host) next.searchParams.set(HOSTED_PAIRING_HOST_PARAM, input.host);
+  if (input.host && input.label) next.searchParams.set(HOSTED_PAIRING_LABEL_PARAM, input.label);
+  next.hash = new URLSearchParams(
+    "token" in input.result
+      ? [[PAIRING_TOKEN_PARAM, input.result.token]]
+      : [[OIDC_SIGN_IN_ERROR_PARAM, input.result.error]],
+  ).toString();
+  return next;
+};
+
+export interface OidcSignInFailure {
+  /** The server that refused, or empty when the return URL is that server's own page. */
+  readonly host: string;
+  readonly label: string;
+  readonly error: string;
+}
+
+export const readOidcSignInFailure = (url: URL): OidcSignInFailure | null => {
+  const error = readHashParams(url).get(OIDC_SIGN_IN_ERROR_PARAM)?.trim() ?? "";
+  if (!error) return null;
+  return {
+    host: url.searchParams.get(HOSTED_PAIRING_HOST_PARAM)?.trim() ?? "",
+    label: url.searchParams.get(HOSTED_PAIRING_LABEL_PARAM)?.trim() ?? "",
+    error,
+  };
+};
+
+/** True when signing in again with the provider's own page, not silently, may succeed. */
+const oidcSignInNeedsInteraction = (error: string): boolean =>
+  error === "login_required" ||
+  error === "interaction_required" ||
+  error === "consent_required" ||
+  error === "account_selection_required";
+
+export const describeOidcSignInError = (error: string): string => {
+  if (oidcSignInNeedsInteraction(error)) return "Sign in with your provider to continue.";
+  switch (error) {
+    case "access_denied":
+      return "Sign-in was declined.";
+    case "not_allowed":
+      return "This account is not allowed to use this environment.";
+    case "pairing_disabled":
+      return "This environment does not accept new devices.";
+    case "unavailable":
+      return "The sign-in provider could not be reached. Try again.";
+    default:
+      return "Sign-in failed. Try again.";
+  }
 };
 
 /** Wraps a pairing URL in the `t3code://pair` link that desktop opens and mobile scans. */

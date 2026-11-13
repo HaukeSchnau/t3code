@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { OidcSignInConfig } from "./OidcSignInConfig.ts";
 import { isRemoteReachableHost, resolveSessionCookieName } from "./utils.ts";
 
 export class EnvironmentAuthPolicy extends Context.Service<
@@ -31,6 +32,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const policy = resolveServerAuthPolicy(config);
+  const oidc = yield* OidcSignInConfig;
 
   const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
     policy === "desktop-managed-local"
@@ -52,6 +54,7 @@ export const make = Effect.gen(function* () {
       environmentId: yield* serverEnvironment.getEnvironmentId,
       development: config.devUrl !== undefined,
     }),
+    ...(oidc ? { oidc: { label: oidc.label, origin: oidc.redirectUri.origin } } : {}),
   };
 
   return EnvironmentAuthPolicy.of({
