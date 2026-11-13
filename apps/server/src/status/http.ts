@@ -18,10 +18,10 @@ import {
   applyStoredSettings,
   patchStoredSettings,
   readSettingsSnapshot,
-  settingsErrorMessage,
 } from "../settingsAccess.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
+// Only the error's own message: a cause can hold payload fragments or provider diagnostics.
 const badRequest = (message: string) =>
   Effect.fail(new EnvironmentHttpBadRequestError({ message }));
 
@@ -47,7 +47,7 @@ export const layer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* readSettingsSnapshot().pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) => badRequest(settingsErrorMessage(error)),
+              ServerSettingsError: (error) => badRequest(error.message),
             }),
           );
         }),
@@ -61,7 +61,7 @@ export const layer = HttpApiBuilder.group(
           }
           return yield* patchStoredSettings(args.payload.patch).pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) => badRequest(settingsErrorMessage(error)),
+              ServerSettingsError: (error) => badRequest(error.message),
             }),
           );
         }),
@@ -74,7 +74,7 @@ export const layer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthProvidersManageScope);
           return yield* applyStoredSettings(args.payload).pipe(
             Effect.catchTags({
-              ServerSettingsError: (error) => badRequest(settingsErrorMessage(error)),
+              ServerSettingsError: (error) => badRequest(error.message),
               SettingsDocumentError: (error) => badRequest(error.message),
             }),
           );

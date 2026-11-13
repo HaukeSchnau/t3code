@@ -3,7 +3,6 @@ import {
   type ProviderInstanceMutation,
   ServerSettings,
   type ServerSettingsApplyInput,
-  type ServerSettingsError,
   ServerSettingsPatch,
   type ServerSettingsSnapshot,
   type ServerSettingsUpdateResult,
@@ -28,7 +27,7 @@ import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 
 export class SettingsDocumentError extends Schema.TaggedError<SettingsDocumentError>()(
   "SettingsDocumentError",
-  { detail: Schema.String },
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {
   override get message(): string {
     return this.detail;
@@ -265,16 +264,12 @@ const patchToward = (current: ServerSettings, target: ServerSettings) => {
     Effect.mapError(
       (cause) =>
         new SettingsDocumentError({
-          detail: `A settings patch cannot express this change.\n${cause.message}`,
+          detail: "A settings patch cannot express this change.",
+          cause,
         }),
     ),
   );
 };
-
-export function settingsErrorMessage(error: ServerSettingsError): string {
-  const cause = error.cause instanceof Error ? error.cause.message : undefined;
-  return cause === undefined || cause.length === 0 ? error.message : `${error.message}\n${cause}`;
-}
 
 const secretLocation = (
   secret: Pick<SettingsSecret, "secretName" | "providerInstanceId" | "environmentVariable">,
@@ -385,7 +380,8 @@ export const applyStoredSettings = Effect.fn("settingsAccess.apply")(function* (
           Effect.mapError(
             (error) =>
               new SettingsDocumentError({
-                detail: `${label} is not a valid settings document.\n${settingsErrorMessage(error)}`,
+                detail: `${label} is not a valid settings document.`,
+                cause: error,
               }),
           ),
         );

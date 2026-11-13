@@ -77,7 +77,9 @@ paired client. It has no settings command and no HTTP route for settings.
   the database, as the server does at start. A server that starts during those moments exits
   because the directory is owned. Callers that only read, such as the reconciler, pass
   `--live-only` or call the route.
-- **Exit codes.** Failures print one message to stderr and leave stdout empty. A failure that may
+- **Exit codes.** Failures print one message to stderr and leave stdout empty. The routes answer with T3's error
+  message only, never its cause; offline, where the operator runs T3 locally, the CLI adds the causes,
+  such as the field a document gets wrong. A failure that may
   pass exits 75:
   - a held lock (a server starting or not answering)
   - a timeout

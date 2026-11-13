@@ -6,7 +6,6 @@ import {
   EnvironmentHttpApi,
   requiredScopesForServerSettingsPatch,
   type ServerSettingsApplyInput,
-  type ServerSettingsError,
   ServerSettingsPatch,
   type ServerSettingsSnapshot,
   type ServerSettingsUpdateResult,
@@ -43,7 +42,6 @@ import {
   applyStoredSettings,
   patchStoredSettings,
   readSettingsSnapshot,
-  settingsErrorMessage,
 } from "../settingsAccess.ts";
 import {
   authLocationFlags,
@@ -146,15 +144,21 @@ const liveFailure = (origin: string, cause: unknown): SettingsCommandError => {
   });
 };
 
+// In-process failures are the local operator's own, so their causes are shown; a server's are not.
+function withCauses(error: unknown): string {
+  const lines: Array<string> = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+    if (current.message.length > 0 && !lines.includes(current.message)) lines.push(current.message);
+    current = current.cause;
+  }
+  return lines.length > 0 ? lines.join("\n") : String(error);
+}
+
 const commandFailure = (cause: unknown): SettingsCommandError =>
   hasTag(cause, "SettingsBusyError") || hasTag(cause, "SettingsFailedError")
     ? (cause as SettingsCommandError)
-    : new SettingsFailedError({
-        detail: hasTag(cause, "ServerSettingsError")
-          ? settingsErrorMessage(cause as ServerSettingsError)
-          : failureDetail(cause),
-        cause,
-      });
+    : new SettingsFailedError({ detail: withCauses(cause), cause });
 
 const withLiveSession = <A, E, R>(
   environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],

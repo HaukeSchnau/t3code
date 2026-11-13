@@ -161,41 +161,44 @@ it.live("reads and patches through the real routes, then revokes the CLI's sessi
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
-it.live("the routes require the RPC's scopes and answer T3's reason as a 400", () =>
-  Effect.gen(function* () {
-    const home = yield* makeHome();
-    const server = yield* serveRoutes(home.baseDir);
-    const issue = (...scopes: ReadonlyArray<string>) =>
-      runCli([
-        "auth",
-        "session",
-        "issue",
-        ...scopes.flatMap((scope) => ["--scope", scope]),
-        "--token-only",
-        "--base-dir",
-        home.baseDir,
-      ]).pipe(Effect.map((result) => result.stdout.trim()));
-    const reader = yield* issue("orchestration:read");
-    const writer = yield* issue("orchestration:read", "settings:write", "providers:manage");
+it.live(
+  "the routes require the RPC's scopes and answer T3's message, not its cause, as a 400",
+  () =>
+    Effect.gen(function* () {
+      const home = yield* makeHome();
+      const server = yield* serveRoutes(home.baseDir);
+      const issue = (...scopes: ReadonlyArray<string>) =>
+        runCli([
+          "auth",
+          "session",
+          "issue",
+          ...scopes.flatMap((scope) => ["--scope", scope]),
+          "--token-only",
+          "--base-dir",
+          home.baseDir,
+        ]).pipe(Effect.map((result) => result.stdout.trim()));
+      const reader = yield* issue("orchestration:read");
+      const writer = yield* issue("orchestration:read", "settings:write", "providers:manage");
 
-    const denied = yield* server.call("POST", "/api/server/settings", reader, {
-      patch: { enableAgentBrowserAccess: false },
-    });
-    assert.equal(denied.status, 403);
-    assert.equal(denied.body.requiredPermission, "settings:write");
-    const deniedApply = yield* server.call("POST", "/api/server/settings/apply", reader, {
-      desired: {},
-      dryRun: true,
-    });
-    assert.equal(deniedApply.status, 403);
+      const denied = yield* server.call("POST", "/api/server/settings", reader, {
+        patch: { enableAgentBrowserAccess: false },
+      });
+      assert.equal(denied.status, 403);
+      assert.equal(denied.body.requiredPermission, "settings:write");
+      const deniedApply = yield* server.call("POST", "/api/server/settings/apply", reader, {
+        desired: {},
+        dryRun: true,
+      });
+      assert.equal(deniedApply.status, 403);
 
-    const rejected = yield* server.call("POST", "/api/server/settings", writer, {
-      patch: { secretProviders: { vault: { kind: "nope", label: "Vault", config: {} } } },
-    });
-    assert.equal(rejected.status, 400);
-    assert.include(String(rejected.body.message), "Unsupported secret provider kind: nope.");
-    assert.isFalse(NodeFS.existsSync(home.settingsPath));
-  }).pipe(Effect.provide(layerTest), Effect.scoped),
+      const rejected = yield* server.call("POST", "/api/server/settings", writer, {
+        patch: { secretProviders: { vault: { kind: "nope", label: "Vault", config: {} } } },
+      });
+      assert.equal(rejected.status, 400);
+      assert.match(String(rejected.body.message), /write-secret-provider failed/);
+      assert.notInclude(String(rejected.body.message), "Unsupported secret provider kind");
+      assert.isFalse(NodeFS.existsSync(home.settingsPath));
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
 it.live("fails instead of printing defaults when settings.json does not decode", () =>
@@ -214,7 +217,8 @@ it.live("fails instead of printing defaults when settings.json does not decode",
       .settings("get", "--json")
       .pipe(Effect.provideService(FetchHttpClient.Fetch, server.fetch));
     assert.equal(live.exitCode, 1);
-    assert.match(live.stderr, /read-file failed[\s\S]*fastWorktreeCheckout/);
+    assert.match(live.stderr, /read-file failed/);
+    assert.notInclude(live.stderr, "fastWorktreeCheckout");
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
@@ -287,9 +291,10 @@ it.effect("get --sparse is a document that apply and patch take back unchanged",
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
-it.effect("reports a rotated secret and skips a patch that changes nothing", () =>
+it.effect("reports rotated secrets and skips a patch that changes nothing", () =>
   Effect.gen(function* () {
     const home = yield* makeHome();
+    // An environment variable and a settings field, whose redacted values look the same after.
     const withKey = (value: string) =>
       home.file(`${value}.json`, {
         providerInstances: {
@@ -298,17 +303,21 @@ it.effect("reports a rotated secret and skips a patch that changes nothing", () 
             environment: [{ name: "OPENAI_API_KEY", value, sensitive: true }],
           },
         },
+        cloudSpeechCredentials: { openai: value },
       });
-    const secret = "providerInstances.codex.environment.OPENAI_API_KEY";
+    const rotated = [
+      { secret: "providerInstances.codex.environment.OPENAI_API_KEY", change: "set" },
+      { secret: "voice-cloud-openai", change: "set" },
+    ];
     const run = (file: string) =>
       home
         .settings("patch", file, "--json")
         .pipe(Effect.map((result) => JSON.parse(result.stdout)));
 
-    assert.deepEqual((yield* run(withKey("sk-1"))).secrets, [{ secret, change: "set" }]);
+    assert.deepEqual((yield* run(withKey("sk-1"))).secrets, rotated);
     assert.deepInclude(yield* run(withKey("sk-2")), {
       changes: [],
-      secrets: [{ secret, change: "set" }],
+      secrets: rotated,
       written: true,
     });
     const before = NodeFS.statSync(home.settingsPath).mtimeMs;
