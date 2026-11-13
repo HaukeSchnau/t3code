@@ -18,17 +18,19 @@ const TONE_COLOR: Record<Exclude<MeterTone, "normal">, string> = {
 export function ComposerUsageMeter({
   environmentId,
   provider,
+  model,
   sources,
 }: {
   readonly environmentId: EnvironmentId;
   readonly provider: ServerProvider;
+  readonly model: string | null;
   readonly sources: UsageLimitSourceSnapshots;
 }) {
   // The clock is a UTC ISO minute, which is all the pace and reset labels need.
   const now = Date.parse(`${useNowMinute()}:00Z`);
   const source = meterSource(environmentId, provider, sources, now);
   if (!source) return null;
-  const shown = meterRows(source, now).map((row) => ({
+  const shown = meterRows(source, model, now).map((row) => ({
     ...row,
     color: row.tone === "normal" ? barColor(provider.driver) : TONE_COLOR[row.tone],
   }));
@@ -47,13 +49,12 @@ export function ComposerUsageMeter({
               .map(({ label, remaining }) => `${label} ${remaining}% left`)
               .join(", ")}`}
           >
-            <span className="flex flex-col gap-1">
+            <span className="grid grid-cols-[auto_auto_auto] items-center gap-x-1.5 gap-y-1 text-3xs leading-none tabular-nums">
               {shown.map(({ id, shortLabel, remaining, color, tone }) => (
-                <span
-                  key={id}
-                  className="flex items-center gap-1.5 text-3xs leading-none tabular-nums"
-                >
-                  <span className="w-4 truncate text-muted-foreground">{shortLabel}</span>
+                <Fragment key={id}>
+                  <span className="min-w-4 max-w-10 truncate text-left text-muted-foreground">
+                    {shortLabel}
+                  </span>
                   <span className="relative h-1 w-8 overflow-hidden rounded-full bg-muted">
                     <span
                       className="absolute inset-y-0 left-0 rounded-full"
@@ -66,7 +67,7 @@ export function ComposerUsageMeter({
                   >
                     {remaining}%
                   </span>
-                </span>
+                </Fragment>
               ))}
             </span>
           </Button>
