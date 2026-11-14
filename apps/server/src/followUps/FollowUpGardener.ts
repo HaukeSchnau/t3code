@@ -72,7 +72,8 @@ const gardenerPrompt = (input: {
     "- Keep the types consistent: fold types and fields that mean the same thing into one.",
     `- Read the threads settled ${
       input.since === null ? "in the last day" : `since ${input.since}`
-    } on ${machines}, and write down follow-ups that nobody wrote. Keep the bar high: only work someone would regret losing, never a summary of what a thread finished. Origin is the thread you read it in (\`fromThread\`).`,
+    } on ${machines}, and write down follow-ups that nobody wrote. Keep the bar high: only work someone would regret losing, never a summary of what a thread finished. Ideas count too, big ones included: a rewrite, an architecture change or a new service a thread hinted at. Origin is the thread you read it in (\`fromThread\`).`,
+    '- When several open follow-ups point at the same root cause and no idea covers it yet, write down the bigger change that would remove them all as an idea (reuse the type for ideas, or define one), with a link of kind "would remove" to each of them. If one already covers it, add the new ones to its links and keep the links it has.',
     "",
     "End with one short report: each change on its own line with the follow-up's id, or a line saying there was nothing to do.",
   ].join("\n");

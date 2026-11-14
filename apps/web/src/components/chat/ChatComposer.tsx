@@ -3615,6 +3615,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         ? null
                         : selectedProviderStatus
                     }
+                    usageLimitsModel={selectedModel}
                     usageLimitSources={usageLimitSources}
                     environmentId={environmentId}
                     pendingAction={pendingPrimaryAction}
