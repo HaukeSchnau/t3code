@@ -81,6 +81,12 @@ import {
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import { ServerIdleStatus } from "./server.ts";
+import { ServerSettingsPatch } from "./settings.ts";
+import {
+  ServerSettingsApplyInput,
+  ServerSettingsSnapshot,
+  ServerSettingsUpdateResult,
+} from "./settingsCli.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -821,13 +827,50 @@ class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
   ) {}
 
 // Fork: deploys wait for an idle server before promoting a release. See patches/nix-flake-packaging.md.
-class EnvironmentServerHttpApi extends HttpApiGroup.make("server").add(
-  HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
-    headers: OptionalBearerHeaders,
-    success: ServerIdleStatus,
-    error: [EnvironmentScopeRequiredError, EnvironmentInternalError],
-  }).middleware(EnvironmentAuthenticatedAuth),
-) {}
+// The settings endpoints serve `t3 settings`. See patches/settings-cli.md.
+class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
+  .add(
+    HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
+      headers: OptionalBearerHeaders,
+      success: ServerIdleStatus,
+      error: [EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("settings", "/api/server/settings", {
+      headers: OptionalBearerHeaders,
+      success: ServerSettingsSnapshot,
+      error: [
+        EnvironmentHttpBadRequestError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("patchSettings", "/api/server/settings", {
+      headers: OptionalBearerHeaders,
+      payload: Schema.Struct({ patch: ServerSettingsPatch }),
+      success: ServerSettingsUpdateResult,
+      error: [
+        EnvironmentHttpBadRequestError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("applySettings", "/api/server/settings/apply", {
+      headers: OptionalBearerHeaders,
+      payload: ServerSettingsApplyInput,
+      success: ServerSettingsUpdateResult,
+      error: [
+        EnvironmentHttpBadRequestError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
 
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
