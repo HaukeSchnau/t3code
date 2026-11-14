@@ -107,6 +107,28 @@ created in Settings can only be copied from the client that created them while
 its Sharing & access page stays open. If you leave or reload that page, create
 another link to share.
 
+### Sign in with your own identity provider
+
+A server can let devices sign in through an OpenID Connect provider instead of a
+pairing code. Register the server as a confidential client whose redirect URI is
+`https://<server>/api/auth/oidc/callback`, then start it with:
+
+| Variable                         | Value                                                                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `T3CODE_OIDC_ISSUER`             | The provider's issuer URL. Unset turns sign-in off.                                                                                                               |
+| `T3CODE_OIDC_CLIENT_ID`          | The client id.                                                                                                                                                    |
+| `T3CODE_OIDC_CLIENT_SECRET_FILE` | A file holding the client secret.                                                                                                                                 |
+| `T3CODE_OIDC_REDIRECT_URI`       | The redirect URI above. Its origin is the address devices pair with.                                                                                              |
+| `T3CODE_OIDC_REQUIRE`            | Claims the ID token must carry, as `claim=value` separated by commas. An array claim must contain the value. Required.                                            |
+| `T3CODE_OIDC_LABEL`              | The provider name on the sign-in button. Defaults to the issuer's host.                                                                                           |
+| `T3CODE_OIDC_RETURN_ORIGINS`     | Comma-separated web origins of other T3 Code servers, and app schemes such as `t3code://`, that may receive a sign-in. The server's own origin is always allowed. |
+
+The pairing page then shows **Sign in with** the label. In **Add environment** on
+web, type the host and the button appears. On mobile, leave the code empty and
+tap Connect. The desktop app still pairs with codes. A sign-in pairs the device
+the way a pairing link does, so its session shows in `t3 auth session list`
+with the subject `oidc:<sub>`, and you revoke it the same way.
+
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, another VPN, a public

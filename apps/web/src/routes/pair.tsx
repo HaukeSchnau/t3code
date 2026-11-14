@@ -2,9 +2,11 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 
 import {
   HostedPairingRouteSurface,
+  HostedSignInFailureSurface,
   PairingPendingSurface,
   PairingRouteSurface,
 } from "../components/auth/PairingRouteSurface";
+import { peekOidcSignInFailure } from "../oidcSignIn";
 
 export const Route = createFileRoute("/pair")({
   beforeLoad: async ({ context }) => {
@@ -40,7 +42,12 @@ function PairRouteView() {
   }
 
   if (authGateState.status === "hosted-pairing") {
-    return <HostedPairingRouteSurface />;
+    const signInFailure = peekOidcSignInFailure();
+    return signInFailure?.host ? (
+      <HostedSignInFailureSurface failure={signInFailure} />
+    ) : (
+      <HostedPairingRouteSurface />
+    );
   }
 
   return (

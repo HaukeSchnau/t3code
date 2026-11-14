@@ -46,7 +46,9 @@ import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
+  readOidcSignInOffer as readOidcSignInOfferAtom,
 } from "~/connection/onboarding";
+import { canSignInWithOidc, startOidcSignIn } from "~/oidcSignIn";
 import { useEnvironmentQuery } from "~/state/query";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
 import { type EnvironmentPresentation, useRelayEnvironmentDiscovery } from "~/state/environments";
@@ -91,6 +93,7 @@ export function AddEnvironmentDialog({
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
     reportFailure: false,
   });
+  const readOidcSignInOffer = useAtomCommand(readOidcSignInOfferAtom, { reportFailure: false });
   const relayDiscoveryState = useRelayEnvironmentDiscovery();
   const savedDesktopSshEnvironmentKeys = (() => {
     const keys = new Set<string>();
@@ -112,6 +115,11 @@ export function AddEnvironmentDialog({
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
+  const [signInOffer, setSignInOffer] = useState<{
+    readonly host: string;
+    readonly origin: string;
+    readonly label: string;
+  } | null>(null);
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
   const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
@@ -119,6 +127,8 @@ export function AddEnvironmentDialog({
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const savedBackendSessionRef = useRef(0);
+  // The host field's value now, which a sign-in lookup that finishes late compares against.
+  const savedBackendHostRef = useRef("");
   const isSshDiscoveryActive = desktopBridge !== undefined && open && savedBackendMode === "ssh";
   const desktopSshHosts = useEnvironmentQuery(
     isSshDiscoveryActive ? desktopSshHostsStateAtom : null,
@@ -152,7 +162,9 @@ export function AddEnvironmentDialog({
       savedBackendSessionRef.current += 1;
       setSavedBackendMode("remote");
       setSavedBackendHost("");
+      savedBackendHostRef.current = "";
       setSavedBackendPairingCode("");
+      setSignInOffer(null);
       setSavedBackendSshHost("");
       setSavedBackendSshUsername("");
       setSavedBackendSshPort("");
@@ -338,8 +350,22 @@ export function AddEnvironmentDialog({
     }
   };
 
+  // A route joins a known machine, which a sign-in's pairing page cannot tell apart from a new one.
+  const readSignInOffer = async (host: string) => {
+    if (routeTarget !== null || !canSignInWithOidc() || host.trim() === "") return;
+    if (signInOffer?.host === host) return;
+    const result = await readOidcSignInOffer(host.trim());
+    if (savedBackendHostRef.current !== host) return;
+    setSignInOffer(
+      result._tag === "Success" && Option.isSome(result.value)
+        ? { host, ...result.value.value }
+        : null,
+    );
+  };
+
   const handleSavedBackendHostChange = (value: string) => {
     const parsedPairingUrl = parsePairingUrlFields(value);
+    savedBackendHostRef.current = parsedPairingUrl ? parsedPairingUrl.host : value;
     if (parsedPairingUrl) {
       setSavedBackendHost(parsedPairingUrl.host);
       setSavedBackendPairingCode(parsedPairingUrl.pairingCode);
@@ -397,6 +423,7 @@ export function AddEnvironmentDialog({
           <Input
             value={savedBackendHost}
             onChange={(event) => handleSavedBackendHostChange(event.target.value)}
+            onBlur={() => void readSignInOffer(savedBackendHost)}
             placeholder="backend.example.com"
             disabled={isAddingSavedBackend}
             spellCheck={false}
@@ -418,6 +445,16 @@ export function AddEnvironmentDialog({
           Paste a full pairing URL here to fill both fields automatically.
         </span>
       </div>
+      {signInOffer !== null && signInOffer.host === savedBackendHost ? (
+        <div className="grid">
+          <Button
+            disabled={isAddingSavedBackend}
+            onClick={() => startOidcSignIn(signInOffer.origin)}
+          >
+            Sign in with {signInOffer.label}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
   const relayRouteOffer =

@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -13,6 +14,7 @@ import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { OidcSignInConfig } from "./OidcSignInConfig.ts";
 
 const layerServerConfig = (
   overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken">>,
@@ -70,12 +72,39 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
       }).pipe(Effect.provide(layerEnvironmentAuth(undefined, desktopAndLocalOnly))),
     );
 
+    it.effect("offers sign-in only where the policy lets remote clients pair", () =>
+      Effect.gen(function* () {
+        const layerOidc = Layer.succeed(OidcSignInConfig, {
+          issuer: "https://id.example.test",
+          clientId: "t3-box",
+          clientSecret: Redacted.make("secret"),
+          redirectUri: new URL("https://box.example.test/api/auth/oidc/callback"),
+          label: "Schnau ID",
+          returnOrigins: new Set(["https://box.example.test"]),
+          returnSchemes: new Set<string>(),
+          require: [{ claim: "groups", value: "t3-owner" }],
+        });
+        const offered = (policy?: ManagedPolicyDocument) =>
+          EnvironmentAuth.EnvironmentAuth.pipe(
+            Effect.flatMap((auth) => auth.getDescriptor()),
+            Effect.map((descriptor) => descriptor.oidc),
+            Effect.provide(layerEnvironmentAuth(undefined, policy).pipe(Layer.provide(layerOidc))),
+          );
+        expect(yield* offered()).toEqual({
+          label: "Schnau ID",
+          origin: "https://box.example.test",
+        });
+        expect(yield* offered(desktopAndLocalOnly)).toBeUndefined();
+      }),
+    );
+
     it.effect("revokes link-paired clients on startup under a policy without remote clients", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionStore.SessionStore;
         const pairingLinks = yield* PairingGrantStore.PairingGrantStore;
         const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const phone = yield* sessions.issue({ subject: "one-time-token" });
+        const signedIn = yield* sessions.issue({ subject: "oidc:user-1" });
         const bot = yield* sessions.issue({ subject: "cli-issued-session" });
         const startup = (ipAddress: string) =>
           sessions.issue({
@@ -86,6 +115,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         const startupBrowser = yield* startup("127.0.0.1");
         yield* environmentAuth.createPairingLink({ subject: "one-time-token" });
         yield* environmentAuth.issuePairingCredential({ access: "auto" });
+        yield* environmentAuth.createPairingLink({ subject: "oidc:user-1" });
 
         yield* EnvironmentAuth.make.pipe(
           Effect.provide(
@@ -95,6 +125,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
 
         const remaining = (yield* sessions.listActive()).map((session) => session.sessionId);
         assert.notInclude(remaining, phone.sessionId);
+        assert.notInclude(remaining, signedIn.sessionId);
         assert.notInclude(remaining, startupPhone.sessionId);
         assert.include(remaining, startupBrowser.sessionId);
         assert.include(remaining, bot.sessionId);
@@ -136,8 +167,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
           subject: "one-time-token",
           label: "CI phone",
         });
-        // An app approval code is never listed.
+        // App approval codes and sign-in grants are never listed.
         yield* environmentAuth.issuePairingCredential({ access: "auto" });
+        yield* environmentAuth.createPairingLink({ subject: "oidc:user-1" });
         const listedBeforeRevoke = yield* environmentAuth.listPairingLinks();
         const revoked = yield* environmentAuth.revokePairingLink(created.id);
         const listedAfterRevoke = yield* environmentAuth.listPairingLinks();
