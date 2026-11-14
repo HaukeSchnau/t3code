@@ -1,4 +1,4 @@
-import { ConnectionOnboarding } from "@t3tools/client-runtime/connection";
+import { ConnectionOnboarding, PeerFanOut } from "@t3tools/client-runtime/connection";
 import {
   createAtomCommandScheduler,
   createRuntimeCommand,
@@ -50,4 +50,20 @@ export const readOidcSignInOffer = createRuntimeCommand(connectionAtomRuntime, {
   scheduler: onboardingScheduler,
   concurrency: { mode: "singleFlight", key: (host: string) => host },
   execute: (host: string) => ConnectionOnboarding.readOidcSignInOffer(host),
+});
+
+export const runPeerFanOut = createRuntimeCommand(connectionAtomRuntime, {
+  label: "mobile:connection:run-peer-fan-out",
+  scheduler: onboardingScheduler,
+  concurrency: { mode: "singleFlight", key: () => "run-peer-fan-out" },
+  execute: (input: Parameters<typeof PeerFanOut.runPeerFanOut<never>>[0]) =>
+    PeerFanOut.runPeerFanOut(input),
+});
+
+export const resolvePeerSignIn = createRuntimeCommand(connectionAtomRuntime, {
+  label: "mobile:connection:resolve-peer-sign-in",
+  scheduler: onboardingScheduler,
+  concurrency: { mode: "parallel" },
+  execute: (link: Parameters<typeof PeerFanOut.resolvePeerSignIn>[0]) =>
+    PeerFanOut.resolvePeerSignIn(link),
 });

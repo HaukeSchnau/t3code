@@ -12,6 +12,7 @@ import {
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
 import { canSignInWithOidc, peekOidcSignInFailure, startOidcSignIn } from "../../oidcSignIn";
+import { continuePeerFanOut, peerFanOutStep } from "../../peerFanOut";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -164,6 +165,7 @@ export function HostedPairingRouteSurface() {
     reportFailure: false,
   });
   const [request] = useState(readHostedPairingRequest);
+  const [fanOutStep] = useState(() => (request ? peerFanOutStep(request.host) : null));
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(
     request ? "pairing" : "error",
   );
@@ -196,10 +198,19 @@ export function HostedPairingRouteSurface() {
     setCanRetry(false);
     tokenSubmittedRef.current = true;
 
-    const result = await connectPairingEnvironment({
-      host: request.host,
-      pairingCode: request.token,
-    });
+    const result = await connectPairingEnvironment(
+      fanOutStep
+        ? {
+            host: fanOutStep.origin,
+            pairingCode: request.token,
+            expectedEnvironmentId: fanOutStep.environmentId,
+          }
+        : { host: request.host, pairingCode: request.token },
+    );
+    if (fanOutStep) {
+      continuePeerFanOut(fanOutStep);
+      return;
+    }
     if (result._tag === "Success") {
       setStatus("paired");
       setMessage(`${request.label || "The environment"} is saved in this browser.`);
@@ -279,6 +290,11 @@ export function HostedPairingRouteSurface() {
 
 /** Another server's sign-in failed and sent this browser back with the reason. */
 export function HostedSignInFailureSurface({ failure }: { failure: OidcSignInFailure }) {
+  const [fanOutStep] = useState(() => peerFanOutStep(failure.host));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a fan-out step that failed moves on to the next linked environment
+  useEffect(() => {
+    if (fanOutStep) continuePeerFanOut(fanOutStep);
+  }, [fanOutStep]);
   return (
     <StandalonePage>
       <StandalonePageHeader

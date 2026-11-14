@@ -7,8 +7,15 @@ vi.mock("expo-constants", () => ({ default: { expoConfig: { scheme: "t3code" } }
 vi.mock("expo-crypto", () => ({
   getRandomBytes: (count: number) => Uint8Array.from({ length: count }, (_, index) => index),
 }));
-vi.mock("../../connection/onboarding", () => ({ readOidcSignInOffer: {} }));
+vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn() }));
+vi.mock("../../connection/onboarding", () => ({
+  readOidcSignInOffer: {},
+  resolvePeerSignIn: {},
+  runPeerFanOut: {},
+}));
+vi.mock("../../lib/protectedData", () => ({ whenProtectedDataAvailable: vi.fn() }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("../../state/presentation", () => ({ connectedEnvironmentIdsAtom: {} }));
 vi.mock("../../state/use-remote-environment-registry", () => ({ pairEnvironment: vi.fn() }));
 
 import { signInWithOidc } from "./oidcSignIn";
@@ -28,10 +35,7 @@ describe("signInWithOidc", () => {
       (start) =>
         `t3code://oidc?host=${encodeURIComponent(ORIGIN)}#token=CODE&client_state=${start.searchParams.get("client_state")}`,
     );
-    expect(await signInWithOidc(ORIGIN)).toEqual({
-      _tag: "Signed",
-      pairingUrl: `${ORIGIN}/#token=CODE`,
-    });
+    expect(await signInWithOidc(ORIGIN)).toEqual({ _tag: "Signed", pairingCode: "CODE" });
 
     // What another app could fire at the scheme: a real grant, without this attempt's value.
     sheetReturns(() => `t3code://oidc?host=${encodeURIComponent(ORIGIN)}#token=OTHER`);
