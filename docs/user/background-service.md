@@ -81,6 +81,36 @@ A missing file is ignored; other read failures stop service startup.
 If the file contains credentials, restrict access to that file with `chmod 600`
 (for the default T3 home, `chmod 600 ~/.t3/service.env`).
 
+## Change settings from a script
+
+`t3 settings get` prints the server's settings, defaults included, with secrets
+hidden. `--sparse` prints the settings document instead: only what you can set
+and what differs from the defaults.
+
+`t3 settings apply desired.json` makes the settings match a document in that
+form, resetting whatever the document leaves out. With `--base previous.json`,
+the document you applied last time, it changes only what you changed since, and
+keeps edits made in the Settings page meanwhile, including saved secrets. For a
+first run on a server that already has settings, pass an empty document (`{}`)
+as the base.
+`--dry-run` shows the changes without making them. Sensitive environment
+variables marked `valueRedacted` keep their stored value. A document can't remove
+a source control host; clear that in the Settings page.
+
+`t3 settings patch patch.json` applies a partial settings object instead, as the
+Settings page does. Provider instances are replaced as a whole map, so include
+every instance you keep.
+
+Both write commands check the input like the Settings page does and print what
+changed, including secrets they stored or removed. Use `-` to read from stdin and
+`--json` for one JSON object on stdout. A misspelled key or a bad value exits 1
+and changes nothing. If T3 Code is starting, busy, or older than the `t3`
+command, the command exits 75; `--wait 2m` keeps retrying for up to two minutes.
+
+The commands talk to the running server when there is one. Otherwise they work
+on the T3 home directly, and refuse while another server owns it. `--live-only`
+exits 75 instead, without taking over or migrating the T3 home.
+
 ## Platform support
 
 Linux needs systemd user services. Setup enables lingering so T3 Code starts at

@@ -202,6 +202,7 @@ import { terminalOutputStream, withOutputWindow } from "./terminal/OutputProtoco
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
+import { updateSettingsForClient } from "./settingsAccess.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
@@ -2805,16 +2806,11 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
-          Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
-            const deviceHosts = patch.deviceHosts
-              ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
-                  Effect.provide(deviceHostContext),
-                )
-              : undefined;
-            const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            const settings = yield* providerInstanceMutation === undefined
-              ? serverSettings.updateSettings(nextPatch)
-              : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
+          Effect.fnUntraced(function* (input) {
+            // Fork: shared with `t3 settings` (patches/settings-cli.md).
+            const settings = yield* updateSettingsForClient(input).pipe(
+              Effect.provide(deviceHostContext),
+            );
             return ServerSettings.redactServerSettingsForClient(settings, settingsClient);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
