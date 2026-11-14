@@ -950,6 +950,11 @@ export const TextGeneratorConfig = Schema.Struct({
   baseUrl: TextGeneratorBaseUrl,
   apiKey: SettingsSecretValue.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * An `openaiCompatible` endpoint reached through the Responses API. A field rather than a kind,
+   * because clients built before it still decode settings that use it.
+   */
+  responsesApi: Schema.optional(Schema.Boolean),
 });
 export type TextGeneratorConfig = typeof TextGeneratorConfig.Type;
 

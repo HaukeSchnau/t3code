@@ -1,4 +1,15 @@
-import type { TextGeneratorKind, TextGeneratorModel } from "@t3tools/contracts";
+import {
+  DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+  type TextGeneratorConfig,
+  type TextGeneratorKind,
+  type TextGeneratorModel,
+} from "@t3tools/contracts";
+import type * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
+import { toJsonSchemaObject } from "@t3tools/provider-core/server/textGenerationUtils";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -28,6 +39,8 @@ export interface TextGeneratorDriver {
     connection: TextGeneratorConnection,
     model: string,
     prompt: string,
+    /** The operation behind the prompt; absent for a connection test. */
+    request?: Pick<TextGenerationOperations.Request<Schema.Top>, "outputSchema" | "modelSelection">,
   ) => Effect.Effect<string, TextGeneratorRequestError, HttpClient.HttpClient>;
   readonly listModels: (
     connection: TextGeneratorConnection,
@@ -170,6 +183,76 @@ const openAICompatible: TextGeneratorDriver = {
   },
 };
 
+const ResponsesReply = Schema.Struct({
+  incomplete_details: Schema.optional(
+    Schema.NullOr(Schema.Struct({ reason: Schema.optional(Schema.String) })),
+  ),
+  output: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      content: Schema.optional(
+        Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.optional(Schema.String) })),
+      ),
+    }),
+  ),
+});
+
+const openAIResponses: TextGeneratorDriver = {
+  kind: "openaiCompatible",
+  generate: (connection, model, prompt, operation) => {
+    const { label } = connection;
+    const selection = operation?.modelSelection;
+    let request = HttpClientRequest.post(endpoint(connection, "/responses")).pipe(
+      HttpClientRequest.bodyJsonUnsafe({
+        model,
+        input: prompt,
+        // ChatGPT's Codex backend, which a pool such as CLIProxyAPI serves, rejects stored responses.
+        store: false,
+        reasoning: {
+          effort:
+            getModelSelectionStringOptionValue(selection, "reasoningEffort") ??
+            DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+        },
+        ...(getModelSelectionBooleanOptionValue(selection, "fastMode")
+          ? { service_tier: "priority" }
+          : {}),
+        ...(operation === undefined
+          ? {}
+          : {
+              text: {
+                format: {
+                  type: "json_schema",
+                  name: "output",
+                  schema: toJsonSchemaObject(operation.outputSchema),
+                  strict: true,
+                },
+              },
+            }),
+      }),
+    );
+    if (connection.apiKey) request = HttpClientRequest.bearerToken(request, connection.apiKey);
+    return sendJson(label, request, ResponsesReply).pipe(
+      Effect.flatMap((reply) => {
+        if (reply.incomplete_details?.reason === "max_output_tokens") {
+          return Effect.fail(
+            new TextGeneratorRequestError({ detail: `${label} reached its output limit.` }),
+          );
+        }
+        const text = reply.output
+          .flatMap((item) => (item.type === "message" ? (item.content ?? []) : []))
+          .flatMap((part) => (part.type === "output_text" && part.text ? [part.text] : []))
+          .join("")
+          .trim();
+        return text
+          ? Effect.succeed(text)
+          : Effect.fail(new TextGeneratorRequestError({ detail: `${label} returned no text.` }));
+      }),
+      withTimeout(label, GENERATE_TIMEOUT),
+    );
+  },
+  listModels: openAICompatible.listModels,
+};
+
 const ANTHROPIC_VERSION = "2023-06-01";
 const AnthropicMessage = Schema.Struct({
   stop_reason: Schema.NullOr(Schema.String),
@@ -251,7 +334,12 @@ const anthropic: TextGeneratorDriver = {
   ),
 };
 
-export const TEXT_GENERATOR_DRIVERS: Readonly<Record<TextGeneratorKind, TextGeneratorDriver>> = {
+const TEXT_GENERATOR_DRIVERS: Readonly<Record<TextGeneratorKind, TextGeneratorDriver>> = {
   openaiCompatible: openAICompatible,
   anthropic,
 };
+
+export const textGeneratorDriver = (config: TextGeneratorConfig) =>
+  config.kind === "openaiCompatible" && config.responsesApi === true
+    ? openAIResponses
+    : TEXT_GENERATOR_DRIVERS[config.kind];

@@ -265,6 +265,7 @@ function TextGeneratorWizard({
   const [preset, setPreset] = useState(TEXT_GENERATOR_PRESETS[0]!);
   const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? preset.baseUrl);
   const [label, setLabel] = useState(existing?.label ?? "");
+  const [responsesApi, setResponsesApi] = useState(existing?.responsesApi === true);
   const secretSources = useSecretSources(environmentId);
   const [keyDraft, setKeyDraft] = useState<string | SecretReference>(
     isSecretReference(existing?.apiKey) ? existing.apiKey : "",
@@ -288,6 +289,7 @@ function TextGeneratorWizard({
     baseUrl: baseUrl.trim(),
     apiKey,
     enabled: existing?.enabled ?? true,
+    ...(kind === "openaiCompatible" && responsesApi ? { responsesApi: true } : {}),
   });
   const keyRequired = existing === null && preset.id !== "custom";
   // Presets know their URL; only a custom endpoint, or one already saved as such, asks for it.
@@ -401,6 +403,26 @@ function TextGeneratorWizard({
                       }}
                       spellCheck={false}
                       autoFocus={existing === null && preset.id === "custom"}
+                    />
+                  </div>
+                ) : null}
+                {kind === "openaiCompatible" ? (
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="grid gap-0.5">
+                      <Label htmlFor="text-generator-responses">Responses API</Label>
+                      <span className="text-xs text-muted-foreground">
+                        For reasoning models behind the Responses API, such as a ChatGPT
+                        subscription proxy. Set reasoning effort and fast mode next to the model in
+                        each task&apos;s settings.
+                      </span>
+                    </div>
+                    <Switch
+                      id="text-generator-responses"
+                      checked={responsesApi}
+                      onCheckedChange={(checked) => {
+                        setResponsesApi(checked);
+                        setCheckError(null);
+                      }}
                     />
                   </div>
                 ) : null}
