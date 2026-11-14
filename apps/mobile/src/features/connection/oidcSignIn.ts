@@ -32,8 +32,21 @@ function appScheme(): string {
 /** The error of a sheet that could not open, which says nothing about the server. */
 export const OIDC_BROWSER_UNAVAILABLE = "browser_unavailable";
 
+// Both platforms show one auth sheet at a time and reject a second, so a sign-in started while
+// another sheet is up (the fan-out during a manual add, say) waits for it instead of failing.
+let sheetTurn: Promise<unknown> = Promise.resolve();
+
 /** Signs in to the server at `origin` in a browser sheet and returns its pairing code. */
-export async function signInWithOidc(
+export function signInWithOidc(
+  origin: string,
+  options?: { readonly prompt?: "none" },
+): Promise<PeerFanOut.PeerSignInResult> {
+  const turn = sheetTurn.then(() => openSignInSheet(origin, options));
+  sheetTurn = turn.catch(() => undefined);
+  return turn;
+}
+
+async function openSignInSheet(
   origin: string,
   options?: { readonly prompt?: "none" },
 ): Promise<PeerFanOut.PeerSignInResult> {
@@ -48,7 +61,7 @@ export async function signInWithOidc(
     returnTo,
     { preferEphemeralSession: true },
   ).catch(() => null);
-  // Android rejects when no browser can show the sheet, and both reject while another is open.
+  // Android rejects when no browser can show the sheet.
   if (result === null) return { _tag: "Failed", error: OIDC_BROWSER_UNAVAILABLE };
   if (result.type !== "success") return { _tag: "Cancelled" };
   const url = new URL(result.url);
@@ -150,7 +163,7 @@ export function installPeerFanOut(): () => void {
               .filter(([, triedAt]) => now - triedAt < RETRY_MS)
               .map(([environmentId]) => environmentId as EnvironmentId),
           ),
-          // A sheet that cannot open (another one is up) ends the run instead of using up peers.
+          // Without a browser no sheet can open, so the run ends instead of using up peers.
           signIn: (peer) =>
             Effect.promise(() =>
               signInWithOidc(peer.origin, { prompt: "none" }).then(
