@@ -149,8 +149,9 @@ current model's limits without leaving the conversation. The result opens above 
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
-On web and desktop, the composer footer also shows the current provider's session and weekly
-windows as small bars with the quota left. When the provider sends requests through a CLIProxyAPI
+On web and desktop, the composer footer also shows the current provider's main limit windows as
+small bars with the quota left, such as a session and a weekly window. A weekly limit that counts
+only one model, such as Claude's Fable weekly, shows only while that model is selected. When the provider sends requests through a CLIProxyAPI
 hub, the bars show what is left across the hub's accounts. A bar turns amber when you are spending
 faster than the window elapses and red when 10% or less is left. Hover it to see every window and
 when it resets.

@@ -42,20 +42,56 @@ const request = {
   modelSelection: { instanceId: ID, model: "some/model" },
 } as const;
 
+const chatMessages = { messages: [{ role: "user", content: "Name this thread." }] };
+
 it.effect.each([
   {
-    kind: "openaiCompatible",
+    name: "Chat Completions",
+    config: { kind: "openaiCompatible" },
     path: "/v1/chat/completions",
     auth: ["authorization", "Bearer secret"],
+    body: chatMessages,
     reply: { choices: [{ finish_reason: "stop", message: { content: '{"title":"Fix login"}' } }] },
   },
   {
-    kind: "anthropic",
+    name: "Responses API",
+    config: { kind: "openaiCompatible", responsesApi: true },
+    path: "/v1/responses",
+    auth: ["authorization", "Bearer secret"],
+    body: {
+      input: "Name this thread.",
+      store: false,
+      reasoning: { effort: "low" },
+      text: {
+        format: {
+          type: "json_schema",
+          name: "output",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: { title: { type: "string" } },
+            required: ["title"],
+            additionalProperties: false,
+          },
+        },
+      },
+    },
+    reply: {
+      output: [
+        { type: "reasoning", summary: [] },
+        { type: "message", content: [{ type: "output_text", text: '{"title":"Fix login"}' }] },
+      ],
+    },
+  },
+  {
+    name: "Anthropic",
+    config: { kind: "anthropic" },
     path: "/v1/messages",
     auth: ["x-api-key", "secret"],
+    body: chatMessages,
     reply: { stop_reason: "end_turn", content: [{ type: "text", text: '{"title":"Fix login"}' }] },
   },
-] as const)("$kind generates structured text with its API's request shape", (api) =>
+] as const)("$name generates structured text with its API's request shape", (api) =>
   Effect.gen(function* () {
     const upstream = vi.fn<typeof fetch>(async (url, init) => {
       expect(new URL(String(url)).pathname).toBe(api.path);
@@ -63,11 +99,12 @@ it.effect.each([
       expect(new Headers(init?.headers).get(api.auth[0])).toBe(api.auth[1]);
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe("some/model");
-      expect(body.messages).toEqual([{ role: "user", content: "Name this thread." }]);
+      expect(body).toMatchObject(api.body);
+      expect(body.service_tier).toBeUndefined();
       return Response.json(api.reply);
     });
     const generators = yield* TextGenerators.TextGenerators.pipe(
-      Effect.provide(layer({ kind: api.kind, apiKey: "secret" })),
+      Effect.provide(layer({ ...api.config, apiKey: "secret" })),
     );
     const run = yield* generators.runner(ID);
     expect(run).toBeDefined();
@@ -84,6 +121,34 @@ it.effect.each([
       run!(request).pipe(Effect.provideService(FetchHttpClient.Fetch, upstream)),
     );
     expect(failure.detail).toMatch(/rejected the API key: Incorrect API key provided$/);
+  }),
+);
+
+it.effect("a Responses API generator sends the selection's reasoning effort and fast mode", () =>
+  Effect.gen(function* () {
+    const upstream = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.reasoning).toEqual({ effort: "high" });
+      expect(body.service_tier).toBe("priority");
+      return Response.json({
+        output: [{ type: "message", content: [{ type: "output_text", text: '{"title":"x"}' }] }],
+      });
+    });
+    const generators = yield* TextGenerators.TextGenerators.pipe(
+      Effect.provide(layer({ responsesApi: true })),
+    );
+    const run = yield* generators.runner(ID);
+    yield* run!({
+      ...request,
+      modelSelection: {
+        ...request.modelSelection,
+        options: [
+          { id: "reasoningEffort", value: "high" },
+          { id: "fastMode", value: true },
+        ],
+      },
+    }).pipe(Effect.provideService(FetchHttpClient.Fetch, upstream));
+    expect(upstream).toHaveBeenCalledOnce();
   }),
 );
 
