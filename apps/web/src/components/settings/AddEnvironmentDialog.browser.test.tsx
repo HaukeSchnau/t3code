@@ -70,8 +70,15 @@ function Owner() {
   );
 }
 
+/** Resets what the `vi.mock` factories read, queued one-time answers included. */
 function setup() {
   mocks.connectSshEnvironment.mockClear();
+  mocks.readOidcSignInOffer.mockReset();
+  mocks.startOidcSignIn.mockReset();
+}
+
+/** SSH needs the desktop bridge; sign-in needs its absence, so only the SSH tests stub it. */
+function stubDesktopBridge() {
   return stubGlobal("desktopBridge", {});
 }
 
@@ -94,7 +101,7 @@ async function expectDefaultModeAfterReopen() {
 
 describe("AddEnvironmentDialog", () => {
   it("offers the sign-in a host advertises and starts it there", async () => {
-    mocks.startOidcSignIn.mockClear();
+    setup();
     await using _screen = await render(<Owner />);
 
     await userEvent.click(page.getByRole("button", { name: "Add environment" }));
@@ -107,6 +114,7 @@ describe("AddEnvironmentDialog", () => {
   });
 
   it("keeps the offer of the host the field shows when an older lookup answers last", async () => {
+    setup();
     const answers = new Map<string, (label: string) => void>();
     const offer = (host: string, label: string) =>
       AsyncResult.success(Option.some({ origin: `https://${host}`, label }));
@@ -133,7 +141,8 @@ describe("AddEnvironmentDialog", () => {
   });
 
   it("reopens on Remote link after adding an SSH environment", async () => {
-    using _bridge = setup();
+    setup();
+    using _bridge = stubDesktopBridge();
     await using _screen = await render(<Owner />);
 
     await openDialogOnSsh();
@@ -147,7 +156,8 @@ describe("AddEnvironmentDialog", () => {
   });
 
   it("clears the form after dismissing it on SSH", async () => {
-    using _bridge = setup();
+    setup();
+    using _bridge = stubDesktopBridge();
     await using _screen = await render(<Owner />);
 
     await openDialogOnSsh();

@@ -89,6 +89,7 @@ const decodeKeySet = Schema.decodeUnknownEffect(Jwks.KeySet);
 class OidcSignInFailure extends Schema.TaggedError<OidcSignInFailure>()("OidcSignInFailure", {
   code: Schema.String,
   stage: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 const page = (status: number, message: string): OidcSignInStep => ({
@@ -130,14 +131,15 @@ export const make = Effect.gen(function* () {
   let keySet: { readonly keys: Jwks.KeySet; readonly expiresAt: number } | undefined;
 
   const randomToken = (size: number) => random.randomBytes(size).pipe(Effect.map(Base64Url.encode));
-  const fail = (code: string, stage: string) => new OidcSignInFailure({ code, stage });
+  const fail = (code: string, stage: string, cause?: unknown) =>
+    new OidcSignInFailure({ code, stage, ...(cause === undefined ? {} : { cause }) });
 
   const getJson = (url: string, stage: string) =>
     http.get(url, { headers: { accept: "application/json" } }).pipe(
       Effect.filterOrFail((response) => response.status === 200),
       Effect.flatMap((response) => response.json),
       Effect.timeout(HTTP_TIMEOUT),
-      Effect.mapError(() => fail("unavailable", stage)),
+      Effect.mapError((cause) => fail("unavailable", stage, cause)),
     );
 
   // The provider's endpoints must live on the issuer's origin, so a tampered document cannot
@@ -148,8 +150,11 @@ export const make = Effect.gen(function* () {
       `${config.issuer.replace(/\/+$/u, "")}/.well-known/openid-configuration`,
       "discovery",
     ).pipe(
-      Effect.flatMap(decodeDiscovery),
-      Effect.mapError(() => fail("unavailable", "discovery")),
+      Effect.flatMap((json) =>
+        decodeDiscovery(json).pipe(
+          Effect.mapError((cause) => fail("unavailable", "discovery", cause)),
+        ),
+      ),
     );
     const issuerOrigin = new URL(config.issuer).origin;
     const endpoints = [document.authorization_endpoint, document.token_endpoint, document.jwks_uri];
@@ -165,8 +170,9 @@ export const make = Effect.gen(function* () {
 
   const fetchKeySet = Effect.fn("OidcSignIn.fetchKeySet")(function* (jwksUri: string) {
     const keys = yield* getJson(jwksUri, "keys").pipe(
-      Effect.flatMap(decodeKeySet),
-      Effect.mapError(() => fail("unavailable", "keys")),
+      Effect.flatMap((json) =>
+        decodeKeySet(json).pipe(Effect.mapError((cause) => fail("unavailable", "keys", cause))),
+      ),
     );
     keySet = {
       keys,
@@ -207,7 +213,7 @@ export const make = Effect.gen(function* () {
           );
     return yield* verified.pipe(
       Effect.mapError((error) =>
-        error._tag === "OidcSignInFailure" ? error : fail("sign_in_failed", "id-token"),
+        error._tag === "OidcSignInFailure" ? error : fail("sign_in_failed", "id-token", error),
       ),
     );
   });
@@ -238,12 +244,12 @@ export const make = Effect.gen(function* () {
         ),
       )
       .pipe(
-        Effect.mapError(() => fail("unavailable", "token")),
+        Effect.mapError((cause) => fail("unavailable", "token", cause)),
         Effect.flatMap((response) =>
           response.status === 200
             ? response.json.pipe(
                 Effect.flatMap(decodeTokens),
-                Effect.mapError(() => fail("sign_in_failed", "token-response")),
+                Effect.mapError((cause) => fail("sign_in_failed", "token-response", cause)),
               )
             : Effect.fail(fail("sign_in_failed", "token-status")),
         ),
@@ -315,6 +321,8 @@ export const make = Effect.gen(function* () {
       const challenge = Base64Url.encode(
         yield* digest.digest(Digest.sha256, new TextEncoder().encode(verifier)),
       );
+      // Another start may have filled the map while this one generated its secrets.
+      if (pending.size >= MAX_PENDING) return yield* fail("unavailable", "capacity");
       const cookie = `${BINDING_COOKIE_PREFIX}${cookieId}`;
       pending.set(state, {
         cookie,
@@ -419,8 +427,8 @@ export const make = Effect.gen(function* () {
           .pipe(
             Effect.mapError((error) =>
               error._tag === "ManagedPolicyRefusedError"
-                ? fail("pairing_disabled", "grant-policy")
-                : fail("sign_in_failed", "grant"),
+                ? fail("pairing_disabled", "grant-policy", error)
+                : fail("sign_in_failed", "grant", error),
             ),
           );
         yield* Effect.logInfo("OIDC sign-in minted a pairing grant.");
