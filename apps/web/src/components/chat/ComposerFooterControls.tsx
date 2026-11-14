@@ -198,6 +198,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   compact: boolean;
   canOperateThread: boolean;
   usageLimitsProvider: ServerProvider | null;
+  usageLimitsModel: string | null;
   usageLimitSources: UsageLimitSourceSnapshots;
   environmentId: EnvironmentId;
   isPreparingWorktree: boolean;
@@ -236,6 +237,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         <ComposerUsageMeter
           environmentId={props.environmentId}
           provider={props.usageLimitsProvider}
+          model={props.usageLimitsModel}
           sources={props.usageLimitSources}
         />
       ) : null}

@@ -56,6 +56,7 @@ import {
 import { createOfflineAuthRevalidationController } from "../offlineAuthRevalidation";
 import { GUEST_PAGE_PATH } from "../guestPage";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { hasHostedOidcSignInFailure } from "../oidcSignIn";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { useAtomValue } from "@effect/atom-react";
@@ -88,7 +89,10 @@ export const Route = createRootRoute({
       };
     }
 
-    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
+    if (
+      location.pathname === "/pair" &&
+      (hasHostedPairingRequest(new URL(window.location.href)) || hasHostedOidcSignInFailure())
+    ) {
       return {
         authGateState: {
           status: "hosted-pairing",

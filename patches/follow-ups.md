@@ -39,7 +39,9 @@ that keeps a tidy list of open work with its origin.
 - **A nightly gardener.** A home with `T3CODE_FOLLOW_UP_GARDENER_AT` (local `HH:MM`) launches one
   agent thread a night in the scratch project with the server's default model. It merges
   duplicates, closes finished work, checks conditions, keeps types consistent and reads the threads
-  its members (`T3CODE_FOLLOW_UP_MEMBERS`) settled since the last pass. Its thread's last message
+  its members (`T3CODE_FOLLOW_UP_MEMBERS`) settled since the last pass for work and ideas nobody
+  wrote down, big ideas included. When several open follow-ups share a root cause, it writes down
+  the bigger change that would remove them all as one idea that links to each of them. Its thread's last message
   is the report, and saves from that thread log as the gardener's. Clients can start a pass at once
   (`followUps.runGardener`).
 - **Hints at thread start.** The first turn of a top-level thread a user started (not a scheduled
@@ -48,6 +50,12 @@ that keeps a tidy list of open work with its origin.
   It reads the 100 most recently updated open follow-ups. Weak matches stay silent. Turn start sits below the peer link in the layer graph, so the server
   above registers the lookup in `FollowUpHints`; without it, and after two seconds, there is no
   hint. The line goes to the provider only, beside the restart note.
+- **Loose ends at settle.** One line in the agent instructions says that an agent asked whether a
+  thread is done or can be settled saves each remaining loose end with `follow_up_save`, searching
+  first. It names that question on purpose: a broader wording sent agents on follow-up detours
+  during ordinary work. Upstream adds its own settle line ("Asked to settle a thread, this one too:
+  `t3_thread_organize`", #26765). At the sync, merge the two into one line that covers "settle
+  this thread" too, so a settle request saves loose ends before it organizes the thread.
 
 ## Upstream touch points
 
@@ -57,6 +65,7 @@ that keeps a tidy list of open work with its origin.
   context of a thread's first turn).
 - `apps/server/src/ws.ts` (fork RPC layer and the config field), `server.ts` (layer wiring),
   `mcp/McpHttpServer.ts` (toolkit registration), `provider/agentContextBudget.json`.
+- `packages/provider-core/src/server/orchestrationInstructions.ts` (the loose-ends line).
 - Web: the inbox rows in `Sidebar.tsx`, `Sidebar.logic.ts` and `Sidebar.drag.ts` (a follow-up row
   kind that never drags but holds its place), the sidebar utility menu, `mainAppLocation.ts`, the
   command palette, and `CustomSnoozeDialog.tsx` (optional wording for Later).

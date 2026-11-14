@@ -1,6 +1,7 @@
 import { Alert, AlertDescription } from "../ui/alert";
 import type { AuthSessionState } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { describeOidcSignInError, type OidcSignInFailure } from "@t3tools/shared/remote";
 import React, { startTransition, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { connectPairing } from "../../connection/onboarding";
@@ -10,6 +11,8 @@ import {
   submitServerAuthCredential,
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
+import { canSignInWithOidc, peekOidcSignInFailure, startOidcSignIn } from "../../oidcSignIn";
+import { continuePeerFanOut, peerFanOutStep } from "../../peerFanOut";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -37,7 +40,13 @@ export function PairingRouteSurface({
 }) {
   const [autoPairToken] = useState(peekPairingTokenFromUrl);
   const [credential, setCredential] = useState(autoPairToken ?? "");
-  const [errorMessage, setErrorMessage] = useState(initialErrorMessage ?? "");
+  const [errorMessage, setErrorMessage] = useState(() => {
+    const signInFailure = peekOidcSignInFailure();
+    return (
+      initialErrorMessage ?? (signInFailure ? describeOidcSignInError(signInFailure.error) : "")
+    );
+  });
+  const signIn = auth.oidc && canSignInWithOidc() ? auth.oidc : null;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const autoSubmitAttemptedRef = useRef(false);
 
@@ -115,7 +124,22 @@ export function PairingRouteSurface({
         ) : null}
 
         <div className="flex flex-wrap gap-2">
-          <Button disabled={isSubmitting} size="sm" type="submit">
+          {signIn ? (
+            <Button
+              disabled={isSubmitting}
+              // On another address of this server, the sign-in ends on the one it is registered for.
+              onClick={() => startOidcSignIn(signIn.origin, signIn.origin)}
+              size="sm"
+            >
+              Sign in with {signIn.label}
+            </Button>
+          ) : null}
+          <Button
+            disabled={isSubmitting}
+            size="sm"
+            type="submit"
+            variant={signIn ? "outline" : "default"}
+          >
             {isSubmitting ? "Pairing..." : "Continue"}
           </Button>
           <Button
@@ -141,6 +165,7 @@ export function HostedPairingRouteSurface() {
     reportFailure: false,
   });
   const [request] = useState(readHostedPairingRequest);
+  const [fanOutStep] = useState(() => (request ? peerFanOutStep(request.host) : null));
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(
     request ? "pairing" : "error",
   );
@@ -173,10 +198,19 @@ export function HostedPairingRouteSurface() {
     setCanRetry(false);
     tokenSubmittedRef.current = true;
 
-    const result = await connectPairingEnvironment({
-      host: request.host,
-      pairingCode: request.token,
-    });
+    const result = await connectPairingEnvironment(
+      fanOutStep
+        ? {
+            host: fanOutStep.origin,
+            pairingCode: request.token,
+            expectedEnvironmentId: fanOutStep.environmentId,
+          }
+        : { host: request.host, pairingCode: request.token },
+    );
+    if (fanOutStep) {
+      continuePeerFanOut(fanOutStep);
+      return;
+    }
     if (result._tag === "Success") {
       setStatus("paired");
       setMessage(`${request.label || "The environment"} is saved in this browser.`);
@@ -249,6 +283,28 @@ export function HostedPairingRouteSurface() {
             Open app
           </Button>
         ) : null}
+      </div>
+    </StandalonePage>
+  );
+}
+
+/** Another server's sign-in failed and sent this browser back with the reason. */
+export function HostedSignInFailureSurface({ failure }: { failure: OidcSignInFailure }) {
+  const [fanOutStep] = useState(() => peerFanOutStep(failure.host));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a fan-out step that failed moves on to the next linked environment
+  useEffect(() => {
+    if (fanOutStep) continuePeerFanOut(fanOutStep);
+  }, [fanOutStep]);
+  return (
+    <StandalonePage>
+      <StandalonePageHeader
+        title="Sign-in failed"
+        description={`${failure.label || failure.host}: ${describeOidcSignInError(failure.error)}`}
+      />
+      <div className="mt-6 flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
+          Open app
+        </Button>
       </div>
     </StandalonePage>
   );

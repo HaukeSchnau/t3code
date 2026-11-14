@@ -22,6 +22,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { AppText as Text, AppTextInput, type AppTextInputProps } from "../../components/ui/AppText";
 import { FrostedCutout } from "../../components/ui/FrostedCutout";
+import { pairWithOidcSignIn } from "./oidcSignIn";
 import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -169,7 +170,12 @@ function PairingForm({
     setSubmitError(null);
     setIsSubmitting(true);
     onChangeConnectionPairingUrl(pairingUrl);
-    const outcome = await onConnectPress(pairingUrl, routeFor);
+    // Without a code, a machine that offers sign-in pairs through it. A route is another
+    // address of a known machine, and a sign-in pairs only the address the server registered.
+    const outcome =
+      (codeInput.trim() === "" && routeFor === undefined
+        ? await pairWithOidcSignIn(hostInput)
+        : null) ?? (await onConnectPress(pairingUrl, routeFor));
     setIsSubmitting(false);
     setSubmitError(outcome.error);
     void Haptics.notificationAsync(
@@ -268,7 +274,9 @@ function PairingForm({
               )}
             >
               {pairingConnectionError ??
-                "For machines on your local network or tailnet. The machine keeps its own provider credentials."}
+                (routeFor === undefined
+                  ? "For machines on your local network or tailnet. Leave the code empty to sign in where the machine offers it."
+                  : "For machines on your local network or tailnet. The machine keeps its own provider credentials.")}
             </Text>
           </View>
 

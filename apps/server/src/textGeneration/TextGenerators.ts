@@ -22,7 +22,7 @@ import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { SECRET_REDACTED } from "../settingsSecrets.ts";
 import {
-  TEXT_GENERATOR_DRIVERS,
+  textGeneratorDriver,
   type TextGeneratorConnection,
   TextGeneratorRequestError,
 } from "./textGeneratorDrivers.ts";
@@ -87,11 +87,11 @@ export const make = Effect.gen(function* () {
   const runnerFor =
     (config: TextGeneratorConfig): TextGenerationOperations.Runner =>
     (request) => {
-      const driver = TEXT_GENERATOR_DRIVERS[config.kind];
+      const driver = textGeneratorDriver(config);
       const label = generatorLabel(config);
       return connect(config).pipe(
         Effect.flatMap((connection) =>
-          driver.generate(connection, request.modelSelection.model, request.prompt),
+          driver.generate(connection, request.modelSelection.model, request.prompt, request),
         ),
         Effect.provideService(HttpClient.HttpClient, http),
         Effect.mapError(
@@ -154,7 +154,7 @@ export const make = Effect.gen(function* () {
         return { models: cached.models };
       }
       const connection = yield* connect(config);
-      const driver = TEXT_GENERATOR_DRIVERS[config.kind];
+      const driver = textGeneratorDriver(config);
       const models = yield* driver
         .listModels(connection)
         .pipe(Effect.provideService(HttpClient.HttpClient, http));

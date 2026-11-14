@@ -185,6 +185,13 @@ export const ServerAuthDescriptor = Schema.Struct({
   sessionCookieName: TrimmedNonEmptyString,
   /** Older servers omit this and authorize self-updates with orchestration:operate. */
   serverUpdateScope: Schema.optionalKey(Schema.Literal(AuthEnvironmentMaintainScope)),
+  /**
+   * Present when the server signs devices in through an OpenID Connect provider. The provider
+   * returns only to `origin`, so every client starts the sign-in there.
+   */
+  oidc: Schema.optionalKey(
+    Schema.Struct({ label: TrimmedNonEmptyString, origin: TrimmedNonEmptyString }),
+  ),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
 

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildOidcSignInResultUrl,
   buildPairingAppLink,
+  readHostedPairingRequest,
+  readOidcSignInFailure,
   readPairingAppLink,
   RemoteBackendUrlMissingError,
   RemotePairingTokenMissingError,
@@ -158,5 +161,33 @@ describe("remote", () => {
     expect(
       readPairingAppLink(`https://pair?pairingUrl=${encodeURIComponent(pairingUrl)}`),
     ).toBeNull();
+  });
+
+  it("reads a sign-in's result from the app's return link", () => {
+    const returnTo = new URL("t3code://oidc");
+    const host = "https://box.example.com";
+    const signed = buildOidcSignInResultUrl(returnTo, {
+      host,
+      label: "Box",
+      result: { token: "ABC123" },
+    });
+    expect(readHostedPairingRequest(new URL(signed.toString()))).toEqual({
+      host,
+      token: "ABC123",
+      label: "Box",
+    });
+    expect(readOidcSignInFailure(signed)).toBeNull();
+
+    const refused = buildOidcSignInResultUrl(returnTo, {
+      host,
+      label: "Box",
+      result: { error: "login_required" },
+    });
+    expect(readHostedPairingRequest(refused)).toBeNull();
+    expect(readOidcSignInFailure(new URL(refused.toString()))).toEqual({
+      host,
+      label: "Box",
+      error: "login_required",
+    });
   });
 });
