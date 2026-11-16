@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   ProviderInstanceId,
   ServerProvider,
   ServerProviderUsageWindow,
@@ -6,8 +7,10 @@ import type {
 } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
+  displayLimitWindows,
   formatDuration,
   type LimitPace,
+  type LimitPoolWindow,
   limitsNotice,
   paceOf,
   remainingPercent,
@@ -23,6 +26,7 @@ import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { hubPoolFor } from "./ThreadDetailsUsage.logic";
 
 const PACE_LABEL: Record<LimitPace, string> = {
   ahead: "Ahead of pace",
@@ -31,6 +35,7 @@ const PACE_LABEL: Record<LimitPace, string> = {
 };
 
 export interface ThreadDetailsUsageInput {
+  readonly environmentId: EnvironmentId;
   readonly providerInstanceId: ProviderInstanceId | null;
   readonly providers: readonly ServerProvider[];
   readonly sources: UsageLimitSourceSnapshots;
@@ -41,6 +46,7 @@ type UsageTone = "error" | "warning" | null;
 
 /** The selected provider's limit windows. Each row reads as room left. */
 export function ThreadDetailsUsage({
+  environmentId,
   providerInstanceId,
   providers,
   sources,
@@ -53,11 +59,13 @@ export function ThreadDetailsUsage({
       : null;
   // Only this instance's data: the report keeps one instance per login, and any other entry may be
   // a different login or workspace, so fall back to the instance's own snapshot.
+  const provider = providers.find((entry) => entry.instanceId === providerInstanceId);
   const limits =
     report?.accounts.find((entry) => entry.instanceId === providerInstanceId)?.limits ??
-    providers.find((provider) => provider.instanceId === providerInstanceId)?.usageLimits;
-  if (!limits) return null;
-  const notice = limitsNotice(limits);
+    provider?.usageLimits;
+  if (!provider || !limits) return null;
+  const pool = hubPoolFor(environmentId, provider.driver, limits, sources, now);
+  const notice = pool ? null : limitsNotice(limits);
 
   return (
     <ThreadDetailsSection
@@ -66,7 +74,16 @@ export function ThreadDetailsUsage({
       showHeading={false}
     >
       <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
-        {notice ? (
+        {pool ? (
+          displayLimitWindows(pool).map((window) => (
+            <PoolRow
+              key={`${window.kind}:${window.id}`}
+              window={window}
+              accountCount={pool.accounts.length}
+              now={now}
+            />
+          ))
+        ) : notice ? (
           <UsageRow
             label="Limits"
             fill={null}
@@ -168,6 +185,49 @@ function LimitRow({
             </span>
           ) : null}
           {pace ? <span className="text-muted-foreground">{PACE_LABEL[pace]}</span> : null}
+        </>
+      }
+    />
+  );
+}
+
+/** A window pooled across the hub's accounts, with the next reset that hands quota back. */
+function PoolRow({
+  window,
+  accountCount,
+  now,
+}: {
+  readonly window: LimitPoolWindow;
+  readonly accountCount: number;
+  readonly now: number;
+}) {
+  const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const left = window.remainingPercent;
+  const refill = window.resets.find((reset) => reset.restoresPercent > 0);
+  return (
+    <UsageRow
+      label={window.label}
+      fill={left}
+      tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
+      value={`${left}%`}
+      ariaValue={`${left}% left across ${accountCount} pooled accounts`}
+      tooltip={
+        <>
+          <span className="text-foreground">
+            {window.label}: {left}% left
+          </span>
+          <span className="text-muted-foreground">
+            Pooled across {accountCount} {accountCount === 1 ? "account" : "accounts"}
+          </span>
+          {refill ? (
+            <span className="text-muted-foreground">
+              +{refill.restoresPercent}% in {formatDuration(refill.at - now)} ·{" "}
+              {formatUpcomingTimestamp(new Date(refill.at).toISOString(), timestampFormat, now)}
+            </span>
+          ) : null}
+          {window.pace ? (
+            <span className="text-muted-foreground">{PACE_LABEL[window.pace]}</span>
+          ) : null}
         </>
       }
     />

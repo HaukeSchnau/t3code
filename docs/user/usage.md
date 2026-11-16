@@ -149,17 +149,12 @@ current model's limits without leaving the conversation. The result opens above 
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
-On web and desktop, the composer footer also shows the current provider's main limit windows as
-small bars with the quota left, such as a session and a weekly window. A weekly limit that counts
-only one model, such as Claude's Fable weekly, shows only while that model is selected. When the provider sends requests through a CLIProxyAPI
-hub, the bars show what is left across the hub's accounts. A bar turns amber when you are spending
-faster than the window elapses and red when 10% or less is left. Hover it to see every window and
-when it resets.
-
-To keep every window in view on web and desktop, turn on **Usage limits** in **Settings → Appearance → Thread details**, or right-click the thread details card.
+To keep them in view on web and desktop, turn on **Usage limits** in **Settings → Appearance → Thread details**, or right-click the thread details card.
 The bottom of the thread details card then shows how much is left in each limit window of the
 current provider account. Some windows, such as a weekly Opus limit, count only one model. Hover a
-row to see when it resets and your pace. Turn on **Context window** to also show the thread's
+row to see when it resets and your pace. When the provider sends requests through a CLIProxyAPI
+hub, the rows show what is left across the hub's accounts for that provider, and hovering shows
+when the next account hands quota back. Turn on **Context window** to also show the thread's
 context use against the model's limit. A tick on the bar marks where the provider compacts
 automatically, when it reports that point.
 

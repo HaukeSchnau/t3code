@@ -3814,7 +3814,6 @@ export default function ChatView(props: ChatViewProps) {
                                 defaultRuntimeMode={defaultRuntimeMode}
                                 lockedProvider={modelPickerLockedProvider}
                                 providerStatuses={providerStatuses as ServerProvider[]}
-                                usageLimitSources={usageLimitSources}
                                 providerCatalogKnown={serverConfig !== null}
                                 activeProjectDefaultModelSelection={
                                   activeProjectDefaultModelSelection
@@ -4054,9 +4053,10 @@ export default function ChatView(props: ChatViewProps) {
                   onUpdateProjectScript={updateProjectScriptStable}
                   onDeleteProjectScript={deleteProjectScriptStable}
                   usage={{
+                    environmentId,
                     providerInstanceId: activeProviderInstanceId,
                     providers: providerStatuses,
-                    sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
+                    sources: usageLimitSources,
                     contextWindow: activeContextWindow,
                   }}
                 />

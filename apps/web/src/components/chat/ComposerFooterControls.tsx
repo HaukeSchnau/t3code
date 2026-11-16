@@ -1,11 +1,4 @@
-import type {
-  EnvironmentId,
-  ModelSelection,
-  ProviderInstanceId,
-  RuntimeMode,
-  ServerProvider,
-  UsageLimitSourceSnapshots,
-} from "@t3tools/contracts";
+import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { type ComponentProps, memo, useId, useRef, useState } from "react";
 
@@ -15,7 +8,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
-import { ComposerUsageMeter } from "./ComposerUsageMeter";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { runtimeModeConfig } from "./runtimeModeConfig";
@@ -197,10 +189,6 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   children?: React.ReactNode;
   compact: boolean;
   canOperateThread: boolean;
-  usageLimitsProvider: ServerProvider | null;
-  usageLimitsModel: string | null;
-  usageLimitSources: UsageLimitSourceSnapshots;
-  environmentId: EnvironmentId;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -233,14 +221,6 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
 }) {
   return (
     <>
-      {props.usageLimitsProvider ? (
-        <ComposerUsageMeter
-          environmentId={props.environmentId}
-          provider={props.usageLimitsProvider}
-          model={props.usageLimitsModel}
-          sources={props.usageLimitSources}
-        />
-      ) : null}
       <ComposerPrimaryActions
         compact={props.compact}
         canOperateThread={props.canOperateThread}

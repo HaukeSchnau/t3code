@@ -34,7 +34,6 @@ import type {
   ScopedThreadRef,
   ServerProvider,
   ThreadId,
-  UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import {
   EnvironmentRequestInvalidError,
@@ -418,7 +417,6 @@ export interface ChatComposerProps {
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
-  usageLimitSources: UsageLimitSourceSnapshots;
   providerCatalogKnown: boolean;
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
@@ -541,7 +539,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     runtimeMode,
     lockedProvider,
     providerStatuses,
-    usageLimitSources,
     providerCatalogKnown,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
@@ -996,7 +993,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     null,
   );
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
@@ -1506,16 +1502,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     };
 
-    const measure = () => {
-      setIsComposerFooterCompact(
-        shouldUseCompactComposerFooter(composerForm.clientWidth, {
-          hasWideActions: composerFooterHasWideActions,
-        }),
-      );
+    setIsComposerPrimaryActionsCompact(measurePrimaryActionsCompact());
+    return observeResize(composerForm, () => {
       setIsComposerPrimaryActionsCompact(measurePrimaryActionsCompact());
-    };
-    measure();
-    return observeResize(composerForm, measure);
+    });
   }, [composerFooterHasWideActions]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads draft images as data URLs and persists them to the draft store, dropping stale results on cleanup
@@ -3610,14 +3600,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
-                    usageLimitsProvider={
-                      isComposerFooterCompact || composerFooterHasWideActions
-                        ? null
-                        : selectedProviderStatus
-                    }
-                    usageLimitsModel={selectedModel}
-                    usageLimitSources={usageLimitSources}
-                    environmentId={environmentId}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     canInterrupt={canInterrupt}
