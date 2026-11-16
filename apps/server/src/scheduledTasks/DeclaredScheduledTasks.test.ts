@@ -189,6 +189,14 @@ it.effect(
         assert.equal(digest.projectId, repo);
         assert.equal(digest.modelSelection.model, "gpt-5.5");
 
+        // Applying the same file again writes nothing.
+        yield* TestClock.adjust("5 minutes");
+        yield* tick;
+        assert.deepEqual(
+          (yield* declared).map((task) => task.updatedAt),
+          added.map((task) => task.updatedAt),
+        );
+
         // Pausing stays with the user; the file owns the rest.
         yield* service.setEnabled({ id: gardener.id, enabled: false });
         yield* write({
