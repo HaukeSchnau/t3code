@@ -33,7 +33,6 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as FollowUpHints from "../followUps/FollowUpHints.ts";
-import * as SkillPacks from "../skills/SkillPacks.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
@@ -164,9 +163,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
-    // Optional so focused tests need no catalog (patches/skill-packs.md).
-    const skillPacks = yield* Effect.serviceOption(SkillPacks.SkillPacks);
-    // Optional like skill packs (patches/follow-ups.md).
+    // Optional so focused tests need no follow-up store (patches/follow-ups.md).
     const followUpHints = yield* Effect.serviceOption(FollowUpHints.FollowUpHints);
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
@@ -798,13 +795,6 @@ export const layer: Layer.Layer<
           ),
         });
         if (!repaired.committed) return;
-      }
-      if (Option.isSome(skillPacks)) {
-        yield* skillPacks.value.prepareTurn({
-          thread: projection.thread,
-          providerSessionId,
-          providerInstanceId: run.modelSelection.instanceId,
-        });
       }
       const sessionResult = yield* Effect.result(
         providerSessions.open({

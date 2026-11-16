@@ -6,7 +6,6 @@ import {
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
-  SKILL_PACK_WS_METHODS,
   WS_METHODS,
   type ChatAttachment,
   MessageId,
@@ -24,7 +23,6 @@ import {
   type RunId,
   type RuntimeMode,
   type RuntimeRequestId,
-  type SkillPackId,
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
@@ -158,8 +156,6 @@ interface StartThreadBootstrap {
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
-    /** Draft-chosen skill packs; absent follows the project default. */
-    readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   };
   readonly prepareWorktree?: {
     readonly requireWorktree?: boolean;
@@ -719,13 +715,6 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    if (bootstrap?.skillPackIds !== undefined) {
-      // The first turn opens the provider session, so the packs must land first.
-      yield* request(SKILL_PACK_WS_METHODS.setThreadPacks, {
-        threadId: input.threadId,
-        packIds: bootstrap.skillPackIds,
-      });
-    }
     return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",

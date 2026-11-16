@@ -42,7 +42,6 @@ import {
 } from "./chatViewSend";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
 import type { InlineReplyDraftStore } from "./inlineReplies";
-import { draftSkillPackBootstrap } from "./SkillPacksControl";
 
 interface MultipleModelSendInput {
   readonly environmentId: EnvironmentId;
@@ -192,7 +191,6 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                       branch,
                       worktreePath: null,
                       createdAt: createdAt,
-                      ...draftSkillPackBootstrap(project.environmentId, threadId),
                     },
                     prepareWorktree: {
                       projectCwd: project.workspaceRoot,

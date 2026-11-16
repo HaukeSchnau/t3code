@@ -463,9 +463,6 @@ export async function restoreRejectedQueuedMessage(
       ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
       ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
       ...(queuedMessage.interactionMode ? { interactionMode: queuedMessage.interactionMode } : {}),
-      ...(queuedMessage.creation?.skillPackIds
-        ? { skillPackIds: queuedMessage.creation.skillPackIds }
-        : {}),
       ...(queuedMessage.freshContext ? { freshContext: true } : {}),
       ...(queuedMessage.creation
         ? {
@@ -1121,7 +1118,6 @@ export function createThreadOutboxDelivery(): {
         branch: workspace.branch,
         worktreePath: workspace.worktreePath,
         startFromOrigin: workspace.startFromOrigin ?? false,
-        ...(creation.skillPackIds ? { skillPackIds: creation.skillPackIds } : {}),
         worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
         managedWorkspace: creation.managedWorkspace,
       }),
