@@ -203,7 +203,7 @@ function PoolRow({
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const left = window.remainingPercent;
-  const refill = window.resets.find((reset) => reset.restoresPercent > 0);
+  const refill = window.resets.find((reset) => reset.restoresPercent > 0 && reset.at > now);
   return (
     <UsageRow
       label={window.label}
