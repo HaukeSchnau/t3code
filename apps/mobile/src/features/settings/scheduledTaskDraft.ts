@@ -344,6 +344,7 @@ export function workspaceStrategyFromDraft(
       startFromOrigin: draft.startFromOrigin,
       checkoutPath: draft.checkoutPath,
     },
-    draft.task?.workspaceStrategy ?? null,
+    // Isolation belongs to the task's project kind; another project gets the server's default.
+    draft.task && draft.task.projectId === draft.projectId ? draft.task.workspaceStrategy : null,
   );
 }
