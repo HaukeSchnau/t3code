@@ -720,6 +720,10 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   blockedByPolicy: Schema.optional(Schema.String).annotate({
     description: "Present when an administrator's policy stops this task from running.",
   }),
+  declaredBy: Schema.optional(Schema.Literal("host configuration")).annotate({
+    description:
+      "Present when the host's configuration declares this task; change or delete it there.",
+  }),
 });
 export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;
 

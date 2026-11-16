@@ -106,6 +106,35 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+## Tasks declared by the server's host
+
+A server's host configuration can declare scheduled tasks, so a machine set up
+from code brings its tasks along. Write them to `declared-scheduled-tasks.json`
+in the server's state directory (`~/.t3/userdata` by default):
+
+```json
+{
+  "tasks": {
+    "nightly-digest": {
+      "title": "Nightly digest",
+      "prompt": "Summarize yesterday's merged pull requests.",
+      "schedule": { "type": "fixed_time", "timeOfDay": "03:30" },
+      "project": "/home/user/acme",
+      "model": { "instanceId": "claudeAgent", "model": "claude-sonnet-5-5" }
+    }
+  }
+}
+```
+
+A schedule is a time of day or an interval (`{ "type": "interval", "everyMs": 3600000 }`).
+Leave out `project` to run in No project, and `model` to use the project's default
+model. The server applies changes within seconds, without a restart, and
+removing a task from the file, or the file itself, removes the task.
+
+Declared tasks show in the list with **Host config**. You can run, pause and
+resume them there, but change or delete them in the file. If the file can't be
+read or parsed, the server keeps the tasks as they were and logs the error.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**

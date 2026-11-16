@@ -36,14 +36,11 @@ that keeps a tidy list of open work with its origin.
   passes; moving the date clears it. Clients merge returned follow-ups into the inbox section of
   the thread list. `dueAt` is stored as UTC ISO text so the scan compares strings.
 
-- **A nightly gardener.** A home with `T3CODE_FOLLOW_UP_GARDENER_AT` (local `HH:MM`) launches one
-  agent thread a night in the scratch project with the server's default model. It merges
-  duplicates, closes finished work, checks conditions, keeps types consistent and reads the threads
-  its members (`T3CODE_FOLLOW_UP_MEMBERS`) settled since the last pass for work and ideas nobody
-  wrote down, big ideas included. When several open follow-ups share a root cause, it writes down
-  the bigger change that would remove them all as one idea that links to each of them. Its thread's last message
-  is the report, and saves from that thread log as the gardener's. Clients can start a pass at once
-  (`followUps.runGardener`).
+- **A nightly gardener.** The maintainer's `~/infra` declares it on each home as a scheduled task
+  (`patches/declared-scheduled-tasks.md`), with a prompt that names the home's members, so T3 has
+  no gardener of its own. Settings runs it at once. Saves from its thread log as an agent's; the
+  `gardener` actor kind stays for changes the built-in gardener logged, and migration 110 still
+  creates `follow_up_gardener_runs`, which nothing reads anymore.
 - **Hints at thread start.** The first turn of a top-level thread a user started (not a scheduled
   task or a goal command) gets one line naming open follow-ups whose title its first 2,000
   characters mostly repeat (two or more title words, at least 60% of them) or whose id it cites.

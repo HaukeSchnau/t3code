@@ -107,12 +107,6 @@ export const FollowUpChange = Schema.Struct({
 });
 export type FollowUpChange = typeof FollowUpChange.Type;
 
-export const FollowUpGardenerRun = Schema.Struct({
-  thread: FollowUpThreadRef,
-  startedAt: IsoDateTime,
-});
-export type FollowUpGardenerRun = typeof FollowUpGardenerRun.Type;
-
 export const FollowUpsSubscribeInput = Schema.Struct({
   /** Closed follow-ups too, newest first. Open ones always come. */
   includeClosed: Schema.optional(Schema.Boolean),
@@ -122,7 +116,6 @@ export type FollowUpsSubscribeInput = typeof FollowUpsSubscribeInput.Type;
 export const FollowUpsSnapshot = Schema.Struct({
   followUps: Schema.Array(FollowUp),
   types: Schema.Array(FollowUpType),
-  lastGardenerRun: Schema.NullOr(FollowUpGardenerRun),
 });
 export type FollowUpsSnapshot = typeof FollowUpsSnapshot.Type;
 
@@ -161,7 +154,6 @@ export const FOLLOW_UP_WS_METHODS = {
   subscribe: "followUps.subscribe",
   save: "followUps.save",
   history: "followUps.history",
-  runGardener: "followUps.runGardener",
 } as const;
 
 export const WsFollowUpsSubscribeRpc = Rpc.make(FOLLOW_UP_WS_METHODS.subscribe, {
@@ -180,12 +172,5 @@ export const WsFollowUpsSaveRpc = Rpc.make(FOLLOW_UP_WS_METHODS.save, {
 export const WsFollowUpsHistoryRpc = Rpc.make(FOLLOW_UP_WS_METHODS.history, {
   payload: FollowUpHistoryInput,
   success: FollowUpHistory,
-  error: Schema.Union([FollowUpError, EnvironmentAuthorizationError]),
-});
-
-/** Starts the gardener's pass now, outside its nightly time. */
-export const WsFollowUpsRunGardenerRpc = Rpc.make(FOLLOW_UP_WS_METHODS.runGardener, {
-  payload: Schema.Struct({}),
-  success: FollowUpGardenerRun,
   error: Schema.Union([FollowUpError, EnvironmentAuthorizationError]),
 });
