@@ -210,7 +210,7 @@ function PoolRow({
       fill={left}
       tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
       value={`${left}%`}
-      ariaValue={`${left}% left across ${accountCount} pooled accounts`}
+      ariaValue={`${left}% left across ${accountCount} pooled ${accountCount === 1 ? "account" : "accounts"}`}
       tooltip={
         <>
           <span className="text-foreground">

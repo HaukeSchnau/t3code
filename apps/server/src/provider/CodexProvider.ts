@@ -95,6 +95,7 @@ export interface CodexAppServerProviderSnapshot {
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel> | undefined;
   readonly serviceTier?: string | undefined;
+  readonly modelProvider?: string | undefined;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
 }
 
@@ -555,7 +556,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   // Optional discovery must finish before the outer timeout can discard the account result.
   const deadlineMs = spawnedAtMs + CODEX_AUTH_PROBE_TIMEOUT_MS - CODEX_DISCOVERY_MARGIN_MS;
-  const [skillsResponse, models, serviceTier, rateLimits] = yield* Effect.all(
+  const [skillsResponse, models, config, rateLimits] = yield* Effect.all(
     [
       withCodexDiscoveryDeadline(client.request("skills/list", { cwds: [input.cwd] }), deadlineMs),
       accountResponse.account?.type === "chatgpt"
@@ -572,8 +573,15 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         deadlineMs,
         CODEX_CONFIG_PROBE_TIMEOUT_MS,
       ).pipe(
-        Effect.map((response) => response?.config.service_tier ?? undefined),
-        Effect.catch(() => Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined))),
+        Effect.map((response) => ({
+          serviceTier: response?.config.service_tier ?? undefined,
+          modelProvider: response?.config.model_provider ?? undefined,
+        })),
+        Effect.catch(() =>
+          Effect.logDebug("Codex config read failed.").pipe(
+            Effect.as({ serviceTier: undefined, modelProvider: undefined }),
+          ),
+        ),
       ),
       // Usage is an enrichment: a failure or a slow answer degrades to "no
       // usage this probe" rather than costing the account and models.
@@ -609,7 +617,8 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     ...(rateLimits ? { rateLimits } : {}),
     version,
     models,
-    serviceTier,
+    serviceTier: config.serviceTier,
+    modelProvider: config.modelProvider,
     skills: skillsResponse ? parseCodexSkillsListResponse(skillsResponse, input.cwd) : [],
   } satisfies CodexAppServerProviderSnapshot;
 });
@@ -859,8 +868,11 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const accountStatus = managedAuth
     ? { status: "ready" as const, auth: managedAuth, message: undefined }
     : accountProbeStatus(snapshot);
+  // A ChatGPT login left in auth.json still answers usage reads after config routes Codex elsewhere.
+  const sendsElsewhere =
+    snapshot.modelProvider !== undefined && snapshot.modelProvider !== "openai";
   const usageLimits =
-    snapshot.account.account?.type === "apiKey"
+    snapshot.account.account?.type === "apiKey" || sendsElsewhere
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
       : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
         ? makeUnavailableUsageLimits({

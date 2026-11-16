@@ -485,6 +485,24 @@ it.layer(
       }),
     );
 
+    it.effect(
+      "reads no limits from a leftover login when Codex sends through another provider",
+      () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                modelProvider: "pool",
+                rateLimits: { snapshot: { planType: "free" }, resetCredits: null },
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
+        }),
+    );
+
     it.effect("keeps the last ready status when a later probe times out", () =>
       Effect.gen(function* () {
         const probeCalls = yield* Ref.make(0);
