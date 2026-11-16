@@ -31,7 +31,6 @@ import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
-import { SkillPackCatalog } from "./skillPacks.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
@@ -624,8 +623,6 @@ export const ServerConfig = Schema.Struct({
   directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
   observability: ServerObservability,
   settings: ServerSettings,
-  /** Skill packs this environment offers (patches/skill-packs.md). */
-  skillPackCatalog: Schema.optionalKey(SkillPackCatalog),
   /** The environment that keeps this one's follow-ups, itself included (patches/follow-ups.md). */
   followUpHome: Schema.optionalKey(EnvironmentId),
   /** Present when an administrator's policy file manages this environment. */

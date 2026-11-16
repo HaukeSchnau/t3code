@@ -8,11 +8,7 @@ import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.t
 const isolated = isolatedTestFiles(
   import.meta.dirname,
   ["src/**/*.test.ts", "integration/**/*.test.ts", "scripts/**/*.test.ts"],
-  [
-    // Loads a skill catalog, which sets the Codex pack root in SkillPackProviderScope for the
-    // process. Codex replays in later files then send frames their transcripts don't have.
-    "src/skills/SkillPacks.test.ts",
-  ],
+  [],
 );
 
 // The root config's `projects` route repo-root runs to package configs,
