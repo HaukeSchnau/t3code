@@ -96,6 +96,7 @@ export interface CodexAppServerProviderSnapshot {
   readonly models: ReadonlyArray<ServerProviderModel> | undefined;
   readonly serviceTier?: string | undefined;
   readonly modelProvider?: string | undefined;
+  readonly configReadFailed?: boolean;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
 }
 
@@ -576,10 +577,11 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         Effect.map((response) => ({
           serviceTier: response?.config.service_tier ?? undefined,
           modelProvider: response?.config.model_provider ?? undefined,
+          failed: response === undefined,
         })),
         Effect.catch(() =>
           Effect.logDebug("Codex config read failed.").pipe(
-            Effect.as({ serviceTier: undefined, modelProvider: undefined }),
+            Effect.as({ serviceTier: undefined, modelProvider: undefined, failed: true }),
           ),
         ),
       ),
@@ -619,6 +621,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     models,
     serviceTier: config.serviceTier,
     modelProvider: config.modelProvider,
+    ...(config.failed ? { configReadFailed: true } : {}),
     skills: skillsResponse ? parseCodexSkillsListResponse(skillsResponse, input.cwd) : [],
   } satisfies CodexAppServerProviderSnapshot;
 });
@@ -874,19 +877,25 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const usageLimits =
     snapshot.account.account?.type === "apiKey" || sendsElsewhere
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
-      : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
+      : snapshot.configReadFailed
         ? makeUnavailableUsageLimits({
             checkedAt,
             reason: "probeFailed",
-            ...(accountStatus.message ? { message: accountStatus.message } : {}),
-            ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
+            message: "Could not read which provider Codex sends to.",
           })
-        : codexRateLimitsToLimits({
-            snapshot: snapshot.rateLimits.snapshot,
-            rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
-            resetCredits: snapshot.rateLimits.resetCredits,
-            checkedAt,
-          });
+        : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
+          ? makeUnavailableUsageLimits({
+              checkedAt,
+              reason: "probeFailed",
+              ...(accountStatus.message ? { message: accountStatus.message } : {}),
+              ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
+            })
+          : codexRateLimitsToLimits({
+              snapshot: snapshot.rateLimits.snapshot,
+              rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
+              resetCredits: snapshot.rateLimits.resetCredits,
+              checkedAt,
+            });
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,
