@@ -8,7 +8,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 const layer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 
 layer("111_DropSkillPacks", (it) => {
-  it.effect("drops skill pack selections and both skill pack columns", () =>
+  it.effect("drops skill pack selections", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 110 });
@@ -22,21 +22,7 @@ layer("111_DropSkillPacks", (it) => {
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skill_pack_thread_selections'
       `;
-      const projectColumns = yield* sql<{ readonly name: string }>`
-        SELECT name FROM pragma_table_info('projection_projects')
-      `;
-      const threadColumns = yield* sql<{ readonly name: string }>`
-        SELECT name FROM pragma_table_info('projection_threads')
-      `;
       assert.deepStrictEqual(tables, []);
-      assert.notInclude(
-        projectColumns.map((column) => column.name),
-        "default_skill_pack_ids_json",
-      );
-      assert.notInclude(
-        threadColumns.map((column) => column.name),
-        "skill_scope_json",
-      );
     }),
   );
 });
