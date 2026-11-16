@@ -35,8 +35,9 @@ declare, change or remove one.
 
 - `packages/contracts/src/scheduledTask.ts` (`declared`) and `orchestratorMcp.ts` (`declaredBy`).
 - `apps/server/src/scheduledTasks/ScheduledTaskService.ts` (declared ids, the refusal, the flag on
-  decode), `mcp/OrchestratorMcpService.ts` (summary and `enabled`-only updates), `server.ts`
-  (layer wiring).
+  decode), `mcp/OrchestratorMcpService.ts` (summary and `enabled`-only updates),
+  `mcp/toolkits/orchestrator/tools.ts` (the `schedule_task` description), `server.ts` (layer
+  wiring).
 - Web `ScheduledTasksSettings.tsx` and mobile `SettingsScheduledTasksRouteScreen.tsx`.
 
 ## Removal
