@@ -2817,6 +2817,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(RemoteDelegation.RemoteDelegation)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({
               list: () => Effect.succeed({ tasks: [task] }),
+              setEnabled: ({ enabled }) => Effect.succeed({ task: { ...task, enabled } }),
               upsert: (input) =>
                 Ref.update(saved, (strategies) => [...strategies, input.workspaceStrategy]).pipe(
                   Effect.andThen(
@@ -2926,6 +2927,22 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.deepEqual(yield* Ref.get(saved), [
           { type: "worktree", baseRef: "origin/master", startFromOrigin: true },
         ]);
+      }),
+    );
+
+    it.effect("pauses a declared task without rewriting the host's definition", () =>
+      Effect.gen(function* () {
+        const saved = yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]);
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(service(masterRepository, saved, { ...existing, declared: true })),
+        );
+        const paused = yield* mcp.updateScheduledTask(client, {
+          scheduledTaskId: existing.id,
+          enabled: false,
+        });
+        assert.equal(paused.enabled, false);
+        assert.equal(paused.declaredBy, "host configuration");
+        assert.deepEqual(yield* Ref.get(saved), []);
       }),
     );
 
