@@ -518,28 +518,35 @@ it.layer(
         }),
     );
 
-    it.effect("keeps the last ready status when a later probe times out", () =>
-      Effect.gen(function* () {
-        const probeCalls = yield* Ref.make(0);
-        const checkStatus = yield* makeCodexProviderStatusCheck(defaultCodexSettings, () =>
-          Ref.getAndUpdate(probeCalls, (calls) => calls + 1).pipe(
-            Effect.flatMap((calls) =>
-              calls === 0 ? Effect.succeed(makeCodexProbeSnapshot()) : Effect.never,
+    it.effect.each([
+      { modelProvider: undefined, usage: "probeFailed" },
+      { modelProvider: "pool", usage: "unsupported" },
+    ] as const)(
+      "keeps the last ready status when a later probe times out: $usage",
+      ({ modelProvider, usage }) =>
+        Effect.gen(function* () {
+          const probeCalls = yield* Ref.make(0);
+          const checkStatus = yield* makeCodexProviderStatusCheck(defaultCodexSettings, () =>
+            Ref.getAndUpdate(probeCalls, (calls) => calls + 1).pipe(
+              Effect.flatMap((calls) =>
+                calls === 0
+                  ? Effect.succeed(makeCodexProbeSnapshot(modelProvider ? { modelProvider } : {}))
+                  : Effect.never,
+              ),
             ),
-          ),
-        );
+          );
 
-        const ready = yield* checkStatus;
-        const timedOutFiber = yield* checkStatus.pipe(Effect.forkChild);
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("21 seconds");
-        const afterTimeout = yield* Fiber.join(timedOutFiber);
+          const ready = yield* checkStatus;
+          const timedOutFiber = yield* checkStatus.pipe(Effect.forkChild);
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("21 seconds");
+          const afterTimeout = yield* Fiber.join(timedOutFiber);
 
-        assert.strictEqual(ready.status, "ready");
-        assert.strictEqual(afterTimeout.status, "ready");
-        assert.deepStrictEqual(afterTimeout.models, ready.models);
-        assert.strictEqual(afterTimeout.usageLimits?.unavailable?.reason, "probeFailed");
-      }),
+          assert.strictEqual(ready.status, "ready");
+          assert.strictEqual(afterTimeout.status, "ready");
+          assert.deepStrictEqual(afterTimeout.models, ready.models);
+          assert.strictEqual(afterTimeout.usageLimits?.unavailable?.reason, usage);
+        }),
     );
 
     it.effect("reads the version of a Codex CLI too old to run app-server (#20351)", () =>

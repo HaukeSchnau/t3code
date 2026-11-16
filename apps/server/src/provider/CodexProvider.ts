@@ -844,11 +844,15 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   if (Option.isNone(probeResult.success)) {
     // A slow probe says nothing about Codex itself, so keep showing the last
-    // ready snapshot. Marking usage as failed keeps the published limits.
+    // ready snapshot. Marking usage as failed keeps the published limits; an
+    // unsupported reading stays, or direct quota reads would read a leftover login.
     if (lastReady) {
       return {
         ...lastReady,
-        usageLimits: makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
+        usageLimits:
+          lastReady.usageLimits?.unavailable?.reason === "unsupported"
+            ? lastReady.usageLimits
+            : makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
       };
     }
     return buildServerProvider({
