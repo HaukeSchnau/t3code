@@ -116,8 +116,8 @@ export type FollowUpsSubscribeInput = typeof FollowUpsSubscribeInput.Type;
 export const FollowUpsSnapshot = Schema.Struct({
   followUps: Schema.Array(FollowUp),
   types: Schema.Array(FollowUpType),
-  /** Always null; clients from before the gardener became a declared task still require it. */
-  lastGardenerRun: Schema.Null,
+  /** Clients from before the gardener became a declared task require it; servers send null. */
+  lastGardenerRun: Schema.optional(Schema.Unknown),
 });
 export type FollowUpsSnapshot = typeof FollowUpsSnapshot.Type;
 
