@@ -58,7 +58,6 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-import * as SkillPacks from "../skills/SkillPacks.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -164,21 +163,9 @@ const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
   ),
 );
 
-// patches/skill-packs.md
-const layerSkillPacksProvided = SkillPacks.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      ProjectionStore.layer,
-      ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
-      layerProviderSessionManagerProvided,
-    ),
-  ),
-);
-
 const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
-      layerSkillPacksProvided,
       layerContextHandoffServiceProvided,
       layerEventSink,
       IdAllocator.layer,
@@ -410,7 +397,6 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
-  layerSkillPacksProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(
   Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),

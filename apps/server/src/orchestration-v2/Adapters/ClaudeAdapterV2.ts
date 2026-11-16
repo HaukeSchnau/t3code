@@ -216,7 +216,6 @@ import {
 } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import * as SkillPackProviderScope from "../../skills/SkillPackProviderScope.ts";
 import {
   projectExecutionArguments,
   resolveSeparateProjectProvider,
@@ -1811,8 +1810,6 @@ export function makeClaudeQueryOptions(input: {
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
-  /** Selected skill packs as local plugins (patches/skill-packs.md). */
-  readonly plugins?: ReadonlyArray<{ readonly type: "local"; readonly path: string }>;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
 }): ClaudeAgentSdkQueryOptions {
@@ -1920,7 +1917,6 @@ export function makeClaudeQueryOptions(input: {
       : {}),
     ...(input.environment === undefined ? {} : { env: input.environment }),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
-    ...(input.plugins === undefined ? {} : { plugins: [...input.plugins] }),
     systemPrompt: {
       type: "preset" as const,
       preset: "claude_code" as const,
@@ -11132,7 +11128,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(mcpOverrides.mcpServers === undefined
               ? {}
               : { mcpServers: mcpOverrides.mcpServers }),
-            ...SkillPackProviderScope.claudeSkillPackPlugins(turnInput.threadId),
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") === true,
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined
