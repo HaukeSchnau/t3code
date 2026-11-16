@@ -185,6 +185,8 @@ describe("editing scheduled task branch settings", () => {
       baseRef: "main",
       startFromOrigin: false,
     });
+    const back = changeDraftProject(moved, isolated.projectId);
+    expect(workspaceStrategyFromDraft(back)).toMatchObject({ isolated: true });
   });
 });
 

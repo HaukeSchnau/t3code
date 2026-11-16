@@ -182,7 +182,7 @@ const EMPTY_DRAFT: DraftState = {
   baseRef: "main",
   startFromOrigin: true,
   existingWorktreePath: "",
-  savedWorkspaceStrategy: null,
+  savedWorkspace: null,
   modelKey: "",
   runtimeMode: "full-access",
   interactionMode: "default",

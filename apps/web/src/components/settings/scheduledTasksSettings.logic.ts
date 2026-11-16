@@ -84,7 +84,11 @@ export interface DraftState {
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
   readonly existingWorktreePath: string;
-  readonly savedWorkspaceStrategy: ScheduledTask["workspaceStrategy"] | null;
+  /** The edited task's strategy and the project it belongs to; isolation fits only that project. */
+  readonly savedWorkspace: {
+    readonly projectId: string;
+    readonly strategy: ScheduledTask["workspaceStrategy"];
+  } | null;
   readonly modelKey: string;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -272,7 +276,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     baseRef: workspace.baseRef,
     startFromOrigin: workspace.startFromOrigin,
     existingWorktreePath: workspace.checkoutPath,
-    savedWorkspaceStrategy: task.workspaceStrategy,
+    savedWorkspace: { projectId: task.projectId, strategy: task.workspaceStrategy },
     modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
@@ -327,8 +331,7 @@ export function unbindDraftFromThread(draft: DraftState): DraftState {
 
 export function changeDraftProject(draft: DraftState, projectId: string): DraftState {
   if (projectId === draft.projectId) return draft;
-  // Isolation belongs to the old project's kind; the server picks the new project's backend.
-  return { ...unbindDraftFromThread(draft), projectId, savedWorkspaceStrategy: null };
+  return { ...unbindDraftFromThread(draft), projectId };
 }
 
 /** Threads a task can move to. The current one is left out; the picker always shows it. */
@@ -419,6 +422,7 @@ export function workspaceStrategyFromDraft(draft: DraftState): ScheduledTask["wo
       startFromOrigin: draft.startFromOrigin,
       checkoutPath: draft.existingWorktreePath,
     },
-    draft.savedWorkspaceStrategy,
+    // Another project gets the server's default backend for its kind.
+    draft.savedWorkspace?.projectId === draft.projectId ? draft.savedWorkspace.strategy : null,
   );
 }
