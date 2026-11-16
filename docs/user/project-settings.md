@@ -126,6 +126,7 @@ in the server's state directory (`~/.t3/userdata` by default):
 }
 ```
 
+Keys use lowercase letters, digits and dashes, and start with a letter or digit.
 A schedule is a time of day or an interval (`{ "type": "interval", "everyMs": 3600000 }`).
 Leave out `project` to run in No project, and `model` to use the project's default
 model. The server applies changes within seconds, without a restart, and

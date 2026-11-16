@@ -17,20 +17,18 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../config.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isSameSchedule } from "./Schedule.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 /** Written by the host's configuration (the maintainer's `~/infra`) into T3's state directory. */
 export const DECLARED_SCHEDULED_TASKS_FILE = "declared-scheduled-tasks.json";
-const RETRY_AFTER_MS = 5 * 60 * 1_000;
+const REAPPLY_AFTER_MS = 5 * 60 * 1_000;
 
 const Declaration = Schema.Struct({
   title: TrimmedNonEmptyString,
@@ -147,7 +145,7 @@ const make = Effect.gen(function* () {
     } satisfies DesiredTask;
   });
 
-  /** Brings the declared tasks in line with the file; returns whether every task applied. */
+  /** Brings the declared tasks in line with the file; a task that cannot apply logs an error. */
   const reconcile = Effect.fn("DeclaredScheduledTasks.reconcile")(function* (
     declarations: Readonly<Record<string, Declaration>>,
   ) {
@@ -156,7 +154,6 @@ const make = Effect.gen(function* () {
         .filter((task) => task.declared === true)
         .map((task) => [task.id, task]),
     );
-    let complete = true;
     for (const [key, declaration] of Object.entries(declarations)) {
       const id = ScheduledTaskService.declaredScheduledTaskId(key);
       const existing = stored.get(id);
@@ -171,7 +168,6 @@ const make = Effect.gen(function* () {
         Effect.result,
       );
       if (Result.isFailure(applied)) {
-        complete = false;
         yield* Effect.logError("A declared scheduled task was not applied", {
           key,
           message: applied.failure.message,
@@ -181,26 +177,19 @@ const make = Effect.gen(function* () {
     for (const task of stored.values()) {
       const removed = yield* Effect.result(tasks.delete({ id: task.id }, { declared: true }));
       if (Result.isFailure(removed)) {
-        complete = false;
         yield* Effect.logError("A scheduled task no longer declared was not removed", {
           taskId: task.id,
           message: removed.failure.message,
         });
       }
     }
-    return complete;
   });
 
-  // The default model can change in Settings; a declaration without a model follows it.
-  const settingsVersion = yield* Ref.make(0);
-  yield* forkParked(
-    Stream.runForEach(settings.streamChanges, () => Ref.update(settingsVersion, (n) => n + 1)),
-  );
-
-  const applied = yield* Ref.make<string | null>(null);
-  const failed = yield* Ref.make<{ readonly fingerprint: string; readonly retryAt: number } | null>(
-    null,
-  );
+  // Applying again every few minutes also picks up a new default model and a task that failed.
+  const lastAttempt = yield* Ref.make<{
+    readonly content: string | null;
+    readonly at: number;
+  } | null>(null);
   const tick = Effect.gen(function* () {
     const read = yield* fs.readFileString(file).pipe(
       // A host that declares nothing has no file.
@@ -210,43 +199,31 @@ const make = Effect.gen(function* () {
       ),
       Effect.result,
     );
-    const fingerprint = Result.isSuccess(read)
-      ? `${yield* Ref.get(settingsVersion)}\n${read.success}`
-      : "unreadable";
-    if (fingerprint === (yield* Ref.get(applied))) return;
+    const content = Result.isSuccess(read) ? read.success : null;
     const now = yield* Clock.currentTimeMillis;
-    const lastFailure = yield* Ref.get(failed);
-    if (lastFailure?.fingerprint === fingerprint && now < lastFailure.retryAt) return;
-    const complete = yield* Effect.gen(function* () {
-      if (Result.isFailure(read)) {
-        yield* Effect.logError("Could not read the declared scheduled tasks", {
-          file,
-          message: read.failure.message,
-        });
-        return false;
-      }
-      const declarations = yield* Effect.result(decodeDeclarations(read.success));
-      if (Result.isFailure(declarations)) {
-        yield* Effect.logError("The declared scheduled tasks are invalid; nothing changed", {
-          file,
-          message: declarations.failure.message,
-        });
-        return false;
-      }
-      return yield* reconcile(declarations.success.tasks).pipe(
-        Effect.catch((error) =>
-          Effect.logError("Could not apply the declared scheduled tasks", {
-            message: error.message,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-    });
-    if (complete) {
-      yield* Ref.set(applied, fingerprint);
-      yield* Ref.set(failed, null);
-    } else {
-      yield* Ref.set(failed, { fingerprint, retryAt: now + RETRY_AFTER_MS });
+    const last = yield* Ref.get(lastAttempt);
+    if (last !== null && last.content === content && now < last.at + REAPPLY_AFTER_MS) return;
+    yield* Ref.set(lastAttempt, { content, at: now });
+    if (Result.isFailure(read)) {
+      return yield* Effect.logError("Could not read the declared scheduled tasks", {
+        file,
+        message: read.failure.message,
+      });
     }
+    const declarations = yield* Effect.result(decodeDeclarations(read.success));
+    if (Result.isFailure(declarations)) {
+      return yield* Effect.logError("The declared scheduled tasks are invalid; nothing changed", {
+        file,
+        message: declarations.failure.message,
+      });
+    }
+    yield* reconcile(declarations.success.tasks).pipe(
+      Effect.catch((error) =>
+        Effect.logError("Could not apply the declared scheduled tasks", {
+          message: error.message,
+        }),
+      ),
+    );
   });
   yield* scheduler.register("declared-scheduled-tasks", tick);
 });

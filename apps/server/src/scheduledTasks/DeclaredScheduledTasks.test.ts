@@ -15,6 +15,7 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import { ServerConfig } from "../config.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -286,9 +287,20 @@ it.effect("leaves declared tasks alone and logs an error when the file or a task
       );
       assert.lengthOf(errors.logged(), 1);
       assert.include(errors.logged()[0], "/home/user/missing");
-      // A failed apply waits before it logs the same error again.
+      // A failed apply waits before it tries the same file again.
       yield* tick;
       assert.lengthOf(errors.logged(), 1);
+      yield* TestClock.adjust("5 minutes");
+      yield* tick;
+      assert.lengthOf(errors.logged(), 2);
+
+      // Rolling back to the last file that applied undoes what the failed one changed.
+      yield* write({ tasks: { gardener: declaration("Tend the follow-ups.") } });
+      yield* tick;
+      assert.deepEqual(
+        (yield* declared).map((task) => task.id),
+        ["declared:gardener"],
+      );
     }),
   ),
 );

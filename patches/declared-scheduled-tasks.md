@@ -15,13 +15,13 @@ declare, change or remove one.
   carry. `project` is a project's absolute path, and without one the task runs in No project.
   `model` defaults to the project's default model.
 - `DeclaredScheduledTasks.ts` reads the file on every scheduler tick (5 s) and applies it when its
-  content or the settings changed. It adds, updates and removes the tasks with id `declared:<key>`
-  and never touches others. It re-reads the file instead of taking it from the unit's environment
-  because a deploy defers T3's restart until agents are idle, for up to a day.
+  content changed and again every five minutes, which picks up a new default model. It adds,
+  updates and removes the tasks with id `declared:<key>` and never touches others. It re-reads the
+  file instead of taking it from the unit's environment because a deploy defers T3's restart until
+  agents are idle, for up to a day.
 - A missing file declares nothing, so removing a host's last declaration removes its task. An
   unreadable or invalid file changes nothing and logs an error. A task that cannot apply (unknown
-  project, no model) keeps its stored version while the others apply. A failed apply runs again
-  after five minutes or when the file or settings change.
+  project, no model) keeps its stored version while the others apply, and applies on a later pass.
 - The host owns the definition. `ScheduledTaskService.upsert` and `delete` refuse a declared id
   unless the declarations call them, so Settings, MCP and the RPCs all get the same refusal. Run now,
   pause and resume still work, and an apply keeps the paused state, so a task that paused itself
