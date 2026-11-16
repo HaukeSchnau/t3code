@@ -16,7 +16,7 @@ attempt, but it never asked the projection store for it.
 
 The wait gives up after 200 reads 10 ms apart instead of after a 2-second deadline. On a loaded host,
 real time could pass that deadline between the test's reads, so the test failed even with the fix.
-Stop still gives up on a stalled run after about 2 seconds.
+Stop still gives up on a stalled run after at least 2 seconds, longer on a loaded host.
 
 ## Removal
 
