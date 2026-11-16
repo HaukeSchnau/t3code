@@ -501,16 +501,20 @@ it.layer(
           assert.strictEqual(status.status, "ready");
           assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
 
-          // Without the provider, the login's limits may belong to an account Codex doesn't use.
-          const unread = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
-            Effect.succeed(
-              makeCodexProbeSnapshot({
-                configReadFailed: true,
-                rateLimits: { snapshot: { planType: "free" }, resetCredits: null },
-              }),
-            ),
+          const unread = yield* checkCodexProviderStatus(
+            defaultCodexSettings,
+            () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  configReadFailed: true,
+                  rateLimits: { snapshot: { planType: "free" }, resetCredits: null },
+                }),
+              ),
+            undefined,
+            undefined,
+            status,
           );
-          assert.strictEqual(unread.usageLimits?.unavailable?.reason, "probeFailed");
+          assert.strictEqual(unread.usageLimits?.unavailable?.reason, "unsupported");
         }),
     );
 

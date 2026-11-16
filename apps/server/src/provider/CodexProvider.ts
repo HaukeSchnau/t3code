@@ -872,30 +872,27 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     ? { status: "ready" as const, auth: managedAuth, message: undefined }
     : accountProbeStatus(snapshot);
   // A ChatGPT login left in auth.json still answers usage reads after config routes Codex elsewhere.
-  const sendsElsewhere =
-    snapshot.modelProvider !== undefined && snapshot.modelProvider !== "openai";
+  // A failed config read keeps the routing the last probe saw, since direct quota reads skip only
+  // `unsupported` and would otherwise publish that login's limits.
+  const sendsElsewhere = snapshot.configReadFailed
+    ? lastReady?.usageLimits?.unavailable?.reason === "unsupported"
+    : snapshot.modelProvider !== undefined && snapshot.modelProvider !== "openai";
   const usageLimits =
     snapshot.account.account?.type === "apiKey" || sendsElsewhere
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
-      : snapshot.configReadFailed
+      : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
         ? makeUnavailableUsageLimits({
             checkedAt,
             reason: "probeFailed",
-            message: "Could not read which provider Codex sends to.",
+            ...(accountStatus.message ? { message: accountStatus.message } : {}),
+            ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
           })
-        : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
-          ? makeUnavailableUsageLimits({
-              checkedAt,
-              reason: "probeFailed",
-              ...(accountStatus.message ? { message: accountStatus.message } : {}),
-              ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
-            })
-          : codexRateLimitsToLimits({
-              snapshot: snapshot.rateLimits.snapshot,
-              rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
-              resetCredits: snapshot.rateLimits.resetCredits,
-              checkedAt,
-            });
+        : codexRateLimitsToLimits({
+            snapshot: snapshot.rateLimits.snapshot,
+            rateLimitsByLimitId: snapshot.rateLimits.rateLimitsByLimitId,
+            resetCredits: snapshot.rateLimits.resetCredits,
+            checkedAt,
+          });
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,
