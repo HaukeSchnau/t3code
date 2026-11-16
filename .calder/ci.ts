@@ -533,6 +533,8 @@ const desktopLaunch = Task.make("desktop-launch", {
       "assets",
       "native",
       "scripts/fixtures/desktop-launch",
+      // electron-builder loads the afterPack hook by path, which Files.imports doesn't follow.
+      "scripts/prepare-server-compile-cache.cjs",
       "third-party-licenses",
       "third-party-licenses.config.json",
     ),
