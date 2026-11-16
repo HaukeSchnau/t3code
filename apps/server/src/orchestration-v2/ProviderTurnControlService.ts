@@ -243,15 +243,12 @@ export const layer: Layer.Layer<
           // Sleep in real time; ingestion fibers do not advance TestClock and would leave Stop blocked.
           // Count reads instead of using a deadline, which real time can expire mid-test on a loaded host.
           yield* Effect.gen(function* () {
-            for (
-              let remaining = 200;
-              loaded.providerTurn.status === "running" && remaining > 0;
-              remaining -= 1
-            ) {
+            for (let remaining = 200; remaining > 0; remaining -= 1) {
               // The run ends with its attempt, in an event that can land after the turn's own.
               const attemptId = loaded.providerTurn.runAttemptId;
               const current = yield* projections.getProviderControlContext(input.threadId, {
-                ...input,
+                providerThreadId: input.providerThreadId,
+                providerTurnId: input.providerTurnId,
                 ...(attemptId === null ? {} : { attemptId }),
               });
               if (

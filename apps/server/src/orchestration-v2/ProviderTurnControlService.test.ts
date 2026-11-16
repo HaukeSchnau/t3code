@@ -376,7 +376,10 @@ it.effect(
     }),
 );
 
-it.effect("Stop waits for the run's terminal after the provider reports its turn's end", () =>
+it.effect.each([
+  { turnAtStop: "running", when: "after the provider reports its turn's end" },
+  { turnAtStop: "completed", when: "when its turn ended before Stop loaded it" },
+] as const)("Stop waits for the run's terminal $when", ({ turnAtStop }) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
     const threadId = ThreadId.make("thread:interrupt-terminal");
@@ -393,6 +396,9 @@ it.effect("Stop waits for the run's terminal after the provider reports its turn
     });
     const projection = yield* Ref.make<OrchestrationV2ThreadProjection>({
       ...initial,
+      providerTurns: initial.providerTurns.map((turn) =>
+        turnAtStop === "running" ? turn : { ...turn, status: turnAtStop, completedAt: now },
+      ),
       attempts: initial.attempts.map((attempt) => ({
         ...attempt,
         status: "running" as const,
@@ -407,11 +413,11 @@ it.effect("Stop waits for the run's terminal after the provider reports its turn
       interruptTurn: () =>
         Ref.update(projection, (current) => ({
           ...current,
-          providerTurns: current.providerTurns.map((turn) => ({
-            ...turn,
-            status: "failed" as const,
-            completedAt: now,
-          })),
+          providerTurns: current.providerTurns.map((turn) =>
+            turn.status === "running"
+              ? { ...turn, status: "failed" as const, completedAt: now }
+              : turn,
+          ),
         })),
     });
     const layerControl = ProviderTurnControlService.layer.pipe(
