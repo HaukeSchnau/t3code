@@ -358,6 +358,7 @@ const make = Effect.gen(function* () {
       return {
         followUps: [...active, ...closed],
         types: yield* types,
+        lastGardenerRun: null,
       };
     },
     Effect.mapError(failWith("Could not read follow-ups")),

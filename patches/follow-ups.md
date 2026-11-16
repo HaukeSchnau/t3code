@@ -40,7 +40,9 @@ that keeps a tidy list of open work with its origin.
   (`patches/declared-scheduled-tasks.md`), with a prompt that names the home's members, so T3 has
   no gardener of its own. Settings runs it at once. Saves from its thread log as an agent's; the
   `gardener` actor kind stays for changes the built-in gardener logged, and migration 110 still
-  creates `follow_up_gardener_runs`, which nothing reads anymore.
+  creates `follow_up_gardener_runs`, which nothing reads anymore. The snapshot still sends
+  `lastGardenerRun: null` because older clients require the key; drop it once every client has
+  updated past the release that removed the built-in gardener.
 - **Hints at thread start.** The first turn of a top-level thread a user started (not a scheduled
   task or a goal command) gets one line naming open follow-ups whose title its first 2,000
   characters mostly repeat (two or more title words, at least 60% of them) or whose id it cites.
