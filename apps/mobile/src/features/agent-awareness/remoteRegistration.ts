@@ -839,7 +839,10 @@ export async function unregisterAgentAwarenessDeviceFromEnvironment(
     if (!deviceId) {
       return;
     }
-    // The skip record would otherwise stop the next registration from reaching this server.
+    // A registration still in flight must not reach the server or save its skip record after this
+    // request; that record would stop the next registration from reaching the server. Callers then
+    // change the registration environments, which starts a fresh registration.
+    deviceRegistrationGeneration++;
     yield* Effect.promise(() =>
       clearAgentAwarenessRegistrationRecord().catch((error: unknown) => {
         logRegistrationError("clear registration record failed", error);

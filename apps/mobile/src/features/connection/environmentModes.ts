@@ -31,8 +31,7 @@ export function useEnvironmentModeMenu() {
     select: async (id: string) => {
       const selection = id === ALL_ID ? null : id;
       const switchedOff = [...environmentModeTargets(modes, selection, catalog.entries)].flatMap(
-        ([environmentId, enabled]) =>
-          !enabled && catalog.entries.get(environmentId)?.enabled ? [environmentId] : [],
+        ([environmentId, enabled]) => (enabled ? [] : [environmentId]),
       );
       await forgetAgentAwarenessDevice(switchedOff);
       await applyMode(selection);

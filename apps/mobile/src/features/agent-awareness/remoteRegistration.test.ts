@@ -7,7 +7,10 @@ import { Platform } from "react-native";
 
 import type { AgentAwarenessSnapshot, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
-import { loadPreferences } from "../../persistence/imperative";
+import {
+  loadAgentAwarenessRegistrationRecord,
+  loadPreferences,
+} from "../../persistence/imperative";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import type { AgentAwarenessEnvironmentTransport } from "./remoteRegistration";
 import {
@@ -195,6 +198,35 @@ describe("accountless agent awareness registration", () => {
     setAgentAwarenessEnvironmentTransport(environment);
 
     await vi.waitFor(() => expect(environment.registerDevice).toHaveBeenCalledTimes(2));
+  });
+
+  it("drops a registration still in flight when this device is forgotten", async () => {
+    let finishRecordLoad!: () => void;
+    vi.mocked(loadAgentAwarenessRegistrationRecord).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRecordLoad = () => resolve(null);
+        }),
+    );
+    let rotateToken!: Parameters<typeof Notifications.addPushTokenListener>[0];
+    vi.mocked(Notifications.addPushTokenListener).mockImplementationOnce((listener) => {
+      rotateToken = listener;
+      return { remove: vi.fn() };
+    });
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+    await vi.waitFor(() => expect(loadAgentAwarenessRegistrationRecord).toHaveBeenCalled());
+
+    await unregisterAgentAwarenessDeviceFromEnvironment(() => Promise.resolve());
+    rotateToken({ type: "ios", data: "rotated-token" });
+    finishRecordLoad();
+
+    await vi.waitFor(() =>
+      expect(environment.registerDevice).toHaveBeenCalledWith(
+        expect.objectContaining({ pushToken: "rotated-token" }),
+      ),
+    );
+    expect(environment.registerDevice).toHaveBeenCalledTimes(1);
   });
 
   it("ends Live Activities when the last environment goes away but not on release", async () => {
