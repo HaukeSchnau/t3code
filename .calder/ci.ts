@@ -533,6 +533,8 @@ const desktopLaunch = Task.make("desktop-launch", {
       "assets",
       "native",
       "scripts/fixtures/desktop-launch",
+      // The web Vite config imports scripts/lib, which Files.workspace doesn't follow.
+      "scripts/lib",
       // electron-builder loads the afterPack hook by path, which Files.imports doesn't follow.
       "scripts/prepare-server-compile-cache.cjs",
       "third-party-licenses",
