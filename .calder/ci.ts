@@ -518,6 +518,21 @@ const nativeClients = Task.make("native-clients", {
   env: { LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" },
 }).pipe(Step.timeout("60 minutes"));
 
+const desktopLaunchInputs = Files.union(
+  Files.workspace("apps/desktop", "apps/server", "apps/web"),
+  Files.imports(["scripts/build-desktop-artifact.ts", "scripts/smoke-desktop-app.ts"]),
+  Files.of(
+    "assets",
+    "native",
+    "scripts/fixtures/desktop-launch",
+    // electron-builder loads the afterPack hooks by path, which Files.imports doesn't follow.
+    "scripts/linux-after-pack.ts",
+    "scripts/prepare-server-compile-cache.cjs",
+    "third-party-licenses",
+    "third-party-licenses.config.json",
+  ),
+);
+
 /**
  * Upstream's desktop launch check, on the packaged app: an unsigned macOS build opens a database an
  * older fork build wrote (`apps/server/scripts/desktop-launch-fixture.ts`), migrates it and shows
@@ -526,19 +541,7 @@ const nativeClients = Task.make("native-clients", {
 const desktopLaunch = Task.make("desktop-launch", {
   platform: "aarch64-darwin",
   setup: appleInstall,
-  inputs: Files.union(
-    Files.workspace("apps/desktop", "apps/server", "apps/web"),
-    Files.imports(["scripts/build-desktop-artifact.ts", "scripts/smoke-desktop-app.ts"]),
-    Files.of(
-      "assets",
-      "native",
-      "scripts/fixtures/desktop-launch",
-      // electron-builder loads the afterPack hook by path, which Files.imports doesn't follow.
-      "scripts/prepare-server-compile-cache.cjs",
-      "third-party-licenses",
-      "third-party-licenses.config.json",
-    ),
-  ),
+  inputs: desktopLaunchInputs,
   // Rust comes from the builder's own pinned nixpkgs registry entry.
   run: cmd`nix shell nixpkgs#cargo nixpkgs#rustc --command bash -c ${
     "set -euo pipefail; " +
@@ -546,6 +549,22 @@ const desktopLaunch = Task.make("desktop-launch", {
     'app=$(echo "$PWD"/desktop-launch-app/mac-arm64/*.app); ' +
     'exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist"); ' +
     'node scripts/smoke-desktop-app.ts --executable "$app/Contents/MacOS/$exe"'
+  }`,
+}).pipe(Step.timeout("30 minutes"));
+
+/**
+ * The same check on Linux, unpacked (`--target dir`) and under Xvfb, so pull requests run it too.
+ * On Xvfb's default 640x480 screen the app collapses its sidebar and the check can't find the thread.
+ */
+const desktopLaunchLinux = Task.make("desktop-launch-linux", {
+  shell: flake.devShells["ci-desktop"],
+  setup: install,
+  inputs: desktopLaunchInputs,
+  run: cmd`desktop-fhs bash -c ${
+    "set -euo pipefail; " +
+    "node scripts/build-desktop-artifact.ts --platform linux --target dir --output-dir desktop-launch-app; " +
+    'xvfb-run -a -s "-screen 0 1280x1024x24" node scripts/smoke-desktop-app.ts ' +
+    '--executable "$(echo "$PWD"/desktop-launch-app/linux*-unpacked/t3code)"'
   }`,
 }).pipe(Step.timeout("30 minutes"));
 
@@ -605,6 +624,7 @@ export default Project.standard({
     graphql,
     desktopBuild,
     desktopLaunch,
+    desktopLaunchLinux,
     rust,
     lintMobile,
     githubScripts,

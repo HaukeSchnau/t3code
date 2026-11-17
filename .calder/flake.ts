@@ -4,5 +4,5 @@ import { Flake } from "@calder-ci/core";
 export const flake = Flake.make({
   packages: ["agent-exec", "default", "projectRelease", "t3code"],
   checks: ["package", "projectReleaseGate", "projectReleaseInterface"],
-  devShells: ["ci", "ci-native", "default"],
+  devShells: ["ci", "ci-desktop", "ci-native", "default"],
 });

@@ -54,6 +54,10 @@ plus the fork lockfile checks.
   the packaging and check scripts and the fixture. It is a check, so a change to the server, web or
   desktop app waits for m1 before it deploys. On m1 the package took under a minute and the launch
   seven seconds.
+- `desktop-launch-linux` runs the same check on Linux in Calder's sandboxed pull-request units, so
+  a pull request proves the launch before it merges. It packages `--target dir` and launches the
+  app under Xvfb inside an FHS environment (`devShells.ci-desktop`). It covers the migration and the
+  shared app, not macOS-only breakage, which stays with `desktop-launch`.
 - The fork replaces upstream's fixture with its own. Upstream's records upstream migration ids:
   a fork build skips the fork migrations at those ids and re-runs upstream's under their fork ids,
   and fails at `73_ProjectionThreadTitleState`. `apps/server/scripts/desktop-launch-fixture.ts`
