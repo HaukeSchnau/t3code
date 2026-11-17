@@ -159,7 +159,7 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
     if (action.type === "start" && action.press.route === "composer") {
       const owner = readDictationShortcutOwner();
       if (!owner || owner.disabled || !owner.speech.available) return;
-      presses.start(
+      void presses.start(
         "composer",
         owner.speech,
         action.press.gesture === "command" ? { intent: "command" } : undefined,
@@ -174,7 +174,7 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
       }
       sessionRef.current = { ...press, context: null, started: false, failure: null };
       setGesture(press.gesture);
-      presses.start(
+      void presses.start(
         "headless",
         speech,
         press.gesture === "command" ? { intent: "command" } : undefined,

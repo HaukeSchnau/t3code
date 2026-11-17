@@ -133,13 +133,16 @@ describe("createFnPressRunner", () => {
     expect(calls).toEqual(["start", "cancel"]);
   });
 
-  it("stops a recording another route started through the fallback", async () => {
+  it("after startup, stops whatever records now, not the press it remembers", async () => {
     const runner = createFnPressRunner();
-    const started = preparingSpeech();
-    const other = preparingSpeech();
-    runner.start("headless", started.speech);
-    await runner.stop("composer", other.speech);
-    expect(other.calls).toEqual(["stop"]);
-    expect(started.calls).toEqual(["start"]);
+    const first = preparingSpeech();
+    const busy = preparingSpeech();
+    const started = runner.start("composer", first.speech);
+    first.beginRecording();
+    await started;
+    await runner.stop("composer", busy.speech);
+    runner.cancel("composer", busy.speech);
+    expect(first.calls).toEqual(["start"]);
+    expect(busy.calls).toEqual(["stop", "cancel"]);
   });
 });

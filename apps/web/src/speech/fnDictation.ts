@@ -85,36 +85,41 @@ type PressSpeech = {
 };
 
 /**
- * Remembers the recorder a press started. A stop that arrives while it is still preparing waits
- * for recording to begin, since stopping before then does nothing; a cancel drops that stop.
+ * Holds a press's recorder only while it prepares, when stopping it does nothing yet: a stop then
+ * waits for recording to begin, and a cancel drops that stop. Afterwards `fallback`, the recorder
+ * that is busy now, is the one to stop, even if this press's recording ended some other way.
  */
 export function createFnPressRunner() {
-  let current: {
+  type Press = {
     readonly route: FnDictationRoute;
     readonly speech: PressSpeech;
     readonly starting: Promise<void>;
-  } | null = null;
+    cancelled: boolean;
+  };
+  let preparing: Press | null = null;
   return {
+    /** Resolves once the press stops preparing. */
     start(
       route: FnDictationRoute,
       speech: PressSpeech,
       options?: { readonly intent?: SpeechPostProcessingIntent },
-    ) {
-      current = { route, speech, starting: speech.start(options) };
+    ): Promise<void> {
+      const press: Press = { route, speech, starting: speech.start(options), cancelled: false };
+      preparing = press;
+      const settle = () => {
+        if (preparing === press) preparing = null;
+      };
+      return press.starting.then(settle, settle);
     },
-    /** Stops this route's started press, or `fallback` for a recording started elsewhere. */
     stop(route: FnDictationRoute, fallback: PressSpeech | null): Promise<void> {
-      const press = current;
+      const press = preparing;
       if (press?.route !== route) return fallback?.stop() ?? Promise.resolve();
-      return press.starting.then(() => {
-        if (current !== press) return;
-        current = null;
-        return press.speech.stop();
-      });
+      return press.starting.then(() => (press.cancelled ? undefined : press.speech.stop()));
     },
     cancel(route: FnDictationRoute, fallback: PressSpeech | null) {
-      const press = current?.route === route ? current : null;
-      current = null;
+      const press = preparing?.route === route ? preparing : null;
+      preparing = null;
+      if (press) press.cancelled = true;
       (press?.speech ?? fallback)?.cancel();
     },
   };
