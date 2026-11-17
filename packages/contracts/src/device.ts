@@ -569,7 +569,7 @@ export class DeviceBootError extends Schema.TaggedError<DeviceBootError>()("Devi
   deviceId: DeviceId,
   reason: Schema.Literals(["disk_space", "timeout", "launch_failed"]),
   diagnostics: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
-  cause: Schema.Defect(),
+  cause: Schema.Defect({ excludeCause: true }),
 }) {
   override get message(): string {
     const explanation = {
@@ -596,7 +596,8 @@ export class DeviceOperationError extends Schema.TaggedError<DeviceOperationErro
       "hub_rejected",
     ]),
     exitCode: Schema.optional(Schema.Number),
-    cause: Schema.Defect(),
+    // Nested causes can carry command output, such as a probe's stderr.
+    cause: Schema.Defect({ excludeCause: true }),
   },
 ) {
   override get message(): string {
@@ -712,7 +713,7 @@ export class DeviceToolUnavailableError extends Schema.TaggedError<DeviceToolUna
   "DeviceToolUnavailableError",
   {
     reason: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
+    cause: Schema.optional(Schema.Defect({ excludeCause: true })),
   },
 ) {
   override get message(): string {
