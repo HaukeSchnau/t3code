@@ -83,7 +83,10 @@ function run(argv) {
   if (result.front !== pid || !$.AXIsProcessTrusted()) return JSON.stringify(result);
   const app = $.AXUIElementCreateApplication(pid);
   const focused = attribute(app, "AXFocusedUIElement");
-  if (focused && text(focused, "AXRole") !== "AXSecureTextField") {
+  // Password fields report a secure subrole; nothing is read from them, not even through Cmd-C.
+  const secure = focused && text(focused, "AXSubrole") === "AXSecureTextField";
+  if (secure) return JSON.stringify(result);
+  if (focused) {
     if (wantField) result.value = text(focused, "AXValue");
     if (wantField || wantSelection) result.selected = text(focused, "AXSelectedText");
   }

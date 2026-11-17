@@ -115,6 +115,8 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
     const delivery = await dictation
       .deliver({ pressId: session.pressId, text: textForTarget(transcript, session.context) })
       .catch(() => "failed" as const);
+    // A recording that started while this one pasted owns the pill now.
+    if (sessionRef.current) return;
     if (delivery === "pasted") showPill(null);
     else if (delivery === "copied") showPill(notice("Copied. Press ⌘V to paste it."));
     else showPill(notice("Could not paste the text.", "error"));

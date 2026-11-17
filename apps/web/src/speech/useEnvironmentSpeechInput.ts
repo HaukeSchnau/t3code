@@ -724,7 +724,8 @@ export function useEnvironmentSpeechInput(input: HookInput) {
       cancelDownload: cancelSetupDownload,
       startRecording: async () => {
         setSetup((current) => ({ ...current, open: false }));
-        await start();
+        // A spoken command that waited for its model must still run as a command.
+        await start({ intent: intentRef.current });
       },
     },
     state,
