@@ -35,12 +35,10 @@ Agents keep follow-ups tidy themselves: they search before they write, update an
 rather than add a duplicate, and may define types with their own fields, such as a risk with a
 severity. Every change is listed under the follow-up's history.
 
-A server can tend its follow-ups once a night when `T3CODE_FOLLOW_UP_GARDENER_AT` is set to a local
-time such as `03:30`. The pass merges duplicates, closes what turns out to be done, checks the
-plain-language conditions, keeps types consistent, and writes down follow-ups that settled threads
-left behind. Its thread ends with a short report of every change; the follow-ups page links to the
-latest one and can start a pass now. `T3CODE_FOLLOW_UP_MEMBERS` lists the other environments, by
-id, whose settled threads the pass reads.
+For a regular tidy-up, schedule a task in **Settings → Scheduled tasks** whose prompt asks an agent
+to merge duplicates, close what turns out to be done, check the plain-language conditions and
+write down follow-ups that settled threads left behind. Its thread shows what it did, and each
+change appears in the follow-up's history.
 
 When you start a thread that clearly continues an open follow-up, the agent is told about it.
 

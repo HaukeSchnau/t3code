@@ -183,14 +183,6 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  followUpGardenerAt: Config.String("T3CODE_FOLLOW_UP_GARDENER_AT").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  followUpMembers: Config.String("T3CODE_FOLLOW_UP_MEMBERS").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
   lan: Config.Boolean("T3CODE_LAN").pipe(Config.option, Config.map(Option.getOrUndefined)),
 });
 
@@ -547,18 +539,6 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     remoteOpenHost: env.remoteOpenHost?.trim() || undefined,
     ...(env.followUpHome?.trim()
       ? { followUpHome: EnvironmentId.make(env.followUpHome.trim()) }
-      : {}),
-    ...(env.followUpGardenerAt?.trim()
-      ? { followUpGardenerAt: env.followUpGardenerAt.trim() }
-      : {}),
-    ...(env.followUpMembers?.trim()
-      ? {
-          followUpMembers: env.followUpMembers
-            .split(",")
-            .map((id) => id.trim())
-            .filter((id) => id !== "")
-            .map((id) => EnvironmentId.make(id)),
-        }
       : {}),
   };
 

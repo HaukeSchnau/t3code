@@ -3,7 +3,6 @@ import {
   FollowUpActor,
   FollowUpError,
   FollowUpFields,
-  FollowUpGardenerRun,
   FollowUpId,
   FollowUpLink,
   FollowUpOrigin,
@@ -80,9 +79,6 @@ export class FollowUps extends Context.Service<
       { readonly type?: FollowUpType; readonly followUp?: FollowUp },
       FollowUpError
     >;
-    readonly recordGardenerRun: (run: FollowUpGardenerRun) => Effect.Effect<void, FollowUpError>;
-    /** Whether a nightly gardener run started this thread, so its changes log as the gardener's. */
-    readonly isGardenerThread: (thread: FollowUpThreadRef) => Effect.Effect<boolean>;
   }
 >()("t3/followUps/FollowUps") {}
 
@@ -129,13 +125,6 @@ const ChangeRow = Schema.Struct({
 });
 const decodeChangeRow = Schema.decodeUnknownEffect(ChangeRow);
 const encodeActor = Schema.encodeEffect(Schema.fromJsonString(FollowUpActor));
-
-const GardenerRow = Schema.Struct({
-  thread_json: Schema.fromJsonString(FollowUpThreadRef),
-  started_at: Schema.String,
-});
-const decodeGardenerRow = Schema.decodeUnknownEffect(GardenerRow);
-const encodeThreadRef = Schema.encodeEffect(Schema.fromJsonString(FollowUpThreadRef));
 
 const fromRow = (row: typeof Row.Type): FollowUp => ({
   id: row.id,
@@ -362,21 +351,6 @@ const make = Effect.gen(function* () {
     Effect.mapError(failWith("Could not read follow-up types")),
   );
 
-  const lastGardenerRun = sql`
-    SELECT * FROM follow_up_gardener_runs ORDER BY started_at DESC LIMIT 1
-  `.pipe(
-    NodeSqliteClient.readOnly,
-    Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeGardenerRow(row))),
-    Effect.map((rows) =>
-      rows[0] === undefined
-        ? null
-        : ({
-            thread: rows[0].thread_json,
-            startedAt: rows[0].started_at,
-          } satisfies FollowUpGardenerRun),
-    ),
-  );
-
   const snapshot: FollowUps["Service"]["snapshot"] = Effect.fn("FollowUps.snapshot")(
     function* (input) {
       const active = yield* loadActive;
@@ -384,7 +358,7 @@ const make = Effect.gen(function* () {
       return {
         followUps: [...active, ...closed],
         types: yield* types,
-        lastGardenerRun: yield* lastGardenerRun,
+        lastGardenerRun: null,
       };
     },
     Effect.mapError(failWith("Could not read follow-ups")),
@@ -698,29 +672,6 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const recordGardenerRun: FollowUps["Service"]["recordGardenerRun"] = (run) =>
-    encodeThreadRef(run.thread).pipe(
-      Effect.flatMap(
-        (threadJson) => sql`
-          INSERT INTO follow_up_gardener_runs (thread_json, started_at)
-          VALUES (${threadJson}, ${run.startedAt})
-        `,
-      ),
-      Effect.andThen(notifyChanged),
-      Effect.mapError(failWith("Could not record the gardener run")),
-    );
-
-  const isGardenerThread: FollowUps["Service"]["isGardenerThread"] = (thread) =>
-    encodeThreadRef(thread).pipe(
-      Effect.flatMap(
-        (threadJson) => sql<{ readonly found: number }>`
-          SELECT 1 AS found FROM follow_up_gardener_runs WHERE thread_json = ${threadJson} LIMIT 1
-        `,
-      ),
-      Effect.map((rows) => rows.length > 0),
-      Effect.orElseSucceed(() => false),
-    );
-
   /** Returns dated follow-ups to the inbox once their date arrives. */
   const returnDue = Effect.fn("FollowUps.returnDue")(function* () {
     const now = yield* DateTime.now;
@@ -759,8 +710,6 @@ const make = Effect.gen(function* () {
     history,
     types,
     apply,
-    recordGardenerRun,
-    isGardenerThread,
   });
 });
 

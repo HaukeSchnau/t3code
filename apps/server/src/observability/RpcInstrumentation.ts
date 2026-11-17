@@ -47,7 +47,6 @@ const RPC_AGGREGATES = {
   [FOLLOW_UP_WS_METHODS.subscribe]: "followUps",
   [FOLLOW_UP_WS_METHODS.save]: "followUps",
   [FOLLOW_UP_WS_METHODS.history]: "followUps",
-  [FOLLOW_UP_WS_METHODS.runGardener]: "followUps",
   [WS_METHODS.serverProbe]: "server",
   [WS_METHODS.serverGetConfig]: "server",
   [WS_METHODS.serverGetNpmRelease]: "server",

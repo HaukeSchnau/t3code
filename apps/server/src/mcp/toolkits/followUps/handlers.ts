@@ -178,13 +178,7 @@ const save = Effect.fn("FollowUpTools.save")(function* (params: SaveParams) {
       : origin === undefined
         ? null
         : { environmentId: origin.environmentId, threadId: origin.threadId };
-  const actor: FollowUpActor = {
-    kind:
-      actingThread !== null && (yield* followUps.isGardenerThread(actingThread))
-        ? "gardener"
-        : "agent",
-    thread: actingThread,
-  };
+  const actor: FollowUpActor = { kind: "agent", thread: actingThread };
 
   if (!hasFollowUpChange(params)) {
     if (params.defineType === undefined) {

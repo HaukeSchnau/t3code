@@ -88,8 +88,8 @@ import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
 import * as AgentWatches from "./watches/AgentWatches.ts";
 import * as WaitWatchdog from "./watches/WaitWatchdog.ts";
 import * as FollowUps from "./followUps/FollowUps.ts";
-import * as FollowUpGardener from "./followUps/FollowUpGardener.ts";
 import * as FollowUpHints from "./followUps/FollowUpHints.ts";
+import * as DeclaredScheduledTasks from "./scheduledTasks/DeclaredScheduledTasks.ts";
 import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
@@ -741,8 +741,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(
     Layer.merge(
       AgentWatches.layer,
-      FollowUpGardener.layer.pipe(
-        Layer.provideMerge(FollowUps.layer),
+      Layer.merge(FollowUps.layer, DeclaredScheduledTasks.layer).pipe(
         Layer.provide(Scheduler.layer),
       ),
     ),

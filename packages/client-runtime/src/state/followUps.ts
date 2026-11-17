@@ -24,7 +24,7 @@ export function createFollowUpEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
-    /** Open follow-ups, the type registry and the latest gardener run; closed ones on request. */
+    /** Open follow-ups and the type registry; closed ones on request. */
     snapshot: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:follow-ups:snapshot",
       tag: FOLLOW_UP_WS_METHODS.subscribe,
@@ -37,11 +37,6 @@ export function createFollowUpEnvironmentAtoms<R, E>(
     save: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:follow-ups:save",
       tag: FOLLOW_UP_WS_METHODS.save,
-    }),
-    /** Starts the gardener's nightly pass now; its thread's last message is the report. */
-    runGardener: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:follow-ups:run-gardener",
-      tag: FOLLOW_UP_WS_METHODS.runGardener,
     }),
   };
 }

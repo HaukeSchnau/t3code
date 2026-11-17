@@ -281,6 +281,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
     ...(task.blockedByPolicy === undefined ? {} : { blockedByPolicy: task.blockedByPolicy }),
+    ...(task.declared === true ? { declaredBy: "host configuration" as const } : {}),
   };
 }
 
@@ -2041,6 +2042,24 @@ const make = Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
+        // The host owns a declared task's definition; pausing and resuming stay here.
+        if (
+          existing.declared === true &&
+          input.prompt === undefined &&
+          input.title === undefined &&
+          input.schedule === undefined &&
+          input.bindToCurrentThread === undefined &&
+          input.freshSession === undefined
+        ) {
+          const { task } = yield* scheduledTasks
+            .setEnabled({ id: existing.id, enabled: input.enabled ?? existing.enabled })
+            .pipe(
+              Effect.mapError((error) =>
+                failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
+              ),
+            );
+          return yield* summarizeScheduledTask(scope, { parent, limits }, task);
+        }
         if (
           input.bindToCurrentThread === true &&
           (parent === undefined || parent.thread.projectId !== existing.projectId)
