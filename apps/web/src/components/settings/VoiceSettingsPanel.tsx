@@ -1261,6 +1261,13 @@ export function VoiceSettingsPanel() {
         "speech-post-processing-model":
           cleanupEnabled && settingsScope ? undefined : "speech-post-processing",
         "speech-correction-word": cleanupEnabled ? undefined : "speech-post-processing",
+        "dictation-in-other-apps": settings.dictationKey === "off" ? "dictation-key" : undefined,
+        "dictation-reads-field":
+          settings.dictationKey === "off"
+            ? "dictation-key"
+            : settings.dictationInOtherApps
+              ? undefined
+              : "dictation-in-other-apps",
       }}
     >
       <SettingsSection id="voice-input" title="Input">

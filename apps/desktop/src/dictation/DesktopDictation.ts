@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Electron from "electron";
 
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
@@ -96,6 +97,10 @@ const make = Effect.gen(function* () {
   let nextPressId = 0;
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   const presses = new Map<number, Press>();
+  // A second helper started while one is starting would never be stopped and double every press.
+  const configureLock = yield* Semaphore.make(1);
+  // Each paste replaces and restores the clipboard; two at once would swap their texts.
+  const deliverLock = yield* Semaphore.make(1);
 
   const dispatch = (event: DesktopDictationEvent) =>
     runPromise(desktopWindow.dispatchDictationEvent(event)).catch(() => false);
@@ -175,12 +180,20 @@ const make = Effect.gen(function* () {
     }
   };
 
+  /** A watcher that stops mid-press never reports the release, so a started recording is cancelled. */
+  const endPress = () => {
+    clearTimeout(holdTimer);
+    const active = current;
+    if (press.phase === "pressed" && press.held && active?.forward)
+      void dispatch({ type: "cancel", pressId: active.id });
+    press = IDLE_DICTATION_PRESS;
+  };
+
   const stop = () => {
     stopWatcher?.();
     stopWatcher = null;
     listening = false;
-    clearTimeout(holdTimer);
-    press = IDLE_DICTATION_PRESS;
+    endPress();
   };
 
   const configure = Effect.fn("desktop.dictation.configure")(function* (next: ClientSettings) {
@@ -197,6 +210,7 @@ const make = Effect.gen(function* () {
           if (trigger !== desired) return;
           stopWatcher = null;
           listening = false;
+          endPress();
           message = "The dictation key stopped responding. Choose the key again to restart it.";
         }),
       catch: (cause) => new DesktopDictationKeyError({ cause }),
@@ -211,7 +225,7 @@ const make = Effect.gen(function* () {
     }
     stopWatcher = started.value;
     listening = true;
-  });
+  }, configureLock.withPermits(1));
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
@@ -262,7 +276,7 @@ const make = Effect.gen(function* () {
       // The text must survive a helper that could not run.
       Electron.clipboard.writeText(request.text);
       return "copied" as const;
-    }),
+    }, deliverLock.withPermits(1)),
     requestAccessibility: Effect.gen(function* () {
       if (!supported || Electron.systemPreferences.isTrustedAccessibilityClient(false)) return;
       const owner = Electron.BrowserWindow.getFocusedWindow();

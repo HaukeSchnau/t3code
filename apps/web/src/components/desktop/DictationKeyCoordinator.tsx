@@ -78,6 +78,7 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
   const lastDraftRef = useRef<DraftId | null>(null);
   const noticeRef = useRef(false);
   const deliveringRef = useRef(false);
+  const draftSaves = useRef<Promise<unknown>>(Promise.resolve());
   const [gesture, setGesture] = useState<DesktopDictationGesture>("dictate");
 
   const showPill = useStableCallback((pill: DesktopDictationPill | null) => {
@@ -94,7 +95,12 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
   ) => {
     if (session.gesture === "draft") {
       const scratch = scratchEnvironmentId(environmentId);
-      const saved = scratch === null ? null : await saveScratchDraft(scratch, transcript);
+      // Overlapping saves into the scratch project would land in one draft and drop a transcript.
+      const save = draftSaves.current.then(() =>
+        scratch === null ? null : saveScratchDraft(scratch, transcript),
+      );
+      draftSaves.current = save.catch(() => undefined);
+      const saved = await save;
       if (!saved) {
         showPill(
           notice("Could not save the draft. No environment offers no-project threads.", "error"),
@@ -243,6 +249,16 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
       } else if (!noticeRef.current && !deliveringRef.current) showPill(null);
     }
   }, [phase, gesture, level, preview, error, showPill, cancelSpeech]);
+
+  const setupOpen = speech.setup.open;
+  const closeSetup = speech.setup.setOpen;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a missing model opens setup this headless recorder cannot show, so the pill points to Voice settings
+  useEffect(() => {
+    if (!setupOpen || !sessionRef.current) return;
+    sessionRef.current = null;
+    closeSetup(false);
+    showPill(notice("Download a transcription model in T3's Voice settings first.", "error"));
+  }, [setupOpen, closeSetup, showPill]);
 
   const editorRecording = useActiveRecording();
   const [windowFocused, setWindowFocused] = useState(() => document.hasFocus());

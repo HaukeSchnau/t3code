@@ -83,7 +83,8 @@ function run(argv) {
     if (wantField) result.value = text(focused, "AXValue");
     if (wantField || wantSelection) result.selected = text(focused, "AXSelectedText");
   }
-  if (wantSelection && !result.selected) {
+  // Shortcuts go to whichever app is in front, so check again right before sending one.
+  if (wantSelection && !result.selected && frontPid() === pid) {
     const pb = $.NSPasteboard.generalPasteboard;
     const saved = snapshot(pb);
     const before = pb.changeCount;
@@ -111,6 +112,7 @@ function run(argv) {
   pb.setStringForType($(value), $("public.utf8-plain-text"));
   if (!paste) return "copied";
   pb.setStringForType($(""), $("org.nspasteboard.TransientType"));
+  if (frontPid() !== pid) return "copied";
   const written = pb.changeCount;
   command(9);
   delay(0.6);
