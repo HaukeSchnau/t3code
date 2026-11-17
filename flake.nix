@@ -582,6 +582,27 @@
             shellHook = ciShellHook;
           };
         }
+        # Packages the desktop app and opens it under Xvfb. npm's Electron is linked for FHS
+        # distributions, so `desktop-fhs <command>` runs a command where it finds its libraries: the
+        # packaging runs the packaged app too, for its compile cache.
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          ci-desktop = pkgs.mkShellNoCC {
+            packages = ciPackages ++ [
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.imagemagick
+              pkgs.xvfb-run
+              (pkgs.buildFHSEnv (
+                pkgs.appimageTools.defaultFhsEnvArgs
+                // {
+                  name = "desktop-fhs";
+                  runScript = pkgs.writeShellScript "desktop-fhs-exec" ''exec "$@"'';
+                }
+              ))
+            ];
+            shellHook = ciShellHook;
+          };
+        }
       );
 
       checks = forAllSystems (

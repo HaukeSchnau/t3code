@@ -12,6 +12,9 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   web browser tests, because the browsers Playwright downloads do not run on NixOS. It is the same browser
   upstream tests with; full Chromium differs, for example in `:hover` over an iframe. Keep that input's
   `playwright-driver` version equal to the workspace's `playwright`.
+  `devShells.ci-desktop` runs the Linux desktop launch check. npm's Electron is linked for FHS
+  distributions, so its `desktop-fhs` command runs the packaging and the launch in a `buildFHSEnv` with
+  nixpkgs' AppImage libraries, and `xvfb-run` gives the app a display.
   `apps/web/vitest.config.ts` pins that browser's locale to `en-US`, because the headless shell follows the
   host's German `LANGUAGE`, and tests match English number formats.
 - `apps/desktop/src/wsl/DesktopWslEnvironment.test.ts`: the busy-runtime holder renames a shell instead of
@@ -52,4 +55,5 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
 ## Removing it
 
 Each change is a portability fix upstream can take as is. Drop the matching line here once upstream has an
-equivalent. The locale and `jujutsu` lines stay as long as Calder runs the checks.
+equivalent. The locale and `jujutsu` lines stay as long as Calder runs the checks, and `ci-desktop` as
+long as Calder's Linux workers run NixOS.
