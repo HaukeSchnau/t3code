@@ -81,6 +81,10 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
   (`isRepo: false`). While the status is unknown (cold start, offline), clients use upstream's
   flow and its base-branch guard; web remembers "no repository" per checkout, so directory
   projects don't flash.
+- Scheduled task forms on web and mobile have no managed workspace choice. They show a saved
+  `workspace` strategy as a new worktree and save it back unchanged, `isolated` and `profile`
+  included, unless the user changes the workspace fields. A changed base keeps the strategy's
+  type and isolation. The mapping is fork-owned client-runtime `scheduledTaskWorkspace.ts`.
 
 ## Upstream hooks
 
@@ -111,13 +115,13 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
 - web `BranchToolbar.tsx`, `ChatView.tsx`, `ChatView.logic.ts` (`planComposerTurn` returns
   `shouldCreateWorktree`), `chat/useComposerSend.ts` (the `prepareWorkspace` bootstrap),
   `session-logic.ts`,
-  `settings/scheduledTasksSettings.logic.ts`; fork-owned `ManagedWorkspaceSelector.tsx` and
+  `settings/scheduledTasksSettings.logic.ts`, `settings/ScheduledTasksSettings.tsx`; fork-owned `ManagedWorkspaceSelector.tsx` and
   `lib/managedWorkspaces.ts`.
 - mobile `Stack.tsx` (the `NewTaskWorkspace` root route), `layout/workspace-overlay-routes.ts`,
   `NewTaskDraftScreen.tsx`, `new-task-flow-provider.tsx`,
   `NewTaskContextPickerScreens.tsx` (exports `PickerSurface` and `ToggleRow`),
   `lib/projectThreadStartTurn.ts`, `state/thread-outbox-model.ts`, `state/threadOutboxDelivery.ts`,
-  `settings/scheduledTaskDraft.ts`; fork-owned `NewTaskWorkspacePickerRouteScreen.tsx` and
+  `settings/scheduledTaskDraft.ts`, `settings/SettingsScheduledTasksRouteScreen.tsx`; fork-owned `NewTaskWorkspacePickerRouteScreen.tsx` and
   `managed-workspaces.ts`.
 - Test harnesses of `ThreadLaunchService` and `WorktreeMcpService` provide a mock layer.
 

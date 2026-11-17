@@ -79,6 +79,7 @@ import {
   scheduledTaskDefaultModel,
   scheduleFromDraft,
   unbindDraftFromThread,
+  workspaceStrategyFromDraft,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
 import { settingsTargetsForProject } from "./settings-environment-filter.logic";
@@ -777,16 +778,7 @@ function TaskForm({
       enabled: draft.enabled,
       threadId: draft.threadId,
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
-      workspaceStrategy:
-        draft.workspace === "root"
-          ? { type: "root" }
-          : draft.workspace === "existing_worktree"
-            ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
-            : {
-                type: "worktree",
-                baseRef: draft.baseRef.trim() || "main",
-                startFromOrigin: draft.startFromOrigin,
-              },
+      workspaceStrategy: workspaceStrategyFromDraft(draft),
       // Tasks have no mode picker; a mode above the administrator's ceiling is refused.
       runtimeMode:
         clampManagedRuntimeMode(config?.managedPolicy, draft.runtimeMode) ?? draft.runtimeMode,

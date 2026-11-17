@@ -21,9 +21,11 @@ import {
   scheduledTaskDefaultModel,
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
+  changeDraftProject,
   scheduleFromDraft,
   taskToDraft,
   unbindDraftFromThread,
+  workspaceStrategyFromDraft,
 } from "./scheduledTasksSettings.logic";
 
 const laptopId = EnvironmentId.make("laptop");
@@ -169,6 +171,22 @@ describe("editing scheduled task branch settings", () => {
     const draft = taskToDraft(legacyTask);
     expect(draft.baseRef).toBe("release");
     expect(draft.startFromOrigin).toBe(false);
+  });
+
+  it("drops a managed workspace's isolation when the task moves to another project", () => {
+    const isolated = taskToDraft({
+      ...legacyTask,
+      workspaceStrategy: { type: "workspace", baseRef: "main", isolated: true },
+    });
+    expect(workspaceStrategyFromDraft(isolated)).toMatchObject({ isolated: true });
+    const moved = changeDraftProject(isolated, "project:other");
+    expect(workspaceStrategyFromDraft(moved)).toEqual({
+      type: "worktree",
+      baseRef: "main",
+      startFromOrigin: false,
+    });
+    const back = changeDraftProject(moved, isolated.projectId);
+    expect(workspaceStrategyFromDraft(back)).toMatchObject({ isolated: true });
   });
 });
 
