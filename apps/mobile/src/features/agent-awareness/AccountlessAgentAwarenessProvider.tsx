@@ -14,22 +14,30 @@ import {
 } from "../../state/agent-awareness";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
+import { useWorkspaceEnvironments } from "../../state/workspace";
 import {
   releaseAgentAwarenessEnvironmentTransport,
+  retryAgentAwarenessRegistration,
   setAgentAwarenessEnvironmentTransport,
   type AgentAwarenessEnvironmentTransport,
 } from "./remoteRegistration";
-import { commandFailure, runFirstConfiguredRegistration } from "./registrationEnvironmentSelection";
+import {
+  commandFailure,
+  registrationEnvironmentIds,
+  runFirstConfiguredRegistration,
+} from "./registrationEnvironmentSelection";
 
 export function AccountlessAgentAwarenessProvider(props: { readonly children: ReactNode }) {
-  const { isLoadingSavedConnection, savedConnectionsById } = useSavedRemoteConnections();
-  const environmentIds = useMemo(() => {
-    const ids: EnvironmentId[] = [];
-    for (const connection of Object.values(savedConnectionsById)) {
-      if (connection.relayManaged !== true) ids.push(connection.environmentId);
-    }
-    return ids.sort();
-  }, [savedConnectionsById]);
+  const { isLoadingSavedConnection } = useSavedRemoteConnections();
+  const environments = useWorkspaceEnvironments();
+  const environmentKey = registrationEnvironmentIds(environments).join("|");
+  const connectedKey = registrationEnvironmentIds(
+    environments.filter((environment) => environment.connectionState === "connected"),
+  ).join("|");
+  const environmentIds = useMemo(
+    () => (environmentKey === "" ? [] : (environmentKey.split("|") as EnvironmentId[])),
+    [environmentKey],
+  );
   const registerDevice = useAtomCommand(registerAgentAwarenessDevice, {
     reportFailure: false,
     reportDefect: false,
@@ -79,6 +87,11 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
     setAgentAwarenessEnvironmentTransport(transport);
     return releaseAgentAwarenessEnvironmentTransport;
   }, [environmentIds, getSnapshot, isLoadingSavedConnection, registerDevice, registerLiveActivity]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registration right after launch or a switch-on runs before the environment connects, so retry once it does.
+  useEffect(() => {
+    if (connectedKey !== "") retryAgentAwarenessRegistration();
+  }, [connectedKey]);
 
   return props.children;
 }

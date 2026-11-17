@@ -45,8 +45,9 @@ authorization boundary and is intentionally not removed.
 - Drop legacy relay-managed mobile connections during migration; users pair those environments
   directly instead.
 - Register an iOS device and its Live Activity update token over the authenticated environment RPC.
-  The first reachable saved direct environment owns the device registration. Removing a saved
-  environment first asks it to forget the device, so it stops pushing to the phone. That request is
+  The first reachable saved direct environment that is switched on owns the device registration.
+  Removing a saved environment or switching it off first asks it to forget the device, so it stops
+  pushing to the phone. That request is
   best effort and bounded to five seconds, so an unreachable server cannot block removal.
 - Mobile's Notifications settings always use this direct path and never ask for T3 Connect. The
   relay token hooks that upstream's `cloudAccountService.ts` calls in `remoteRegistration.ts` are

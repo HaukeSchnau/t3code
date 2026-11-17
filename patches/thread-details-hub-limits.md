@@ -7,7 +7,8 @@ CLI then reports no subscription limits, and upstream's **Usage limits** row in 
 card reads "Unavailable". Codex is routed by `/etc/codex/config.toml` (`model_provider = "pool"`,
 from infra), but a ChatGPT login left in `~/.codex/auth.json` still answers Codex's usage read, so
 upstream shows that login's limits instead. Hauke uses that row instead of the fork's old composer
-meter, which this patch replaces.
+meter, which this patch replaces. Upstream also shows only the selected provider, while Hauke wants
+every subscription's room at a glance without opening Usage.
 
 ## Requirements
 
@@ -19,17 +20,20 @@ meter, which this patch replaces.
   API-key login, whatever login `auth.json` holds.
 - A provider that reports its own windows, a failed read (`probeFailed`), or a driver no hub
   reports keeps upstream's behavior.
+- Below the selected provider, the row lists every other driver on the environment that has
+  readable limits, from its own login or a hub, pooled like Usage → Limits. Those groups always
+  carry a caption with the provider's name, and the selected provider's group does once any follow.
 
 ## Implementation
 
-`apps/web/src/components/chat/ThreadDetailsUsage.logic.ts` (`hubPoolFor`) is fork-owned.
-`ThreadDetailsUsage.tsx` renders its windows as `PoolRow`s, and `ChatView.tsx` passes the
-environment id in the panel's `usage` input. `CodexProvider.ts` takes `model_provider` from the
+`apps/web/src/components/chat/ThreadDetailsUsage.logic.ts` (`hubPoolFor`, `otherDriverPools`) is
+fork-owned. `ThreadDetailsUsage.tsx` renders their windows as `PoolRow`s under `DriverCaption`s,
+and `ChatView.tsx` passes the environment id in the panel's `usage` input. `CodexProvider.ts` takes `model_provider` from the
 `config/read` call it already makes for the service tier.
 
 ## Removal
 
-Drop this patch when upstream's thread details usage row falls back to hub accounts. Upstream
-tracks the bug in pingdotgg/t3code#30990, and pingdotgg/t3code#30634 pools the hub accounts the same
-way. Neither covers Codex's leftover login; that part stays until upstream checks Codex's model
+Drop the hub fallback when upstream's thread details usage row falls back to hub accounts, and the
+other providers' groups when upstream's row lists every provider. Upstream tracks the bug in
+pingdotgg/t3code#30990, and pingdotgg/t3code#30634 pools the hub accounts the same way. Neither covers Codex's leftover login; that part stays until upstream checks Codex's model
 provider before reading limits.
