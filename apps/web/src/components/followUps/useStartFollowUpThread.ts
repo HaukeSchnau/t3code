@@ -72,7 +72,7 @@ export function useStartFollowUpThread() {
         message: {
           messageId: newMessageId(),
           role: "user",
-          text: followUpSeedMessage(followUp),
+          text: followUpSeedMessage(followUp, input.homeEnvironmentId),
           attachments: [],
         },
         modelSelection,

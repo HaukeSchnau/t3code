@@ -172,7 +172,7 @@ vi.mock("../state/server", () => ({ serverEnvironment: {} }));
 vi.mock("../state/follow-ups", async () => {
   const { Atom } = await import("effect/reactivity");
   const noHome = Atom.make(null);
-  return { environmentFollowUpHomeAtom: () => noHome };
+  return { environmentFollowUpHomeAtom: () => noHome, useLinkedFollowUps: () => new Map() };
 });
 vi.mock("../state/session", () => ({
   readEnvironmentScope: () => true,
@@ -257,6 +257,7 @@ vi.mock("../native/useMarkdownImageSource", () => ({ useMarkdownImageSource: () 
 vi.mock("../native/useEnrichedLinkVariants", () => ({
   enrichedThreadLinkCustomization: () => undefined,
   enrichedContextLinkCustomization: () => undefined,
+  enrichedFollowUpLinkCustomization: () => undefined,
   withChipIcon: (value: unknown) => value,
 }));
 vi.mock("../native/NativeScrollViewMarker", () => ({
