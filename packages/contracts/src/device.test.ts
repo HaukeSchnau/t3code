@@ -2,8 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { Schema } from "effect";
 import {
   DeviceBootError,
+  DeviceError,
   DeviceHostUnavailableError,
+  DeviceOperationError,
   DeviceServiceState,
+  DeviceToolUnavailableError,
   EasDeviceHostConfig,
   SimlockDeviceHostConfig,
   EasDeviceHostConfigs,
@@ -14,7 +17,9 @@ import { secretSettingsFields } from "./settings.ts";
 const decodeSshHosts = Schema.decodeUnknownSync(SshDeviceHostConfigs);
 const decodeEas = Schema.decodeUnknownSync(EasDeviceHostConfigs);
 const encodeState = Schema.encodeSync(DeviceServiceState);
-const encodeHostUnavailable = Schema.encodeSync(DeviceHostUnavailableError);
+const encodeDeviceWireError = Schema.encodeSync(
+  Schema.Union([DeviceError, DeviceToolUnavailableError]),
+);
 const decodeState = Schema.decodeUnknownSync(DeviceServiceState);
 // The host summary as clients decoded it before EAS hosts existed.
 const decodeOlderState = Schema.decodeUnknownSync(
@@ -86,15 +91,22 @@ describe("device state for clients from before EAS hosts", () => {
   });
 });
 
-describe("device host errors sent to clients", () => {
-  it("keeps nested causes, such as a wake command's stderr, off the wire", () => {
-    const error = new DeviceHostUnavailableError({
-      hostId: "tower",
-      reason: "Could not wake this host.",
-      cause: new Error("Device host tower failed", { cause: new Error("SECRET STDERR") }),
-    });
-    const wire = JSON.stringify(encodeHostUnavailable(error));
-    expect(wire).toContain("Could not wake this host.");
+describe("device errors sent to clients", () => {
+  // Nested causes can carry command output, such as a wake command's or a probe's stderr.
+  const cause = () => new Error("Device command failed", { cause: new Error("SECRET STDERR") });
+  it.each([
+    new DeviceHostUnavailableError({ hostId: "tower", reason: "Could not wake.", cause: cause() }),
+    new DeviceBootError({
+      hostId: "mac",
+      deviceId: "Pixel_10",
+      reason: "launch_failed",
+      cause: cause(),
+    }),
+    new DeviceOperationError({ operation: "probe", reason: "command_failed", cause: cause() }),
+    new DeviceToolUnavailableError({ reason: "No device.", cause: cause() }),
+  ])("keeps nested causes of $_tag off the wire", (error) => {
+    const wire = JSON.stringify(encodeDeviceWireError(error));
+    expect(wire).toContain("Device command failed");
     expect(wire).not.toContain("SECRET STDERR");
   });
 });
