@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ServerProvider,
   ServerProviderUsageWindow,
@@ -7,6 +8,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
+  cursorUsageWindowDetails,
   displayLimitWindows,
   formatDuration,
   type LimitPace,
@@ -15,7 +17,7 @@ import {
   paceOf,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -26,7 +28,9 @@ import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
-import { hubPoolFor } from "./ThreadDetailsUsage.logic";
+import { providerClients } from "../settings/providerDriverMeta";
+import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { hubPoolFor, otherDriverPools } from "./ThreadDetailsUsage.logic";
 
 const PACE_LABEL: Record<LimitPace, string> = {
   ahead: "Ahead of pace",
@@ -44,7 +48,10 @@ export interface ThreadDetailsUsageInput {
 
 type UsageTone = "error" | "warning" | null;
 
-/** The selected provider's limit windows. Each row reads as room left. */
+/**
+ * The selected provider's limit windows, then every other provider's on the environment. Each row
+ * reads as room left.
+ */
 export function ThreadDetailsUsage({
   environmentId,
   providerInstanceId,
@@ -63,9 +70,13 @@ export function ThreadDetailsUsage({
   const limits =
     report?.accounts.find((entry) => entry.instanceId === providerInstanceId)?.limits ??
     provider?.usageLimits;
-  if (!provider || !limits) return null;
-  const pool = hubPoolFor(environmentId, provider.driver, limits, sources, now);
-  const notice = pool ? null : limitsNotice(limits);
+  const active = provider && limits ? { driver: provider.driver, limits } : null;
+  const pool = active
+    ? hubPoolFor(environmentId, active.driver, active.limits, sources, now)
+    : null;
+  const notice = active && !pool ? limitsNotice(active.limits) : null;
+  const others = otherDriverPools(environmentId, active?.driver ?? null, providers, sources, now);
+  if (!active && others.length === 0) return null;
 
   return (
     <ThreadDetailsSection
@@ -74,28 +85,65 @@ export function ThreadDetailsUsage({
       showHeading={false}
     >
       <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
-        {pool ? (
-          displayLimitWindows(pool).map((window) => (
-            <PoolRow
-              key={`${window.kind}:${window.id}`}
-              window={window}
-              accountCount={pool.accounts.length}
-              now={now}
-            />
-          ))
-        ) : notice ? (
-          <UsageRow
-            label="Limits"
-            fill={null}
-            tone={null}
-            value="Unavailable"
-            tooltip={<span className="text-foreground">{notice}</span>}
-          />
-        ) : (
-          limits.windows.map((window) => <LimitRow key={window.id} window={window} now={now} />)
-        )}
+        {active ? (
+          <>
+            {others.length > 0 ? <DriverCaption driver={active.driver} /> : null}
+            {pool ? (
+              displayLimitWindows(pool).map((window) => (
+                <PoolRow
+                  key={`${window.kind}:${window.id}`}
+                  driver={pool.driver}
+                  window={window}
+                  accountCount={pool.accounts.length}
+                  now={now}
+                />
+              ))
+            ) : notice ? (
+              <UsageRow
+                label="Limits"
+                fill={null}
+                tone={null}
+                value="Unavailable"
+                tooltip={<span className="text-foreground">{notice}</span>}
+              />
+            ) : (
+              active.limits.windows.map((window) => (
+                <LimitRow key={window.id} window={window} now={now} />
+              ))
+            )}
+          </>
+        ) : null}
+        {others.map((other) => (
+          <Fragment key={other.driver}>
+            <DriverCaption driver={other.driver} />
+            {displayLimitWindows(other).map((window) => (
+              <PoolRow
+                key={`${window.kind}:${window.id}`}
+                driver={other.driver}
+                window={window}
+                accountCount={other.accounts.length}
+                now={now}
+              />
+            ))}
+          </Fragment>
+        ))}
       </div>
     </ThreadDetailsSection>
+  );
+}
+
+function DriverCaption({ driver }: { readonly driver: ProviderDriverKind }) {
+  const label = providerClients.get(driver)?.label ?? String(driver);
+  return (
+    <div className="col-span-3 flex mt-1.5 h-6 items-center gap-1.5 px-2.5 text-2xs font-medium text-muted-foreground select-none first:mt-0">
+      <ProviderInstanceIcon
+        driverKind={driver}
+        displayName={label}
+        className="size-3.5"
+        iconClassName="size-3"
+      />
+      {label}
+    </div>
   );
 }
 
@@ -193,10 +241,12 @@ function LimitRow({
 
 /** A window pooled across the hub's accounts, with the next reset that hands quota back. */
 function PoolRow({
+  driver,
   window,
   accountCount,
   now,
 }: {
+  readonly driver: ProviderDriverKind;
   readonly window: LimitPoolWindow;
   readonly accountCount: number;
   readonly now: number;
@@ -204,21 +254,25 @@ function PoolRow({
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const left = window.remainingPercent;
   const refill = window.resets.find((reset) => reset.restoresPercent > 0 && reset.at > now);
+  const label =
+    (driver === "cursor" ? cursorUsageWindowDetails(window.id)?.label : null) ?? window.label;
   return (
     <UsageRow
-      label={window.label}
+      label={label}
       fill={left}
       tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
       value={`${left}%`}
-      ariaValue={`${left}% left across ${accountCount} pooled ${accountCount === 1 ? "account" : "accounts"}`}
+      ariaValue={
+        accountCount > 1 ? `${left}% left across ${accountCount} pooled accounts` : `${left}% left`
+      }
       tooltip={
         <>
           <span className="text-foreground">
-            {window.label}: {left}% left
+            {label}: {left}% left
           </span>
-          <span className="text-muted-foreground">
-            Pooled across {accountCount} {accountCount === 1 ? "account" : "accounts"}
-          </span>
+          {accountCount > 1 ? (
+            <span className="text-muted-foreground">Pooled across {accountCount} accounts</span>
+          ) : null}
           {refill ? (
             <span className="text-muted-foreground">
               +{refill.restoresPercent}% in {formatDuration(refill.at - now)} ·{" "}
