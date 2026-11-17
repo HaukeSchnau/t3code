@@ -48,6 +48,14 @@ and its scope is gone before T3 reads it, the turn fails without the OOM label. 
 its own budget; infra sets them for srv-2. Drop this once upstream caps sessions and keeps them
 running after a tool's OOM kill.
 
+srv-2 also runs systemd-oomd on user slices, which kills a whole scope under sustained memory
+pressure, the agent included. The kernel counts nothing in `memory.events`, and systemd records
+the unit's `oom-kill` result only once the cgroup empties, which under heavy reclaim came long
+after the agent's exit and after T3's own stop had failed the scope with `timeout`. So the scope
+reads oomd's `user.oomd_ooms` xattr with `getfattr` (the Nix package puts `attr` on its PATH),
+labels the turn as an OOM kill, and leaves the scope for systemd to finish. Without `getfattr`
+these turns fail without the label, as upstream's do.
+
 ## Upstream touch points
 
 - `apps/server/src/observability/Observability.ts`: the protobuf pin and the `RuntimeMetrics`
