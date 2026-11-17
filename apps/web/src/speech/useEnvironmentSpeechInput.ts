@@ -115,8 +115,20 @@ type HookInput = {
   readonly onCommandFailure?: (message: string) => void;
 };
 
-const COMMAND_NEEDS_CLEANUP =
-  "Spoken commands use transcript cleanup. Turn it on in Voice settings, on an environment that supports commands.";
+/** Why a spoken command can't run on the draft's environment, or null when it can. */
+function commandBlocker(environment: {
+  readonly supported: boolean;
+  readonly reachable: boolean;
+  readonly label: string | undefined;
+}): string | null {
+  const name = environment.label ?? "This environment";
+  if (!readCleanupGrant())
+    return "Spoken commands use transcript cleanup. Turn it on in Voice settings.";
+  if (!environment.supported)
+    return `${name} runs a T3 server without spoken commands. Update it to use them.`;
+  if (!environment.reachable) return `${name} isn't available for transcript cleanup right now.`;
+  return null;
+}
 
 /**
  * Microphone audio leaves this device only for the environment the person chose in
@@ -163,8 +175,8 @@ export function useEnvironmentSpeechInput(input: HookInput) {
   const grantId = destination.grantId;
   const cloudProvider = destination.cloudProvider;
   const cloudModel = destination.cloudModel;
-  const draftCapabilities = useEnvironment(input.environmentId)?.serverConfig?.environment
-    .capabilities;
+  const draftEnvironment = useEnvironment(input.environmentId);
+  const draftCapabilities = draftEnvironment?.serverConfig?.environment.capabilities;
   const originatingConnection = Option.getOrNull(usePreparedConnection(input.environmentId));
   const canCleanUp = useEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope);
   const cleanupPrepared =
@@ -222,17 +234,27 @@ export function useEnvironmentSpeechInput(input: HookInput) {
     submit: (text: string) => void;
     text?: string;
   } | null>(null);
-  const commandsSupported = draftCapabilities?.voiceCommands === true;
+  const commandEnvironment = {
+    supported: draftCapabilities?.voiceCommands === true,
+    reachable: cleanupPrepared !== null,
+    label: draftEnvironment?.label,
+  };
   const latestRef = useRef({
     input,
     clientSettings,
     cleanupPrepared,
     projectWords,
-    commandsSupported,
+    commandEnvironment,
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed props and settings to the asynchronous recording controller
   useEffect(() => {
-    latestRef.current = { input, clientSettings, cleanupPrepared, projectWords, commandsSupported };
+    latestRef.current = {
+      input,
+      clientSettings,
+      cleanupPrepared,
+      projectWords,
+      commandEnvironment,
+    };
   });
   const draftRevisionRef = useRef({ ownerKey: input.ownerKey, text: input.draftText, revision: 0 });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tracks committed draft revisions so a late transcript cannot overwrite an edited draft
@@ -334,7 +356,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
       options,
     ) => {
       const preferences = recordingPreferences;
-      const { input: current, cleanupPrepared: target, commandsSupported } = latestRef.current;
+      const { input: current, cleanupPrepared: target, commandEnvironment } = latestRef.current;
       const intent = intentRef.current;
       // A command's raw transcript is an instruction, never text to insert.
       const failCommand = (message: string) => {
@@ -351,14 +373,17 @@ export function useEnvironmentSpeechInput(input: HookInput) {
         current.cleanup === false ||
         current.environmentId !== preferences.environmentId
       )
-        return intent === "command" ? failCommand(COMMAND_NEEDS_CLEANUP) : null;
-      if (intent === "command" && !commandsSupported) return failCommand(COMMAND_NEEDS_CLEANUP);
-      if (!target)
         return intent === "command"
-          ? failCommand(COMMAND_NEEDS_CLEANUP)
-          : Promise.reject(
-              new Error("The draft's environment is unavailable for transcript cleanup."),
-            );
+          ? failCommand(
+              commandBlocker(commandEnvironment) ?? "Transcript cleanup is off for this recording.",
+            )
+          : null;
+      const blocked = intent === "command" ? commandBlocker(commandEnvironment) : null;
+      if (blocked) return failCommand(blocked);
+      if (!target)
+        return Promise.reject(
+          new Error("The draft's environment is unavailable for transcript cleanup."),
+        );
       const prepared = current.prepareCleanup?.(intent) ?? Promise.resolve(null);
       const result = prepared
         .then((context) =>
@@ -525,8 +550,9 @@ export function useEnvironmentSpeechInput(input: HookInput) {
     async (options?: { readonly intent?: SpeechPostProcessingIntent }) => {
       if (latestRef.current.input.disabled || (setup.open && setup.downloading)) return;
       const intent = options?.intent ?? "dictate";
-      if (intent === "command" && !(commandsSupported && cleanupPrepared && readCleanupGrant())) {
-        (latestRef.current.input.onCommandFailure ?? reportCommandFailure)(COMMAND_NEEDS_CLEANUP);
+      const blocked = intent === "command" ? commandBlocker(commandEnvironment) : null;
+      if (blocked) {
+        (latestRef.current.input.onCommandFailure ?? reportCommandFailure)(blocked);
         return;
       }
       intentRef.current = intent;

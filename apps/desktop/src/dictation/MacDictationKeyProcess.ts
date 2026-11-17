@@ -14,6 +14,8 @@ export type DictationKeyLine =
 // Polls hardware state, which needs no Input Monitoring grant. `CGEventSourceSecondsSinceLastEventType`
 // only updates twice a second, so chord keys are found by scanning key state while the trigger is down.
 // Arrow and navigation keys raise the Fn bit together with the keypad bit; such a press is not Fn.
+// NSWorkspace updates frontmostApplication through run-loop notifications, which delay() never
+// delivers, so the app in front is read after running the loop briefly at each press.
 const POLLER_SCRIPT = `
 ObjC.import("AppKit");
 $.NSApplication.sharedApplication.setActivationPolicy($.NSApplicationActivationPolicyProhibited);
@@ -25,6 +27,8 @@ function run(argv) {
   const bit = trigger === "fn" ? FN : trigger === "right-option" ? 0x40 : 0x10;
   const modifiers = (flags) => ((flags & SHIFT) ? "s" : "") + ((flags & CONTROL) ? "c" : "") || "-";
   let down = false, sent = "", chord = false, escape = false;
+  const workspace = $.NSWorkspace.sharedWorkspace;
+  workspace.frontmostApplication;
   console.log("ready");
   while ($.getppid() !== 1) {
     const flags = Number($.CGEventSourceFlagsState(0));
@@ -35,7 +39,8 @@ function run(argv) {
         down = true;
         chord = false;
         sent = current;
-        console.log("down " + $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier + " " + current);
+        $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));
+        console.log("down " + workspace.frontmostApplication.processIdentifier + " " + current);
       } else if (current !== sent) {
         sent = current;
         console.log("modifiers " + current);
