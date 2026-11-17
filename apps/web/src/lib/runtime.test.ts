@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Effect from "effect/Effect";
 import * as Tracer from "effect/Tracer";
+// vi.resetModules keeps node_modules loaded. Loading them here keeps that one-time cost, which
+// outlasted the test timeout on a loaded CI host, out of the first test.
+import "./runtime";
 
 afterEach(() => {
   vi.unstubAllEnvs();

@@ -1,10 +1,11 @@
 import { vi } from "vite-plus/test";
 
-// The fork's CI runs browser tests on aarch64 hosts, where heavy file previews outlast
-// `vi.waitFor`'s one-second default. Vitest has no setting for it (patches/nixos-ci-portability.md).
+// Vitest's one-second `vi.waitFor` default fails heavy file previews on loaded Calder workers long
+// before the 30 s browser test timeout. Waiting until just under it keeps the assertion message.
+// Vitest has no setting for the default (patches/nixos-ci-portability.md).
 const waitFor = vi.waitFor;
 vi.waitFor = ((callback, options) =>
   waitFor(
     callback,
-    typeof options === "number" ? options : { timeout: 5_000, ...options },
+    typeof options === "number" ? options : { timeout: 25_000, ...options },
   )) as typeof vi.waitFor;
