@@ -1303,6 +1303,97 @@ it.effect("wakes the run whose subagent lost its shell, past a wake cut before i
   }).pipe(Effect.provide(layerRecoveryTest)),
 );
 
+it.effect(
+  "wakes a delegated child's settled run, not its parent, when its awaited shell dies",
+  () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const recovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      // Sorts before the child, so recovery reaches the parent first: the order that lost the note.
+      const parentId = yield* createThread("a-delegating-parent");
+      const childId = yield* createThread("b-delegated-child", {
+        lineage: {
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+          rootThreadId: parentId,
+        },
+      });
+      const providerThreadId = ProviderThreadId.make(`provider-thread:${childId}`);
+      const providerSessionId = ProviderSessionId.make(`session:${childId}`);
+      yield* projections.apply({
+        id: EventId.make(`event:${childId}:session`),
+        type: "provider-session.attached",
+        threadId: childId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: providerSessionId,
+          driver,
+          providerInstanceId,
+          status: "ready",
+          cwd: "/workspace",
+          model: modelSelection.model,
+          capabilities: CodexProviderCapabilitiesV2,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+      });
+      const settledRun = yield* createRun(childId, "completed", { providerThreadId });
+      yield* projections.apply({
+        id: EventId.make(`event:${childId}:roster`),
+        type: "provider-thread.updated",
+        threadId: childId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: providerThreadId,
+          appThreadId: childId,
+          ownerNodeId: null,
+          driver,
+          providerInstanceId,
+          providerSessionId,
+          nativeThreadRef: { driver, nativeId: "native-child", strength: "strong" },
+          nativeConversationHeadRef: null,
+          status: "idle",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          pendingBackgroundTasks: [
+            { taskId: "ci", description: "until ci ends", kind: "command", awaited: true },
+          ],
+        },
+      });
+      // The parent's delegate_task row records the child's provider thread.
+      yield* sql`
+      INSERT INTO orchestration_v2_projection_subagents
+        (subagent_id, thread_id, parent_node_id, provider, provider_thread_id, child_thread_id,
+         origin, status, updated_at, payload_json)
+      VALUES ('node:delegated-task:child', ${parentId}, 'node:parent', 'codex', ${providerThreadId},
+        ${childId}, 'app_owned', 'completed', '', '{}')
+    `;
+
+      yield* recovery.reconcile("startup");
+
+      const effects = yield* sql<{ readonly effect_id: string }>`
+      SELECT effect_id FROM orchestration_v2_effect_outbox
+      WHERE effect_id LIKE 'effect:restart-continuation:%'
+    `;
+      assert.deepEqual(effects, [{ effect_id: `effect:restart-continuation:${settledRun}` }]);
+      const child = yield* projections.getThreadProjection(childId);
+      assert.deepEqual(child.runs[0]?.restartCancelledBackgroundWork, [
+        { kind: "shell", label: "until ci ends (id ci)", id: "ci", awaited: true },
+      ]);
+    }).pipe(Effect.provide(layerRecoveryTest)),
+);
+
 it.effect("wakes a settled run whose native subagent ran on its own provider thread", () =>
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
