@@ -44,9 +44,10 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   workflow steps start with `--noprofile --norc`. Node connects a child's stdio through sockets, so NixOS's
   bash takes itself for an SSH session, sources `/etc/bashrc` and resets PATH to the system profile, which
   lacks the CI shell's `jq`.
-- `apps/web/test/browserWaitFor.ts` (a browser-project setup file): `vi.waitFor` waits five seconds by
-  default instead of one. Calder's aarch64 workers take longer than that to parse and lay out heavy file
-  previews (a 2,000-output notebook, ODS, RTF, fonts), and Vitest has no setting for the default.
+- `apps/web/test/browserWaitFor.ts` (a browser-project setup file): `vi.waitFor` waits up to 25 seconds by
+  default instead of one, just under the 30-second browser test timeout. Loaded Calder workers took over
+  ten seconds to parse and lay out heavy file previews (a 2,000-output notebook, XLSX, ODS, RTF, fonts),
+  and Vitest has no setting for the default.
 
 ## Removing it
 
