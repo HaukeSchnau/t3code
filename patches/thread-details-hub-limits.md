@@ -23,6 +23,12 @@ every subscription's room at a glance without opening Usage.
 - Below the selected provider, the row lists every other driver on the environment that has
   readable limits, from its own login or a hub, pooled like Usage → Limits. Those groups always
   carry a caption with the provider's name, and the selected provider's group does once any follow.
+- Each row projects its window at the pace it shows so far, until every account has refilled once,
+  and answers two questions: does the pool run dry before a refill lands, and does an account reset
+  with room left? The bar is solid for room the pace uses, dashed for room that resets unused, and
+  amber for room it is short, with a notch at what the pace needs. The tooltip says when it runs
+  out, what resets unused, and how much faster or slower stays covered. Claude's model-scoped
+  weeklies, such as Fable's, get no projection; Hauke doesn't plan around them.
 
 ## Implementation
 
@@ -31,9 +37,17 @@ fork-owned. `ThreadDetailsUsage.tsx` renders their windows as `PoolRow`s under `
 and `ChatView.tsx` passes the environment id in the panel's `usage` input. `CodexProvider.ts` takes `model_provider` from the
 `config/read` call it already makes for the service tier.
 
+`projectLimitWindows` and `projectionPaces` in `packages/shared/src/usageLimits.ts` are fork-owned.
+They spend a pool the way infra's claude-pool priorities route it
+(`~/infra/modules/features/claude-pool/priorities.py`): within a day of its weekly reset an account
+takes every new session, otherwise the one with the most room per hour does. Change both together.
+Codex accounts on the hub keep CLIProxyAPI's round robin, so a Codex pool can waste more than the
+projection shows.
+
 ## Removal
 
-Drop the hub fallback when upstream's thread details usage row falls back to hub accounts, and the
-other providers' groups when upstream's row lists every provider. Upstream tracks the bug in
+Drop the hub fallback when upstream's thread details usage row falls back to hub accounts, the
+other providers' groups when upstream's row lists every provider, and the projection when upstream
+draws one. Upstream tracks the bug in
 pingdotgg/t3code#30990, and pingdotgg/t3code#30634 pools the hub accounts the same way. Neither covers Codex's leftover login; that part stays until upstream checks Codex's model
 provider before reading limits.

@@ -56,7 +56,7 @@ function accountHue(email: string): number {
   return Math.abs(hash) % 360;
 }
 
-function AccountChip({ email }: { readonly email: string }) {
+export function AccountChip({ email }: { readonly email: string }) {
   const hue = accountHue(email);
   return (
     <span
