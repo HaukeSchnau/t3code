@@ -101,7 +101,6 @@ import {
   ThreadId,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
-  SKILL_PACK_WS_METHODS,
   FOLLOW_UP_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
@@ -131,7 +130,6 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
-import * as SkillPacks from "./skills/SkillPacks.ts";
 import * as FollowUps from "./followUps/FollowUps.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
@@ -686,9 +684,6 @@ const ServerUpstreamWsRpcGroup = ServerWsRpcGroup.omit(
   WS_METHODS.agentAwarenessUnregisterDevice,
   WS_METHODS.agentAwarenessRegisterLiveActivity,
   WS_METHODS.agentAwarenessGetSnapshot,
-  SKILL_PACK_WS_METHODS.subscribe,
-  SKILL_PACK_WS_METHODS.setThreadPacks,
-  SKILL_PACK_WS_METHODS.setProjectDefault,
   FOLLOW_UP_WS_METHODS.subscribe,
   FOLLOW_UP_WS_METHODS.save,
   FOLLOW_UP_WS_METHODS.history,
@@ -701,7 +696,6 @@ const ServerUpstreamWsRpcGroup = ServerWsRpcGroup.omit(
 const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
   Effect.gen(function* () {
     const localAgentAwareness = yield* LocalAgentAwareness.LocalAgentAwareness;
-    const skillPacks = yield* SkillPacks.SkillPacks;
     const jjWorkflow = yield* JjWorkflow.JjWorkflow;
     const jjTurns = yield* JjTurnService.JjTurnService;
     const jjThreadWork = yield* JjThreadWork.JjThreadWork;
@@ -714,9 +708,6 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
       [WS_METHODS.agentAwarenessRegisterLiveActivity]: (input) =>
         localAgentAwareness.registerLiveActivity(input),
       [WS_METHODS.agentAwarenessGetSnapshot]: () => localAgentAwareness.getSnapshot,
-      [SKILL_PACK_WS_METHODS.subscribe]: (input) => skillPacks.subscribe(input),
-      [SKILL_PACK_WS_METHODS.setThreadPacks]: (input) => skillPacks.setThreadPacks(input),
-      [SKILL_PACK_WS_METHODS.setProjectDefault]: (input) => skillPacks.setProjectDefault(input),
       [FOLLOW_UP_WS_METHODS.subscribe]: (input) => followUps.subscribe(input),
       [FOLLOW_UP_WS_METHODS.save]: (input) => followUps.save(input, { kind: "user", thread: null }),
       [FOLLOW_UP_WS_METHODS.history]: (input) =>
@@ -1514,7 +1505,6 @@ export const layerWsRpc = (
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
-      const skillPacks = yield* SkillPacks.SkillPacks;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2039,7 +2029,6 @@ export const layerWsRpc = (
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
           },
           settings,
-          ...(skillPacks.catalog === null ? {} : { skillPackCatalog: skillPacks.catalog }),
           followUpHome: config.followUpHome ?? environment.environmentId,
           ...(serverSettings.managedPolicy === undefined
             ? {}

@@ -95,6 +95,8 @@ export interface CodexAppServerProviderSnapshot {
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel> | undefined;
   readonly serviceTier?: string | undefined;
+  readonly modelProvider?: string | undefined;
+  readonly configReadFailed?: boolean;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
 }
 
@@ -555,7 +557,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   // Optional discovery must finish before the outer timeout can discard the account result.
   const deadlineMs = spawnedAtMs + CODEX_AUTH_PROBE_TIMEOUT_MS - CODEX_DISCOVERY_MARGIN_MS;
-  const [skillsResponse, models, serviceTier, rateLimits] = yield* Effect.all(
+  const [skillsResponse, models, config, rateLimits] = yield* Effect.all(
     [
       withCodexDiscoveryDeadline(client.request("skills/list", { cwds: [input.cwd] }), deadlineMs),
       accountResponse.account?.type === "chatgpt"
@@ -572,8 +574,16 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         deadlineMs,
         CODEX_CONFIG_PROBE_TIMEOUT_MS,
       ).pipe(
-        Effect.map((response) => response?.config.service_tier ?? undefined),
-        Effect.catch(() => Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined))),
+        Effect.map((response) => ({
+          serviceTier: response?.config.service_tier ?? undefined,
+          modelProvider: response?.config.model_provider ?? undefined,
+          failed: response === undefined,
+        })),
+        Effect.catch(() =>
+          Effect.logDebug("Codex config read failed.").pipe(
+            Effect.as({ serviceTier: undefined, modelProvider: undefined, failed: true }),
+          ),
+        ),
       ),
       // Usage is an enrichment: a failure or a slow answer degrades to "no
       // usage this probe" rather than costing the account and models.
@@ -609,7 +619,9 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     ...(rateLimits ? { rateLimits } : {}),
     version,
     models,
-    serviceTier,
+    serviceTier: config.serviceTier,
+    modelProvider: config.modelProvider,
+    ...(config.failed ? { configReadFailed: true } : {}),
     skills: skillsResponse ? parseCodexSkillsListResponse(skillsResponse, input.cwd) : [],
   } satisfies CodexAppServerProviderSnapshot;
 });
@@ -832,11 +844,15 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   if (Option.isNone(probeResult.success)) {
     // A slow probe says nothing about Codex itself, so keep showing the last
-    // ready snapshot. Marking usage as failed keeps the published limits.
+    // ready snapshot. Marking usage as failed keeps the published limits; an
+    // unsupported reading stays, or direct quota reads would read a leftover login.
     if (lastReady) {
       return {
         ...lastReady,
-        usageLimits: makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
+        usageLimits:
+          lastReady.usageLimits?.unavailable?.reason === "unsupported"
+            ? lastReady.usageLimits
+            : makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
       };
     }
     return buildServerProvider({
@@ -859,8 +875,14 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const accountStatus = managedAuth
     ? { status: "ready" as const, auth: managedAuth, message: undefined }
     : accountProbeStatus(snapshot);
+  // A ChatGPT login left in auth.json still answers usage reads after config routes Codex elsewhere.
+  // A failed config read keeps the routing the last probe saw, since direct quota reads skip only
+  // `unsupported` and would otherwise publish that login's limits.
+  const sendsElsewhere = snapshot.configReadFailed
+    ? lastReady?.usageLimits?.unavailable?.reason === "unsupported"
+    : snapshot.modelProvider !== undefined && snapshot.modelProvider !== "openai";
   const usageLimits =
-    snapshot.account.account?.type === "apiKey"
+    snapshot.account.account?.type === "apiKey" || sendsElsewhere
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
       : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
         ? makeUnavailableUsageLimits({

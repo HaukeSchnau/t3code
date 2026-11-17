@@ -12,7 +12,6 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
-  SkillPackId,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
@@ -408,8 +407,6 @@ export interface ComposerDraft {
   /** `/clear` armed this draft: its next message starts a fresh provider session. */
   readonly freshContext?: boolean;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
-  /** A new task's skill packs (patches/skill-packs.md); absent follows the project default. */
-  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   readonly project?: ComposerDraftProject;
 }
 
@@ -448,7 +445,6 @@ export type ComposerDraftSettingsUpdate = Pick<
   | "freshContext"
   | "workspaceSelection"
   | "project"
-  | "skillPackIds"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
@@ -482,7 +478,6 @@ const ComposerDraftSchema = Schema.Struct({
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   freshContext: Schema.optional(Schema.Boolean),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
-  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   project: Schema.optional(ComposerDraftProjectSchema),
 });
 

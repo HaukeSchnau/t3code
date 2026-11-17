@@ -95,8 +95,10 @@ import type { Pluggable, PluggableList } from "unified";
 import { defaultUrlTransform } from "react-markdown";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
+import { parseFollowUpLinkHref } from "@t3tools/shared/followUpLinks";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { MarkdownFollowUpLink } from "./chat/MarkdownFollowUpLink";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import { mathKind } from "@t3tools/shared/markdownMath";
 import remarkMath from "remark-math";
@@ -418,6 +420,7 @@ function markdownUrlTransform(href: string) {
   if (parseAssistantCitationHref(href)) return href;
   if (parseComposerContextHref(href)) return href;
   if (parseThreadLinkHref(href)) return href;
+  if (parseFollowUpLinkHref(href)) return href;
   if (isWindowsDrivePathHref(href)) return href;
   if (isLocalEditorFileHref(href)) return href;
   return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
@@ -1134,6 +1137,16 @@ const CHAT_MARKDOWN_COMPONENTS = {
         <MarkdownThreadLink environmentId={environmentId} link={threadLink} label={label} />
       ) : (
         <span>{label ?? "Thread"}</span>
+      );
+    }
+    const followUpLink = href ? parseFollowUpLinkHref(href) : null;
+    if (followUpLink) {
+      const written = hastPlainTextDeep(node);
+      return (
+        <MarkdownFollowUpLink
+          link={followUpLink}
+          label={written && parseFollowUpLinkHref(written) === null ? written : null}
+        />
       );
     }
     const contextReference = href ? parseComposerContextHref(href) : null;

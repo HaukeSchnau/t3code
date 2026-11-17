@@ -100,11 +100,6 @@ import {
 } from "./agentAwareness.ts";
 import { WsFollowUpsHistoryRpc, WsFollowUpsSaveRpc, WsFollowUpsSubscribeRpc } from "./followUps.ts";
 import {
-  WsSkillPacksSetProjectDefaultRpc,
-  WsSkillPacksSetThreadPacksRpc,
-  WsSkillPacksSubscribeRpc,
-} from "./skillPacks.ts";
-import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -2191,9 +2186,6 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsAgentAwarenessUnregisterDeviceRpc,
   WsAgentAwarenessRegisterLiveActivityRpc,
   WsAgentAwarenessGetSnapshotRpc,
-  WsSkillPacksSubscribeRpc,
-  WsSkillPacksSetThreadPacksRpc,
-  WsSkillPacksSetProjectDefaultRpc,
   WsFollowUpsSubscribeRpc,
   WsFollowUpsSaveRpc,
   WsFollowUpsHistoryRpc,

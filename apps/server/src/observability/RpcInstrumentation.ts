@@ -1,6 +1,5 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
-  SKILL_PACK_WS_METHODS,
   FOLLOW_UP_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
@@ -45,9 +44,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.agentAwarenessUnregisterDevice]: "agentAwareness",
   [WS_METHODS.agentAwarenessRegisterLiveActivity]: "agentAwareness",
   [WS_METHODS.agentAwarenessGetSnapshot]: "agentAwareness",
-  [SKILL_PACK_WS_METHODS.subscribe]: "skillPacks",
-  [SKILL_PACK_WS_METHODS.setThreadPacks]: "skillPacks",
-  [SKILL_PACK_WS_METHODS.setProjectDefault]: "skillPacks",
   [FOLLOW_UP_WS_METHODS.subscribe]: "followUps",
   [FOLLOW_UP_WS_METHODS.save]: "followUps",
   [FOLLOW_UP_WS_METHODS.history]: "followUps",

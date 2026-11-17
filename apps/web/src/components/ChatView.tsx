@@ -278,7 +278,6 @@ import {
 } from "../state/entities";
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
-import { ComposerSkillPacksControl } from "./chat/SkillPacksControl";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialogHost, openExpandedImagePreview } from "./chat/ExpandedImageDialog";
 import {
@@ -1370,18 +1369,6 @@ export default function ChatView(props: ChatViewProps) {
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
-  const renderSkillPacksControl = (input: { size: "sm" | "xs"; hidden: boolean }) =>
-    activeProject && activeThreadId ? (
-      <ComposerSkillPacksControl
-        environmentId={activeProject.environmentId}
-        projectId={activeProject.id}
-        threadId={activeThreadId}
-        isServerThread={isServerThread}
-        providerDriver={selectedProvider ?? null}
-        size={input.size}
-        hidden={input.hidden}
-      />
-    ) : null;
   const conversationProviderStatus =
     providerStatuses.find((status) => status.instanceId === activeRuntime?.providerInstanceId) ??
     activeProviderStatus;
@@ -3716,9 +3703,6 @@ export default function ChatView(props: ChatViewProps) {
                               <ChatComposer
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
-                                {...(serverConfig?.skillPackCatalog && activeProject
-                                  ? { renderSkillPacksControl }
-                                  : {})}
                                 multipleModelSelections={multipleModelSelections}
                                 supportsMultipleModels={
                                   serverConfig?.environment.capabilities
