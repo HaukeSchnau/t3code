@@ -15,6 +15,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
+  createFnPressRunner,
   reduceFnDictation,
   type FnDictationAction,
   type FnDictationPress,
@@ -140,17 +141,27 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
       return { draft: context?.draft ?? null, targetApp: context?.app ?? null };
     },
     onCommandFailure: (message) => {
-      if (sessionRef.current) sessionRef.current.failure = message;
+      const session = sessionRef.current;
+      if (session?.started) {
+        session.failure = message;
+        return;
+      }
+      // The command never started recording, so no phase change will show the message.
+      sessionRef.current = null;
+      showPill(notice(message, "error"));
     },
   });
   const phase = speech.state.phase;
   const isHeadlessBusy = useStableCallback(() => phase !== "idle" && phase !== "error");
 
+  const [presses] = useState(createFnPressRunner);
   const run = useStableCallback((action: FnDictationAction) => {
     if (action.type === "start" && action.press.route === "composer") {
       const owner = readDictationShortcutOwner();
       if (!owner || owner.disabled || !owner.speech.available) return;
-      void owner.speech.start(
+      presses.start(
+        "composer",
+        owner.speech,
         action.press.gesture === "command" ? { intent: "command" } : undefined,
       );
       return;
@@ -163,23 +174,30 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
       }
       sessionRef.current = { ...press, context: null, started: false, failure: null };
       setGesture(press.gesture);
-      void speech.start(press.gesture === "command" ? { intent: "command" } : undefined);
+      presses.start(
+        "headless",
+        speech,
+        press.gesture === "command" ? { intent: "command" } : undefined,
+      );
+      return;
+    }
+    const fallback =
+      action.route === "composer" ? (readDictationShortcutOwner()?.speech ?? null) : speech;
+    if (action.type === "stop") {
+      void presses.stop(action.route, fallback);
+      return;
+    }
+    if (action.type === "cancel") {
+      presses.cancel(action.route, fallback);
+      if (action.route === "headless") {
+        sessionRef.current = null;
+        showPill(null);
+      }
       return;
     }
     if (action.route === "composer") {
-      const owner = readDictationShortcutOwner();
-      if (action.type === "stop") void owner?.speech.stop();
-      else if (action.type === "cancel") owner?.speech.cancel();
-      else if (action.type === "retarget" && action.gesture === "command")
-        owner?.speech.retarget?.("command");
-      return;
-    }
-    if (action.type === "stop") void speech.stop();
-    else if (action.type === "cancel") {
-      speech.cancel();
-      sessionRef.current = null;
-      showPill(null);
-    } else if (action.type === "retarget" && sessionRef.current) {
+      if (action.gesture === "command") fallback?.retarget?.("command");
+    } else if (sessionRef.current) {
       sessionRef.current.gesture = action.gesture;
       setGesture(action.gesture);
       speech.retarget(action.gesture === "command" ? "command" : "dictate");

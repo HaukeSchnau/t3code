@@ -693,6 +693,11 @@ export function useEnvironmentSpeechInput(input: HookInput) {
       setSetup(INITIAL_SETUP);
       controllerRef.current?.cancel();
     }),
-    skipPostProcessing: useStableCallback(() => controllerRef.current?.skipPostProcessing()),
+    // A command's raw transcript is the instruction itself, so skipping its cleanup discards it.
+    skipPostProcessing: useStableCallback(() =>
+      intentRef.current === "command"
+        ? controllerRef.current?.cancel()
+        : controllerRef.current?.skipPostProcessing(),
+    ),
   };
 }

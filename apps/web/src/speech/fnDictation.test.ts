@@ -1,7 +1,12 @@
 import type { DesktopDictationEvent, VoiceShortcutMode } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { reduceFnDictation, type FnDictationAction, type FnDictationPress } from "./fnDictation";
+import {
+  createFnPressRunner,
+  reduceFnDictation,
+  type FnDictationAction,
+  type FnDictationPress,
+} from "./fnDictation";
 
 function run(
   mode: VoiceShortcutMode,
@@ -82,5 +87,59 @@ describe("reduceFnDictation", () => {
         { event: { type: "gesture", pressId: 1, gesture: "command" } },
       ]),
     ).toEqual(["start:composer", "retarget:composer"]);
+  });
+});
+
+function preparingSpeech() {
+  const calls: string[] = [];
+  let beginRecording = () => {};
+  const speech = {
+    start: () => {
+      calls.push("start");
+      return new Promise<void>((resolve) => {
+        beginRecording = resolve;
+      });
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    cancel: () => {
+      calls.push("cancel");
+    },
+  };
+  return { speech, calls, beginRecording: () => beginRecording() };
+}
+
+describe("createFnPressRunner", () => {
+  it("stops a press released while preparing once it records", async () => {
+    const runner = createFnPressRunner();
+    const { speech, calls, beginRecording } = preparingSpeech();
+    runner.start("headless", speech);
+    const stopped = runner.stop("headless", null);
+    expect(calls).toEqual(["start"]);
+    beginRecording();
+    await stopped;
+    expect(calls).toEqual(["start", "stop"]);
+  });
+
+  it("drops that stop when the press is cancelled first", async () => {
+    const runner = createFnPressRunner();
+    const { speech, calls, beginRecording } = preparingSpeech();
+    runner.start("composer", speech);
+    const stopped = runner.stop("composer", null);
+    runner.cancel("composer", null);
+    beginRecording();
+    await stopped;
+    expect(calls).toEqual(["start", "cancel"]);
+  });
+
+  it("stops a recording another route started through the fallback", async () => {
+    const runner = createFnPressRunner();
+    const started = preparingSpeech();
+    const other = preparingSpeech();
+    runner.start("headless", started.speech);
+    await runner.stop("composer", other.speech);
+    expect(other.calls).toEqual(["stop"]);
+    expect(started.calls).toEqual(["start"]);
   });
 });

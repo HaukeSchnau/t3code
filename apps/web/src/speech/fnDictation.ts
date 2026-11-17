@@ -1,6 +1,7 @@
 import type {
   DesktopDictationEvent,
   DesktopDictationGesture,
+  SpeechPostProcessingIntent,
   VoiceShortcutMode,
 } from "@t3tools/contracts";
 
@@ -75,4 +76,46 @@ export function reduceFnDictation(
     case "pill-click":
       return { active, action: null };
   }
+}
+
+type PressSpeech = {
+  start(options?: { readonly intent?: SpeechPostProcessingIntent }): Promise<void>;
+  stop(): Promise<void>;
+  cancel(): void;
+};
+
+/**
+ * Remembers the recorder a press started. A stop that arrives while it is still preparing waits
+ * for recording to begin, since stopping before then does nothing; a cancel drops that stop.
+ */
+export function createFnPressRunner() {
+  let current: {
+    readonly route: FnDictationRoute;
+    readonly speech: PressSpeech;
+    readonly starting: Promise<void>;
+  } | null = null;
+  return {
+    start(
+      route: FnDictationRoute,
+      speech: PressSpeech,
+      options?: { readonly intent?: SpeechPostProcessingIntent },
+    ) {
+      current = { route, speech, starting: speech.start(options) };
+    },
+    /** Stops this route's started press, or `fallback` for a recording started elsewhere. */
+    stop(route: FnDictationRoute, fallback: PressSpeech | null): Promise<void> {
+      const press = current;
+      if (press?.route !== route) return fallback?.stop() ?? Promise.resolve();
+      return press.starting.then(() => {
+        if (current !== press) return;
+        current = null;
+        return press.speech.stop();
+      });
+    },
+    cancel(route: FnDictationRoute, fallback: PressSpeech | null) {
+      const press = current?.route === route ? current : null;
+      current = null;
+      (press?.speech ?? fallback)?.cancel();
+    },
+  };
 }
