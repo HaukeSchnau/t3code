@@ -339,8 +339,6 @@ export interface ChatComposerHandle {
 }
 
 export interface ChatComposerProps {
-  /** The Skills control, first among the resting blocks (patches/skill-packs.md). */
-  renderSkillPacksControl?: (input: { size: "sm" | "xs"; hidden: boolean }) => React.ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
@@ -2410,7 +2408,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : expandedControlsIconOnlyBlockCount;
   const composerControls = (
     <ComposerControlsBar
-      renderSkillPacksControl={props.renderSkillPacksControl}
       environmentId={environmentId}
       routeKind={routeKind}
       routeThreadRef={routeThreadRef}

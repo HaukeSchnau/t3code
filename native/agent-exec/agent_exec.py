@@ -587,10 +587,8 @@ def launch(record, cwd, command, *, project=None):
                 )
                 + "\n",
             )
-    # T3 materializes selected skills outside the checkout. Expose only that generated catalog.
     t3_home = Path(os.environ.get("T3CODE_HOME", str(host_home / ".t3")))
-    for name in ["userdata/skill-scopes", "userdata/attachments"]:
-        bind(args, t3_home / name)
+    bind(args, t3_home / "userdata/attachments")
 
     bin_dir = state / "bin"
     bin_dir.mkdir(exist_ok=True)

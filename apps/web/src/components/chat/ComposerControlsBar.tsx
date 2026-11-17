@@ -40,7 +40,6 @@ import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
 const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-foreground";
 
 export function ComposerControlsBar(props: {
-  renderSkillPacksControl: ChatComposerProps["renderSkillPacksControl"];
   environmentId: EnvironmentId;
   routeKind: ChatComposerProps["routeKind"];
   routeThreadRef: ChatComposerProps["routeThreadRef"];
@@ -88,7 +87,6 @@ export function ComposerControlsBar(props: {
   getModelDisabledReason: ChatComposerProps["getModelDisabledReason"];
 }) {
   const {
-    renderSkillPacksControl,
     environmentId,
     routeKind,
     routeThreadRef,
@@ -161,10 +159,6 @@ export function ComposerControlsBar(props: {
     reportedModelSelection,
     promptUltrathink,
     onPromptEdit,
-  });
-  const skillPacksControl = renderSkillPacksControl?.({
-    size: controlSize,
-    hidden: composerControlsHidden,
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
   const restingBlockDefs = showModeBlock
@@ -267,11 +261,6 @@ export function ComposerControlsBar(props: {
   ) : (
     <>
       {composerModelPicker}
-      {skillPacksControl ? (
-        <div data-composer-skill-packs className="flex w-max min-w-max shrink-0 items-center">
-          {skillPacksControl}
-        </div>
-      ) : null}
 
       <>
         {restingBlockDefs.map((def, index) => {

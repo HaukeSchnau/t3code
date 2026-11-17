@@ -5,7 +5,6 @@ import {
   type EnvironmentId,
   type ClientGuardedRpcTag,
   ORCHESTRATION_V2_WS_METHODS,
-  SKILL_PACK_WS_METHODS,
   FOLLOW_UP_WS_METHODS,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -66,7 +65,6 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.serverGetStorageCleanupReport
   | typeof WS_METHODS.serverGetDatabaseStorage
-  | typeof SKILL_PACK_WS_METHODS.subscribe
   | typeof FOLLOW_UP_WS_METHODS.subscribe
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents

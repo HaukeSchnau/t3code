@@ -11,7 +11,6 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
-  SkillPackId,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -189,9 +188,6 @@ type NewTaskFlowContextValue = {
   readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
   readonly selectBranch: (branch: VcsRef) => void;
   readonly setStartFromOrigin: (value: boolean) => void;
-  /** Fork: draft skill packs; undefined follows the project default (patches/skill-packs.md). */
-  readonly skillPackIds: ReadonlyArray<SkillPackId> | undefined;
-  readonly setSkillPackIds: (value: ReadonlyArray<SkillPackId> | undefined) => void;
   readonly buildPendingTaskMessage: (
     metadata: TurnCommandMetadata,
     options?: {
@@ -488,12 +484,6 @@ export function NewTaskFlowProvider(
     selectedEnvironmentServerConfig?.providers.find(
       (provider) => provider.instanceId === selectedModel?.instanceId,
     ) ?? null;
-  const skillPackIds = selectedProjectDraft.skillPackIds;
-  const setSkillPackIds = (value: ReadonlyArray<SkillPackId> | undefined) => {
-    if (selectedProjectDraftKey) {
-      updateComposerDraftSettings(selectedProjectDraftKey, { skillPackIds: value });
-    }
-  };
   const setSelectedModelKey = (
     key: string | null,
     options?: ReadonlyArray<ProviderOptionSelection>,
@@ -773,7 +763,6 @@ export function NewTaskFlowProvider(
           ? { startFromOrigin: true }
           : {}),
         ...(mode === "worktree" ? managedWorkspaceCreation(managedWorkspaces) : {}),
-        ...(draft.skillPackIds ? { skillPackIds: draft.skillPackIds } : {}),
       },
       createdAt: metadata.createdAt,
     };
@@ -864,7 +853,6 @@ export function NewTaskFlowProvider(
     availableBranches,
     currentCheckoutBranchName,
     runtimeMode,
-    skillPackIds,
     expandedProvider,
     environments,
     selectedProject,
@@ -886,7 +874,6 @@ export function NewTaskFlowProvider(
     setWorkspaceMode,
     selectBranch,
     setStartFromOrigin,
-    setSkillPackIds,
     buildPendingTaskMessage,
     setPrompt,
     replaceAttachments,

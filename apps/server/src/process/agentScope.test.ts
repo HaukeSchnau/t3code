@@ -94,7 +94,7 @@ const withFakeSystemd = <A, E>(
 ) =>
   Effect.gen(function* () {
     const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-agent-scope-"));
-    for (const name of ["systemd-run", "systemctl", "agent"]) {
+    for (const name of ["systemd-run", "systemctl", "getfattr", "agent"]) {
       NodeFS.writeFileSync(NodePath.join(bin, name), "", { mode: 0o755 });
     }
     const cgroupRoot = NodePath.join(bin, "cgroup");
@@ -111,9 +111,18 @@ const withFakeSystemd = <A, E>(
       stderrInvalidUtf8: false,
     });
     const runner = ProcessRunner.ProcessRunner.of({
-      run: ({ args }) =>
+      run: ({ command, args }) =>
         Effect.sync(() => {
           calls.push(args);
+          if (command.endsWith("/getfattr")) {
+            const xattr = NodePath.join(
+              String(args.at(-1)).replace("/sys/fs/cgroup", cgroupRoot),
+              String(args.at(-2)),
+            );
+            return NodeFS.existsSync(xattr)
+              ? output(NodeFS.readFileSync(xattr, "utf8"))
+              : output("", 1);
+          }
           if (!oomPolicy && args.some((arg) => arg.startsWith("--property=OOMPolicy="))) {
             return output("", 1);
           }
@@ -176,7 +185,15 @@ const exitedAgent = (
   units: Map<string, FakeUnit>,
   cgroupRoot: string,
   unit: string,
-  { populated, oomKills }: { readonly populated: boolean; readonly oomKills: number | undefined },
+  {
+    populated,
+    oomKills,
+    oomdKills,
+  }: {
+    readonly populated: boolean;
+    readonly oomKills: number | undefined;
+    readonly oomdKills?: number;
+  },
 ) => {
   const controlGroup = `/${unit}`;
   NodeFS.mkdirSync(NodePath.join(cgroupRoot, controlGroup), { recursive: true });
@@ -190,6 +207,10 @@ const exitedAgent = (
       NodePath.join(cgroupRoot, controlGroup, "memory.events"),
       `low 0\nhigh 0\nmax 0\noom ${oomKills}\noom_kill ${oomKills}\noom_group_kill 0\n`,
     );
+  }
+  // The fake getfattr reads an xattr from a file of the same name.
+  if (oomdKills !== undefined) {
+    NodeFS.writeFileSync(NodePath.join(cgroupRoot, controlGroup, "user.oomd_ooms"), `${oomdKills}`);
   }
   units.set(unit, { activeState: "active", result: "success", controlGroup });
 };
@@ -457,6 +478,30 @@ describe("AgentScope service", () => {
         exitedAgent(units, cgroupRoot, unit, { populated: false, oomKills: 2 });
         units.get(unit)!.activeState = "inactive";
         expect(yield* scope.oomKilled("a")).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("reports a scope systemd-oomd killed, though the kernel counted no OOM kill", () =>
+    withFakeSystemd(({ scope, units, calls, cgroupRoot }) =>
+      Effect.gen(function* () {
+        // oomd marks the cgroup before it kills it; systemd notices only once the cgroup empties.
+        const first = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+        exitedAgent(units, cgroupRoot, unitOf(first), {
+          populated: true,
+          oomKills: 0,
+          oomdKills: 1,
+        });
+        expect(yield* scope.oomKilled("a")).toBe(true);
+
+        const second = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "b" });
+        const unit = unitOf(second);
+        exitedAgent(units, cgroupRoot, unit, { populated: true, oomKills: 0, oomdKills: 1 });
+        yield* scope.stop(unit);
+        expect(stopsOf(calls)).toEqual([]);
+        units.delete(unit);
+        NodeFS.rmSync(NodePath.join(cgroupRoot, unit), { recursive: true });
+        expect(yield* scope.oomKilled("b")).toBe(true);
       }),
     ),
   );
