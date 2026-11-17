@@ -1,13 +1,15 @@
 import {
   EnvironmentId,
   ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { hubPoolFor } from "./ThreadDetailsUsage.logic";
+import { hubPoolFor, otherDriverPools } from "./ThreadDetailsUsage.logic";
 
 const now = Date.parse("2026-10-06T12:00:00Z");
 const checkedAt = "2026-10-06T11:59:00.000Z";
@@ -68,5 +70,44 @@ describe("hubPoolFor", () => {
       hubPoolFor(environmentId, claude, { checkedAt, windows: [session(10)] }, hub, now),
     ).toBeNull();
     expect(hubPoolFor(environmentId, claude, apiKey, [], now)).toBeNull();
+  });
+});
+
+describe("otherDriverPools", () => {
+  const provider = (driver: string, usageLimits: ServerProviderUsageLimits): ServerProvider => ({
+    instanceId: ProviderInstanceId.make(driver),
+    driver: ProviderDriverKind.make(driver),
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt,
+    models: [],
+    slashCommands: [],
+    skills: [],
+    usageLimits,
+  });
+
+  it("pools every driver but the thread's, from native logins and the hub alike", () => {
+    const providers = [
+      provider("claudeAgent", apiKey),
+      provider("cursor", { checkedAt, windows: [{ ...session(25), id: "autoPercentUsed" }] }),
+      provider("opencode", apiKey),
+    ];
+    const pools = (activeDriver: ProviderDriverKind | null) =>
+      otherDriverPools(environmentId, activeDriver, providers, hub, now).map((pool) => [
+        pool.driver,
+        pool.windows.map((window) => window.remainingPercent),
+      ]);
+    expect(pools(ProviderDriverKind.make("cursor"))).toEqual([
+      ["claudeAgent", [30]],
+      ["codex", [100]],
+    ]);
+    expect(pools(null)).toEqual([
+      ["cursor", [75]],
+      ["claudeAgent", [30]],
+      ["codex", [100]],
+    ]);
   });
 });
