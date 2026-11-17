@@ -54,7 +54,8 @@ describe("ThemeImportDialog", () => {
       </StrictMode>,
     );
 
-    await userEvent.type(page.getByLabelText("Search Open VSX themes"), "night");
+    // One input event: typed keystrokes outlast the search debounce on a loaded host and search "nig".
+    await page.getByLabelText("Search Open VSX themes").fill("night");
 
     await expect.element(page.getByRole("heading", { name: "Nightfall" })).toBeVisible();
     expect(searchOpenVsxThemes).toHaveBeenCalledWith(
