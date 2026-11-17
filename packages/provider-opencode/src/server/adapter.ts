@@ -951,10 +951,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const scope = yield* Effect.scope;
         const cwd = input.runtimePolicy.cwd ?? host.paths.cwd;
         // The environment only reaches a server T3 spawns for this session.
-        const environment = yield* (yield* ProviderThreadEnvironment).forOpenCodeServer(
-          input.threadId,
-          options.environment,
-        );
+        const environment = {
+          ...options.environment,
+          ...(yield* (yield* ProviderThreadEnvironment).forThread(input.threadId)),
+        };
         const connection = yield* runtime.connectToOpenCodeServer({
           binaryPath: options.settings.binaryPath,
           directory: cwd,
