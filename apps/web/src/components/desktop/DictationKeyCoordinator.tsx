@@ -187,7 +187,7 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
       void presses.stop(action.route, fallback);
       return;
     }
-    if (action.type === "cancel") {
+    if (action.type !== "retarget") {
       presses.cancel(action.route, fallback);
       if (action.route === "headless") {
         sessionRef.current = null;
