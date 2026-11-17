@@ -252,9 +252,10 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
 
   const setupOpen = speech.setup.open;
   const closeSetup = speech.setup.setOpen;
+  // Only this coordinator starts its recorder, so open setup always belongs to a press here.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a missing model opens setup this headless recorder cannot show, so the pill points to Voice settings
   useEffect(() => {
-    if (!setupOpen || !sessionRef.current) return;
+    if (!setupOpen) return;
     sessionRef.current = null;
     closeSetup(false);
     showPill(notice("Download a transcription model in T3's Voice settings first.", "error"));

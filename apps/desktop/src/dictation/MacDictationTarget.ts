@@ -14,7 +14,11 @@ ObjC.import("AppKit");
 $.NSApplication.sharedApplication.setActivationPolicy($.NSApplicationActivationPolicyProhibited);
 ObjC.import("CoreGraphics");
 ObjC.import("ApplicationServices");
-function frontPid() { return $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier; }
+// frontmostApplication only updates when the run loop runs, so run it briefly before each read.
+function frontPid() {
+  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.01));
+  return $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+}
 function snapshot(pb) {
   const items = [];
   const all = pb.pasteboardItems;
