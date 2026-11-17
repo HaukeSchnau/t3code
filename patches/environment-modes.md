@@ -19,7 +19,9 @@ personal ones with one shortcut. Upstream has only the per-environment switch.
 - Web and desktop switch modes from the sidebar footer, the command palette, and the shortcut.
   The iPhone shows a mode pill in the thread list filters. Android and the iPad sidebar show a Mode
   submenu in the thread list's filter menu (`home-list-filter-menu.ts`).
-- Switching an environment off does not unregister the phone's push registration, so a
-  switched-off environment that owns the registration still sends notifications.
+- Switching an environment off on the phone, by hand or through a mode, first asks it to forget the
+  device, as removal does, so it stops sending notifications and Live Activity updates. Device
+  registration then considers only switched-on environments, so switching one back on registers
+  the phone with it again ([agent awareness](accountless-direct-agent-awareness.md)).
 
 Remove this when upstream ships grouped environment switching on every client.

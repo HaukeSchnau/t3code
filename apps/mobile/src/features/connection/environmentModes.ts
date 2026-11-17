@@ -2,11 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   activeEnvironmentMode,
   environmentModeLabel,
+  environmentModeTargets,
   type EnvironmentModeSelection,
 } from "@t3tools/client-runtime/connection";
 
 import { environmentCatalog } from "../../connection/catalog";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useForgetAgentAwarenessDevice } from "../agent-awareness/useForgetAgentAwarenessDevice";
 
 const ALL_ID = "all";
 
@@ -15,6 +17,7 @@ export function useEnvironmentModeMenu() {
   const modes = useAtomValue(environmentCatalog.modesValueAtom);
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const applyMode = useAtomCommand(environmentCatalog.applyMode, "environment mode");
+  const forgetAgentAwarenessDevice = useForgetAgentAwarenessDevice();
   const active = activeEnvironmentMode(modes, catalog.entries);
   const selections: EnvironmentModeSelection[] = [...modes.map((mode) => mode.id), null];
   return {
@@ -25,6 +28,13 @@ export function useEnvironmentModeMenu() {
       title: environmentModeLabel(modes, selection),
       state: selection === active ? ("on" as const) : ("off" as const),
     })),
-    select: (id: string) => void applyMode(id === ALL_ID ? null : id),
+    select: async (id: string) => {
+      const selection = id === ALL_ID ? null : id;
+      const switchedOff = [...environmentModeTargets(modes, selection, catalog.entries)].flatMap(
+        ([environmentId, enabled]) => (enabled ? [] : [environmentId]),
+      );
+      await forgetAgentAwarenessDevice(switchedOff);
+      await applyMode(selection);
+    },
   };
 }

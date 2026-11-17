@@ -7,7 +7,10 @@ import { Platform } from "react-native";
 
 import type { AgentAwarenessSnapshot, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
-import { loadPreferences } from "../../persistence/imperative";
+import {
+  loadAgentAwarenessRegistrationRecord,
+  loadPreferences,
+} from "../../persistence/imperative";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import type { AgentAwarenessEnvironmentTransport } from "./remoteRegistration";
 import {
@@ -122,6 +125,10 @@ vi.mock("../../persistence/imperative", () => ({
     registrationRecord.value = value;
     return Promise.resolve();
   }),
+  clearAgentAwarenessRegistrationRecord: vi.fn(() => {
+    registrationRecord.value = null;
+    return Promise.resolve();
+  }),
 }));
 
 function transport(
@@ -179,6 +186,47 @@ describe("accountless agent awareness registration", () => {
       }),
     );
     expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+  });
+
+  it("registers again with an environment that forgot this device", async () => {
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+    await vi.waitFor(() => expect(registrationRecord.value).not.toBeNull());
+
+    await unregisterAgentAwarenessDeviceFromEnvironment(() => Promise.resolve());
+    setAgentAwarenessEnvironmentTransport(null);
+    setAgentAwarenessEnvironmentTransport(environment);
+
+    await vi.waitFor(() => expect(environment.registerDevice).toHaveBeenCalledTimes(2));
+  });
+
+  it("drops a registration still in flight when this device is forgotten", async () => {
+    let finishRecordLoad!: () => void;
+    vi.mocked(loadAgentAwarenessRegistrationRecord).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRecordLoad = () => resolve(null);
+        }),
+    );
+    let rotateToken!: Parameters<typeof Notifications.addPushTokenListener>[0];
+    vi.mocked(Notifications.addPushTokenListener).mockImplementationOnce((listener) => {
+      rotateToken = listener;
+      return { remove: vi.fn() };
+    });
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+    await vi.waitFor(() => expect(loadAgentAwarenessRegistrationRecord).toHaveBeenCalled());
+
+    await unregisterAgentAwarenessDeviceFromEnvironment(() => Promise.resolve());
+    rotateToken({ type: "ios", data: "rotated-token" });
+    finishRecordLoad();
+
+    await vi.waitFor(() =>
+      expect(environment.registerDevice).toHaveBeenCalledWith(
+        expect.objectContaining({ pushToken: "rotated-token" }),
+      ),
+    );
+    expect(environment.registerDevice).toHaveBeenCalledTimes(1);
   });
 
   it("ends Live Activities when the last environment goes away but not on release", async () => {
