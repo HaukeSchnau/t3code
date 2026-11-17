@@ -11,11 +11,9 @@ export type DictationKeyLine =
   | { readonly type: "modifiers"; readonly modifiers: DictationModifiers }
   | { readonly type: "key" | "up" | "escape" };
 
-// Polls hardware state, which needs no Input Monitoring grant. `CGEventSourceSecondsSinceLastEventType`
-// only updates twice a second, so chord keys are found by scanning key state while the trigger is down.
-// Arrow and navigation keys raise the Fn bit together with the keypad bit; such a press is not Fn.
-// NSWorkspace updates frontmostApplication through run-loop notifications, which delay() never
-// delivers, so the app in front is read after running the loop briefly at each press.
+// Hardware state needs no Input Monitoring grant. Chord keys are scanned, since the last-event clock
+// only updates twice a second. Arrow keys raise Fn with the keypad bit. frontmostApplication only
+// updates when the run loop runs, which delay() never does, so each press runs it briefly first.
 const POLLER_SCRIPT = `
 ObjC.import("AppKit");
 $.NSApplication.sharedApplication.setActivationPolicy($.NSApplicationActivationPolicyProhibited);
