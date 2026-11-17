@@ -207,7 +207,8 @@ pick the environments each mode includes.
 Choosing a mode switches on its environments and switches off environments that only other
 modes include. **All environments** switches on everything any mode includes. Environments you
 leave out of every mode keep their own switch. A switched-off environment disconnects and hides
-its threads; its agents keep running on that machine.
+its threads; its agents keep running on that machine. On a phone, a switched-off environment also
+stops sending it notifications until you switch it back on.
 
 Switch modes from the menu at the bottom of the sidebar, from the command palette, or with
 `mod+alt+e`, which cycles through your modes and then **All environments**. On mobile, use the

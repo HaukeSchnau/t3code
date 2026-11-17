@@ -10,6 +10,20 @@ export function commandFailure(result: { readonly cause: Cause.Cause<unknown> })
   return failure instanceof Error ? failure : new Error(String(failure));
 }
 
+/** Switched-on direct environments, in the order registration tries them. */
+export function registrationEnvironmentIds(
+  environments: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly isEnabled: boolean;
+    readonly isRelayManaged: boolean;
+  }>,
+): EnvironmentId[] {
+  return environments
+    .filter((environment) => environment.isEnabled && !environment.isRelayManaged)
+    .map((environment) => environment.environmentId)
+    .sort();
+}
+
 export async function runFirstConfiguredRegistration(
   environmentIds: readonly EnvironmentId[],
   operation: (

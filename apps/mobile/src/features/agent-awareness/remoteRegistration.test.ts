@@ -122,6 +122,10 @@ vi.mock("../../persistence/imperative", () => ({
     registrationRecord.value = value;
     return Promise.resolve();
   }),
+  clearAgentAwarenessRegistrationRecord: vi.fn(() => {
+    registrationRecord.value = null;
+    return Promise.resolve();
+  }),
 }));
 
 function transport(
@@ -179,6 +183,18 @@ describe("accountless agent awareness registration", () => {
       }),
     );
     expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+  });
+
+  it("registers again with an environment that forgot this device", async () => {
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+    await vi.waitFor(() => expect(registrationRecord.value).not.toBeNull());
+
+    await unregisterAgentAwarenessDeviceFromEnvironment(() => Promise.resolve());
+    setAgentAwarenessEnvironmentTransport(null);
+    setAgentAwarenessEnvironmentTransport(environment);
+
+    await vi.waitFor(() => expect(environment.registerDevice).toHaveBeenCalledTimes(2));
   });
 
   it("ends Live Activities when the last environment goes away but not on release", async () => {

@@ -29,6 +29,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import {
+  clearAgentAwarenessRegistrationRecord,
   loadAgentAwarenessDeviceId,
   loadAgentAwarenessRegistrationRecord,
   loadOrCreateAgentAwarenessDeviceId,
@@ -762,6 +763,13 @@ function publishWidget(source: AgentActivityWidgetSource): void {
   });
 }
 
+/** Retries a device registration that has not succeeded, such as one that ran before connecting. */
+export function retryAgentAwarenessRegistration(): void {
+  if (environmentTransport && registrationStatus !== "registered") {
+    enqueueDeviceRegistration({}, "device registration after environment connection failed");
+  }
+}
+
 export function refreshAgentAwarenessRegistration(): Effect.Effect<void, never> {
   return registerDeviceForCurrentEnvironment().pipe(
     Effect.catch((error) =>
@@ -831,6 +839,12 @@ export async function unregisterAgentAwarenessDeviceFromEnvironment(
     if (!deviceId) {
       return;
     }
+    // The skip record would otherwise stop the next registration from reaching this server.
+    yield* Effect.promise(() =>
+      clearAgentAwarenessRegistrationRecord().catch((error: unknown) => {
+        logRegistrationError("clear registration record failed", error);
+      }),
+    );
     yield* Effect.tryPromise({
       try: () => unregister(deviceId),
       catch: (cause) =>
