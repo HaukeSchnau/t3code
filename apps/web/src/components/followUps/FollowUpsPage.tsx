@@ -44,6 +44,8 @@ import { FollowUpGraphView } from "./FollowUpGraphView";
 import { followUpGraphKey, followUpSections, followUpWhenLabel } from "./followUps.logic";
 
 export interface FollowUpsSearch {
+  /** The home environment that keeps `id`; a follow-up link names it. */
+  readonly home?: string;
   readonly id?: string;
   readonly closed?: true;
   readonly view?: "graph";
@@ -256,6 +258,7 @@ export function FollowUpsPage() {
     search.id === undefined
       ? null
       : (stores.flatMap((store) => {
+          if (search.home !== undefined && store.environmentId !== search.home) return [];
           const followUp = store.followUps.find((candidate) => candidate.id === search.id);
           return followUp ? [{ store, followUp }] : [];
         })[0] ?? null);
@@ -264,7 +267,8 @@ export function FollowUpsPage() {
     selected === null &&
     !loadingClosed &&
     stores.every((store) => !store.loading);
-  const select = (id: FollowUpId) => void navigate({ search: (previous) => ({ ...previous, id }) });
+  const select = (id: FollowUpId) =>
+    void navigate({ search: ({ home: _home, ...previous }) => ({ ...previous, id }) });
   const graph = search.view === "graph";
   const noStores = (
     <Empty size="compact">
@@ -409,6 +413,7 @@ export function FollowUpsPage() {
                 if (view !== "list" && view !== "graph") return;
                 void navigate({
                   search: (previous) => ({
+                    ...(previous.home === undefined ? {} : { home: previous.home }),
                     ...(previous.id === undefined ? {} : { id: previous.id }),
                     ...(previous.closed ? { closed: true as const } : {}),
                     ...(view === "graph" ? { view: "graph" as const } : {}),
@@ -427,6 +432,7 @@ export function FollowUpsPage() {
               onCheckedChange={(checked) =>
                 void navigate({
                   search: (previous) => ({
+                    ...(previous.home === undefined ? {} : { home: previous.home }),
                     ...(previous.id === undefined ? {} : { id: previous.id }),
                     ...(checked ? { closed: true as const } : {}),
                     ...(previous.view === undefined ? {} : { view: previous.view }),

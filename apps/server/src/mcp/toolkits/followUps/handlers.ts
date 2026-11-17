@@ -18,9 +18,11 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   type FollowUpFromThread,
+  type FollowUpSaveResult,
   FollowUpSaveTool,
   FollowUpsTool,
   FollowUpsToolkit,
+  type LinkedFollowUp,
 } from "./tools.ts";
 
 const toFailure = (error: FollowUpError) =>
@@ -44,6 +46,28 @@ const forward = Effect.fn("FollowUpTools.forward")(function* <T extends Tool.Any
   const forwarding = yield* PeerForwarding.PeerForwarding;
   return yield* forwarding.call(scope, tool, home, params);
 });
+
+/**
+ * Links name `home`, the store that keeps the follow-up. A forwarded result's links are rebuilt
+ * here, since only this side knows whether its caller can open them.
+ */
+const linkedTo =
+  (scope: McpInvocationContext.McpInvocationScope, home: EnvironmentId) =>
+  ({ link: _forwarded, ...followUp }: typeof LinkedFollowUp.Type): typeof LinkedFollowUp.Type => {
+    const link = McpInvocationContext.followUpLinkFor(
+      scope,
+      { environmentId: home, followUpId: followUp.id },
+      followUp.title,
+    );
+    return link === undefined ? followUp : { ...followUp, link };
+  };
+
+const linkSaved =
+  (scope: McpInvocationContext.McpInvocationScope, home: EnvironmentId) =>
+  (result: typeof FollowUpSaveResult.Type): typeof FollowUpSaveResult.Type =>
+    result.followUp === undefined
+      ? result
+      : { ...result, followUp: linkedTo(scope, home)(result.followUp) };
 
 /** The calling thread here, at the user message that started its current turn. */
 const callingThread = Effect.gen(function* () {
@@ -133,7 +157,7 @@ const save = Effect.fn("FollowUpTools.save")(function* (params: SaveParams) {
     return yield* forward(FollowUpSaveTool, home, {
       ...params,
       ...(fromThread === undefined ? {} : { fromThread }),
-    });
+    }).pipe(Effect.map(linkSaved(scope, home)));
   }
 
   const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -209,14 +233,18 @@ const save = Effect.fn("FollowUpTools.save")(function* (params: SaveParams) {
       },
       actor,
     )
-    .pipe(Effect.mapError(toFailure));
+    .pipe(Effect.map(linkSaved(scope, scope.environmentId)), Effect.mapError(toFailure));
 });
 
 const search = Effect.fn("FollowUpTools.search")(function* (
   params: Tool.Parameters<typeof FollowUpsTool>,
 ) {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
   const home = yield* remoteHome;
-  if (home !== undefined) return yield* forward(FollowUpsTool, home, params);
+  if (home !== undefined) {
+    const result = yield* forward(FollowUpsTool, home, params);
+    return { ...result, followUps: result.followUps.map(linkedTo(scope, home)) };
+  }
   const followUps = yield* FollowUps.FollowUps;
   const matches = yield* followUps
     .search({
@@ -229,7 +257,10 @@ const search = Effect.fn("FollowUpTools.search")(function* (
     })
     .pipe(Effect.mapError(toFailure));
   const types = yield* followUps.types.pipe(Effect.mapError(toFailure));
-  return { followUps: matches.map((match) => match.followUp), types };
+  return {
+    followUps: matches.map((match) => linkedTo(scope, scope.environmentId)(match.followUp)),
+    types,
+  };
 });
 
 const handlers = {

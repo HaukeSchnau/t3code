@@ -335,6 +335,8 @@
               pkgs.which
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
+              # getfattr reads systemd-oomd's kill mark on agent scopes.
+              pkgs.attr
               pkgs.procps
             ]
           );

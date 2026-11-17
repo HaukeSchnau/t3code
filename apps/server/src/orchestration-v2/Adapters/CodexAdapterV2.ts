@@ -134,7 +134,6 @@ import {
   MCP_APP_RESOURCE_SCHEME,
 } from "@t3tools/shared/mcpApp";
 import { snapshotMcpApp } from "../../mcpApps/McpAppSnapshot.ts";
-import * as SkillPackProviderScope from "../../skills/SkillPackProviderScope.ts";
 import {
   projectExecutionArguments,
   resolveSeparateProjectProvider,
@@ -1453,7 +1452,6 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
-      ...SkillPackProviderScope.codexThreadSkillConfig(input.threadId),
       // The app-server process may serve several threads, so the thread's
       // environment goes to its shell commands through config, not the process.
       ...Object.fromEntries(
@@ -1926,10 +1924,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
             }
             yield* client.notify("initialized", undefined);
-            const skillPackRoots = SkillPackProviderScope.codexSkillPackRoots();
-            if (skillPackRoots.length > 0) {
-              yield* client.request("skills/extraRoots/set", { extraRoots: [...skillPackRoots] });
-            }
             yield* Ref.set(initialized, true);
           }),
         );

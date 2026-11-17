@@ -74,7 +74,7 @@ export function useStartFollowUpThread(input: {
         ...metadata,
         projectId: project.id,
         projectCwd: project.workspaceRoot,
-        text: followUpSeedMessage(input.followUp),
+        text: followUpSeedMessage(input.followUp, input.homeEnvironmentId),
         titleText: input.followUp.title,
         uploadedAttachments: [],
         modelSelection,

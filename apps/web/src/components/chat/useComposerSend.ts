@@ -98,7 +98,6 @@ import {
   referencedThreadContexts,
 } from "./composerSend.logic";
 import { formatInlineReplyPrompt, type InlineReplyDraftStore } from "./inlineReplies";
-import { draftSkillPackBootstrap } from "./SkillPacksControl";
 import { managedWorkspaceBootstrap, setIsolatedWorkspaceChoice } from "../../lib/managedWorkspaces";
 import {
   enqueueComposerSend,
@@ -1304,7 +1303,6 @@ export function useComposerSend(input: ComposerSendInput) {
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
-                      ...draftSkillPackBootstrap(activeProject.environmentId, threadIdForSend),
                     },
                   }
                 : {}),

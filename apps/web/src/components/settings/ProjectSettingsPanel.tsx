@@ -50,7 +50,6 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
-import { ProjectSkillPacksSettings } from "./ProjectSkillPacksSettings";
 import {
   defaultProjectIcon,
   hasDefaultProjectIcon,
@@ -606,10 +605,6 @@ function ProjectDetail({
                 </Button>
               </div>
             }
-          />
-          <ProjectSkillPacksSettings
-            representative={representative}
-            members={group.memberProjects}
           />
           {canOrganize ? (
             <>
