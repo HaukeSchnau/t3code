@@ -40,6 +40,7 @@ import { useEnvironment } from "../state/environments";
 import { useEnvironmentScope, usePreparedConnection } from "../state/session";
 import { createBrowserVoiceInputPlatform } from "./browserVoiceInput";
 import { preferredSpeechLanguages } from "./preferredSpeechLanguages";
+import { publishRecording } from "./activeRecording";
 import { runEnvironmentSpeech } from "./runEnvironmentSpeech";
 import { bindAudioGrant, readCleanupGrant, useAudioChoice } from "./voiceConsent";
 
@@ -228,6 +229,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
 
   const controllerRef = useRef<VoiceInputController | null>(null);
   const intentRef = useRef<SpeechPostProcessingIntent>("dictate");
+  const [recordingIntent, setRecordingIntent] = useState<SpeechPostProcessingIntent>("dictate");
   const startRequestRef = useRef(0);
   const pendingSubmissionRef = useRef<{
     ownerKey: string;
@@ -556,6 +558,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
         return;
       }
       intentRef.current = intent;
+      setRecordingIntent(intent);
       if (!grantId) {
         if (destination.offerFirstRunSetup && latestRef.current.input.offerSetup !== false)
           await navigate({ to: "/settings/voice", hash: "voice-transcription-destination" });
@@ -670,6 +673,31 @@ export function useEnvironmentSpeechInput(input: HookInput) {
     }
   });
 
+  const ownerKey = input.ownerKey;
+  const recordingActive = voiceInputBlocksSubmission(state);
+  const recordingLevel = Math.round(level * 10) / 10;
+  const previewText =
+    preview && (state.phase === "recording" || state.phase === "transcribing")
+      ? `${preview.committed}${preview.tentative}`
+      : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors this editor's recording into the store the desktop pill reads, outside React
+  useEffect(() => {
+    publishRecording(
+      ownerKey,
+      recordingActive
+        ? {
+            ownerKey,
+            phase: state.phase,
+            gesture: recordingIntent === "command" ? "command" : "dictate",
+            level: recordingLevel,
+            preview: previewText,
+          }
+        : null,
+    );
+  }, [ownerKey, recordingActive, state.phase, recordingIntent, recordingLevel, previewText]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- an editor that unmounts mid-recording leaves no stale entry behind
+  useEffect(() => () => publishRecording(ownerKey, null), [ownerKey]);
+
   const destinationReady =
     grantId === null
       ? Boolean(destination.offerFirstRunSetup) && input.offerSetup !== false
@@ -709,6 +737,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
     /** Changes what a running recording becomes, for a modifier added during a held key. */
     retarget: useStableCallback((intent: SpeechPostProcessingIntent) => {
       intentRef.current = intent;
+      setRecordingIntent(intent);
     }),
     submitAfterDictation,
     stop: useStableCallback(() => controllerRef.current?.stop() ?? Promise.resolve()),

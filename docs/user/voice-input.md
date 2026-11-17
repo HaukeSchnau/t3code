@@ -116,7 +116,7 @@ started: if that app is still in front when the transcript is ready, T3 Code
 pastes it at the cursor and restores your clipboard; otherwise the text is copied
 for you to paste. A recording you started in T3 always goes into that composer,
 even if you switch apps while talking. A pill at the bottom of the screen shows
-progress. This needs Accessibility permission, and T3 Code's window must stay
+progress, also for a recording into T3 while you're in another app. This needs Accessibility permission, and T3 Code's window must stay
 open, though it can be behind other windows.
 
 **Read the text around the cursor** sends up to about 1 KB around your cursor in

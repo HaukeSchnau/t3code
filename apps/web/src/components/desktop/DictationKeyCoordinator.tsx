@@ -20,6 +20,7 @@ import {
   type FnDictationAction,
   type FnDictationPress,
 } from "~/speech/fnDictation";
+import { useActiveRecording } from "~/speech/activeRecording";
 import { isDictationShortcutBusy, readDictationShortcutOwner } from "~/speech/useDictationShortcut";
 import {
   useEnvironmentSpeechInput,
@@ -242,6 +243,45 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
       } else if (!noticeRef.current && !deliveringRef.current) showPill(null);
     }
   }, [phase, gesture, level, preview, error, showPill, cancelSpeech]);
+
+  const editorRecording = useActiveRecording();
+  const [windowFocused, setWindowFocused] = useState(() => document.hasFocus());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the browser reports window focus only through events
+  useEffect(() => {
+    // Focus moving into a preview frame also blurs the window, but T3 still has focus then.
+    const update = () => setWindowFocused(document.hasFocus());
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    return () => {
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+    };
+  }, []);
+  const mirrored =
+    !windowFocused && editorRecording !== null && editorRecording.ownerKey !== OWNER_KEY
+      ? editorRecording
+      : null;
+  const mirroringRef = useRef(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows a T3 editor's recording in the desktop pill while T3 is in the background
+  useEffect(() => {
+    if (sessionRef.current) return;
+    if (mirrored) {
+      mirroringRef.current = true;
+      showPill(
+        mirrored.phase === "preparing" || mirrored.phase === "recording"
+          ? {
+              kind: "listening",
+              gesture: mirrored.gesture,
+              level: mirrored.level,
+              preview: mirrored.preview?.slice(-200) ?? null,
+            }
+          : { kind: "working", gesture: mirrored.gesture },
+      );
+    } else if (mirroringRef.current) {
+      mirroringRef.current = false;
+      showPill(null);
+    }
+  }, [mirrored, showPill]);
 
   return null;
 }
