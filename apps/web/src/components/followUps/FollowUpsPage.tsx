@@ -1,12 +1,6 @@
 import { isFollowUpClosed } from "@t3tools/client-runtime/state/follow-ups";
 import { useAtomValue } from "@effect/atom-react";
-import type {
-  EnvironmentId,
-  FollowUp,
-  FollowUpGardenerRun,
-  FollowUpId,
-  FollowUpType,
-} from "@t3tools/contracts";
+import type { EnvironmentId, FollowUp, FollowUpId, FollowUpType } from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ListTodoIcon, PlugZapIcon } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
@@ -39,11 +33,12 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { FollowUpDetail } from "./FollowUpDetail";
-import { FollowUpGardenerStatus } from "./FollowUpGardenerStatus";
 import { FollowUpGraphView } from "./FollowUpGraphView";
 import { followUpGraphKey, followUpSections, followUpWhenLabel } from "./followUps.logic";
 
 export interface FollowUpsSearch {
+  /** The home environment that keeps `id`; a follow-up link names it. */
+  readonly home?: string;
   readonly id?: string;
   readonly closed?: true;
   readonly view?: "graph";
@@ -57,7 +52,6 @@ interface FollowUpStore {
   readonly error: string | null;
   readonly followUps: ReadonlyArray<FollowUp>;
   readonly types: ReadonlyArray<FollowUpType>;
-  readonly lastGardenerRun: FollowUpGardenerRun | null;
 }
 
 /**
@@ -91,7 +85,6 @@ function useFollowUpStores(selectedId: string | undefined, showClosed: boolean) 
         error: null,
         followUps: [],
         types: [],
-        lastGardenerRun: null,
       };
     }
     // While closed ones load, the open ones stay on screen.
@@ -105,7 +98,6 @@ function useFollowUpStores(selectedId: string | undefined, showClosed: boolean) 
       error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
       followUps: snapshot?.followUps ?? [],
       types: snapshot?.types ?? [],
-      lastGardenerRun: snapshot?.lastGardenerRun ?? null,
     };
   });
   return { stores, loadingClosed: wantClosed && all.some((result) => result._tag === "Initial") };
@@ -163,32 +155,19 @@ function storeNote(store: FollowUpStore): string | null {
     : `Could not load follow-ups from ${store.label}: ${store.error}`;
 }
 
-/** The store's name when several show, its nightly pass, and why it shows nothing. */
+/** The store's name when several show, and why it shows nothing. */
 function FollowUpStoreHeader(props: {
   readonly store: FollowUpStore;
   readonly showLabel: boolean;
 }) {
   const { store } = props;
   const note = storeNote(store);
-  const gardener = note === null && !store.loading;
   return (
     <>
-      {props.showLabel || gardener ? (
+      {props.showLabel ? (
         <div className="flex min-w-0 items-center gap-2 px-3 text-xs font-medium text-muted-foreground">
-          {props.showLabel ? (
-            <>
-              <h2 className="shrink-0">{store.label}</h2>
-              <Separator className="min-w-2 flex-1" />
-            </>
-          ) : (
-            <div className="flex-1" />
-          )}
-          {gardener ? (
-            <FollowUpGardenerStatus
-              homeEnvironmentId={store.environmentId}
-              lastRun={store.lastGardenerRun}
-            />
-          ) : null}
+          <h2 className="shrink-0">{store.label}</h2>
+          <Separator className="min-w-2 flex-1" />
         </div>
       ) : null}
       {note !== null ? (
@@ -256,6 +235,7 @@ export function FollowUpsPage() {
     search.id === undefined
       ? null
       : (stores.flatMap((store) => {
+          if (search.home !== undefined && store.environmentId !== search.home) return [];
           const followUp = store.followUps.find((candidate) => candidate.id === search.id);
           return followUp ? [{ store, followUp }] : [];
         })[0] ?? null);
@@ -264,7 +244,8 @@ export function FollowUpsPage() {
     selected === null &&
     !loadingClosed &&
     stores.every((store) => !store.loading);
-  const select = (id: FollowUpId) => void navigate({ search: (previous) => ({ ...previous, id }) });
+  const select = (id: FollowUpId) =>
+    void navigate({ search: ({ home: _home, ...previous }) => ({ ...previous, id }) });
   const graph = search.view === "graph";
   const noStores = (
     <Empty size="compact">
@@ -409,6 +390,7 @@ export function FollowUpsPage() {
                 if (view !== "list" && view !== "graph") return;
                 void navigate({
                   search: (previous) => ({
+                    ...(previous.home === undefined ? {} : { home: previous.home }),
                     ...(previous.id === undefined ? {} : { id: previous.id }),
                     ...(previous.closed ? { closed: true as const } : {}),
                     ...(view === "graph" ? { view: "graph" as const } : {}),
@@ -427,6 +409,7 @@ export function FollowUpsPage() {
               onCheckedChange={(checked) =>
                 void navigate({
                   search: (previous) => ({
+                    ...(previous.home === undefined ? {} : { home: previous.home }),
                     ...(previous.id === undefined ? {} : { id: previous.id }),
                     ...(checked ? { closed: true as const } : {}),
                     ...(previous.view === undefined ? {} : { view: previous.view }),

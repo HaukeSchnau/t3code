@@ -108,6 +108,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { MicrophoneTest } from "./MicrophoneTest";
 import { CloudVoiceConfiguration } from "./CloudVoiceConfiguration";
+import { DictationKeySettings } from "./DictationKeySettings";
 import { LanguageRow, ModelBenchmarks, orderSpeechLanguages } from "./SpeechModelComparison";
 import { languageLabel, SpeechLanguageSelect } from "./SpeechLanguageSelect";
 import { filterSpeechModels, type SpeechModelSort } from "./speechModelBrowser";
@@ -1260,6 +1261,13 @@ export function VoiceSettingsPanel() {
         "speech-post-processing-model":
           cleanupEnabled && settingsScope ? undefined : "speech-post-processing",
         "speech-correction-word": cleanupEnabled ? undefined : "speech-post-processing",
+        "dictation-in-other-apps": settings.dictationKey === "off" ? "dictation-key" : undefined,
+        "dictation-reads-field":
+          settings.dictationKey === "off"
+            ? "dictation-key"
+            : settings.dictationInOtherApps
+              ? undefined
+              : "dictation-in-other-apps",
       }}
     >
       <SettingsSection id="voice-input" title="Input">
@@ -1333,6 +1341,7 @@ export function VoiceSettingsPanel() {
             </Select>
           }
         />
+        <DictationKeySettings />
       </SettingsSection>
 
       <SettingsSection id="voice-transcription" title="Transcription">

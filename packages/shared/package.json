@@ -291,6 +291,10 @@
       "types": "./src/threadLinks.ts",
       "import": "./src/threadLinks.ts"
     },
+    "./followUpLinks": {
+      "types": "./src/followUpLinks.ts",
+      "import": "./src/followUpLinks.ts"
+    },
     "./composerContextReferences": {
       "types": "./src/composerContextReferences.ts",
       "import": "./src/composerContextReferences.ts"

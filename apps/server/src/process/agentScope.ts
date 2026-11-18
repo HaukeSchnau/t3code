@@ -69,6 +69,8 @@ export interface ScopeState {
   readonly result: string;
   readonly oomKills: number | undefined;
   readonly populated: boolean | undefined;
+  /** Kills by systemd-oomd, which takes the whole scope; read only where a kill matters. */
+  readonly oomdKills?: number;
 }
 
 /**
@@ -81,7 +83,7 @@ export function classifyScope(
   state: ScopeState,
   reportedOomKills?: number,
 ): "oom-killed" | "gone" | "running" | "stopping" {
-  if (state.result === "oom-kill") return "oom-killed";
+  if (state.result === "oom-kill" || (state.oomdKills ?? 0) > 0) return "oom-killed";
   if (reportedOomKills !== undefined && (state.oomKills ?? 0) > reportedOomKills) {
     return "oom-killed";
   }
@@ -190,6 +192,7 @@ export const make = Effect.gen(function* () {
       const systemdRun = yield* resolve("systemd-run", hostEnvironment);
       const systemctl = yield* resolve("systemctl", hostEnvironment);
       if (systemdRun === null || systemctl === null) return undefined;
+      const getfattr = yield* resolve("getfattr", hostEnvironment);
       yield* stopLeftoverAgents(systemctl);
       const probe = (options: ReadonlyArray<string>) =>
         run(systemdRun, [
@@ -238,6 +241,7 @@ export const make = Effect.gen(function* () {
       return {
         systemdRun,
         systemctl,
+        getfattr,
         runtimeDir,
         supportsOomPolicy,
         sessionMemoryMax: limits.session,
@@ -259,7 +263,29 @@ export const make = Effect.gen(function* () {
     }
   >();
 
-  const readScope = Effect.fn("agentScope.readScope")(function* (systemctl: string, unit: string) {
+  // systemd-oomd marks a cgroup with this xattr before it kills it. systemd reflects the kill
+  // in the unit only once the cgroup empties, often after the agent's exit was reported.
+  const readOomdKills = Effect.fn("agentScope.readOomdKills")(function* (
+    getfattr: string,
+    controlGroup: string,
+  ) {
+    const read = yield* run(getfattr, [
+      "--only-values",
+      "--absolute-names",
+      "-n",
+      "user.oomd_ooms",
+      path.join("/sys/fs/cgroup", controlGroup),
+    ]);
+    if (read._tag === "None" || read.value.code !== 0) return 0;
+    const kills = Number(read.value.stdout.trim());
+    return Number.isSafeInteger(kills) ? kills : 0;
+  });
+
+  const readScope = Effect.fn("agentScope.readScope")(function* (
+    systemctl: string,
+    unit: string,
+    getfattr: string | null = null,
+  ) {
     const shown = yield* run(systemctl, [
       "--user",
       "show",
@@ -278,6 +304,9 @@ export const make = Effect.gen(function* () {
       result: values.get("Result") ?? "",
       oomKills: parseCgroupCounter(memoryEvents, "oom_kill"),
       populated: populated === undefined ? undefined : populated === 1,
+      ...(getfattr !== null && controlGroup
+        ? { oomdKills: yield* readOomdKills(getfattr, controlGroup) }
+        : {}),
     } satisfies ScopeState;
   });
 
@@ -346,7 +375,7 @@ export const make = Effect.gen(function* () {
       if (scope === undefined) return false;
       const reported = tracked.reportedOomKills;
       for (let attempt = 0; attempt < STOPPING_POLL_ATTEMPTS; attempt++) {
-        const state = yield* readScope(scope.systemctl, tracked.unit);
+        const state = yield* readScope(scope.systemctl, tracked.unit, scope.getfattr);
         const status =
           state === undefined ? "gone" : classifyScope(state, tracked.reportedOomKills);
         if (status === "running") return false;
@@ -354,7 +383,8 @@ export const make = Effect.gen(function* () {
           yield* Effect.sleep(STOPPING_POLL_INTERVAL);
           continue;
         }
-        if (reported !== undefined && state?.result !== "oom-kill") {
+        const scopeKilled = state?.result === "oom-kill" || (state?.oomdKills ?? 0) > 0;
+        if (reported !== undefined && !scopeKilled) {
           // The session goes on, so a later failure is only an OOM kill if the scope counts another.
           const kills = Math.max(state?.oomKills ?? 0, tracked.stoppedOomKills);
           if (kills <= reported) return false;
@@ -383,7 +413,15 @@ export const make = Effect.gen(function* () {
     if (!unit.startsWith("t3code-") || !unit.endsWith(".scope")) return;
     const scope = yield* systemd;
     if (scope === undefined) return;
-    const state = yield* readScope(scope.systemctl, unit);
+    const state = yield* readScope(scope.systemctl, unit, scope.getfattr);
+    if ((state?.oomdKills ?? 0) > 0) {
+      // oomd already killed every process. Stopping would replace systemd's oom-kill result.
+      for (const tracked of scopeByThread.values()) {
+        if (tracked.unit === unit) tracked.oomKilled = true;
+      }
+      yield* Effect.logWarning("systemd-oomd killed an agent scope", { unit });
+      return;
+    }
     if (
       state === undefined ||
       state.loadState !== "loaded" ||

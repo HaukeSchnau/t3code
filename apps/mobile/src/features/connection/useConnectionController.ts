@@ -16,12 +16,10 @@ import {
   connectPairingUrl as connectPairingUrlAtom,
   updateBearerConnection,
 } from "../../connection/onboarding";
-import { unregisterAgentAwarenessDevice } from "../../state/agent-awareness";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { relayEnvironmentDiscovery } from "../../state/relay";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { commandFailure } from "../agent-awareness/registrationEnvironmentSelection";
-import { unregisterAgentAwarenessDeviceFromEnvironment } from "../agent-awareness/remoteRegistration";
+import { useForgetAgentAwarenessDevice } from "../agent-awareness/useForgetAgentAwarenessDevice";
 import { relayManagedEnvironmentIds } from "./environmentSections";
 
 export interface RelayEnvironmentView {
@@ -41,10 +39,7 @@ export function useConnectionController() {
   const updateBearer = useAtomCommand(updateBearerConnection, { reportFailure: false });
   const registerEnvironment = useAtomCommand(environmentCatalog.register, "environment register");
   const removeEnvironmentMutation = useAtomCommand(environmentCatalog.remove, "environment remove");
-  const unregisterAgentAwareness = useAtomCommand(unregisterAgentAwarenessDevice, {
-    reportFailure: false,
-    reportDefect: false,
-  });
+  const forgetAgentAwarenessDevice = useForgetAgentAwarenessDevice();
   const retryEnvironmentMutation = useAtomCommand(environmentCatalog.retryNow, "environment retry");
   const setEnvironmentEnabledMutation = useAtomCommand(
     environmentCatalog.setEnabled,
@@ -90,17 +85,15 @@ export function useConnectionController() {
       }),
     );
   const removeEnvironment = async (environmentId: EnvironmentId) => {
-    // A removed server must stop pushing notifications and Live Activity updates here.
-    await unregisterAgentAwarenessDeviceFromEnvironment(async (deviceId) => {
-      const result = await unregisterAgentAwareness({ environmentId, input: { deviceId } });
-      if (result._tag === "Failure") throw commandFailure(result);
-    });
+    await forgetAgentAwarenessDevice([environmentId]);
     return removeEnvironmentMutation(environmentId);
   };
   const retryEnvironment = (environmentId: EnvironmentId) =>
     retryEnvironmentMutation(environmentId);
-  const setEnvironmentEnabled = (environmentId: EnvironmentId, enabled: boolean) =>
-    setEnvironmentEnabledMutation({ environmentId, enabled });
+  const setEnvironmentEnabled = async (environmentId: EnvironmentId, enabled: boolean) => {
+    if (!enabled) await forgetAgentAwarenessDevice([environmentId]);
+    return setEnvironmentEnabledMutation({ environmentId, enabled });
+  };
   const updateEnvironment = (
     environmentId: EnvironmentId,
     updates: { readonly label: string; readonly displayUrl: string },

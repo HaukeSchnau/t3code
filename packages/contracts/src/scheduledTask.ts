@@ -267,6 +267,8 @@ export const ScheduledTask = Schema.Struct({
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
   /** Why the task cannot run regardless of `enabled`, such as a managed policy refusing webhooks. */
   blockedByPolicy: Schema.optionalKey(Schema.String),
+  /** The host's configuration owns this task: it can run, pause and resume, but not change here. */
+  declared: Schema.optionalKey(Schema.Boolean),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 

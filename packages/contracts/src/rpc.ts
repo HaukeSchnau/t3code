@@ -98,17 +98,7 @@ import {
   AgentAwarenessServiceError,
   AgentAwarenessSnapshot,
 } from "./agentAwareness.ts";
-import {
-  WsFollowUpsHistoryRpc,
-  WsFollowUpsRunGardenerRpc,
-  WsFollowUpsSaveRpc,
-  WsFollowUpsSubscribeRpc,
-} from "./followUps.ts";
-import {
-  WsSkillPacksSetProjectDefaultRpc,
-  WsSkillPacksSetThreadPacksRpc,
-  WsSkillPacksSubscribeRpc,
-} from "./skillPacks.ts";
+import { WsFollowUpsHistoryRpc, WsFollowUpsSaveRpc, WsFollowUpsSubscribeRpc } from "./followUps.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -2196,13 +2186,9 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsAgentAwarenessUnregisterDeviceRpc,
   WsAgentAwarenessRegisterLiveActivityRpc,
   WsAgentAwarenessGetSnapshotRpc,
-  WsSkillPacksSubscribeRpc,
-  WsSkillPacksSetThreadPacksRpc,
-  WsSkillPacksSetProjectDefaultRpc,
   WsFollowUpsSubscribeRpc,
   WsFollowUpsSaveRpc,
   WsFollowUpsHistoryRpc,
-  WsFollowUpsRunGardenerRpc,
   WsArtifactsReadMarkdownRpc,
   WsVcsJjRunActionRpc,
   WsVcsJjAssignPathsRpc,

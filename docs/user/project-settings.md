@@ -106,6 +106,36 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+## Tasks declared by the server's host
+
+A server's host configuration can declare scheduled tasks, so a machine set up
+from code brings its tasks along. Write them to `declared-scheduled-tasks.json`
+in the server's state directory (`~/.t3/userdata` by default):
+
+```json
+{
+  "tasks": {
+    "nightly-digest": {
+      "title": "Nightly digest",
+      "prompt": "Summarize yesterday's merged pull requests.",
+      "schedule": { "type": "fixed_time", "timeOfDay": "03:30" },
+      "project": "/home/user/acme",
+      "model": { "instanceId": "claudeAgent", "model": "claude-sonnet-5-5" }
+    }
+  }
+}
+```
+
+Keys use lowercase letters, digits and dashes, and start with a letter or digit.
+A schedule is a time of day or an interval (`{ "type": "interval", "everyMs": 3600000 }`).
+Leave out `project` to run in No project, and `model` to use the project's default
+model. The server applies changes within seconds, without a restart, and
+removing a task from the file, or the file itself, removes the task.
+
+Declared tasks show in the list with **Host config**. You can run, pause and
+resume them there, but change or delete them in the file. If the file can't be
+read or parsed, the server keeps the tasks as they were and logs the error.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**
@@ -197,13 +227,6 @@ selected to override it there) to **Top level only** to stop at the ones the rep
 itself, or **Skip** to leave them for a setup script. It resolves in the same order as the
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
-
-## Default skills for new threads
-
-When your environment offers skill packs, the **Project** category shows a **Skills** row. It sets
-the packs new threads in the project start with. Core skills are always on, and a thread can still
-pick its own packs from the composer. Use the reset action to return new threads to core only. See
-[the composer guide](composer.md#skill-packs).
 
 ## Worktree location
 

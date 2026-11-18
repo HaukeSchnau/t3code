@@ -69,6 +69,13 @@ import {
   setSnapShotAnimationDestination,
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
+import {
+  deliverDictation,
+  getDictationStatus,
+  prepareDictation,
+  requestDictationAccessibility,
+  setDictationPill,
+} from "./methods/dictation.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
@@ -122,6 +129,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(dismissSnapShotAnimation);
   yield* ipc.handle(acknowledgeSnapShot);
   yield* ipc.handle(setConnectionCatalog);
+  yield* ipc.handle(getDictationStatus);
+  yield* ipc.handle(prepareDictation);
+  yield* ipc.handle(deliverDictation);
+  yield* ipc.handle(setDictationPill);
+  yield* ipc.handle(requestDictationAccessibility);
 
   yield* ipc.handle(discoverSshHosts);
   yield* ipc.handle(resolveSshHost);

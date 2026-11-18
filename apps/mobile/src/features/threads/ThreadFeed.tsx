@@ -7,6 +7,7 @@ import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdown
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import {
   enrichedContextLinkCustomization,
+  enrichedFollowUpLinkCustomization,
   enrichedThreadLinkCustomization,
   withChipIcon,
 } from "../../native/useEnrichedLinkVariants";
@@ -66,6 +67,7 @@ import type { ToolCallVisibility } from "@t3tools/contracts/settings";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { findThreadSearchOccurrences } from "@t3tools/shared/threadSearch";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
+import { parseFollowUpLinkHref } from "@t3tools/shared/followUpLinks";
 import { hostedThreadLink, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
 import {
@@ -166,7 +168,7 @@ import {
   type NativeMarkdownTextStyle,
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
-import { environmentFollowUpHomeAtom } from "../../state/follow-ups";
+import { environmentFollowUpHomeAtom, useLinkedFollowUps } from "../../state/follow-ups";
 import { FOLLOW_UP_ICON } from "../follow-ups/followUpPresentation";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -1178,9 +1180,11 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const models = useModelMentions(props.environmentId, props.markdown);
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
   const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
+  const linkedFollowUps = useLinkedFollowUps(liveMarkdown);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     linkCustomization: (href) =>
+      enrichedFollowUpLinkCustomization(linkedFollowUps.get(href)) ??
       withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
   };
   const { messageId, onQuoteToFollowUp } = props;
@@ -2445,6 +2449,7 @@ function UserMessageContent(props: UserMessageContentProps) {
   const { selectedThread } = useThreadSelection();
   const liveText = useLiveThreadLinkLabels(props.text, props.environmentId);
   const threadIcons = useThreadChipIcons(props.environmentId, liveText, props.context?.records);
+  const linkedFollowUps = useLinkedFollowUps(liveText);
   const text = replaceComposerContextReferences(liveText, (ref) => {
     const available = props.context?.records.some((record) => record.contextId === ref.contextId);
     return `[${ref.label}${available ? "" : " (unavailable)"}](t3-context://v1/${ref.kind}/${ref.contextId})`;
@@ -2528,6 +2533,7 @@ function UserMessageContent(props: UserMessageContentProps) {
             }
           },
           linkCustomization: (href) =>
+            enrichedFollowUpLinkCustomization(linkedFollowUps.get(href)) ??
             withChipIcon(
               enrichedContextLinkCustomization(href, props.context?.records ?? []) ??
                 props.linkHandlers.linkCustomization?.(href),
@@ -2991,6 +2997,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           threadId: String(target.threadId),
         });
       }
+      return;
+    }
+    const followUp = parseFollowUpLinkHref(href);
+    if (followUp) {
+      navigation.navigate("FollowUp", {
+        environmentId: String(followUp.environmentId),
+        followUpId: String(followUp.followUpId),
+      });
       return;
     }
     const media = resolveMarkdownMediaPreview(href, {

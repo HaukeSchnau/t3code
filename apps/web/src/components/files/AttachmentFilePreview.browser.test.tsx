@@ -1865,10 +1865,7 @@ it.each([60, 100])("prepares all %i pages of a table-heavy Word report", async (
       sizeBytes={file.size}
     />,
   );
-  // The first Office preview in the file loads the lazy viewer chain and the preparation worker.
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("page " + pages), {
-    timeout: 10_000,
-  });
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("page " + pages));
   expect(screen.container.textContent).not.toContain("Preview limited");
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
 });
@@ -1895,15 +1892,12 @@ describe("standalone Mermaid previews", () => {
 
   it.each(["<-->", "<==>", "<-.->", "-->"])("renders the %s arrow", async (arrow) => {
     await using screen = await render(<MermaidFilePreview text={`flowchart LR\nA ${arrow} B`} />);
-    await vi.waitFor(
-      () => {
-        const diagram = screen.container.querySelector("svg");
-        expect(diagram?.querySelector("path")).not.toBeNull();
-        expect(diagram?.textContent).toContain("A");
-        expect(diagram?.textContent).toContain("B");
-      },
-      { timeout: 10_000 },
-    );
+    await vi.waitFor(() => {
+      const diagram = screen.container.querySelector("svg");
+      expect(diagram?.querySelector("path")).not.toBeNull();
+      expect(diagram?.textContent).toContain("A");
+      expect(diagram?.textContent).toContain("B");
+    });
     expect(screen.container.querySelector('[role="alert"]')).toBeNull();
   });
 });
@@ -1932,9 +1926,7 @@ it("reloads a workspace Word file after a preview remount", async () => {
       asset={asset}
     />,
   );
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("Original outlook"), {
-    timeout: 10_000,
-  });
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Original outlook"));
   heading = "Revised outlook";
   await screen.rerender(
     <AttachmentFilePreview
@@ -1945,9 +1937,7 @@ it("reloads a workspace Word file after a preview remount", async () => {
       asset={asset}
     />,
   );
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("Revised outlook"), {
-    timeout: 10_000,
-  });
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Revised outlook"));
   expect(screen.container.textContent).not.toContain("Original outlook");
 });
 
@@ -1973,9 +1963,7 @@ it("clears an Office metadata error when the same URL becomes previewable", asyn
   );
   expect(screen.container.textContent).not.toContain("under 50 MB");
   resolveBody("invalid-office-file");
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("not a readable ZIP"), {
-    timeout: 10_000,
-  });
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("not a readable ZIP"));
 });
 
 describe("attachment HTML preview recovery", () => {
@@ -2181,10 +2169,8 @@ it("refreshes authorization and retries a failed streamed attachment", async () 
         asset={{ environmentId: EnvironmentId.make("test"), attachmentId: "retry" }}
       />,
     );
-    // A cold large-text worker can take longer than waitFor's default to boot on CI.
-    await vi.waitFor(
-      () => expect(screen.container.textContent).toContain("This file contains binary data."),
-      { timeout: 10_000 },
+    await vi.waitFor(() =>
+      expect(screen.container.textContent).toContain("This file contains binary data."),
     );
     await act(() =>
       screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
@@ -2226,12 +2212,10 @@ it.each([
           <OfficeFilePreview name="custom.xlsx" src={src} kind="xlsx" sizeBytes={file.size} />
         </div>,
       );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.textContent).toContain(
-            row > 250000 ? "This workbook exceeds the preview limit" : "worksheet value",
-          ),
-        { timeout: 10_000 },
+      await vi.waitFor(() =>
+        expect(screen.container.textContent).toContain(
+          row > 250000 ? "This workbook exceeds the preview limit" : "worksheet value",
+        ),
       );
     } finally {
       URL.revokeObjectURL(src);
@@ -2246,10 +2230,8 @@ it("copies every indexed line rather than the mounted preview rows", async () =>
     <LargeTextViewer name="whole.txt" text={text} delimiter={null} copyContents={copyContents} />,
   );
   await vi.waitFor(() => expect(screen.container.textContent).toContain("line-0"));
-  // Copy rejects until the worker finishes indexing, which a cold worker can delay past waitFor's default on CI.
-  await vi.waitFor(async () => expect(await copyContents.current!()).toBe(text), {
-    timeout: 10_000,
-  });
+  // Copy rejects until the worker finishes indexing.
+  await vi.waitFor(async () => expect(await copyContents.current!()).toBe(text));
   const first = copyContents.current!();
   await expect(copyContents.current!()).rejects.toThrow("Another copy is in progress.");
   expect(await first).toBe(text);
@@ -2324,16 +2306,12 @@ it("loads a font attachment through the lazy preview", async () => {
       file={file}
     />,
   );
-  // Two cold lazy chunks plus decoding a 600 KB font can take longer than waitFor's default on CI.
-  await vi.waitFor(
-    () => {
-      const frame = screen.container.querySelector("iframe");
-      expect(frame?.title).toBe("Carlito.ttf");
-      expect(frame?.srcdoc).toContain("@font-face");
-      expect(frame?.srcdoc).toContain("The quick brown fox");
-    },
-    { timeout: 10_000 },
-  );
+  await vi.waitFor(() => {
+    const frame = screen.container.querySelector("iframe");
+    expect(frame?.title).toBe("Carlito.ttf");
+    expect(frame?.srcdoc).toContain("@font-face");
+    expect(frame?.srcdoc).toContain("The quick brown fox");
+  });
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -2599,10 +2577,8 @@ it("mounts a bounded set of saved notebook outputs as the reader scrolls", async
       />
     </div>,
   );
-  // The first outputs wait on the lazy notebook viewer and the conversion worker, not on a frame.
-  await vi.waitFor(
-    () => expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
-    { timeout: 10_000 },
+  await vi.waitFor(() =>
+    expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
   );
   expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
   const first = screen.container.querySelector("iframe")!;
@@ -2756,22 +2732,18 @@ it.each(["rtf", "epub", "ods"] as const)(
         />
       </div>,
     );
-    await vi.waitFor(
-      () => {
-        if (kind === "ods") {
-          expect(screen.container.textContent).toContain("North");
-          expect(screen.container.textContent).toContain("150");
-          expect(screen.container.textContent).not.toContain("private note");
-          expect(screen.container.textContent).toContain("1 rows · 2 columns");
-          expect(screen.container.textContent).not.toContain("Limited to 500");
-        } else {
-          const frame = screen.container.querySelector("iframe");
-          expect(frame?.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
-        }
-        // The viewer runs its own conversion worker behind lazy chunks.
-      },
-      { timeout: 10_000 },
-    );
+    await vi.waitFor(() => {
+      if (kind === "ods") {
+        expect(screen.container.textContent).toContain("North");
+        expect(screen.container.textContent).toContain("150");
+        expect(screen.container.textContent).not.toContain("private note");
+        expect(screen.container.textContent).toContain("1 rows · 2 columns");
+        expect(screen.container.textContent).not.toContain("Limited to 500");
+      } else {
+        const frame = screen.container.querySelector("iframe");
+        expect(frame?.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
+      }
+    });
     expect(screen.container.querySelector('[role="alert"]')).toBeNull();
   },
 );

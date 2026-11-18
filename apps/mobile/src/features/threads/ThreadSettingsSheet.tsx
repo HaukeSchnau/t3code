@@ -103,12 +103,6 @@ import {
 import { useSearchToolbarInset } from "../../components/ui/useBarInset";
 import type { AppBarSearch } from "../../components/ui/AppBar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
-import { skillPacksRowValue, type SkillPacksSheetSession } from "./skill-packs-session";
-import {
-  SkillPacksChoiceContent,
-  useNewTaskSkillPacksSession,
-  useThreadSkillPacksSession,
-} from "./SkillPacksSheetContent";
 import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
@@ -259,8 +253,7 @@ function SwitchRow(props: {
 
 type ThreadSettingsSubmenuPage =
   | { readonly kind: "descriptor"; readonly id: string }
-  | { readonly kind: "runtime" }
-  | { readonly kind: "skills" };
+  | { readonly kind: "runtime" };
 
 type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
@@ -278,8 +271,6 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
-  /** Fork: present when the environment publishes skill packs (patches/skill-packs.md). */
-  readonly skillPacks?: SkillPacksSheetSession;
 };
 
 /** The composer draft the sheet edits: the thread's own, or a queued message being edited. */
@@ -303,7 +294,6 @@ type ThreadSettingsSessionValue = {
   readonly runtimeMode: RuntimeMode;
   readonly runtimeModeChoices: ReadonlyArray<RuntimeModeChoice>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
-  readonly skillPacks: SkillPacksSheetSession | null;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly promptTraits: ReturnType<typeof getPromptControlledTraits>;
   readonly displayedModelSelection: ModelSelection | null;
@@ -613,7 +603,6 @@ function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
-    skillPacks: props.skillPacks ?? null,
     displayedDescriptors,
     promptTraits,
     displayedModelSelection: pendingModel?.selection ?? props.selectedModel,
@@ -889,15 +878,6 @@ function ThreadSettingsOptionsItem(props: {
             </Animated.View>
           );
         })}
-        {session.skillPacks ? (
-          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
-            <DisclosureRow
-              label="Skills"
-              value={skillPacksRowValue(session.skillPacks)}
-              onPress={() => props.onOpenSubmenu({ kind: "skills" })}
-            />
-          </Animated.View>
-        ) : null}
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
@@ -1060,14 +1040,6 @@ function ThreadSettingsChoiceContent(props: {
   const insets = useSafeAreaInsets();
   const session = useThreadSettingsSession();
   const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
-  if (props.submenu.kind === "skills") {
-    return session.skillPacks ? (
-      <SkillPacksChoiceContent session={session.skillPacks} onSelected={props.onSelected} />
-    ) : (
-      <View className="flex-1 bg-sheet" />
-    );
-  }
-
   const activeDescriptor =
     descriptorId !== null
       ? session.displayedDescriptors.find(
@@ -1271,11 +1243,9 @@ function ThreadSettingsModelsScreen() {
             const title =
               submenu.kind === "runtime"
                 ? "Runtime"
-                : submenu.kind === "skills"
-                  ? "Skills"
-                  : (session.displayedDescriptors.find(
-                      (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                    )?.label ?? "Option");
+                : (session.displayedDescriptors.find(
+                    (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
+                  )?.label ?? "Option");
             navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
           }}
         />
@@ -1355,16 +1325,6 @@ export function ExistingThreadSettingsRouteScreen({
   const draftKey = activeComposerDraftKey(threadKey, route.params.draftKey, queuedRunEdit);
   const prompt = useComposerDraft(draftKey).text;
   const serverConfig = selectedEnvironmentRuntime?.serverConfig ?? null;
-  const draftModelSelection = draftSettings.modelSelection ?? selectedThread?.modelSelection;
-  const skillPacks = useThreadSkillPacksSession({
-    environmentId: route.params.environmentId,
-    projectId: selectedThread?.projectId ?? null,
-    threadId: route.params.threadId,
-    providerDriver:
-      serverConfig?.providers.find(
-        (provider) => provider.instanceId === draftModelSelection?.instanceId,
-      )?.driver ?? null,
-  });
 
   if (!selectedThread) {
     return <View className="flex-1 bg-sheet" />;
@@ -1415,7 +1375,6 @@ export function ExistingThreadSettingsRouteScreen({
       }}
       runtimeMode={draftSettings.runtimeMode ?? selectedThread.runtimeMode}
       onUpdateRuntimeMode={(runtimeMode) => updateComposerDraftSettings(threadKey, { runtimeMode })}
-      {...(skillPacks ? { skillPacks } : {})}
       onClose={() => navigation.goBack()}
     />
   );
@@ -1425,13 +1384,6 @@ export function ExistingThreadSettingsRouteScreen({
 export function NewTaskThreadSettingsRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
-  const skillPacks = useNewTaskSkillPacksSession({
-    environmentId: flow.selectedEnvironmentId,
-    projectId: flow.selectedProject?.id ?? null,
-    draftPackIds: flow.skillPackIds,
-    setDraftPackIds: flow.setSkillPackIds,
-    providerDriver: flow.selectedModelOption?.providerDriver ?? null,
-  });
   const optionDescriptors = resolveProviderOptionDescriptors({
     capabilities: flow.selectedModelOption?.capabilities,
     selections: flow.selectedModel?.options,
@@ -1452,7 +1404,6 @@ export function NewTaskThreadSettingsRouteScreen() {
       onUpdateOptionSelections={flow.setSelectedModelOptions}
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
-      {...(skillPacks ? { skillPacks } : {})}
       onClose={() => navigation.goBack()}
     />
   );

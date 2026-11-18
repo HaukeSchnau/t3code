@@ -4891,8 +4891,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ON owner.node_id = owned.owner_node_id
                   WHERE owned.owner_node_id IS NOT NULL AND owner.thread_id = ${threadId}
                   UNION
+                  -- A delegated child recovers its own provider thread; a parent that
+                  -- cleared the child's roster would drop the child's restart note.
                   SELECT provider_thread_id FROM orchestration_v2_projection_subagents
                   WHERE thread_id = ${threadId} AND provider_thread_id IS NOT NULL
+                    AND origin = 'provider_native'
                 )
                 AND (
                   provider_thread.status = 'active'

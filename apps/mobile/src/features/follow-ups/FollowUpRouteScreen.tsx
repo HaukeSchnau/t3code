@@ -16,6 +16,7 @@ import {
   type FollowUpLink,
   type FollowUpSaveInput,
 } from "@t3tools/contracts";
+import { parseFollowUpLinkHref } from "@t3tools/shared/followUpLinks";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Platform, View } from "react-native";
@@ -195,6 +196,16 @@ function FollowUpDetail(props: {
   const body = useLiveThreadLinkLabels(followUp.body, origin?.environmentId ?? home);
   const openPullRequest = useOpenPullRequest();
   const openLink = (href: string) => {
+    const followUpLink = parseFollowUpLinkHref(href);
+    if (followUpLink !== null) {
+      navigation.dispatch(
+        StackActions.push("FollowUp", {
+          environmentId: String(followUpLink.environmentId),
+          followUpId: String(followUpLink.followUpId),
+        }),
+      );
+      return;
+    }
     const link = parseThreadLinkHref(href);
     if (link === null) {
       void openPullRequest(href);

@@ -12,6 +12,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import { formatFollowUpLink, type FollowUpRef } from "@t3tools/shared/followUpLinks";
 import { formatThreadLink, hostedThreadLink } from "@t3tools/shared/threadLinks";
 
 const ALL_MCP_CAPABILITIES = [
@@ -149,6 +150,17 @@ export const threadLinkFor = (
     ? formatThreadLink(ref, title)
     : hostedThreadLink(ref, hostedAppUrl);
 };
+
+/**
+ * T3 Code renders `t3-follow-up://` links as follow-up chips. No hosted page opens a follow-up,
+ * so other MCP clients get no link and name it by its title.
+ */
+export const followUpLinkFor = (
+  scope: Pick<McpInvocationScope, "client">,
+  ref: FollowUpRef,
+  title: string,
+): string | undefined =>
+  scope.client?.hostedAppUrl === undefined ? formatFollowUpLink(ref, title) : undefined;
 
 export class McpInvocationContext extends Context.Service<
   McpInvocationContext,

@@ -113,6 +113,7 @@ import Migration0107 from "./Migrations/080_ScheduledTaskThreadMode.ts";
 import Migration0108 from "./Migrations/081_ProjectionMessageSearchText.ts";
 import Migration0109 from "./Migrations/109_ScheduledTaskOnceRunAt.ts";
 import Migration0110 from "./Migrations/110_FollowUps.ts";
+import Migration0111 from "./Migrations/111_DropSkillPacks.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -231,6 +232,7 @@ const migrationEntries = [
   [108, "ProjectionMessageSearchText", Migration0108],
   [109, "ScheduledTaskOnceRunAt", Migration0109],
   [110, "FollowUps", Migration0110],
+  [111, "DropSkillPacks", Migration0111],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

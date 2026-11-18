@@ -5,13 +5,54 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
+  ScheduledTaskId,
+  type ScheduledTask,
 } from "@t3tools/contracts";
 import {
+  changeDraftProject,
+  editDraft,
   scheduledTaskDefaultModel,
   DEFAULT_SCHEDULE,
   scheduleDraftForTask,
   scheduleFromDraft,
+  workspaceStrategyFromDraft,
 } from "./scheduledTaskDraft";
+
+const isolatedTask: ScheduledTask = {
+  id: ScheduledTaskId.make("isolated-task"),
+  title: "Review issues",
+  prompt: "Review open issues",
+  enabled: true,
+  schedule: { type: "interval", everyMs: 60_000 },
+  projectId: ProjectId.make("project"),
+  threadId: null,
+  workspaceStrategy: { type: "workspace", baseRef: "main", isolated: true },
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  createdBy: "user",
+  creationSource: "web",
+  createdAt: "2026-09-17T00:00:00.000Z",
+  updatedAt: "2026-09-17T00:00:00.000Z",
+  nextRunAt: null,
+  lastRunAt: null,
+  lastRunStatus: "never",
+  lastRunError: null,
+  runCount: 0,
+};
+
+describe("workspaceStrategyFromDraft", () => {
+  it("drops a managed workspace's isolation when the task moves to another project", () => {
+    const draft = editDraft(isolatedTask);
+    expect(workspaceStrategyFromDraft(draft)).toMatchObject({ isolated: true });
+    const moved = changeDraftProject(draft, ProjectId.make("project:other"));
+    expect(workspaceStrategyFromDraft(moved)).toEqual({
+      type: "worktree",
+      baseRef: "main",
+      startFromOrigin: false,
+    });
+  });
+});
 
 describe("scheduleDraftForTask", () => {
   it("opens legacy sub-minute schedules at the writable minimum", () => {

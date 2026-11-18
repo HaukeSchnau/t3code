@@ -264,6 +264,8 @@ export class ScheduledTaskService extends Context.Service<
       options?: {
         /** The agent thread that asked for the task; it hears about failed runs. Kept on edits. */
         readonly creatorThreadId?: ThreadId;
+        /** Set only by the host's declarations, which own declared tasks. */
+        readonly declared?: boolean;
       },
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly setEnabled: (
@@ -271,6 +273,7 @@ export class ScheduledTaskService extends Context.Service<
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly delete: (
       input: ScheduledTaskDeleteInput,
+      options?: { readonly declared?: boolean },
     ) => Effect.Effect<ScheduledTaskDeleteResult, ScheduledTaskError>;
     /** Deletes only tasks that still target this thread, including their webhook deliveries. */
     readonly deleteForThread: (threadId: ThreadId) => Effect.Effect<void, ScheduledTaskError>;
@@ -301,6 +304,17 @@ export class ScheduledTaskService extends Context.Service<
     ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>;
   }
 >()("t3/scheduledTasks/ScheduledTaskService") {}
+
+const DECLARED_TASK_ID_PREFIX = "declared:";
+
+/** The task a host declares under `key` (DeclaredScheduledTasks.ts). */
+export const declaredScheduledTaskId = (key: string) =>
+  ScheduledTaskId.make(`${DECLARED_TASK_ID_PREFIX}${key}`);
+
+const isDeclaredScheduledTaskId = (id: string) => id.startsWith(DECLARED_TASK_ID_PREFIX);
+
+const DECLARED_TASK_CHANGE =
+  "This host's configuration declares this task. Change or remove it there; you can still run, pause or resume it here.";
 
 function taskError(message: string, input?: { taskId?: ScheduledTaskId; cause?: unknown }) {
   return new ScheduledTaskError({
@@ -435,7 +449,7 @@ const decodeRow = Effect.fnUntraced(
     const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
     const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
     const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
-    return yield* decodeTask({
+    const task = yield* decodeTask({
       id: row.task_id,
       title: row.title,
       prompt: row.prompt,
@@ -460,6 +474,7 @@ const decodeRow = Effect.fnUntraced(
       consecutiveFailures: row.consecutive_failures,
       ...(webhook === undefined ? {} : { webhook }),
     });
+    return isDeclaredScheduledTaskId(task.id) ? { ...task, declared: true } : task;
   },
   (effect, row, _origin?) =>
     effect.pipe(
@@ -1484,6 +1499,13 @@ export const layer = Layer.effect(
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
     )(function* (input, options) {
+      if (
+        input.id !== undefined &&
+        isDeclaredScheduledTaskId(input.id) &&
+        options?.declared !== true
+      ) {
+        return yield* taskError(DECLARED_TASK_CHANGE, { taskId: input.id });
+      }
       // A webhook task the policy blocks can still be edited while it is off.
       if (input.enabled && input.schedule.type === "webhook" && webhookPolicyBlock !== undefined) {
         return yield* taskError(
@@ -1755,12 +1777,14 @@ export const layer = Layer.effect(
         { discard: true },
       );
 
-    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(forgetWebhookTask(input.id)),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
-      );
+    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input, options) =>
+      isDeclaredScheduledTaskId(input.id) && options?.declared !== true
+        ? taskError(DECLARED_TASK_CHANGE, { taskId: input.id })
+        : deleteRow(input.id).pipe(
+            Effect.andThen(forgetWebhookTask(input.id)),
+            Effect.andThen(notifyChanged),
+            Effect.as({ id: input.id }),
+          );
 
     const deleteForThread = Effect.fn("ScheduledTaskService.deleteForThread")(function* (
       threadId: ThreadId,

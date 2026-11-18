@@ -10,6 +10,7 @@ import type {
   SpeechAcceleration,
   SpeechModelUnloadTimeout,
   SpeechTranscriptionOptions,
+  SpeechPostProcessingIntent,
   SpeechPostProcessingOptions,
 } from "@t3tools/contracts";
 
@@ -255,6 +256,10 @@ export const postProcessEnvironmentTranscript = (
   },
   options: SpeechPostProcessingOptions,
   canSend: () => boolean,
+  target: {
+    readonly intent?: SpeechPostProcessingIntent;
+    readonly targetApp?: string;
+  } = {},
 ) =>
   request({
     group: "voice",
@@ -264,7 +269,7 @@ export const postProcessEnvironmentTranscript = (
     canSend,
     timeoutMs: INFERENCE_OR_DOWNLOAD_TIMEOUT_MS,
     run: ({ client, headers }) =>
-      client.postProcess({ headers, payload: { transcript, draft, options } }),
+      client.postProcess({ headers, payload: { transcript, draft, options, ...target } }),
   });
 
 export const updateEnvironmentSpeechAcceleration = (

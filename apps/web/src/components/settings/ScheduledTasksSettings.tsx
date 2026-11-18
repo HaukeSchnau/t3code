@@ -17,7 +17,6 @@ import { type ReactNode, useRef, useState } from "react";
 import type {
   EnvironmentId,
   ModelSelection,
-  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
   ScheduledTask,
   ScheduledTaskId,
@@ -108,6 +107,7 @@ import {
   scheduledTaskDefaultModel,
   taskToDraft,
   unbindDraftFromThread,
+  workspaceStrategyFromDraft,
   type DraftState,
   type ScheduleMode,
   type WorkspaceMode,
@@ -182,6 +182,7 @@ const EMPTY_DRAFT: DraftState = {
   baseRef: "main",
   startFromOrigin: true,
   existingWorktreePath: "",
+  savedWorkspace: null,
   modelKey: "",
   runtimeMode: "full-access",
   interactionMode: "default",
@@ -417,9 +418,11 @@ export function ScheduledTasksSettings(target: {
       ? serverEnvironment.scheduledTasksLive({ environmentId: linkedEnvironmentId, input: {} })
       : null,
   );
+  // The host's configuration owns a declared task, so there is no editor to open.
   const linkedTask = linkedTasksQuery.data?.tasks.find(
     (task) =>
       task.id === target.taskId &&
+      task.declared !== true &&
       linkedEnvironmentId !== undefined &&
       matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId),
   );
@@ -814,6 +817,14 @@ function ScheduledTaskRow({
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
           ) : null}
+          {task.declared === true ? (
+            <Tooltip>
+              <TooltipTrigger render={<Badge variant="outline" />}>Host config</TooltipTrigger>
+              <TooltipPopup>
+                This host's configuration declares this task. Change or remove it there.
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
           {task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread" ? (
             <ScheduledTaskThreadLink environmentId={environmentId} threadId={task.threadId} />
           ) : null}
@@ -842,10 +853,12 @@ function ScheduledTaskRow({
               <MoreHorizontalIcon className="size-4" />
             </MenuTrigger>
             <MenuPopup align="end">
-              <MenuItem onClick={onEdit}>
-                <PencilIcon />
-                Edit
-              </MenuItem>
+              {task.declared === true ? null : (
+                <MenuItem onClick={onEdit}>
+                  <PencilIcon />
+                  Edit
+                </MenuItem>
+              )}
               {isWebhook ? (
                 <MenuItem onClick={() => setDeliveriesOpen(true)}>
                   <InboxIcon />
@@ -857,11 +870,15 @@ function ScheduledTaskRow({
                   Run now
                 </MenuItem>
               )}
-              <MenuSeparator />
-              <MenuItem onClick={() => void act("delete")}>
-                <Trash2Icon />
-                Delete
-              </MenuItem>
+              {task.declared === true ? null : (
+                <>
+                  <MenuSeparator />
+                  <MenuItem onClick={() => void act("delete")}>
+                    <Trash2Icon />
+                    Delete
+                  </MenuItem>
+                </>
+              )}
             </MenuPopup>
           </Menu>
           {deliveriesOpen ? (
@@ -1519,16 +1536,6 @@ function ScheduledTaskEditorForm({
       draft.baseModelSelection.model === selection.model
         ? draft.baseModelSelection
         : selection;
-    const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
-      draft.workspaceMode === "root"
-        ? { type: "root" }
-        : draft.workspaceMode === "existing_worktree"
-          ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
-          : {
-              type: "worktree",
-              baseRef: draft.baseRef.trim() || "main",
-              startFromOrigin: draft.startFromOrigin,
-            };
     const input: ScheduledTaskUpsertInput = {
       ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId, requireExisting: true } : {}),
       title: draft.title.trim(),
@@ -1538,7 +1545,7 @@ function ScheduledTaskEditorForm({
       projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
-      workspaceStrategy,
+      workspaceStrategy: workspaceStrategyFromDraft(draft),
       modelSelection,
       // Tasks have no mode picker; a mode above the administrator's ceiling would fail every run.
       runtimeMode:

@@ -10,7 +10,10 @@ import { resolveSpeechPostProcessingModelSelection } from "@t3tools/shared/serve
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
-import { buildTranscriptionPostProcessingPrompt } from "../textGeneration/TranscriptionPostProcessing.ts";
+import {
+  buildTranscriptionPostProcessingPrompt,
+  buildVoiceCommandPrompt,
+} from "../textGeneration/TranscriptionPostProcessing.ts";
 import { applySpeechAliases } from "./customWords.ts";
 import { SpeechOperationError } from "./SpeechService.ts";
 
@@ -40,21 +43,23 @@ const make = Effect.gen(function* () {
         const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-voice-cleanup-" });
         const generated = yield* textGeneration.generateTranscriptionPostProcessing({
           cwd,
-          prompt: buildTranscriptionPostProcessingPrompt(
-            instructions,
-            input.transcript,
-            input.draft,
-            input.options.speechCorrectionWord,
-          ),
+          prompt:
+            input.intent === "command"
+              ? buildVoiceCommandPrompt(input.transcript, input.draft, input.targetApp)
+              : buildTranscriptionPostProcessingPrompt(
+                  instructions,
+                  input.transcript,
+                  input.draft,
+                  input.options.speechCorrectionWord,
+                  input.targetApp,
+                ),
           modelSelection: resolveSpeechPostProcessingModelSelection(settings),
         });
         const text = generated.transcription.trim();
-        return {
-          text:
-            text.length > 0
-              ? applySpeechAliases(text, input.options.speechCustomWords)
-              : input.transcript,
-        };
+        if (text.length > 0)
+          return { text: applySpeechAliases(text, input.options.speechCustomWords) };
+        // The raw instruction is never the text the person wanted.
+        return { text: input.intent === "command" ? "" : input.transcript };
       },
       Effect.scoped,
       Effect.mapError((cause) => new SpeechOperationError({ operation: "post-processing", cause })),

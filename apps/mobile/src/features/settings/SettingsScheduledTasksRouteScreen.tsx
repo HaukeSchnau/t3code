@@ -79,6 +79,7 @@ import {
   scheduledTaskDefaultModel,
   scheduleFromDraft,
   unbindDraftFromThread,
+  workspaceStrategyFromDraft,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
 import { settingsTargetsForProject } from "./settings-environment-filter.logic";
@@ -777,16 +778,7 @@ function TaskForm({
       enabled: draft.enabled,
       threadId: draft.threadId,
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
-      workspaceStrategy:
-        draft.workspace === "root"
-          ? { type: "root" }
-          : draft.workspace === "existing_worktree"
-            ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
-            : {
-                type: "worktree",
-                baseRef: draft.baseRef.trim() || "main",
-                startFromOrigin: draft.startFromOrigin,
-              },
+      workspaceStrategy: workspaceStrategyFromDraft(draft),
       // Tasks have no mode picker; a mode above the administrator's ceiling is refused.
       runtimeMode:
         clampManagedRuntimeMode(config?.managedPolicy, draft.runtimeMode) ?? draft.runtimeMode,
@@ -1495,7 +1487,9 @@ function EnvironmentTasks({
           >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Edit ${task.title}`}
+              accessibilityLabel={task.declared === true ? task.title : `Edit ${task.title}`}
+              // The host's configuration owns a declared task, so there is no editor to open.
+              disabled={task.declared === true}
               onPress={() => {
                 onEdit(task);
               }}
@@ -1517,6 +1511,11 @@ function EnvironmentTasks({
                   {task.blockedByPolicy}
                 </Text>
               ) : null}
+              {task.declared === true ? (
+                <Text className="text-sm text-foreground-muted" numberOfLines={2}>
+                  Declared by this host's configuration. Change or remove it there.
+                </Text>
+              ) : null}
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
                   Last run failed: {task.lastRunError}
@@ -1525,7 +1524,7 @@ function EnvironmentTasks({
             </Pressable>
             <Menu
               actions={[
-                { id: "edit", title: "Edit" },
+                ...(task.declared === true ? [] : [{ id: "edit", title: "Edit" }]),
                 ...(task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread"
                   ? [{ id: "thread", title: "Open thread" }]
                   : []),
@@ -1537,11 +1536,15 @@ function EnvironmentTasks({
                 ...(task.schedule.type === "webhook"
                   ? []
                   : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
-                {
-                  id: "delete",
-                  title: "Delete",
-                  attributes: { destructive: true, disabled: !canOperate },
-                },
+                ...(task.declared === true
+                  ? []
+                  : [
+                      {
+                        id: "delete",
+                        title: "Delete",
+                        attributes: { destructive: true, disabled: !canOperate },
+                      },
+                    ]),
               ]}
               onPressAction={({ nativeEvent }) => {
                 const action = nativeEvent.event;
