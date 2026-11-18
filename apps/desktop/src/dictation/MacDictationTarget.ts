@@ -66,10 +66,13 @@ function text(element, name) {
     return null;
   }
 }
-// Password fields report a secure subrole. Nothing is read from them or pasted into them.
-function isSecure(pid) {
-  const focused = attribute($.AXUIElementCreateApplication(pid), "AXFocusedUIElement");
-  return Boolean(focused) && text(focused, "AXSubrole") === "AXSecureTextField";
+function focusedElement(pid) {
+  return attribute($.AXUIElementCreateApplication(pid), "AXFocusedUIElement");
+}
+// Password fields report a secure subrole. Nothing is read from them or pasted into them; each
+// check looks at the very element that is read or that receives the shortcut.
+function isSecure(element) {
+  return Boolean(element) && text(element, "AXSubrole") === "AXSecureTextField";
 }
 function stdin() {
   const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
@@ -86,15 +89,14 @@ function run(argv) {
   const front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
   const result = { front: front.processIdentifier, app: front.localizedName.js, value: null, selected: null };
   if (result.front !== pid || !$.AXIsProcessTrusted()) return JSON.stringify(result);
-  const app = $.AXUIElementCreateApplication(pid);
-  if (isSecure(pid)) return JSON.stringify(result);
-  const focused = attribute(app, "AXFocusedUIElement");
+  const focused = focusedElement(pid);
+  if (isSecure(focused)) return JSON.stringify(result);
   if (focused) {
     if (wantField) result.value = text(focused, "AXValue");
     if (wantField || wantSelection) result.selected = text(focused, "AXSelectedText");
   }
   // Shortcuts go to whichever app is in front, so check again right before sending one.
-  if (wantSelection && !result.selected && frontPid() === pid) {
+  if (wantSelection && !result.selected && frontPid() === pid && !isSecure(focusedElement(pid))) {
     const pb = $.NSPasteboard.generalPasteboard;
     const saved = snapshot(pb);
     const before = pb.changeCount;
@@ -122,7 +124,7 @@ function run(argv) {
   pb.setStringForType($(value), $("public.utf8-plain-text"));
   if (!paste) return "copied";
   pb.setStringForType($(""), $("org.nspasteboard.TransientType"));
-  if (frontPid() !== pid || isSecure(pid)) return "copied";
+  if (frontPid() !== pid || isSecure(focusedElement(pid))) return "copied";
   const written = pb.changeCount;
   command(9);
   delay(0.6);
