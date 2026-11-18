@@ -334,6 +334,9 @@ export const LoadBalancingWeights = Schema.Record(
   Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
 );
 
+/** Fork (patches/fleet-placement.md): this machine's Auto balance weight; 0 takes no balanced work. */
+export const PlacementWeight = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
+
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
 export const ChatWidth = Schema.Literals(["comfortable", "wide", "full"]);
@@ -1353,6 +1356,10 @@ export const CloudSpeechCredentials = Schema.Struct({
 });
 
 export const ServerSettings = Schema.Struct({
+  // Null until a client sets it or migrates its browser's Auto balance settings.
+  placementWeight: Schema.NullOr(PlacementWeight).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1790,6 +1797,9 @@ export const ServerSettingsPatch = Schema.Struct({
   setProviderModelOrder: Schema.optionalKey(
     Schema.Struct({ provider: ProviderInstanceId, modelOrder: Schema.Array(TrimmedString) }),
   ),
+  placementWeight: Schema.optionalKey(Schema.NullOr(PlacementWeight)),
+  // Applied under the settings service's write lock, only while still unset.
+  migratePlacementWeight: Schema.optionalKey(PlacementWeight),
   favorites: Schema.optionalKey(ModelFavorites),
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   // Applied under the settings service's write lock, only while still unset.

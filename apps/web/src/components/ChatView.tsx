@@ -35,6 +35,7 @@ import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import { resolveDraftHeroState } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
+import { usePlacementWeights } from "../hooks/useLoadBalancedEnvironment";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
@@ -214,11 +215,7 @@ import {
   resolveProjectDefaultProviderModelSelection,
   shouldShowInstanceBadge,
 } from "../providerInstances";
-import {
-  useClientSettings,
-  useClientSettingsHydrated,
-  useEnvironmentSettings,
-} from "../hooks/useSettings";
+import { useClientSettingsHydrated, useEnvironmentSettings } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
@@ -1318,12 +1315,22 @@ export default function ChatView(props: ChatViewProps) {
   const canChangeEnvironment =
     hasMultipleEnvironments && !envLocked && draftId !== null && !draftThread?.promotedTo;
 
-  const loadBalancingSettings = useClientSettings((settings) => ({
-    loadBalancingEnabled: settings.loadBalancingEnabled,
-    loadBalancingWeights: settings.loadBalancingWeights,
-  }));
+  // Each machine decides in its own settings whether it takes balanced work.
+  const projectEnvironmentIds = logicalProjectEnvironments.map(
+    ({ environmentId }) => environmentId,
+  );
+  const placementWeights = usePlacementWeights(projectEnvironmentIds);
+  const loadBalancingWeights = Object.fromEntries(
+    projectEnvironmentIds.map((environmentId, index) => [
+      environmentId,
+      placementWeights[index] ?? 0,
+    ]),
+  );
+  const loadBalancingSettings = {
+    loadBalancingEnabled: Object.values(loadBalancingWeights).some((weight) => weight > 0),
+    loadBalancingWeights,
+  };
   const automaticEnvironment = Boolean(
-    clientSettingsHydrated &&
     draftId &&
     !envLocked &&
     canAutoBalanceEnvironments &&

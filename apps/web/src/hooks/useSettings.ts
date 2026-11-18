@@ -46,6 +46,7 @@ import * as Equal from "effect/Equal";
 import * as Struct from "effect/Struct";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { placementMigrationPatch } from "@t3tools/client-runtime/load-balancing";
 import { toastManager } from "~/components/ui/toast";
 import { isHostedStaticApp } from "~/hostedPairing";
 import { environmentCatalog } from "~/connection/catalog";
@@ -348,8 +349,10 @@ function migrateModelPreferences(): void {
     modelPreferencesMigrationTargetsAtom,
   )) {
     if (attemptedMigrationGenerations.get(environmentId) === generation) continue;
-    const patch = modelPreferencesMigrationPatch(settings, clientSettingsSnapshot);
-    if (!patch) continue;
+    const modelPatch = modelPreferencesMigrationPatch(settings, clientSettingsSnapshot);
+    const placementPatch = placementMigrationPatch(settings, clientSettingsSnapshot, environmentId);
+    if (!modelPatch && !placementPatch) continue;
+    const patch = { ...modelPatch, ...placementPatch };
     attemptedMigrationGenerations.set(environmentId, generation);
     void runAtomCommand(
       appAtomRegistry,
@@ -360,7 +363,7 @@ function migrateModelPreferences(): void {
   }
 }
 
-/** Moves this client's legacy model preferences onto each server, once per connection. */
+/** Moves this client's legacy model and Auto balance preferences onto each server, once per connection. */
 export function startModelPreferencesMigration(): () => void {
   const unsubscribes = [
     appAtomRegistry.subscribe(modelPreferencesMigrationTargetsAtom, migrateModelPreferences),
