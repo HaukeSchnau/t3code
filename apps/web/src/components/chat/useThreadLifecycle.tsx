@@ -20,6 +20,7 @@ import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
   type ScopedThreadRef,
+  type ThreadAskId,
   type ThreadId,
   ProviderInteractionMode,
   RuntimeMode,
@@ -66,11 +67,14 @@ import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import {
+  askNowItem,
   backgroundWorkNowItem,
   childInputNowItem,
   goalNowItem,
   runStopNowItem,
 } from "./ThreadActivityBanners";
+import type { TimelineEntry } from "../../session-logic";
+import { requestHtmlRenderOpen } from "../../state/htmlRenderOpenRequest";
 import { useForceStopThread } from "./useForceStopThread";
 import { useAtomValue } from "@effect/atom-react";
 import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
@@ -108,6 +112,10 @@ interface ThreadLifecycleInput {
   readonly isWorking: boolean;
   readonly pendingBackgroundTasks: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
   readonly turnItems: Parameters<typeof backgroundWorkNowItem>[0]["turnItems"];
+  /** The loaded timeline, where a page ask finds its page. */
+  readonly timelineEntries: ReadonlyArray<TimelineEntry>;
+  /** Scrolls the timeline to a page; false when the loaded timeline does not hold it. */
+  readonly revealHtmlRender: (renderId: string) => boolean;
   readonly activePendingApproval: PendingThreadRequests["activePendingApproval"];
   readonly activePendingUserInput: PendingThreadRequests["activePendingUserInput"];
   readonly localCheckoutBranchMismatch: {
@@ -160,6 +168,8 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     isWorking,
     pendingBackgroundTasks,
     turnItems,
+    timelineEntries,
+    revealHtmlRender,
     activePendingApproval,
     activePendingUserInput,
     localCheckoutBranchMismatch,
@@ -178,7 +188,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   } = input;
   const navigate = useNavigate();
   const router = useRouter();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, dismissThreadAsks } = useThreadActions();
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
@@ -502,11 +512,12 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   };
   const onOpenRelatedThreadStable = useStableCallback(onOpenRelatedThread);
   const childThreadInputs = useChildThreadInputs(activeThreadRef);
+  const threadAwaitingUser = Boolean(
+    activePendingApproval || activePendingUserInput || activeThreadShell?.hasPendingUserInput,
+  );
   const childInputNow = childInputNowItem({
     childThreadInputs,
-    parentAwaitingUser: Boolean(
-      activePendingApproval || activePendingUserInput || activeThreadShell?.hasPendingUserInput,
-    ),
+    parentAwaitingUser: threadAwaitingUser,
     onOpenThread: onOpenRelatedThreadStable,
   });
 
@@ -661,6 +672,38 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         }),
       );
     };
+  const openAsk = threadAwaitingUser ? undefined : activeThreadShell?.openAsks?.[0];
+  const askPageTitle = (() => {
+    if (openAsk?.source.type !== "page") return null;
+    const { renderId } = openAsk.source;
+    const page = timelineEntries.find(
+      (entry) => entry.kind === "html-render" && entry.htmlRender.attachmentId === renderId,
+    );
+    return page?.kind === "html-render"
+      ? (page.versions.at(-1)?.htmlRender.title ?? page.htmlRender.title)
+      : null;
+  })();
+  const openAskPage = (renderId: string) => {
+    if (activeThreadRef === null || !revealHtmlRender(renderId)) return;
+    requestHtmlRenderOpen({ ...activeThreadRef, renderId });
+  };
+  const dismissAsk = (askId: ThreadAskId) => {
+    if (activeThreadRef === null) return;
+    void dismissThreadAsks(activeThreadRef, askId).then(
+      toastThreadActionFailure("Failed to end the ask"),
+    );
+  };
+  const askNow =
+    openAsk === undefined
+      ? null
+      : askNowItem({
+          ask: openAsk,
+          pageTitle: askPageTitle,
+          canOperate: canOperateThread,
+          onOpenPage: openAskPage,
+          onJumpToPage: (renderId) => void revealHtmlRender(renderId),
+          onDismiss: dismissAsk,
+        });
   const shortcuts = {
     "thread.settle": () => {
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
@@ -705,7 +748,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
     // A Stop that went unanswered needs the user; one in progress is the thread's work.
-    attentionNow: runStop?.state === "unresponsive" ? runStopNow : childInputNow,
+    attentionNow: runStop?.state === "unresponsive" ? runStopNow : (childInputNow ?? askNow),
     workNow: runStop?.state === "stopping" ? runStopNow : backgroundWorkNow,
     childInputNow,
     goalNow,

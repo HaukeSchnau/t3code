@@ -1,11 +1,21 @@
-import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  RunId,
+  RuntimeRequestId,
+  ThreadAskId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createInboxReturnTracker,
   isThreadWorking,
   sortInboxThreadsByReturn,
+  sortThreadsByNeed,
   sortWorkingThreadsBySend,
+  threadNeedsYou,
 } from "./threadInbox.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -77,6 +87,24 @@ describe("createInboxReturnTracker", () => {
     expect(tracker.returnedAt(thread("a", false))).toBe(12_000);
     expect(notify).toHaveBeenCalledTimes(1);
     unsubscribe();
+  });
+
+  it("lets a thread that stops working with an open ask leave Working at once", () => {
+    const tracker = createInboxReturnTracker();
+    tracker.observe([thread("a", true)]);
+    const asking = {
+      ...thread("a", false),
+      openAsks: [
+        {
+          id: ThreadAskId.make("ask"),
+          source: { type: "turn_end" as const, runId: RunId.make("run-1") },
+          text: "Delete the leftover dirs?",
+          raisedAt: "2026-06-01T00:01:00.000Z",
+        },
+      ],
+    };
+    tracker.observe([asking]);
+    expect(tracker.isWorking(asking)).toBe(false);
   });
 
   it("cancels a transient return on resume and grants a fresh grace after the next finish", () => {
@@ -239,5 +267,114 @@ describe("sortWorkingThreadsBySend", () => {
     expect(
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
     ).toEqual(["sent-last", "sent-first", "launched"]);
+  });
+});
+
+describe("threadNeedsYou", () => {
+  const none = {
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    pendingUserInputAt: null,
+    pendingSubagentRequest: null,
+    pendingGuestMessageCount: 0,
+    openAsks: [],
+  };
+  const request = (card?: "secret" | "link") => ({
+    pendingRuntimeRequest: {
+      id: RuntimeRequestId.make("request"),
+      kind: card === undefined ? ("command" as const) : ("user_input" as const),
+      createdAt: DateTime.makeUnsafe("2026-06-01T00:02:00.000Z"),
+      ...(card === undefined ? {} : { card }),
+    },
+  });
+  const ask = (id: string, type: "turn_end" | "page", raisedAt: string) => ({
+    id: ThreadAskId.make(id),
+    source:
+      type === "page"
+        ? { type, renderId: `render:${id}` }
+        : { type, runId: RunId.make(`run:${id}`) },
+    text: `Ask ${id}`,
+    raisedAt,
+  });
+  const asks = [
+    ask("page", "page", "2026-06-01T00:05:00.000Z"),
+    ask("turn", "turn_end", "2026-06-01T00:03:00.000Z"),
+  ];
+
+  it.each([
+    ["nothing", none, null],
+    [
+      "an approval before any ask",
+      { ...none, hasPendingApprovals: true, openAsks: asks, source: request() },
+      { kind: "approval", text: null, since: "2026-06-01T00:02:00.000Z" },
+    ],
+    [
+      "a question",
+      { ...none, hasPendingUserInput: true, pendingUserInputAt: "2026-06-01T00:04:00.000Z" },
+      { kind: "question", text: null, since: "2026-06-01T00:04:00.000Z" },
+    ],
+    [
+      "a secret card as a request",
+      { ...none, hasPendingUserInput: true, source: request("secret") },
+      { kind: "request", text: null, since: "2026-06-01T00:02:00.000Z" },
+    ],
+    [
+      "a subagent's request",
+      { ...none, pendingSubagentRequest: "approval" as const },
+      { kind: "subagent", text: null, since: null },
+    ],
+    [
+      "a guest's message, from when the oldest waiting one was sent",
+      {
+        ...none,
+        pendingGuestMessageCount: 2,
+        source: { pendingRuntimeRequest: null, pendingGuestMessageAt: "2026-06-01T00:01:00.000Z" },
+      },
+      { kind: "guest", text: null, since: "2026-06-01T00:01:00.000Z" },
+    ],
+    [
+      "the oldest ask",
+      { ...none, openAsks: asks },
+      { kind: "turn_end", text: "Ask turn", since: "2026-06-01T00:03:00.000Z" },
+    ],
+  ] as const)("reports %s", (_, shell, need) => {
+    expect(threadNeedsYou(shell)).toEqual(need);
+  });
+
+  it("orders the thread waiting longest first, and needs without a start after dated ones", () => {
+    const shell = (
+      id: string,
+      updatedAt: string,
+      fields: Partial<Parameters<typeof threadNeedsYou>[0]>,
+    ) => ({
+      ...none,
+      ...fields,
+      id: ThreadId.make(id),
+      environmentId,
+      updatedAt,
+    });
+    const threads = [
+      // An older server sends no guest message time.
+      shell("guest-undated", "2026-06-01T00:09:00.000Z", { pendingGuestMessageCount: 1 }),
+      shell("page", "2026-06-01T00:01:00.000Z", { openAsks: [asks[0]!] }),
+      shell("subagent", "2026-06-01T00:08:00.000Z", { pendingSubagentRequest: "approval" }),
+      shell("question", "2026-06-01T00:00:00.000Z", {
+        hasPendingUserInput: true,
+        pendingUserInputAt: "2026-06-01T00:04:00.000Z",
+      }),
+      shell("turn", "2026-06-01T00:07:00.000Z", { openAsks: asks }),
+      shell("guest", "2026-06-01T00:06:00.000Z", {
+        pendingGuestMessageCount: 1,
+        source: { pendingRuntimeRequest: null, pendingGuestMessageAt: "2026-06-01T00:02:00.000Z" },
+      }),
+    ];
+    expect(sortThreadsByNeed(threads).map((thread) => thread.id)).toEqual([
+      "guest",
+      "turn",
+      "question",
+      "page",
+      "subagent",
+      "guest-undated",
+    ]);
   });
 });

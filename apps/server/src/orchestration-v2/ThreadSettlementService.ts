@@ -153,6 +153,8 @@ export function isAutoSettlementCandidate(
   if (thread.pendingRuntimeRequest !== null) return false;
   // A guest is waiting on the owner; settling would hide the Request.
   if ((thread.pendingGuestMessageCount ?? 0) > 0) return false;
+  // So is an agent's ask.
+  if ((thread.openAsks?.length ?? 0) > 0) return false;
   if (thread.activityRunStatus != null) return false;
   if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
@@ -170,6 +172,7 @@ export function isSnoozed(
     | "status"
     | "pendingRuntimeRequest"
     | "pendingGuestMessageCount"
+    | "openAsks"
   >,
   nowMs: number,
 ): boolean {
@@ -178,6 +181,14 @@ export function isSnoozed(
   // Same as the client: a waiting guest message wakes the thread, and the snooze stays stored.
   if ((thread.pendingGuestMessageCount ?? 0) > 0) return false;
   const snoozedAtMs = toMillis(thread.snoozedAt);
+  // Snoozing an open ask means "ask me later"; only an ask raised after the snooze wakes it.
+  if (
+    thread.openAsks?.some(
+      (ask) => snoozedAtMs === null || !(Date.parse(ask.raisedAt) <= snoozedAtMs),
+    )
+  ) {
+    return false;
+  }
   if (
     thread.pendingRuntimeRequest !== null &&
     (thread.pendingRuntimeRequest.kind !== "user_input" ||

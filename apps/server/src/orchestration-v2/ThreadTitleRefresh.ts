@@ -1,9 +1,5 @@
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import {
-  CommandId,
-  type OrchestrationV2ConversationMessage,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { CommandId, type ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -20,6 +16,7 @@ import { formatThreadTitleContext } from "@t3tools/provider-core/server/threadTi
 import * as ProjectStore from "./ProjectStore.ts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import { isUserTurn } from "./userTurn.ts";
 
 // A burst of follow-ups or steering messages settles into one generation.
 const REFRESH_DEBOUNCE = "5 seconds";
@@ -38,28 +35,6 @@ class ThreadTitleRefresh extends Context.Service<
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("t3/orchestration-v2/ThreadTitleRefresh") {}
-
-/** A message the user wrote, not a notification, delegated result, scheduled prompt, or provider echo. */
-function isUserTurn(
-  message: Pick<
-    OrchestrationV2ConversationMessage,
-    | "role"
-    | "createdBy"
-    | "creationSource"
-    | "notification"
-    | "delegatedCompletion"
-    | "scheduledTaskId"
-  >,
-): boolean {
-  return (
-    message.role === "user" &&
-    message.createdBy === "user" &&
-    message.creationSource !== "provider" &&
-    message.notification === undefined &&
-    message.delegatedCompletion === undefined &&
-    message.scheduledTaskId === undefined
-  );
-}
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;

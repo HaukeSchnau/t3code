@@ -230,6 +230,7 @@ import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementSer
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as ThreadTitleRefresh from "./orchestration-v2/ThreadTitleRefresh.ts";
+import * as TurnEndAskDetector from "./orchestration-v2/TurnEndAskDetector.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
@@ -706,6 +707,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WaitWatchdog.layer,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(ThreadTitleRefresh.make.pipe(Effect.flatMap((service) => service.start()))),
+  Layer.effectDiscard(
+    TurnEndAskDetector.make.pipe(Effect.flatMap((service) => service.start())),
+  ).pipe(Layer.provide(ProjectionStoreV2.layer)),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;

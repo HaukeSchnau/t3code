@@ -184,6 +184,12 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
+const DISMISS_ASKS_MENU_ACTION: MenuAction = {
+  id: "dismiss-asks",
+  title: "No reply needed",
+  image: "checkmark.bubble",
+};
+
 const LEGACY_MENU_ACTIONS: MenuAction[] = [
   { id: "archive", title: "Archive", image: "archivebox" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
@@ -302,6 +308,26 @@ function ThreadListV2ShelfHeader(
     />
   );
 }
+
+export const ThreadListV2NeedsYouHeader = memo(function ThreadListV2NeedsYouHeader(props: {
+  readonly count: number;
+  readonly pane?: "screen" | "sidebar";
+}) {
+  return <ThreadListV2Section label={`Needs you (${props.count})`} pane={props.pane} />;
+});
+
+export const ThreadListV2NeedsYouEnd = memo(function ThreadListV2NeedsYouEnd(props: {
+  readonly pane?: "screen" | "sidebar";
+}) {
+  return (
+    <View
+      className={cn(
+        "mb-1 mt-2 h-px",
+        props.pane === "sidebar" ? "mx-3 bg-drawer-border" : "mx-5 bg-border",
+      )}
+    />
+  );
+});
 
 export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingShelfHeader(
   props: ThreadListV2ShelfHeaderProps,
@@ -650,6 +676,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly snoozed?: boolean;
   readonly pinned?: boolean;
   readonly wokeAt: string | null;
+  /** What the thread needs from the user, shown under the title in the Needs you section. */
+  readonly needLabel?: string | null;
   readonly snoozeWakeLabelText?: string;
   readonly timeLabel: string;
   readonly snoozePresetMinute: string;
@@ -674,6 +702,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
+  readonly onDismissThreadAsks: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
@@ -722,6 +751,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSettleThread,
     onSnoozeThread,
     onUnsnoozeThread,
+    onDismissThreadAsks,
     onUnsettleThread,
     onArchiveThread,
     onPinThread,
@@ -776,7 +806,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
-  const rowAccessibilityLabel = `${thread.title}${providerNameLabel ? `, ${providerNameLabel}` : ""}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
+  const rowAccessibilityLabel = `${thread.title}${props.needLabel ? `, ${props.needLabel}` : ""}${providerNameLabel ? `, ${providerNameLabel}` : ""}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
   const timeLabel = props.timeLabel;
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
@@ -817,6 +847,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [onSnoozeThread, thread],
   );
   const handleUnsnooze = useCallback(() => onUnsnoozeThread(thread), [onUnsnoozeThread, thread]);
+  const handleDismissAsks = useCallback(
+    () => onDismissThreadAsks(thread),
+    [onDismissThreadAsks, thread],
+  );
+  const hasOpenAsks = (thread.openAsks?.length ?? 0) > 0;
+  const needLabel = props.needLabel ?? null;
   const handleUnsettle = useCallback(() => onUnsettleThread(thread), [onUnsettleThread, thread]);
   const handlePin = useCallback(() => onPinThread(thread), [onPinThread, thread]);
   const handleUnpin = useCallback(() => onUnpinThread(thread), [onUnpinThread, thread]);
@@ -844,6 +880,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: snoozeGateNow }),
     snoozed: snoozedRow,
+    hasOpenAsks,
   });
   const snoozePresets = resolveThreadListV2SnoozePresets({
     secondary: swipeActions.secondary,
@@ -998,6 +1035,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       direct: [
         ...direct,
         CARD_MENU_ACTIONS[0]!,
+        ...(hasOpenAsks ? [DISMISS_ASKS_MENU_ACTION] : []),
         ...(swipeActions.secondary === "snooze"
           ? [{ id: "snooze", title: "Snooze", image: "clock", subactions: snoozePresetActions }]
           : []),
@@ -1014,6 +1052,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   }, [
     autoSettleMenuItems,
     canUnsettle,
+    hasOpenAsks,
     pinMenuItems,
     props.settlementSupported,
     reorderMenuItems,
@@ -1029,6 +1068,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
+      if (nativeEvent.event === "dismiss-asks") handleDismissAsks();
       if (nativeEvent.event === "pin") handlePin();
       if (nativeEvent.event === "unpin") handleUnpin();
       if (nativeEvent.event === "auto-settle:enabled") handleSetAutoSettle(true);
@@ -1088,6 +1128,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleUnpin,
       handleUnsettle,
       handleUnsnooze,
+      handleDismissAsks,
       setCustomSnoozeOpen,
       snoozePresets,
       props.snoozePresets,
@@ -1110,6 +1151,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onPress: handleUnsnooze,
       };
     }
+    if (swipeActions.primary === "dismiss-asks") {
+      return {
+        accessibilityLabel: `No reply needed for ${thread.title}`,
+        icon: "checkmark.bubble" as const,
+        // The swipe button fits about eight characters.
+        label: "No reply",
+        onPress: handleDismissAsks,
+      };
+    }
     return swipeActions.primary === "unsettle"
       ? {
           accessibilityLabel: `Un-settle ${thread.title}`,
@@ -1125,6 +1175,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         };
   }, [
     handleArchive,
+    handleDismissAsks,
     handleSettle,
     handleUnsettle,
     handleUnsnooze,
@@ -1279,6 +1330,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
         </View>
       </View>
+      {needLabel !== null ? (
+        <View className="mt-1" style={{ paddingLeft: titleTextInset }}>
+          <Text
+            className={cn(
+              "text-sm",
+              selected
+                ? selectedThreadRowColors.mutedForegroundClassName
+                : rowAppearance.mutedForegroundClassName,
+            )}
+            numberOfLines={2}
+          >
+            {needLabel}
+          </Text>
+        </View>
+      ) : null}
       {props.searchMatch ? (
         <View className="mt-1" style={{ paddingLeft: titleTextInset }}>
           <ThreadSearchMatchExcerpt
@@ -1566,7 +1632,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onSwipeableWillOpen={props.onSwipeableWillOpen}
         primaryAction={primaryAction}
         secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}`}
+        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}:${hasOpenAsks}`}
         simultaneousWith={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
       >

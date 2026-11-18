@@ -45,6 +45,7 @@ import type {
   RuntimeRequestId,
   ScopedThreadRef,
   ServerConfig as T3ServerConfig,
+  ThreadAskId,
   UsageLimitsReport,
   RunId,
 } from "@t3tools/contracts";
@@ -606,6 +607,7 @@ function ThreadDetailBody(
     reportFailure: false,
   });
   const unsnoozeThread = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
+  const dismissAsks = useAtomCommand(threadEnvironment.dismissAsks, { reportFailure: false });
   const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
@@ -768,6 +770,16 @@ function ThreadDetailBody(
       );
     }
   };
+  const dismissOpenAsk = async (askId: ThreadAskId) => {
+    const result = await dismissAsks({
+      environmentId: props.environmentId,
+      input: { threadId: props.selectedThread.id, askId },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      Dialog.alert("Could not end the ask", error instanceof Error ? error.message : "Try again.");
+    }
+  };
   const pendingBackgroundWork = presentPendingBackgroundWork(
     props.selectedThread.pendingBackgroundTasks,
   );
@@ -842,38 +854,63 @@ function ThreadDetailBody(
         },
       };
     }
+    const backgroundStatus =
+      pendingBackgroundWork !== null && contentPresentationKind === "ready"
+        ? {
+            kind: "background" as const,
+            label: pendingBackgroundWork.title,
+            accessibilityLabel: `${pendingBackgroundWork.title}: ${pendingBackgroundWork.items
+              .map((item) => item.label)
+              .join(", ")}`,
+            waiting: pendingBackgroundWork.waiting,
+            checkInAt: pendingBackgroundWork.waiting ? props.selectedThread.waitCheckInAt : null,
+            onPress: () => {
+              Keyboard.dismiss();
+              navigation.navigate("ThreadBackgroundWork", {
+                environmentId: props.environmentId,
+                threadId: props.selectedThread.id,
+              });
+            },
+            action: props.selectedThread.pendingBackgroundTasks.every(isAgentWatchTask)
+              ? null
+              : {
+                  label: statusPending ? "Stopping..." : "Stop",
+                  accessibilityLabel: "Stop background work",
+                  disabled: !props.canOperateThread || statusPending,
+                  onPress: () => void runStatusAction("stop"),
+                },
+          }
+        : null;
+    // The oldest of what agents asked in this thread, when no request of the thread's own waits.
+    // Background work the user can stop keeps this slot, since its Stop lives nowhere else.
+    const openAsk = props.selectedThread.openAsks?.[0];
+    if (
+      openAsk !== undefined &&
+      !props.selectedThread.hasPendingUserInput &&
+      contentPresentationKind === "ready" &&
+      (backgroundStatus === null || backgroundStatus.action === null)
+    ) {
+      return {
+        kind: "ask",
+        page: openAsk.source.type === "page",
+        label: openAsk.text,
+        action: props.canOperateThread
+          ? {
+              label: "No reply needed",
+              accessibilityLabel: "No reply needed",
+              disabled: false,
+              onPress: () => void dismissOpenAsk(openAsk.id),
+            }
+          : null,
+      };
+    }
     if (props.isCompacting && contentPresentationKind === "ready") {
       return { kind: "compacting" };
     }
     if (props.activeWorkStartedAt !== null && contentPresentationKind === "ready") {
       return { kind: "working", startedAt: props.activeWorkStartedAt };
     }
-    if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
-      return {
-        kind: "background",
-        label: pendingBackgroundWork.title,
-        accessibilityLabel: `${pendingBackgroundWork.title}: ${pendingBackgroundWork.items
-          .map((item) => item.label)
-          .join(", ")}`,
-        waiting: pendingBackgroundWork.waiting,
-        checkInAt: pendingBackgroundWork.waiting ? props.selectedThread.waitCheckInAt : null,
-        onPress: () => {
-          Keyboard.dismiss();
-          navigation.navigate("ThreadBackgroundWork", {
-            environmentId: props.environmentId,
-            threadId: props.selectedThread.id,
-          });
-        },
-        action: props.selectedThread.pendingBackgroundTasks.every(isAgentWatchTask)
-          ? null
-          : {
-              label: statusPending ? "Stopping..." : "Stop",
-              accessibilityLabel: "Stop background work",
-              disabled: !props.canOperateThread || statusPending,
-              onPress: () => void runStatusAction("stop"),
-            },
-      };
-    }
+    if (backgroundStatus !== null) return backgroundStatus;
     if (contentPresentationKind === "ready" && (lifecycleSnoozed || settled || woke)) {
       const state = lifecycleSnoozed ? "snoozed" : settled ? "settled" : "woke";
       const label =

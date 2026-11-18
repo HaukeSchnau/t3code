@@ -13,6 +13,7 @@ import {
   EnvironmentAuthorizationError,
   EnvironmentId,
   type ScopedThreadRef,
+  type ThreadAskId,
   ThreadId,
   sessionGrantsScope,
 } from "@t3tools/contracts";
@@ -308,6 +309,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const unsnoozeThreadMutation = useOrchestrationCommand(threadEnvironment.unsnooze, {
+    reportFailure: false,
+  });
+  const dismissThreadAsksMutation = useOrchestrationCommand(threadEnvironment.dismissAsks, {
     reportFailure: false,
   });
   const markThreadUnread = useMarkThreadUnread();
@@ -937,6 +941,13 @@ export function useThreadActions() {
     return result;
   };
 
+  /** No reply needed: ends one ask, or every open ask of the thread, without a message. */
+  const dismissThreadAsks = (target: ScopedThreadRef, askId?: ThreadAskId) =>
+    dismissThreadAsksMutation({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, ...(askId === undefined ? {} : { askId }) },
+    });
+
   const runUndoPlan = (target: ScopedThreadRef, plan: ThreadUndo.ThreadUndoPlan) =>
     ThreadUndo.executeThreadUndo(
       plan,
@@ -998,6 +1009,7 @@ export function useThreadActions() {
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
+    dismissThreadAsks,
     pinThread,
     unpinThread,
     confirmAndUnpinThread,

@@ -2207,6 +2207,7 @@ export default function ChatView(props: ChatViewProps) {
   const {
     showScrollToBottom,
     timelineLiveFollowEnabled,
+    revealHtmlRender,
     onComposerPageScrollKeyDownStable,
     onComposerPageScrollKeyUpStable,
     onComposerPageScrollReleaseStable,
@@ -2537,6 +2538,8 @@ export default function ChatView(props: ChatViewProps) {
     isWorking,
     pendingBackgroundTasks,
     turnItems: serverProjection?.turnItems ?? EMPTY_TURN_ITEMS,
+    timelineEntries,
+    revealHtmlRender,
     activePendingApproval,
     activePendingUserInput,
     localCheckoutBranchMismatch,

@@ -18,6 +18,7 @@ import type {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  ThreadOpenAsk,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -165,6 +166,8 @@ export interface EnvironmentThreadShell {
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   /** Guest messages waiting for the owner to send or dismiss. */
   readonly pendingGuestMessageCount?: number;
+  /** What agents asked the user and still wait for, oldest first. */
+  readonly openAsks?: ReadonlyArray<ThreadOpenAsk>;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
@@ -324,6 +327,7 @@ export function presentThreadShell(
         : null,
     pendingSubagentRequest,
     pendingGuestMessageCount: thread.pendingGuestMessageCount ?? 0,
+    openAsks: thread.openAsks ?? [],
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     waitCheckInAt: (() => {

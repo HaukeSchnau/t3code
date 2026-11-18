@@ -7,6 +7,8 @@ import {
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadShell,
+  type ThreadOpenAsk,
 } from "@t3tools/contracts";
 
 import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
@@ -26,6 +28,7 @@ import {
   cancelQueuedRun,
   createThread,
   deleteThread,
+  dismissThreadAsks,
   editQueuedRun,
   interruptThreadTurn,
   forkSideChat,
@@ -62,6 +65,17 @@ import {
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
+
+/** Settling and No reply needed end asks; the shell carries open asks only while there are some. */
+function withoutOpenAsks(
+  thread: OrchestrationV2ThreadShell,
+  ended: (ask: ThreadOpenAsk) => boolean,
+): OrchestrationV2ThreadShell {
+  if (thread.openAsks === undefined) return thread;
+  const { openAsks, ...rest } = thread;
+  const remaining = openAsks.filter((ask) => !ended(ask));
+  return remaining.length === 0 ? rest : { ...rest, openAsks: remaining };
+}
 
 export type LoadEarlierThreadHistoryInput = {
   readonly threadId: ThreadId;
@@ -177,6 +191,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     unsnooze: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unsnooze",
       execute: unsnoozeThread,
+      scheduler,
+      concurrency,
+    }),
+    dismissAsks: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:dismiss-asks",
+      execute: dismissThreadAsks,
       scheduler,
       concurrency,
     }),
@@ -393,7 +413,7 @@ export function createThreadEnvironmentAtoms<R, E>(
         ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
         ? thread
         : {
-            ...thread,
+            ...withoutOpenAsks(thread, () => true),
             pendingRuntimeRequest: null,
             settledOverride: "settled",
             settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
@@ -429,6 +449,9 @@ export function createThreadEnvironmentAtoms<R, E>(
       snoozedUntil: null,
       snoozedAt: null,
     })),
+    dismissAsks: optimistic.wrap(commands.dismissAsks, (thread, input) =>
+      withoutOpenAsks(thread, (ask) => input.askId === undefined || ask.id === input.askId),
+    ),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),

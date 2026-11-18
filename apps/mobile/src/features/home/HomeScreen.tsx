@@ -70,6 +70,8 @@ import {
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
+  ThreadListV2NeedsYouEnd,
+  ThreadListV2NeedsYouHeader,
   ThreadListV2WorkingShelfHeader,
 } from "../threads/thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
@@ -123,6 +125,7 @@ interface HomeScreenProps {
     snoozedUntil: string,
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onDismissThreadAsks: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -416,6 +419,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleSettleThread = props.onSettleThread;
   const handleSnoozeThread = props.onSnoozeThread;
   const handleUnsnoozeThread = props.onUnsnoozeThread;
+  const handleDismissThreadAsks = props.onDismissThreadAsks;
   const handlePinThread = props.onPinThread;
   const handleMoveThread = props.onMoveThread;
   const handleUnpinThread = props.onUnpinThread;
@@ -560,6 +564,10 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
+    if (item.type === "v2-needs-you-section") {
+      return <ThreadListV2NeedsYouHeader count={item.count} />;
+    }
+    if (item.type === "v2-needs-you-end") return <ThreadListV2NeedsYouEnd />;
     if (item.type === "v2-working-shelf") {
       return (
         <ThreadListV2WorkingShelfHeader
@@ -603,6 +611,7 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozed={item.item.snoozed}
         pinned={item.item.pinned}
         wokeAt={item.item.wokeAt}
+        needLabel={item.item.needLabel}
         snoozePresetMinute={item.snoozePresetMinute ?? ""}
         snoozeWakeLabelText={item.snoozeWakeLabelText}
         timeLabel={item.timeLabel}
@@ -641,14 +650,16 @@ export function HomeScreen(props: HomeScreenProps) {
         pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
         autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
         reorderSupported={
-          item.item.pinned
+          item.item.needLabel === null &&
+          (item.item.pinned
             ? pinReorderEnvironmentIds.has(thread.environmentId)
-            : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+            : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId))
         }
         canMoveUp={item.canMoveUp}
         canMoveDown={item.canMoveDown}
         onSnoozeThread={handleSnoozeThread}
         onUnsnoozeThread={handleUnsnoozeThread}
+        onDismissThreadAsks={handleDismissThreadAsks}
         onUnsettleThread={handleUnsettleThread}
         onPinThread={handlePinThread}
         onUnpinThread={handleUnpinThread}

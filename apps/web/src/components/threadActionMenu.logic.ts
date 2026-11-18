@@ -17,6 +17,7 @@ export type ThreadActionMenuId =
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
+  | "dismiss-asks"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -80,6 +81,8 @@ export interface ThreadActionMenuState {
   readonly autoSettleEnabled: boolean;
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
+  /** An agent asked something; No reply needed ends it without a message. */
+  readonly hasOpenAsks?: boolean;
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects attached providers, so disable it while running. */
   readonly isRunning: boolean;
@@ -166,6 +169,9 @@ export function buildThreadActionMenuItems(
                 ],
               },
         ]
+      : []),
+    ...(state.hasOpenAsks
+      ? [{ id: "dismiss-asks" as const, label: "No reply needed", icon: "message-circle-off" }]
       : []),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration

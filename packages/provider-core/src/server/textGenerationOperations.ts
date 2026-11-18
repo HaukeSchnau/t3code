@@ -12,11 +12,13 @@ import {
   buildPrContentPrompt,
   buildReviewGuidePrompt,
   buildThreadTitlePrompt,
+  buildTurnEndAskPrompt,
 } from "./textGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
+  sanitizeTurnEndAsk,
 } from "./textGenerationUtils.ts";
 
 export const TranscriptionPostProcessingOutput = Schema.Struct({ transcription: Schema.String });
@@ -181,6 +183,18 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     });
   });
 
+  const generateTurnEndAsk: ProviderTextGeneration["generateTurnEndAsk"] = Effect.fn(
+    `${name}.generateTurnEndAsk`,
+  )(function* (input) {
+    const generated = yield* run({
+      operation: "generateTurnEndAsk",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildTurnEndAskPrompt(input),
+    });
+    return { waitsOnUser: generated.waitsOnUser, ask: sanitizeTurnEndAsk(generated.ask) };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -188,5 +202,6 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     generateThreadTitle,
     generateReviewGuide,
     generateTranscriptionPostProcessing,
+    generateTurnEndAsk,
   } satisfies ProviderTextGeneration;
 }

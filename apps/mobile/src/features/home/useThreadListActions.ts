@@ -195,6 +195,7 @@ export function useThreadListActions(): {
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly dismissThreadAsks: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -212,6 +213,9 @@ export function useThreadListActions(): {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
+  const dismissAsksMutation = useAtomCommand(threadEnvironment.dismissAsks, {
+    reportFailure: false,
+  });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
   const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
@@ -387,6 +391,31 @@ export function useThreadListActions(): {
     })();
     snoozeInFlightThreadKeys.current.delete(key);
     return succeeded;
+  };
+  /** No reply needed: ends every open ask of the thread without sending the agent anything. */
+  const dismissThreadAsks = async (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not end the ask")) return false;
+    selectionHaptic();
+    const result = await withThreadDismissal(
+      scopedThreadKey(thread.environmentId, thread.id),
+      () =>
+        dismissAsksMutation({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id },
+        }),
+      (result) => result._tag === "Success",
+    );
+    if (result._tag === "Failure") {
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        "Could not end the ask",
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "The ask could not be ended.",
+      );
+      return false;
+    }
+    return true;
   };
   const unsettleThread = async (thread: EnvironmentThreadShell) =>
     (await executeAction("unsettle", thread)) === true;
@@ -712,6 +741,7 @@ export function useThreadListActions(): {
     settleThread,
     snoozeThread,
     unsnoozeThread,
+    dismissThreadAsks,
     unsettleThread,
     pinThread,
     unpinThread,

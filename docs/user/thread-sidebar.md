@@ -73,6 +73,25 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## See what needs you
+
+Threads that wait on you sit under **Needs you** at the top of the sidebar, above your pins, with
+the one waiting longest first. A thread is there while its agent waits for an approval, an answer,
+a secret or a sign-in, or while a subagent or a guest's message waits on you. It is also there when
+an agent ends its turn on a question or a decision it needs from you. The question shows under the
+thread's title. T3 Code spots these with the model in **Settings → Threads → Text generation
+model**, so each finished turn costs one short request to it.
+
+Opening a thread does not take it out of **Needs you**. Acting does: reply in the thread, answer
+its question, or choose **No reply needed** when the agent can carry on without you. On web and
+desktop, **No reply needed** is on the row when you hover it, in the thread's menu, and on the line
+at the end of the thread. On iOS and Android, swipe the row or open its long-press menu. Settling a
+thread also ends what it asked. A later turn that ends without a question leaves an earlier one
+open.
+
+A snoozed thread leaves **Needs you** until it wakes, and wakes early when an agent asks something
+new.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
@@ -144,8 +163,8 @@ Threads that are working or waiting on work they will resume from move into a co
 **Working** section below the active list.
 That includes subagents, watched pull requests, and background commands or monitors the agent
 says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
-there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
-answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
+there. A thread returns to the top of the active list when it finishes or fails, and moves to
+**Needs you** when it needs an approval or answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
 the pinned section.
 
 This is on by default. Turn it off with **Settings → General → Working section** on web and desktop,
@@ -417,5 +436,5 @@ several selected threads together. Choose **Wake thread** to bring a thread back
 
 A snoozed thread keeps working and stays hidden until its wake time, even while
 its agent wakes itself for background work. It comes back early for an approval,
-a new question, a failed run, or a message or answer you send. You can snooze an existing
+a new question or ask, a failed run, or a message or answer you send. You can snooze an existing
 question and answer when the thread wakes; the question stays unanswered.
