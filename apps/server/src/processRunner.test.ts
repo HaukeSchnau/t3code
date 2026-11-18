@@ -1,4 +1,5 @@
 import { isWindowsCommandNotFound } from "@t3tools/provider-core/server/snapshotProbe";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -6,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
@@ -141,6 +142,18 @@ describe("runProcess", () => {
       expect(error).toMatchObject({ command: "jj", argumentCount: 1, cwd: "/repo" });
       expect(error.cause).toBe(defect);
     }),
+  );
+
+  it.effect("the Node spawner fails instead of dying when spawn throws synchronously", () =>
+    // patches/@effect__platform-node-shared@4.1.2.patch: an oversized argument makes Node throw
+    // E2BIG from spawn, as sandboxed macOS throws EPERM for setuid binaries such as /bin/ps.
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const error = yield* spawner
+        .string(ChildProcess.make(process.execPath, ["x".repeat(4 * 1024 * 1024)]))
+        .pipe(Effect.flip);
+      expect(error).toBeInstanceOf(PlatformError.PlatformError);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("fails when output exceeds max buffer in default mode", () =>

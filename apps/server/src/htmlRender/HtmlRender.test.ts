@@ -425,7 +425,9 @@ describe("HtmlRender", () => {
           expect(error.message).toBe(
             "Headless Chrome could not render the page: the browser could not be started.",
           );
-          expect(error).toMatchObject({ cause: { code: "ENOTDIR" } });
+          // The spawner reports Node's synchronous throw as a PlatformError
+          // (patches/effect-spawn-sync-errors.md).
+          expect(error).toMatchObject({ cause: { reason: { cause: { code: "ENOTDIR" } } } });
         }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
       );
     },

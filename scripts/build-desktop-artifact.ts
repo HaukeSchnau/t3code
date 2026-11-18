@@ -2438,11 +2438,57 @@ const generateMacIconSet = Effect.fn("build-desktop-artifact.generateMacIconSet"
     );
   }
 
-  yield* runCommand(ChildProcess.make({})`iconutil -c icns ${iconsetDir} -o ${targetIcns}`, {
-    label: "iconutil icns",
-    verbose,
-  });
+  const withoutIconutil = yield* Config.Boolean("T3CODE_DESKTOP_ICNS_WITHOUT_ICONUTIL").pipe(
+    Config.withDefault(false),
+  );
+  if (!withoutIconutil) {
+    yield* runCommand(ChildProcess.make({})`iconutil -c icns ${iconsetDir} -o ${targetIcns}`, {
+      label: "iconutil icns",
+      verbose,
+    });
+    return;
+  }
+  const entries = yield* Effect.forEach(MAC_ICNS_ENTRIES, ([type, size, scale]) =>
+    fs
+      .readFile(path.join(iconsetDir, `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`))
+      .pipe(Effect.map((png) => ({ type, png }))),
+  );
+  yield* fs.writeFile(targetIcns, encodeIcns(entries));
 });
+
+// iconutil asks LaunchServices for the iconset's type, which m1's pull-request sandbox denies, so
+// the fork's desktop-launch check writes the icns itself: a header, then each PNG under its size's
+// OSType. Releases keep iconutil: it stores 16 and 32 px as ARGB, and PNG there can break app icons.
+const MAC_ICNS_ENTRIES = [
+  ["icp4", 16, 1],
+  ["ic11", 16, 2],
+  ["icp5", 32, 1],
+  ["ic12", 32, 2],
+  ["ic07", 128, 1],
+  ["ic13", 128, 2],
+  ["ic08", 256, 1],
+  ["ic14", 256, 2],
+  ["ic09", 512, 1],
+  ["ic10", 512, 2],
+] as const;
+
+const encodeIcns = (entries: ReadonlyArray<{ type: string; png: Uint8Array }>) => {
+  const length = entries.reduce((total, entry) => total + 8 + entry.png.length, 8);
+  const bytes = new Uint8Array(length);
+  const view = new DataView(bytes.buffer);
+  const header = (offset: number, type: string, size: number) => {
+    bytes.set(new TextEncoder().encode(type), offset);
+    view.setUint32(offset + 4, size);
+  };
+  header(0, "icns", length);
+  let offset = 8;
+  for (const { type, png } of entries) {
+    header(offset, type, 8 + png.length);
+    bytes.set(png, offset + 8);
+    offset += 8 + png.length;
+  }
+  return bytes;
+};
 
 const stageMacIcons = Effect.fn("build-desktop-artifact.stageMacIcons")(function* (
   stageResourcesDir: string,

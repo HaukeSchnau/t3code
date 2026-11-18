@@ -41,10 +41,16 @@ let app: ElectronApplication | undefined;
 try {
   app = await _electron.launch({
     executablePath: executable,
-    // Linux CI runners do not allow the Chromium sandbox's user namespaces.
-    args: [...(values.app ? [NodePath.resolve(values.app)] : []), "--no-sandbox"],
-    // HOME stays real: on macOS a fake HOME has no login keychain, and safeStorage blocks the
-    // main process on a keychain dialog. macOS keeps its Electron profile in the runner's HOME.
+    // Linux CI runners do not allow the Chromium sandbox's user namespaces, and m1 runs pull
+    // requests inside sandbox-exec, where Chromium's own sandbox can't start.
+    args: [
+      ...(values.app ? [NodePath.resolve(values.app)] : []),
+      "--no-sandbox",
+      // m1's pull-request user has no login keychain; without this, safeStorage blocks the main
+      // process on a keychain dialog.
+      // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone Node tooling has no Effect runtime.
+      ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
+    ],
     env: {
       ...process.env,
       XDG_CONFIG_HOME: NodePath.join(home, ".config"),

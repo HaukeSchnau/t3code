@@ -46,10 +46,30 @@ plus the fork lockfile checks.
   checks (`rust`), `lint:mobile`, the `.github/scripts` tests, upstream's PR-asset rejection, seven
   typecheck groups, a test step for each package with a sizeable suite, one for the small packages,
   one for the repository scripts, the release smoke, and the fork and deploy lockfile checks.
-  Calder skips only upstream's desktop launch check (`scripts/smoke-desktop-app.ts`), because npm's
-  Electron doesn't run on NixOS, `.#ci` has no xvfb, and its fixture database records upstream's
-  migration ids, which a fork build misreads as its own. Running it on m1 against the packaged app
-  needs a fixture from a fork build first.
+- `desktop-launch` runs upstream's desktop launch check (`scripts/smoke-desktop-app.ts`) on m1,
+  because npm's Electron doesn't run on NixOS. It packages an unsigned macOS app (`--target dir`)
+  and launches it in m1's GUI session, where the Calder agent runs, against
+  `scripts/fixtures/desktop-launch/statev2.sqlite`. The step fails when the app can't migrate that
+  database or doesn't show its seeded thread. It reads the same packages as `desktop-build`, plus
+  the packaging and check scripts and the fixture. It is a check, so a change to the server, web or
+  desktop app waits for m1 before it deploys. On m1 the package took under a minute and the launch
+  seven seconds.
+- The fork replaces upstream's fixture with its own. Upstream's records upstream migration ids:
+  a fork build skips the fork migrations at those ids and re-runs upstream's under their fork ids,
+  and fails at `73_ProjectionThreadTitleState`. `apps/server/scripts/desktop-launch-fixture.ts`
+  writes the fixture with the running build's migrations and V1 thread importer, as upstream's
+  holds a V1 import. The committed one comes from fork `main` at `9e72ff9b3c`, at fork migration
+  99, so every newer build migrates it forward through 100 and up, including upstream's renumbered
+  073 to 081. To refresh it, run the script in a `jj workspace add` of an older fork revision
+  (`node apps/server/scripts/desktop-launch-fixture.ts --output <path>` from that workspace, after
+  copying the script in), and keep it well behind `main`. When an upstream sync changes the
+  fixture, keep the fork's.
+- On m1, pull requests' steps run as a sandboxed user without a login keychain or LaunchServices
+  (infra's `calder-sandbox`). The smoke run passes `--use-mock-keychain` on macOS. `iconutil` looks
+  up the iconset's type through LaunchServices, so with `T3CODE_DESKTOP_ICNS_WITHOUT_ICONUTIL`, which
+  only `desktop-launch` sets, `build-desktop-artifact.ts` writes the `.icns` itself. Releases keep
+  `iconutil`. Keep both when upstream changes either file; they could go if pull requests' steps
+  ran in a macOS VM with their own session.
 - Upstream's `changes` job skips jobs a change cannot affect; Calder reuses a step whose inputs are
   unchanged instead. Knip reads the whole repository and runs on every change. `desktop-build` reads
   the web, server and desktop packages, what they depend on, and the committed SPDX license

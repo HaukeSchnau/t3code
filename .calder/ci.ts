@@ -519,6 +519,41 @@ const nativeClients = Task.make("native-clients", {
 }).pipe(Step.timeout("60 minutes"));
 
 /**
+ * Upstream's desktop launch check, on the packaged app: an unsigned macOS build opens a database an
+ * older fork build wrote (`apps/server/scripts/desktop-launch-fixture.ts`), migrates it and shows
+ * the seeded thread. The Calder agent runs in m1's GUI session, which Electron needs.
+ */
+const desktopLaunch = Task.make("desktop-launch", {
+  platform: "aarch64-darwin",
+  setup: appleInstall,
+  inputs: Files.union(
+    Files.workspace("apps/desktop", "apps/server", "apps/web"),
+    Files.imports(["scripts/build-desktop-artifact.ts", "scripts/smoke-desktop-app.ts"]),
+    Files.of(
+      "assets",
+      "native",
+      "scripts/fixtures/desktop-launch",
+      // The web Vite config imports scripts/lib, which Files.workspace doesn't follow.
+      "scripts/lib",
+      // electron-builder loads the afterPack hook by path, which Files.imports doesn't follow.
+      "scripts/prepare-server-compile-cache.cjs",
+      "third-party-licenses",
+      "third-party-licenses.config.json",
+    ),
+  ),
+  // Rust comes from the builder's own pinned nixpkgs registry entry.
+  run: cmd`nix shell nixpkgs#cargo nixpkgs#rustc --command bash -c ${
+    "set -euo pipefail; " +
+    "node scripts/build-desktop-artifact.ts --platform mac --target dir --arch arm64 --output-dir desktop-launch-app; " +
+    'app=$(echo "$PWD"/desktop-launch-app/mac-arm64/*.app); ' +
+    'exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist"); ' +
+    'node scripts/smoke-desktop-app.ts --executable "$app/Contents/MacOS/$exe"'
+  }`,
+  // iconutil needs LaunchServices, which m1's pull-request sandbox denies.
+  env: { T3CODE_DESKTOP_ICNS_WITHOUT_ICONUTIL: "1" },
+}).pipe(Step.timeout("30 minutes"));
+
+/**
  * The desktop and iOS apps ship from every deployed commit. Packaging, signing and TestFlight run on
  * the Apple builder (m1) in Hauke's GUI session, where Xcode and the signing keychain work; the
  * update feed lives on srv-2. A desktop or mobile failure never holds up the deploy.
@@ -573,6 +608,7 @@ export default Project.standard({
     knip,
     graphql,
     desktopBuild,
+    desktopLaunch,
     rust,
     lintMobile,
     githubScripts,
