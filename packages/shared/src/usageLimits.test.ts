@@ -7,6 +7,7 @@ import {
   type ServerProviderUsageLimits,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -22,6 +23,8 @@ import {
   exhaustedUsageWindow,
   paceOf,
   paceRemainingPercent,
+  projectLimitWindows,
+  projectionPaces,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
 } from "./usageLimits.ts";
@@ -161,6 +164,53 @@ describe("pace", () => {
     expect(paceOf(window, now)).toBe("under");
     expect(paceOf({ ...window, usedPercent: 62 }, now)).toBe("on");
     expect(paceOf({ ...window, usedPercent: 80 }, now)).toBe("ahead");
+  });
+
+  const HOUR = 3_600_000;
+  const weeklyIn = (usedPercent: number, hours: number) =>
+    ({
+      id: "seven_day",
+      kind: "weekly",
+      label: "Weekly",
+      usedPercent,
+      windowDurationMins: 7 * 24 * 60,
+      resetsAt: DateTime.formatIso(DateTime.makeUnsafe(now + hours * HOUR)),
+    }) as const;
+
+  it("projects a nearly empty pool by when its accounts refill, not by even pace", () => {
+    const refillSoon = [weeklyIn(98, 2), weeklyIn(98, 24), weeklyIn(97, 48)];
+    expect(paceOf(refillSoon[2]!, now)).toBe("ahead");
+    expect(projectLimitWindows(refillSoon, now)).toMatchObject({ shortPercent: 0, dry: [] });
+    expect(projectionPaces(refillSoon, now).safe).toBeCloseTo(1.71, 2);
+
+    const refillsFarOff = [weeklyIn(97, 30), weeklyIn(98, 70), weeklyIn(96, 110)];
+    const projection = projectLimitWindows(refillsFarOff, now);
+    expect(projection?.shortPercent).toBeCloseTo(39, 0);
+    expect(projection?.dry[0]).toMatchObject({ until: now + 30 * HOUR, refill: 0 });
+    expect((projection!.dry[0]!.from - now) / HOUR).toBeCloseTo(3, 0);
+  });
+
+  it("counts room that resets before the pace reaches it, and skips windows it can't time", () => {
+    const projection = projectLimitWindows(
+      [weeklyIn(20, 8), weeklyIn(90, 96), weeklyIn(95, 144)],
+      now,
+    );
+    expect(projection?.expiring).toEqual([
+      { member: 0, at: now + 8 * HOUR, percent: expect.closeTo(61, 0) },
+    ]);
+    expect(projection?.shortPercent).toBeGreaterThan(0);
+
+    // A reset inside a projection step throws its room away before the next step spends.
+    expect(projectLimitWindows([weeklyIn(99, 0.1)], now)?.expiring).toEqual([
+      { member: 0, at: now + 0.1 * HOUR, percent: expect.closeTo(0.94, 2) },
+    ]);
+    expect(projectLimitWindows([weeklyIn(1, 167)], now)).toBeNull();
+    expect(
+      projectLimitWindows([weeklyIn(5, 160), weeklyIn(5, 160), weeklyIn(5, 160)], now),
+    ).toBeNull();
+    expect(
+      projectLimitWindows([{ ...weeklyIn(50, 10), windowDurationMins: undefined }], now),
+    ).toBeNull();
   });
 });
 

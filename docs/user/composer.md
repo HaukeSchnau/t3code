@@ -329,6 +329,10 @@ On web and desktop, turn on **Context window** in **Settings → Appearance →
 Thread details** to see context usage in the thread details card. It appears
 once the provider reports usage.
 
+Turn on **Usage limits** there to see every provider's limits in the same card. Each bar projects
+your pace so far: dashes are room that resets before you'd use it, amber is room you'd run short
+of before the next refill, and the mark is what your pace needs. Hover a row for when that happens.
+
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).
 
