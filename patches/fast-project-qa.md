@@ -64,6 +64,12 @@ plus the fork lockfile checks.
   (`node apps/server/scripts/desktop-launch-fixture.ts --output <path>` from that workspace, after
   copying the script in), and keep it well behind `main`. When an upstream sync changes the
   fixture, keep the fork's.
+- On m1, pull requests' steps run as a sandboxed user without a login keychain or LaunchServices
+  (infra's `calder-sandbox`). The smoke run passes `--use-mock-keychain` on macOS. `iconutil` looks
+  up the iconset's type through LaunchServices, so with `T3CODE_DESKTOP_ICNS_WITHOUT_ICONUTIL`, which
+  only `desktop-launch` sets, `build-desktop-artifact.ts` writes the `.icns` itself. Releases keep
+  `iconutil`. Keep both when upstream changes either file; they could go if pull requests' steps
+  ran in a macOS VM with their own session.
 - Upstream's `changes` job skips jobs a change cannot affect; Calder reuses a step whose inputs are
   unchanged instead. Knip reads the whole repository and runs on every change. `desktop-build` reads
   the web, server and desktop packages, what they depend on, and the committed SPDX license

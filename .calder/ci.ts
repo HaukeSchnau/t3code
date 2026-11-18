@@ -549,6 +549,8 @@ const desktopLaunch = Task.make("desktop-launch", {
     'exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist"); ' +
     'node scripts/smoke-desktop-app.ts --executable "$app/Contents/MacOS/$exe"'
   }`,
+  // iconutil needs LaunchServices, which m1's pull-request sandbox denies.
+  env: { T3CODE_DESKTOP_ICNS_WITHOUT_ICONUTIL: "1" },
 }).pipe(Step.timeout("30 minutes"));
 
 /**
