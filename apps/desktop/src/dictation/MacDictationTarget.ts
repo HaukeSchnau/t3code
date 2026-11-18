@@ -51,14 +51,6 @@ function command(keyCode) {
     $.CGEventPost(0, event);
   }
 }
-function stdin() {
-  const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
-  return $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
-}
-`;
-
-// The focused element's text, through Accessibility. Apps that expose no text return none.
-const READ_SCRIPT = `${PASTEBOARD_SCRIPT}
 function attribute(element, name) {
   const out = Ref();
   if ($.AXUIElementCopyAttributeValue(element, $(name), out) !== 0) return null;
@@ -74,6 +66,19 @@ function text(element, name) {
     return null;
   }
 }
+// Password fields report a secure subrole. Nothing is read from them or pasted into them.
+function isSecure(pid) {
+  const focused = attribute($.AXUIElementCreateApplication(pid), "AXFocusedUIElement");
+  return Boolean(focused) && text(focused, "AXSubrole") === "AXSecureTextField";
+}
+function stdin() {
+  const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  return $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
+}
+`;
+
+// The focused element's text, through Accessibility. Apps that expose no text return none.
+const READ_SCRIPT = `${PASTEBOARD_SCRIPT}
 function run(argv) {
   const pid = Number(argv[0]);
   const wantField = argv[1] === "1";
@@ -82,10 +87,8 @@ function run(argv) {
   const result = { front: front.processIdentifier, app: front.localizedName.js, value: null, selected: null };
   if (result.front !== pid || !$.AXIsProcessTrusted()) return JSON.stringify(result);
   const app = $.AXUIElementCreateApplication(pid);
+  if (isSecure(pid)) return JSON.stringify(result);
   const focused = attribute(app, "AXFocusedUIElement");
-  // Password fields report a secure subrole; nothing is read from them, not even through Cmd-C.
-  const secure = focused && text(focused, "AXSubrole") === "AXSecureTextField";
-  if (secure) return JSON.stringify(result);
   if (focused) {
     if (wantField) result.value = text(focused, "AXValue");
     if (wantField || wantSelection) result.selected = text(focused, "AXSelectedText");
@@ -119,7 +122,7 @@ function run(argv) {
   pb.setStringForType($(value), $("public.utf8-plain-text"));
   if (!paste) return "copied";
   pb.setStringForType($(""), $("org.nspasteboard.TransientType"));
-  if (frontPid() !== pid) return "copied";
+  if (frontPid() !== pid || isSecure(pid)) return "copied";
   const written = pb.changeCount;
   command(9);
   delay(0.6);
