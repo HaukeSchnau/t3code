@@ -11,10 +11,15 @@ import {
   cursorUsageWindowDetails,
   displayLimitWindows,
   formatDuration,
+  type LimitAccount,
   type LimitPace,
   type LimitPoolWindow,
+  type LimitProjection,
   limitsNotice,
   paceOf,
+  projectionPaces,
+  projectLimitWindows,
+  projectsLimitWindow,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import { Fragment, type ReactNode } from "react";
@@ -29,6 +34,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { providerClients } from "../settings/providerDriverMeta";
+import { AccountChip } from "../usage/UsageLimitsPooled";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { hubPoolFor, otherDriverPools } from "./ThreadDetailsUsage.logic";
 
@@ -108,7 +114,7 @@ export function ThreadDetailsUsage({
               />
             ) : (
               active.limits.windows.map((window) => (
-                <LimitRow key={window.id} window={window} now={now} />
+                <LimitRow key={window.id} driver={active.driver} window={window} now={now} />
               ))
             )}
           </>
@@ -204,9 +210,11 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
 }
 
 function LimitRow({
+  driver,
   window,
   now,
 }: {
+  readonly driver: ProviderDriverKind;
   readonly window: ServerProviderUsageWindow;
   readonly now: number;
 }) {
@@ -214,11 +222,15 @@ function LimitRow({
   const left = remainingPercent(window);
   const pace = paceOf(window, now);
   const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+  const projection = projectsLimitWindow(driver, window.id)
+    ? projectLimitWindows([window], now)
+    : null;
   return (
     <UsageRow
       label={window.label}
       fill={left}
       tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
+      projection={projection}
       value={`${left}%`}
       ariaValue={`${left}% left`}
       tooltip={
@@ -232,7 +244,11 @@ function LimitRow({
               {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}
             </span>
           ) : null}
-          {pace ? <span className="text-muted-foreground">{PACE_LABEL[pace]}</span> : null}
+          {projection ? (
+            <ProjectionLines windows={[window]} projection={projection} now={now} />
+          ) : pace ? (
+            <span className="text-muted-foreground">{PACE_LABEL[pace]}</span>
+          ) : null}
         </>
       }
     />
@@ -256,11 +272,17 @@ function PoolRow({
   const refill = window.resets.find((reset) => reset.restoresPercent > 0 && reset.at > now);
   const label =
     (driver === "cursor" ? cursorUsageWindowDetails(window.id)?.label : null) ?? window.label;
+  const windows = window.members.map((member) => member.window);
+  const projection = projectsLimitWindow(driver, window.id)
+    ? projectLimitWindows(windows, now)
+    : null;
+  const pooled = window.members.length > 1;
   return (
     <UsageRow
       label={label}
       fill={left}
       tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
+      projection={projection}
       value={`${left}%`}
       ariaValue={
         accountCount > 1 ? `${left}% left across ${accountCount} pooled accounts` : `${left}% left`
@@ -279,13 +301,128 @@ function PoolRow({
               {formatUpcomingTimestamp(new Date(refill.at).toISOString(), timestampFormat, now)}
             </span>
           ) : null}
-          {window.pace ? (
+          {projection ? (
+            <ProjectionLines
+              windows={windows}
+              projection={projection}
+              now={now}
+              {...(pooled ? { accounts: window.members.map((member) => member.account) } : {})}
+            />
+          ) : window.pace ? (
             <span className="text-muted-foreground">{PACE_LABEL[window.pace]}</span>
+          ) : null}
+          {pooled ? (
+            <span className="mt-1 grid grid-cols-[auto_auto_1fr] items-center gap-x-2 gap-y-0.5 border-t border-border/60 pt-1.5 tabular-nums">
+              {window.members.map((member) => {
+                const resetsAt = member.window.resetsAt ? Date.parse(member.window.resetsAt) : null;
+                return (
+                  <Fragment key={member.account.key}>
+                    <AccountMark account={member.account} />
+                    <span className="text-end text-foreground">
+                      {remainingPercent(member.window)}%
+                    </span>
+                    <span className="text-muted-foreground">
+                      {resetsAt !== null && resetsAt > now
+                        ? `refills in ${formatDuration(resetsAt - now)}`
+                        : ""}
+                    </span>
+                  </Fragment>
+                );
+              })}
+            </span>
           ) : null}
         </>
       }
     />
   );
+}
+
+function AccountMark({ account }: { readonly account: LimitAccount }) {
+  if (account.email) return <AccountChip email={account.email} />;
+  return (
+    <span className="text-foreground">
+      {account.displayName ?? providerClients.get(account.driver)?.label ?? String(account.driver)}
+    </span>
+  );
+}
+
+/** What the projection means, in words. Mounts only while the tooltip is open. */
+function ProjectionLines({
+  windows,
+  projection,
+  now,
+  accounts,
+}: {
+  readonly windows: readonly ServerProviderUsageWindow[];
+  readonly projection: LimitProjection;
+  readonly now: number;
+  /** A pool's accounts, in window order; a single window has none. */
+  readonly accounts?: readonly LimitAccount[];
+}) {
+  const paces = projectionPaces(windows, now);
+  const [dry] = projection.dry;
+  const dryTotal = projection.dry.reduce((sum, stretch) => sum + stretch.until - stretch.from, 0);
+  const expiring = projection.expiring.toSorted((a, b) => b.percent - a.percent).slice(0, 2);
+  const safe = Math.floor(paces.safe * 10) / 10;
+  return (
+    <>
+      {dry ? (
+        <span className="text-warning-foreground">
+          Runs out in {formatDuration(dry.from - now)}, {formatDuration(dry.until - dry.from)}{" "}
+          before{" "}
+          {accounts ? (
+            <>
+              <AccountMark account={accounts[dry.refill]!} /> refills
+            </>
+          ) : (
+            "it resets"
+          )}
+          {projection.dry.length > 1 ? `. ${formatDuration(dryTotal)} with no room in all` : ""}
+        </span>
+      ) : null}
+      {expiring.map((entry) => (
+        <span key={entry.member} className="text-foreground">
+          {Math.round(entry.percent)}%{" "}
+          {accounts ? (
+            <>
+              of <AccountMark account={accounts[entry.member]!} />{" "}
+            </>
+          ) : null}
+          resets unused in {formatDuration(entry.at - now)}
+        </span>
+      ))}
+      {!dry && expiring.length === 0 ? (
+        <span className="text-foreground">
+          Lasts until {accounts ? "the refills" : "the reset"}, with nothing left over
+        </span>
+      ) : null}
+      <span className="text-muted-foreground">
+        {dry
+          ? safe > 0
+            ? `Slowing to ${safe}× this pace keeps you covered`
+            : "Even a crawl runs dry first"
+          : paces.safe >= 3
+            ? "Covered even at 3× this pace"
+            : `Covered up to ${safe}× this pace`}
+      </span>
+      {paces.usesAll !== null ? (
+        <span className="text-muted-foreground">
+          At {Math.ceil(paces.usesAll * 10) / 10}× this pace, nothing resets unused
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+// A slot cut around the pace notch, as on the Usage page, so the notch reads apart from a fill end.
+function notchAt(percent: number) {
+  const at = `clamp(2px, ${percent}%, calc(100% - 2px))`;
+  const [left, right] = [`calc(${at} - 2px)`, `calc(${at} + 2px)`];
+  const [near, far] = ["-1px", "calc(100% + 1px)"];
+  return {
+    left: at,
+    clipPath: `polygon(${near} ${near}, ${left} ${near}, ${left} ${far}, ${right} ${far}, ${right} ${near}, ${far} ${near}, ${far} ${far}, ${near} ${far})`,
+  };
 }
 
 /** One label, hairline, and value row; the whole row opens the details tooltip. */
@@ -294,6 +431,7 @@ function UsageRow({
   fill,
   tone,
   tick = null,
+  projection = null,
   value,
   ariaValue = value,
   tooltip,
@@ -305,11 +443,16 @@ function UsageRow({
   readonly tone: UsageTone;
   /** A marker on the bar, from 0 to 100. */
   readonly tick?: number | null;
+  /** Splits the fill into room the pace uses and room that resets unused, and marks a shortfall. */
+  readonly projection?: LimitProjection | null;
   readonly value: string;
   readonly ariaValue?: string;
   readonly tooltip: ReactNode;
   readonly muted?: boolean;
 }) {
+  const solid = projection ? projection.usePercent : (fill ?? 0);
+  const need = projection ? Math.min(100, solid + projection.shortPercent) : null;
+  const notch = need === null ? null : notchAt(need);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -323,27 +466,54 @@ function UsageRow({
       >
         <span className="max-w-28 truncate text-muted-foreground">{label}</span>
         {fill !== null ? (
-          <span className="relative h-[3px] rounded-full bg-muted-foreground/30 dark:bg-muted-foreground/20">
-            {fill > 0 ? (
-              <span
-                className={cn(
-                  "absolute inset-y-0 left-0 rounded-full",
-                  tone === "error"
-                    ? "bg-error"
-                    : tone === "warning"
-                      ? "bg-warning"
-                      : muted
-                        ? "bg-muted-foreground"
-                        : "bg-foreground/80",
-                )}
-                style={{ width: `max(${fill}%, 6px)` }}
-              />
-            ) : null}
+          <span className="relative h-[3px]">
+            <span className="absolute inset-0" style={notch ? { clipPath: notch.clipPath } : {}}>
+              <span className="absolute inset-0 rounded-full bg-muted-foreground/30 dark:bg-muted-foreground/20" />
+              {projection && projection.expiresPercent > 0 ? (
+                <span
+                  className="absolute inset-y-0 text-foreground/50"
+                  style={{
+                    left: `${solid}%`,
+                    width: `${projection.expiresPercent}%`,
+                    backgroundImage:
+                      "repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 5px)",
+                  }}
+                />
+              ) : null}
+              {solid > 0 ? (
+                <span
+                  className={cn(
+                    "absolute inset-y-0 left-0 rounded-full",
+                    tone === "error"
+                      ? "bg-error"
+                      : tone === "warning"
+                        ? "bg-warning"
+                        : muted
+                          ? "bg-muted-foreground"
+                          : "bg-foreground/80",
+                  )}
+                  style={{ width: `max(${solid}%, 6px)` }}
+                />
+              ) : null}
+              {need !== null && need > solid ? (
+                <span
+                  className="absolute inset-y-0 rounded-full bg-warning/55"
+                  style={{ left: `${solid}%`, width: `${need - solid}%` }}
+                />
+              ) : null}
+            </span>
             {tick !== null ? (
               <span
                 aria-hidden
                 className="absolute -top-[3px] h-[9px] w-px -translate-x-1/2 bg-foreground/60"
                 style={{ left: `${tick}%` }}
+              />
+            ) : null}
+            {notch ? (
+              <span
+                aria-hidden
+                className="absolute -top-[3px] h-[9px] w-px -translate-x-1/2 bg-foreground"
+                style={{ left: notch.left }}
               />
             ) : null}
           </span>
