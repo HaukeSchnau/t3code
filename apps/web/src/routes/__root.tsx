@@ -39,6 +39,7 @@ import { Button } from "../components/ui/button";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
 import { AnchoredToastProvider, ToastProvider } from "../components/ui/toast";
 import { isElectron } from "../env";
+import { DictationKeyCoordinator } from "../components/desktop/DictationKeyCoordinator";
 import { useClientSettings } from "../hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -216,6 +217,7 @@ function RootRouteBranch() {
       ) : null}
       <SshPasswordPromptDialog />
       <SnapShotCoordinator />
+      {isElectron ? <DictationKeyCoordinator /> : null}
       <ReopenClosedViewShortcut />
       <ConfirmDialogHost />
       <CustomSnoozeDialogHost />

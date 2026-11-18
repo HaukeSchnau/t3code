@@ -97,6 +97,36 @@ sees the recording, which runs in T3 Code itself.
 are down, and **Toggle** always needs a second press. Change the chord itself in
 [Keybindings settings](./keybindings.md).
 
+## Dictation key on Mac
+
+In the macOS desktop app, **Settings → Voice → Dictation key** dictates with one
+key, Fn by default. It follows the **Dictation shortcut** mode: with **Auto**, tap
+Fn to start and again to finish, or hold it while you speak. Fn with another key,
+such as Fn+Delete, still does what it always did, and `Esc` discards.
+
+- Hold **Shift** too to save the transcript as a new draft thread without a
+  project. It appears with your drafts in the sidebar and is not sent. Click the
+  notice to open it.
+- Hold **Control** too to speak an instruction instead of text. With a selection,
+  it rewrites the selection ("make this more formal"); without one, it writes new
+  text at the cursor. Commands use transcript cleanup, so turn that on first.
+
+Turn on **Use the key in other apps** to dictate anywhere. Text lands where you
+started: if that app is still in front when the transcript is ready, T3 Code
+pastes it at the cursor and restores your clipboard; otherwise the text is copied
+for you to paste. A recording you started in T3 always goes into that composer,
+even if you switch apps while talking. A pill at the bottom of the screen shows
+progress, also for a recording into T3 while you're in another app. This needs Accessibility permission, and T3 Code's window must stay
+open, though it can be behind other windows.
+
+**Read the text around the cursor** sends up to about 1 KB around your cursor in
+the other app to transcript cleanup, so the result fits what you're writing. Mac
+apps share it; most browsers and Electron apps don't, and password fields never do.
+
+If macOS also reacts to the Globe key, set **System Settings → Keyboard → Press 🌐
+key to** to **Do Nothing**. On a keyboard whose Fn key macOS can't see, choose
+Right Option or Right Command instead.
+
 ## Improve recognition
 
 - **Language** picks what you speak. **Auto** lets a multilingual model detect

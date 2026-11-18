@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  DesktopDictationEvent,
   DesktopPreviewAnnotationVoiceEvent,
   DesktopPreviewOpenLinkEvent,
   DesktopPreviewPointerEvent,
@@ -340,6 +341,24 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         );
       };
     },
+  },
+  dictation: {
+    getStatus: () => ipcRenderer.invoke(IpcChannels.GET_DICTATION_STATUS_CHANNEL),
+    onEvent: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+        if (typeof event !== "object" || event === null || !("type" in event)) return;
+        listener(event as DesktopDictationEvent);
+      };
+      ipcRenderer.on(IpcChannels.DICTATION_EVENT_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IpcChannels.DICTATION_EVENT_CHANNEL, wrappedListener);
+      };
+    },
+    prepare: (request) => ipcRenderer.invoke(IpcChannels.PREPARE_DICTATION_CHANNEL, request),
+    deliver: (request) => ipcRenderer.invoke(IpcChannels.DELIVER_DICTATION_CHANNEL, request),
+    setPill: (pill) => ipcRenderer.invoke(IpcChannels.SET_DICTATION_PILL_CHANNEL, pill),
+    requestAccessibility: () =>
+      ipcRenderer.invoke(IpcChannels.REQUEST_DICTATION_ACCESSIBILITY_CHANNEL),
   },
   preview: {
     setForwardedShortcuts: (shortcuts) =>

@@ -514,6 +514,7 @@ const layerTest = (
             prepareCaptureReveal: Effect.sync(prepareCaptureRevealMock),
             dispatchMenuAction: () => Effect.void,
             dispatchSnapShotEvent: () => Effect.void,
+            dispatchDictationEvent: () => Effect.succeed(false),
           } as unknown as DesktopWindow.DesktopWindow["Service"]),
         ),
         FileSystem.layerNoop(fileSystemOverrides),
@@ -684,6 +685,7 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
           state.preparedWithoutOverlay &&= flashWindows.every((window) => window.destroyed);
         }),
         dispatchMenuAction: () => Effect.void,
+        dispatchDictationEvent: () => Effect.succeed(false),
         dispatchSnapShotEvent: (event: DesktopSnapShotEvent) => {
           switch (event.type) {
             case "requested":

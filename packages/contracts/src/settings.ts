@@ -369,6 +369,9 @@ export type ModelPreferences = {
 
 export const VoiceShortcutMode = Schema.Literals(["auto", "hold", "toggle"]);
 export type VoiceShortcutMode = typeof VoiceShortcutMode.Type;
+/** The macOS desktop key that dictates on its own, inside T3 and, when allowed, in any app. */
+export const DictationKey = Schema.Literals(["off", "fn", "right-option", "right-command"]);
+export type DictationKey = typeof DictationKey.Type;
 
 /**
  * Where this device sends microphone audio. A cloud grant names the forwarding environment and
@@ -551,6 +554,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // Device-local input device id. An empty string follows the operating system default.
   voiceMicrophone: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   voiceShortcutMode: VoiceShortcutMode.pipe(Schema.withDecodingDefault(Effect.succeed("auto"))),
+  dictationKey: DictationKey.pipe(Schema.withDecodingDefault(Effect.succeed("fn"))),
+  dictationInOtherApps: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  dictationReadsField: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   speechLanguage: SpeechLanguage.pipe(Schema.withDecodingDefault(Effect.succeed("auto"))),
   speechTranslateToEnglish: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   speechCustomWords: SpeechCustomWords.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
@@ -2071,6 +2077,9 @@ export const ClientSettingsPatch = Schema.Struct({
   timestampFormat: Schema.optionalKey(TimestampFormat),
   voiceMicrophone: Schema.optionalKey(Schema.String),
   voiceShortcutMode: Schema.optionalKey(VoiceShortcutMode),
+  dictationKey: Schema.optionalKey(DictationKey),
+  dictationInOtherApps: Schema.optionalKey(Schema.Boolean),
+  dictationReadsField: Schema.optionalKey(Schema.Boolean),
   speechLanguage: Schema.optionalKey(SpeechLanguage),
   speechTranslateToEnglish: Schema.optionalKey(Schema.Boolean),
   speechCustomWords: Schema.optionalKey(SpeechCustomWords),
