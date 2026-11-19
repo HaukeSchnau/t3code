@@ -112,6 +112,15 @@ it.effect("lists newest first in pages, and a new version moves forward unseen",
       cursor: first.nextCursor!,
     });
     assert.deepEqual(rest, { pages: ["a1:Layouts:1"], nextCursor: null });
+    // One page by its render id, however far back it sorts, and only in its own thread.
+    assert.deepEqual(
+      yield* listed(index, { threadId: threadA, renderId: "a1", filter: "all", limit: 1 }),
+      { pages: ["a1:Layouts:1"], nextCursor: null },
+    );
+    assert.deepEqual(
+      (yield* listed(index, { threadId: threadB, renderId: "a1", filter: "all" })).pages,
+      [],
+    );
 
     yield* index.markSeen({ threadId: threadA, renderId: "a1", attachmentId: "a1" });
     yield* index.markSeen({ threadId: threadA, renderId: "b1", attachmentId: "b1" });

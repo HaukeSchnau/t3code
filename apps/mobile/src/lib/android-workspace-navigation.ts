@@ -2,15 +2,14 @@ import type { NavigationState } from "@react-navigation/native";
 import { isSettingsRoute } from "../features/settings/settings-navigation";
 import { resetRootStack, type RootStackNavigation } from "./root-stack-reset";
 
-function androidWorkspaceBackReturnsToThread(state: NavigationState) {
+/** Back from a thread returns to a distinct thread below it, or to the triage deck it came from. */
+function androidWorkspaceBackPops(state: NavigationState) {
   const current = state.routes[state.index];
+  const previous = state.routes[state.index - 1]?.name;
   const params = current?.params as ReactNavigation.RootParamList["Thread"] | undefined;
-  return (
-    current?.name === "Thread" &&
-    state.routes[state.index - 1]?.name === "Thread" &&
-    params !== undefined &&
-    !parentThreadIsBelow(state, params)
-  );
+  if (current?.name !== "Thread") return false;
+  if (previous === "Triage") return true;
+  return previous === "Thread" && params !== undefined && !parentThreadIsBelow(state, params);
 }
 
 /** The root stack with only the workspace list. */
@@ -63,7 +62,7 @@ export function returnToAndroidWorkspaceList(
   selectTab: () => void,
 ) {
   const state = navigation.getState();
-  if (state && androidWorkspaceBackReturnsToThread(state)) return navigation.goBack();
+  if (state && androidWorkspaceBackPops(state)) return navigation.goBack();
   selectTab();
   resetAndroidWorkspace(navigation);
 }

@@ -219,8 +219,21 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
           fail(id, -32000, "Sending needs a click in the page, one message per click.");
           return;
         }
-        messages = [...messages, now()];
-        answer(id, () => bridge.send(htmlRenderMessage(bridge, text)));
+        const sentAt = now();
+        messages = [...messages, sentAt];
+        answer(id, () =>
+          bridge.send(htmlRenderMessage(bridge, text)).catch((error: unknown) => {
+            // A refused send never went out: the page keeps its click and its place under the
+            // cap, so it can try again.
+            if (error instanceof HtmlRenderHostRefusal) {
+              clickCredit = true;
+              const index = messages.indexOf(sentAt);
+              if (index !== -1)
+                messages = [...messages.slice(0, index), ...messages.slice(index + 1)];
+            }
+            throw error;
+          }),
+        );
         return;
       }
       case HTML_RENDER_CALL_TOOL_METHOD: {

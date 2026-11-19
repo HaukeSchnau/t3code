@@ -125,7 +125,7 @@ function throwOnFailure(result: AtomCommandResult<unknown, unknown>): void {
 
 /** Brings an existing thread's modes in line with the message, idempotently per command. */
 async function syncThreadSettings(command: DurableComposerCommand): Promise<void> {
-  if (command.bootstrap?.createThread) return;
+  if (command.bootstrap?.createThread || command.inheritThreadSettings) return;
   const thread = readThreadShell(scopeThreadRef(command.environmentId, command.threadId));
   if (thread === null) return;
   if (thread.runtimeMode !== command.runtimeMode) {
@@ -250,7 +250,7 @@ export async function deliverDurableComposerCommand(
       attachments: wireAttachments,
       ...(context ? { context } : {}),
     },
-    modelSelection: command.modelSelection,
+    ...(command.inheritThreadSettings ? {} : { modelSelection: command.modelSelection }),
     titleSeed: command.titleSeed,
     runtimeMode: command.runtimeMode,
     interactionMode: command.interactionMode,

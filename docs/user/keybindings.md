@@ -181,6 +181,11 @@ through the pages you have visited, like a browser's back and forward buttons.
 
 `settings.open` (`mod+shift+,`) opens Settings.
 
+`needsYou.triage` (`mod+shift+y`) opens triage, which goes through the threads that need you one
+at a time. In a browser it uses `ctrl+shift+y` on macOS and `alt+shift+y` on Windows and Linux,
+since Firefox opens Downloads with `ctrl+shift+y`. Its own keys are fixed; see
+[Triage what needs you](./thread-sidebar.md#triage-what-needs-you).
+
 `chat.new` may ask you to choose a project when there is more than one.
 `chat.newLocal` skips that chooser. Both use your
 [new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`

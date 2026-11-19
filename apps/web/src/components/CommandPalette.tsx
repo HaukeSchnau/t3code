@@ -71,6 +71,7 @@ import {
   MessageSquareDashedIcon,
   LinkIcon,
   AppWindowIcon,
+  InboxIcon,
   ListTodoIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -1649,6 +1650,18 @@ function OpenCommandPaletteDialog(props: {
     icon: <ListTodoIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/follow-ups" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:needs-you-triage",
+    searchTerms: ["needs you", "triage", "waiting", "asks", "questions", "reply", "inbox"],
+    title: "Triage what needs you",
+    icon: <InboxIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "needsYou.triage",
+    run: async () => {
+      await navigate({ to: "/triage" });
     },
   });
 

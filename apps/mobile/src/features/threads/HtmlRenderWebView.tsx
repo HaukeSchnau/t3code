@@ -12,6 +12,7 @@ import {
   MessageId,
   type EnvironmentId,
   type HtmlRenderState,
+  type OrchestrationMessageContext,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -46,6 +47,7 @@ import { htmlRenderEnvironment, htmlRenderStateStore } from "../../state/htmlRen
 import { useEnvironmentQuery } from "../../state/query";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { triagePageSend } from "../needs-you/triageSession";
 import { useMarkHtmlRenderSeenInView } from "../pages/useHtmlRenderSeen";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
@@ -107,11 +109,18 @@ const commandFailure = (result: {
   );
 };
 
+type HtmlRenderSend = (message: {
+  readonly text: string;
+  readonly context: OrchestrationMessageContext;
+}) => Promise<void>;
+
 /** A render shown in a thread, which its page may send to, call tools for, and save state in. */
 export interface HtmlRenderBridgeTarget {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly renderId: string;
+  /** Replaces queueing the page's message in the thread's outbox. */
+  readonly send?: HtmlRenderSend | undefined;
 }
 
 /** The render's saved state: this device's unsent or newer save, else a read when the view mounts. */
@@ -234,7 +243,8 @@ function HtmlRenderPage(
             renderId: live().bridge.renderId,
             title: live().title,
             send: async (message) => {
-              const { environmentId, threadId } = live().bridge;
+              const { environmentId, threadId, send } = live().bridge;
+              if (send !== undefined) return send(message);
               await enqueueThreadOutboxMessage({
                 environmentId,
                 threadId,
@@ -394,6 +404,8 @@ export function ThreadHtmlRender(props: {
   readonly onFocusRect: (rect: { readonly top: number; readonly bottom: number }) => void;
   readonly frameWidth: number;
   readonly iconColor: ColorValue;
+  /** Shown on a triage card: the page's sends, also full screen, wait their turn with the card's. */
+  readonly triage?: boolean;
 }) {
   const navigation = useNavigation();
   const last = props.versions.length - 1;
@@ -406,6 +418,9 @@ export function ThreadHtmlRender(props: {
     environmentId: props.environmentId,
     threadId: props.threadId,
     renderId: props.render.attachmentId,
+    send: props.triage
+      ? triagePageSend({ environmentId: props.environmentId, threadId: props.threadId })
+      : undefined,
   };
   const resource = {
     _tag: "attachment" as const,
@@ -548,6 +563,7 @@ export function ThreadHtmlRender(props: {
                 sizeBytes: "0",
                 htmlRender: "1",
                 renderId: props.render.attachmentId,
+                ...(props.triage ? { triage: "1" } : {}),
               })
             }
           >

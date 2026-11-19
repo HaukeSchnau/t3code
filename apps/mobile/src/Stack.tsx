@@ -65,6 +65,7 @@ import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { JjStackSheet } from "./features/threads/git/JjStackSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { PagesScreen } from "./features/pages/PagesScreen";
+import { TriageScreen } from "./features/needs-you/TriageScreen";
 import { ThreadPagesSheet } from "./features/pages/ThreadPagesSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
@@ -525,6 +526,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
     Pages: createNativeStackScreen({
       screen: PagesScreen,
       linking: "pages",
+      options: pageRoute(),
+    }),
+    Triage: createNativeStackScreen({
+      screen: TriageScreen,
+      linking: "triage",
       options: pageRoute(),
     }),
     PullRequestGuideStop: createNativeStackScreen({

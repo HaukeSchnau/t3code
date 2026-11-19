@@ -24,4 +24,21 @@ describe("AppRouteModal", () => {
 
     expect(onCommit).toHaveBeenCalledWith("Keep titles short");
   });
+
+  it("stays open on an Esc that escapeCloses turns down", async () => {
+    await using _screen = await render(
+      <AppRouteModal
+        label="Triage"
+        escapeCloses={(event) => !(event.target instanceof HTMLTextAreaElement)}
+      >
+        <textarea aria-label="Reply" />
+      </AppRouteModal>,
+      { router: "/triage" },
+    );
+
+    await page.getByRole("textbox", { name: "Reply" }).fill("Ship it");
+    await userEvent.keyboard("{Escape}");
+
+    await expect.element(page.getByRole("dialog", { name: "Triage" })).toHaveAttribute("data-open");
+  });
 });

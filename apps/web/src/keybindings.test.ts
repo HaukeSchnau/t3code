@@ -945,6 +945,34 @@ describe("composer and pull request shortcuts", () => {
       }),
     );
   });
+  it("keeps the triage chord off Firefox's Downloads shortcut in browsers", () => {
+    const chord = event({ key: "y", ctrlKey: true, shiftKey: true });
+    assert.strictEqual(
+      resolveShortcutCommand(chord, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false, desktop: true },
+      }),
+      "needsYou.triage",
+    );
+    assert.isNull(
+      resolveShortcutCommand(chord, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false, browser: true },
+      }),
+    );
+    for (const [platform, browserChord] of [
+      ["Linux", event({ key: "y", altKey: true, shiftKey: true })],
+      ["MacIntel", event({ key: "y", ctrlKey: true, shiftKey: true })],
+    ] as const) {
+      assert.strictEqual(
+        resolveShortcutCommand(browserChord, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { terminalFocus: false, browser: true },
+        }),
+        "needsYou.triage",
+      );
+    }
+  });
   it("fills missing number shortcuts without replacing the saved URL binding", () => {
     const olderServerBindings = DEFAULT_RESOLVED_KEYBINDINGS.filter(
       (binding) =>

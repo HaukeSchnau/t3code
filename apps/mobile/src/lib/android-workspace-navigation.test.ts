@@ -41,6 +41,7 @@ const options = {
     "SettingsOpenSourceLicenses",
     "SettingsUsage",
     "SettingsUsageAccount",
+    "Triage",
   ],
   routeParamList: {},
   routeGetIdList: {},
@@ -134,6 +135,31 @@ describe("Android workspace navigation", () => {
       routes: ["Home"],
       index: 0,
       listSelected: true,
+    });
+  });
+
+  it("returns from a thread opened in triage to the triage deck", () => {
+    let state = apply(router.getInitialState(options), StackActions.push("Triage"));
+    state = apply(state, StackActions.push(thread.name, thread.params));
+    let listSelected = false;
+    returnToAndroidWorkspaceList(
+      {
+        dispatch: (action: RootStackResetAction) => {
+          state = apply(state, action);
+        },
+        getParent: () => undefined,
+        getState: () => state,
+        goBack: () => {
+          state = apply(state, StackActions.pop());
+        },
+      },
+      () => {
+        listSelected = true;
+      },
+    );
+    expect({ routes: names(state), listSelected }).toEqual({
+      routes: ["Home", "Triage"],
+      listSelected: false,
     });
   });
 

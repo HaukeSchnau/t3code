@@ -1,7 +1,7 @@
 import type { HtmlRenderCallToolResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { type HtmlRenderBridgeTarget, makeHtmlRenderHost } from "./host.ts";
+import { type HtmlRenderBridgeTarget, HtmlRenderHostRefusal, makeHtmlRenderHost } from "./host.ts";
 
 const active = { active: true };
 const idle = { active: false };
@@ -96,7 +96,14 @@ describe("makeHtmlRenderHost", () => {
   });
 
   it("sends one message per click, marked as coming from the page", async () => {
-    const { host, sent, response } = setup();
+    const sent: Array<Parameters<HtmlRenderBridgeTarget["send"]>[0]> = [];
+    let busy = false;
+    const { host, response } = setup({
+      send: async (message) => {
+        if (busy) throw new HtmlRenderHostRefusal("Still sending the last reply.");
+        sent.push(message);
+      },
+    });
     host.receive(click, active);
     host.receive(send("first", "  Answer B "), active);
     host.receive(send("second", "Answer C"), active);
@@ -111,6 +118,21 @@ describe("makeHtmlRenderHost", () => {
     ]);
     expect(await response("first")).toMatchObject({ result: null });
     expect(await response("second")).toMatchObject({ error: { code: -32000 } });
+
+    // Sends the client refused never went out: the click and the cap do not count them, so the
+    // page can try again.
+    busy = true;
+    host.receive(click, active);
+    for (const id of ["busy-1", "busy-2", "busy-3"]) {
+      host.receive(send(id, "Answer D"), active);
+      expect(await response(id)).toMatchObject({
+        error: { code: -32000, message: "Still sending the last reply." },
+      });
+    }
+    busy = false;
+    host.receive(send("retry", "Answer D"), active);
+    expect(await response("retry")).toMatchObject({ result: null });
+    expect(sent).toHaveLength(2);
   });
 
   it("gives no credit for a click while the reader is not using the frame", async () => {
