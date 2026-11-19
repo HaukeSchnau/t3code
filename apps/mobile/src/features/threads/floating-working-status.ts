@@ -18,6 +18,13 @@ export type FloatingWorkingStatus =
       readonly onPress: () => void;
     }
   | {
+      readonly kind: "ask";
+      /** A page asks, rather than the agent's last message. */
+      readonly page: boolean;
+      readonly label: string;
+      readonly action: FloatingStatusAction | null;
+    }
+  | {
       readonly kind: "background";
       readonly label: string;
       readonly accessibilityLabel: string;

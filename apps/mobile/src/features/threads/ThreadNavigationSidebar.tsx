@@ -63,6 +63,8 @@ import {
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
+  ThreadListV2NeedsYouEnd,
+  ThreadListV2NeedsYouHeader,
   ThreadListV2WorkingShelfHeader,
 } from "./thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
@@ -135,6 +137,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     settleThread,
     snoozeThread,
     unsnoozeThread,
+    dismissThreadAsks,
     unsettleThread,
     pinThread,
     unpinThread,
@@ -426,6 +429,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             snoozed={item.item.snoozed}
             pinned={item.item.pinned}
             wokeAt={item.item.wokeAt}
+            needLabel={item.item.needLabel}
             snoozePresetMinute={item.snoozePresetMinute ?? ""}
             snoozeWakeLabelText={item.snoozeWakeLabelText}
             timeLabel={item.timeLabel}
@@ -472,14 +476,16 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
             autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
             reorderSupported={
-              item.item.pinned
+              item.item.needLabel === null &&
+              (item.item.pinned
                 ? pinReorderEnvironmentIds.has(thread.environmentId)
-                : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+                : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId))
             }
             canMoveUp={item.canMoveUp}
             canMoveDown={item.canMoveDown}
             onSnoozeThread={snoozeThread}
             onUnsnoozeThread={unsnoozeThread}
+            onDismissThreadAsks={dismissThreadAsks}
             onUnsettleThread={unsettleThread}
             onPinThread={pinThread}
             onUnpinThread={unpinThread}
@@ -501,6 +507,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             onOpen={openFollowUp}
           />
         );
+      case "v2-needs-you-section":
+        return <ThreadListV2NeedsYouHeader count={item.count} pane="sidebar" />;
+      case "v2-needs-you-end":
+        return <ThreadListV2NeedsYouEnd pane="sidebar" />;
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader

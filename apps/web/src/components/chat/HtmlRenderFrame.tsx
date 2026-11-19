@@ -18,6 +18,8 @@ import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 import { cn } from "~/lib/utils";
 import { htmlRenderEnvironment, htmlRenderStateStore } from "~/state/htmlRender";
+import { type HtmlRenderOpenTarget, registerHtmlRenderOpener } from "~/state/htmlRenderOpenRequest";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { useEnvironmentQuery } from "~/state/query";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
@@ -106,6 +108,7 @@ export function HtmlRenderFrame(props: {
           threadRef={props.threadRef}
           bridge={bridge}
           readState={readState}
+          openTarget={stateTarget}
           onFullscreenChange={props.onFullscreenChange}
         />
       ) : (
@@ -163,6 +166,8 @@ function HtmlRenderVersionFrame(props: {
   readonly threadRef: ScopedThreadRef | undefined;
   readonly bridge: HtmlRenderPageBridge | undefined;
   readonly readState: () => HtmlRenderState;
+  /** The page's identity for full-screen requests made outside the frame. */
+  readonly openTarget: HtmlRenderOpenTarget | undefined;
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
 }) {
   const { attachmentId, title } = props.htmlRender;
@@ -194,6 +199,32 @@ function HtmlRenderVersionFrame(props: {
   const failed = loaded === null && assetUrl._tag === "Failure";
   const refresh = useAssetUrlRefresh(props.environmentId, resource);
   const [expandedSrc, setExpandedSrc] = useState<string | null>(null);
+  const openFullScreen = async () => {
+    const url =
+      loaded !== null && loaded.expiresAt - Date.now() > MIN_URL_LIFE_MS
+        ? src
+        : await refresh().catch(() => null);
+    if (url !== null) setExpandedSrc(url);
+    else
+      toastManager.add({
+        type: "error",
+        title: "Page unavailable",
+        description: "Reconnect to the environment and try again.",
+      });
+  };
+  const openFullScreenStable = useStableCallback(() => void openFullScreen());
+  const openEnvironmentId = props.openTarget?.environmentId;
+  const openThreadId = props.openTarget?.threadId;
+  const openRenderId = props.openTarget?.renderId;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the page with the thread's ask line, which opens it full screen from outside the frame
+  useEffect(() => {
+    if (openEnvironmentId === undefined || openThreadId === undefined) return;
+    if (openRenderId === undefined) return;
+    return registerHtmlRenderOpener(
+      { environmentId: openEnvironmentId, threadId: openThreadId, renderId: openRenderId },
+      openFullScreenStable,
+    );
+  }, [openEnvironmentId, openThreadId, openRenderId, openFullScreenStable]);
   // The inline page reloads after full screen so it shows what was saved there.
   const [inlineLoad, setInlineLoad] = useState(0);
   const { onFullscreenChange } = props;
@@ -230,19 +261,7 @@ function HtmlRenderVersionFrame(props: {
                     aria-label="Open full screen"
                     size="icon-xs"
                     variant="glass"
-                    onClick={async () => {
-                      const url =
-                        loaded !== null && loaded.expiresAt - Date.now() > MIN_URL_LIFE_MS
-                          ? src
-                          : await refresh().catch(() => null);
-                      if (url !== null) setExpandedSrc(url);
-                      else
-                        toastManager.add({
-                          type: "error",
-                          title: "Page unavailable",
-                          description: "Reconnect to the environment and try again.",
-                        });
-                    }}
+                    onClick={() => void openFullScreen()}
                   />
                 }
               >
@@ -251,24 +270,24 @@ function HtmlRenderVersionFrame(props: {
               <TooltipPopup side="left">Open full screen</TooltipPopup>
             </Tooltip>
           </div>
-          {expandedSrc !== null ? (
-            <HtmlRenderDialog
-              src={expandedSrc}
-              htmlRender={props.htmlRender}
-              threadRef={props.threadRef}
-              bridge={props.bridge}
-              state={props.readState()}
-              onClose={() => {
-                setExpandedSrc(null);
-                setInlineLoad((value) => value + 1);
-              }}
-            />
-          ) : null}
         </>
       ) : failed ? (
         <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
           Unable to load {title}
         </p>
+      ) : null}
+      {expandedSrc !== null ? (
+        <HtmlRenderDialog
+          src={expandedSrc}
+          htmlRender={props.htmlRender}
+          threadRef={props.threadRef}
+          bridge={props.bridge}
+          state={props.readState()}
+          onClose={() => {
+            setExpandedSrc(null);
+            setInlineLoad((value) => value + 1);
+          }}
+        />
       ) : null}
     </div>
   );

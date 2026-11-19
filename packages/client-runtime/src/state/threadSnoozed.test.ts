@@ -110,6 +110,22 @@ describe("effectiveSnoozed", () => {
     expect(effectiveSnoozed({ ...shell, pendingUserInputAt: "invalid" }, { now: NOW })).toBe(false);
   });
 
+  it("defers asks raised before the snooze, but wakes for a newer ask", () => {
+    const shell: ThreadSnoozeShell = {
+      ...makeShell({ snoozedUntil: FUTURE_WAKE }),
+      openAsks: [{ raisedAt: SNOOZED_AT }],
+    };
+    expect(effectiveSnoozed(shell, { now: NOW })).toBe(true);
+    expect(threadWokeAt(shell, { now: NOW })).toBeNull();
+
+    const newAsk = {
+      ...shell,
+      openAsks: [{ raisedAt: SNOOZED_AT }, { raisedAt: "2026-04-10T10:00:00.000Z" }],
+    };
+    expect(effectiveSnoozed(newAsk, { now: NOW })).toBe(false);
+    expect(threadWokeAt(newAsk, { now: NOW })).toBe("2026-04-10T10:00:00.000Z");
+  });
+
   it.each([false, true])(
     "snoozes existing source questions with blocking=%s and wakes for newer ones",
     (blocking) => {

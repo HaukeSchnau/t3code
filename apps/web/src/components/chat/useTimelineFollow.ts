@@ -530,9 +530,30 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     setTimelineAnchor({ threadKey, messageId });
   };
 
+  /** Scrolls to a page by its render id; false when the loaded timeline does not hold it. */
+  const revealHtmlRender = (renderId: string): boolean => {
+    const list = legendListRef.current;
+    const rows: ReadonlyArray<{
+      readonly kind?: string;
+      readonly htmlRender?: { readonly attachmentId: string };
+    }> = list?.getState().data ?? [];
+    const index = rows.findIndex(
+      (row) => row.kind === "html-render" && row.htmlRender?.attachmentId === renderId,
+    );
+    if (list === null || index < 0) return false;
+    viewportRef.current?.navigate({ releasesFollow: true });
+    void list.scrollToIndex({
+      index,
+      animated: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      viewOffset: CHAT_LIST_ANCHOR_OFFSET,
+    });
+    return true;
+  };
+
   return {
     showScrollToBottom,
     timelineLiveFollowEnabled,
+    revealHtmlRender,
     onComposerPageScrollKeyDownStable,
     onComposerPageScrollKeyUpStable,
     onComposerPageScrollReleaseStable,

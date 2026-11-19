@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildThreadTitlePrompt } from "./textGenerationPrompts.ts";
+import { buildThreadTitlePrompt, buildTurnEndAskPrompt } from "./textGenerationPrompts.ts";
 import { normalizeCliError } from "./textGenerationUtils.ts";
 
 describe("buildThreadTitlePrompt", () => {
@@ -15,6 +15,15 @@ describe("buildThreadTitlePrompt", () => {
       "Keep the previous title exactly when it remains accurate. Change it only for a meaningful specificity gain or a clear user-led topic shift.",
     );
     expect(result.prompt).not.toContain("Otherwise return a meaningfully improved title");
+  });
+});
+
+describe("buildTurnEndAskPrompt", () => {
+  it("keeps the end of a long final message without half an emoji", () => {
+    // The cut falls between the two halves of the emoji.
+    const ending = `${"a".repeat(2_990)} Ship it?`;
+    const { prompt } = buildTurnEndAskPrompt({ finalMessage: `x\u{1F600}${ending}` });
+    expect(prompt.endsWith(`[Earlier content truncated]\n\n${ending}`)).toBe(true);
   });
 });
 

@@ -38,7 +38,11 @@ function layout(
   const rects = items.map((item) => {
     const height =
       item.kind === "thread"
-        ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
+        ? (item.section === "needs-you"
+            ? 100
+            : item.section === "pinned" || item.section === "active"
+              ? cardHeight
+              : 36) * scale
         : item.kind === "followUp"
           ? 36 * scale
           : item.marker === "pinned-header" || item.marker === "pinned-divider"
@@ -287,6 +291,27 @@ describe("sidebar drag projection", () => {
     }
     const lastIndex = items.length - 1;
     expect(strategy({ ...args, index: lastIndex })).toEqual(stationary);
+  });
+
+  it("holds the Needs you rows in place while a row moves into the pins below them", () => {
+    const items = [
+      marker("needs-you-header"),
+      thread("n", "needs-you"),
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      settledHeader,
+    ];
+    const result = preview(
+      { items, settledOrder: [], settledExpanded: true, boundaryLabelHeight: 24 },
+      "a2",
+      "p",
+    );
+    expect(result.get(sidebarMarkerId("needs-you-header"))).toEqual(stationary);
+    expect(result.get("n")).toEqual(stationary);
+    expect(result.get("p")!.y).toBeGreaterThan(0);
   });
 
   const pinned = [

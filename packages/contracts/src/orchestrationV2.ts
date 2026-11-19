@@ -20,6 +20,7 @@ import {
   IsoDateTime,
   MessageId,
   EnvironmentId,
+  ThreadAskId,
   NodeId,
   ForwardCompatibleUnion,
   ForwardCompatibleUnionArray,
@@ -44,6 +45,7 @@ import {
 import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment, ChatImageAttachment } from "./chatAttachment.ts";
 import { ThreadGuestShare } from "./guestShare.ts";
+import { ThreadAsk, ThreadAskSource, ThreadAskText, ThreadOpenAsk } from "./threadAsks.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
 import {
   OrchestrationSearchThreadsInput,
@@ -488,6 +490,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
+  /** What agents asked the user, open and recently resolved. Absent on threads that never asked. */
+  asks: Schema.optional(Schema.Array(ThreadAsk)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1932,6 +1936,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.model-selection-updated",
       "thread.provider-switched",
       "thread.guest-share-updated",
+      "thread.asks-updated",
     ]),
     payload: OrchestrationV2AppThread,
   }),
@@ -2096,6 +2101,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** A secret or link card that waits like a question. Absent for runtime requests and from older servers. */
+  card: Schema.optional(Schema.Literals(["secret", "link"])),
 });
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;
@@ -2150,6 +2157,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   /** Guest messages waiting for the owner to send or dismiss. Absent from older servers. */
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
+  /** When the oldest of them was sent. Absent when none waits and from older servers. */
+  pendingGuestMessageAt: Schema.optional(IsoDateTime),
+  /** Asks waiting for the user, oldest first. Absent when there are none and from older servers. */
+  openAsks: Schema.optional(Schema.Array(ThreadOpenAsk)),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
@@ -2829,6 +2840,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.model-selection-updated",
       "thread.provider-switched",
       "thread.guest-share-updated",
+      "thread.asks-updated",
     ]),
     payload: OrchestrationV2AppThreadJson,
   }),
@@ -2999,6 +3011,13 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     guestMessageId: GuestMessageId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.ask.dismiss"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    /** Absent dismisses every open ask of the thread. */
+    askId: Schema.optional(ThreadAskId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unarchive"),
@@ -3459,6 +3478,31 @@ const OrchestrationV2InternalCommand = Schema.Union([
     guestMessageId: GuestMessageId,
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  }),
+  /**
+   * A `turn_end` ask lands only while no user-authored message came after its run, so a slow
+   * detector cannot raise what the user already answered. A page ask replaces the text of the
+   * open ask for the same render.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.ask.raise"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    askId: ThreadAskId,
+    source: ThreadAskSource,
+    text: ThreadAskText,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.ask.withdraw"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    renderId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.ask.remind"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    askId: ThreadAskId,
   }),
   /** Moves a thread to a project rooted at the folder it already works in, so its cwd never changes. */
   Schema.Struct({

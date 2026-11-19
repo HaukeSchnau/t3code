@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   RuntimeRequestId,
   RunId,
+  ThreadAskId,
   ThreadId,
   TurnItemId,
   type OrchestrationProjectShell,
@@ -159,6 +160,37 @@ describe("isAutoSettlementCandidate", () => {
       pendingGuestMessageCount: 1,
     });
     expect(ThreadSettlementService.isSnoozed(snoozed, NOW_MS)).toBe(false);
+  });
+
+  it("never settles a thread with an open ask, and only a newer ask ends its snooze", () => {
+    const ask = (raisedAt: DateTime.Utc) => ({
+      id: ThreadAskId.make(`ask:${DateTime.formatIso(raisedAt)}`),
+      source: { type: "turn_end" as const, runId: RunId.make("run-1") },
+      text: "Delete the leftover dirs?",
+      raisedAt: DateTime.formatIso(raisedAt),
+    });
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate(
+        shell({ openAsks: [ask(at(-DAY_MS))] }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+    const snoozed = {
+      snoozedUntil: at(60 * 60 * 1_000),
+      snoozedAt: at(-60 * 60 * 1_000),
+    };
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({ ...snoozed, openAsks: [ask(at(-2 * 60 * 60 * 1_000))] }),
+        NOW_MS,
+      ),
+    ).toBe(true);
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({ ...snoozed, openAsks: [ask(at(-30 * 60 * 1_000))] }),
+        NOW_MS,
+      ),
+    ).toBe(false);
   });
 
   it("keeps snoozed threads parked until a fresh failure or timer wake", () => {

@@ -3,7 +3,9 @@ import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
   OrchestrationV2ProviderSession,
+  ThreadAskId,
   ThreadId,
+  ThreadOpenAsk,
 } from "@t3tools/contracts";
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
@@ -22,6 +24,7 @@ import {
   CircleStopIcon,
   GitBranchIcon,
   MessageCircleIcon,
+  MessageCircleQuestionIcon,
   ShieldQuestionIcon,
   TargetIcon,
   TerminalIcon,
@@ -84,6 +87,43 @@ export function childInputNowItem(input: {
       <InlineButton onClick={() => onOpenThread(first.id, first.environmentId)}>
         {first.hasPendingApprovals ? "Open approval" : "Open question"}
       </InlineButton>
+    ),
+  };
+}
+
+/** What an agent asked in this thread, when no request of the thread's own waits. */
+export function askNowItem(input: {
+  readonly ask: ThreadOpenAsk;
+  /** The title of the page a page ask came from, when the loaded timeline holds it. */
+  readonly pageTitle: string | null;
+  readonly canOperate: boolean;
+  readonly onOpenPage: (renderId: string) => void;
+  readonly onJumpToPage: (renderId: string) => void;
+  readonly onDismiss: (askId: ThreadAskId) => void;
+}): ThreadNowItem {
+  const { ask, pageTitle, onOpenPage, onJumpToPage, onDismiss } = input;
+  const renderId = ask.source.type === "page" ? ask.source.renderId : null;
+  return {
+    id: `ask:${ask.id}`,
+    icon: <MessageCircleQuestionIcon className="text-info-foreground" />,
+    title: renderId === null ? ask.text : `${pageTitle ?? "A page"} is waiting for you`,
+    description: renderId === null ? undefined : ask.text,
+    actions: (
+      <>
+        {renderId !== null && pageTitle !== null ? (
+          <>
+            <InlineButton onClick={() => onOpenPage(renderId)}>Open</InlineButton>
+            <InlineButton tone="muted" onClick={() => onJumpToPage(renderId)}>
+              Jump to it
+            </InlineButton>
+          </>
+        ) : null}
+        {input.canOperate ? (
+          <InlineButton tone="muted" onClick={() => onDismiss(ask.id)}>
+            No reply needed
+          </InlineButton>
+        ) : null}
+      </>
     ),
   };
 }

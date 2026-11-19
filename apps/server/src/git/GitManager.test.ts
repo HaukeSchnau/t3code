@@ -293,6 +293,7 @@ function createTextGeneration(
     generateReviewGuide: () => Effect.succeed({ stops: [] }),
     generateTranscriptionPostProcessing: () =>
       Effect.succeed({ transcription: "processed transcript" }),
+    generateTurnEndAsk: () => Effect.succeed({ waitsOnUser: false, ask: "" }),
     ...overrides,
   };
 
@@ -344,6 +345,7 @@ function createTextGeneration(
     generateReviewGuide: (input) => implementation.generateReviewGuide(input),
     generateTranscriptionPostProcessing: (input) =>
       implementation.generateTranscriptionPostProcessing(input),
+    generateTurnEndAsk: (input) => implementation.generateTurnEndAsk(input),
   };
 }
 

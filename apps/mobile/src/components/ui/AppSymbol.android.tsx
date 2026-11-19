@@ -89,6 +89,7 @@ import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
 import IconLink from "@tabler/icons-react-native/IconLink";
 import IconListNumbers from "@tabler/icons-react-native/IconListNumbers";
 import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
+import IconMessageCheck from "@tabler/icons-react-native/IconMessageCheck";
 import IconMessageCircleQuestion from "@tabler/icons-react-native/IconMessageCircleQuestion";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
 import IconMessageDots from "@tabler/icons-react-native/IconMessageDots";
@@ -279,6 +280,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "text.alignleft": IconAlignLeft,
   "text.bubble": IconMessage,
   "questionmark.bubble": IconMessageCircleQuestion,
+  "checkmark.bubble": IconMessageCheck,
   "exclamationmark.shield": IconShieldQuestion,
   "bubble.left.and.bubble.right": IconMessage,
   "bubble.left": IconMessage,

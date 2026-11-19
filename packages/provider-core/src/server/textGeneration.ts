@@ -79,6 +79,23 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export interface TurnEndAskGenerationInput {
+  cwd: string;
+  /** The end of the run's final assistant message. */
+  finalMessage: string;
+  /** The user's latest message, for context. */
+  userMessage?: string | undefined;
+  modelSelection: ModelSelection;
+  projectId?: ProjectId | null | undefined;
+}
+
+export interface TurnEndAskGenerationResult {
+  /** The agent cannot or will not continue without the user. */
+  waitsOnUser: boolean;
+  /** One line for the user, phrased as what they must decide or do; empty when not waiting. */
+  ask: string;
+}
+
 export interface ReviewGuideStackLayer {
   readonly number: number;
   readonly title: string | null;
@@ -139,4 +156,8 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  readonly generateTurnEndAsk: (
+    input: TurnEndAskGenerationInput,
+  ) => Effect.Effect<TurnEndAskGenerationResult, TextGenerationError>;
 }

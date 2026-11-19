@@ -146,6 +146,14 @@ import {
   decideGuestShareCommand,
   type GuestShareCommand,
 } from "./GuestShareDecider.ts";
+import {
+  decideThreadAskCommand,
+  dismissOpenAsks,
+  threadAfterCancelledReply,
+  threadAfterUserReply,
+  type ThreadAskCommand,
+} from "./ThreadAskDecider.ts";
+import { isUserReply } from "./userTurn.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -599,6 +607,10 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.guest-share.close":
     case "thread.guest-message.submit":
     case "thread.guest-message.dismiss":
+    case "thread.ask.raise":
+    case "thread.ask.withdraw":
+    case "thread.ask.dismiss":
+    case "thread.ask.remind":
     case "thread.settle":
     case "thread.auto-settle":
     case "thread.unsettle":
@@ -3508,6 +3520,53 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return decided.success;
   });
 
+  const dispatchThreadAsk = Effect.fn("orchestrationV2.dispatch.threadAsk")(function* (
+    command: ThreadAskCommand,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const mapProjectionError = Effect.mapError(
+      (cause: unknown) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+    );
+    const current = yield* projectionStore.getThread(command.threadId).pipe(mapProjectionError);
+    const turnEndRunId =
+      command.type === "thread.ask.raise" && command.source.type === "turn_end"
+        ? command.source.runId
+        : undefined;
+    const facts =
+      turnEndRunId === undefined
+        ? { runs: [], latestUserReplyAt: null }
+        : yield* Effect.gen(function* () {
+            const { runs } = yield* projectionStore.getThreadRecords(command.threadId, ["runs"], {
+              runIds: [
+                turnEndRunId,
+                ...(current.asks ?? []).flatMap((ask) =>
+                  ask.source.type === "turn_end" ? [ask.source.runId] : [],
+                ),
+              ],
+            });
+            const ended = runs.find((run) => run.id === turnEndRunId)?.completedAt ?? null;
+            // Only a reply after the run ended stops its ask, so the read ends there too.
+            const reply =
+              ended === null
+                ? undefined
+                : yield* projectionStore.getLatestUserReply(command.threadId, ended);
+            return { runs, latestUserReplyAt: reply?.createdAt ?? null };
+          }).pipe(mapProjectionError);
+    const now = yield* DateTime.now;
+    const thread = decideThreadAskCommand({ thread: current, command, now, ...facts });
+    if (thread === current) return;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.asks-updated",
+      threadId: command.threadId,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: now,
+      payload: thread,
+    });
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -4000,6 +4059,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
+            // Settling says nothing more is needed, so it ends what the agent asked too.
+            ...(thread.asks === undefined ? {} : { asks: dismissOpenAsks(thread.asks, now) }),
             unsettledAt: null,
             pinnedAt: null,
             pinOrderKey: null,
@@ -6137,6 +6198,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: thread,
       });
       projection = applyToProjection(projection, event);
+    }
+    // A reply answers the open asks in the same commit. A continuation (Resume, an automatic
+    // retry) answers nothing, even a Resume that sends text.
+    if (
+      command.manualContinuationOfRunId === undefined &&
+      isUserReply({ ...command, role: "user" })
+    ) {
+      const now = yield* DateTime.now;
+      const answered = threadAfterUserReply(projection.thread, command.messageId, now);
+      if (answered !== projection.thread) {
+        const event = yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.asks-updated",
+          threadId: command.threadId,
+          providerInstanceId: answered.providerInstanceId,
+          occurredAt: now,
+          payload: answered,
+        });
+        projection = applyToProjection(projection, event);
+      }
     }
     const userMessages = projection.messages.filter((message) => message.role === "user");
     const onlyMaintenanceHistory =
@@ -10499,8 +10582,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     yield* emitQueuedRunCancellation({ command, events, projection, run: queuedRun, now });
     const emitEvent = emit(events, command);
     const guest = queuedMessage?.context?.guest;
+    let thread = projection.thread;
     if (guest !== undefined) {
-      const thread = guestShareAfterCancelledSend(projection.thread, guest, now);
+      thread = guestShareAfterCancelledSend(thread, guest, now);
       if (thread !== projection.thread) {
         yield* emitEvent({
           type: "thread.guest-share-updated",
@@ -10510,6 +10594,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           payload: thread,
         });
       }
+    }
+    const reopened = threadAfterCancelledReply(thread, queuedRun.userMessageId, now, projection);
+    if (reopened !== thread) {
+      yield* emitEvent({
+        type: "thread.asks-updated",
+        threadId: command.threadId,
+        providerInstanceId: reopened.providerInstanceId,
+        occurredAt: now,
+        payload: reopened,
+      });
     }
   });
 
@@ -13661,7 +13755,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
         if (
           thread.settledOverride !== null ||
-          DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt)
+          DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt) ||
+          // The sweep skips threads with open asks, so one here came in the snapshot's millisecond.
+          thread.asks?.some((ask) => ask.status === "open") === true
         ) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
@@ -13776,6 +13872,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.guest-message.submit":
       case "thread.guest-message.dismiss":
         yield* dispatchGuestShare(command, events, effects);
+        break;
+      case "thread.ask.raise":
+      case "thread.ask.withdraw":
+      case "thread.ask.dismiss":
+      case "thread.ask.remind":
+        yield* dispatchThreadAsk(command, events);
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
@@ -14128,6 +14230,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
+          // Nor is a stale detector result, or dismissing an ask that already ended.
+          command.type === "thread.ask.raise" ||
+          command.type === "thread.ask.withdraw" ||
+          command.type === "thread.ask.dismiss" ||
+          command.type === "thread.ask.remind" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

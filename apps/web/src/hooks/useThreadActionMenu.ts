@@ -80,6 +80,7 @@ export function useThreadActionMenu(input: {
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
+    dismissThreadAsks,
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
@@ -146,6 +147,7 @@ export function useThreadActionMenu(input: {
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
         isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
         canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
+        hasOpenAsks: (thread.openAsks?.length ?? 0) > 0,
         isRegeneratingTitle,
         isRunning: !threadRuntimeCanArchive(thread.runtime),
         supports,
@@ -233,6 +235,9 @@ export function useThreadActionMenu(input: {
           return;
         case "unsnooze":
           await reportFailure("Failed to wake thread", () => unsnoozeThread(threadRef));
+          return;
+        case "dismiss-asks":
+          await reportFailure("Failed to end the ask", () => dismissThreadAsks(threadRef));
           return;
         case "pin":
           await reportFailure("Failed to pin thread", () => pinThread(threadRef));

@@ -37,6 +37,8 @@ export type {
   ThreadTitleGenerationResult,
   TranscriptionPostProcessingInput,
   TranscriptionPostProcessingResult,
+  TurnEndAskGenerationInput,
+  TurnEndAskGenerationResult,
 } from "@t3tools/provider-core/server/textGeneration";
 
 export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
@@ -49,7 +51,8 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateReviewGuide"
-  | "generateTranscriptionPostProcessing";
+  | "generateTranscriptionPostProcessing"
+  | "generateTurnEndAsk";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -196,6 +199,14 @@ export const make = Effect.gen(function* () {
         null,
         (service, modelSelection) =>
           service.generateTranscriptionPostProcessing({ ...input, modelSelection }),
+      );
+    }),
+    generateTurnEndAsk: Effect.fn("TextGeneration.generateTurnEndAsk")(function (input) {
+      return generate(
+        "generateTurnEndAsk",
+        input.modelSelection,
+        input.projectId,
+        (service, modelSelection) => service.generateTurnEndAsk({ ...input, modelSelection }),
       );
     }),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {

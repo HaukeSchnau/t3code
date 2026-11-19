@@ -1,4 +1,4 @@
-import { TextGenerationError } from "@t3tools/contracts";
+import { TextGenerationError, THREAD_ASK_TEXT_MAX_LENGTH } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -82,6 +82,20 @@ export function sanitizeThreadTitle(raw: string): string {
   if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
     end -= 1;
   }
+  return `${normalized.slice(0, end).trimEnd()}...`;
+}
+
+/** One line for a thread list; empty when the model gave none. */
+export function sanitizeTurnEndAsk(raw: string): string {
+  const normalized = raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .trim();
+  if (normalized.length <= THREAD_ASK_TEXT_MAX_LENGTH) return normalized;
+  let end = THREAD_ASK_TEXT_MAX_LENGTH - 3;
+  const previous = normalized.charCodeAt(end - 1);
+  if (previous >= 0xd800 && previous <= 0xdbff) end -= 1;
   return `${normalized.slice(0, end).trimEnd()}...`;
 }
 

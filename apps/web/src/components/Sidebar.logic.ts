@@ -1,6 +1,7 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { threadNeedsYou } from "@t3tools/client-runtime/state/thread-inbox";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -181,16 +182,19 @@ export function useRetainedValue<T>(key: string | null, value: T | null): T | nu
 export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
-// Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
+// Snoozed rows cannot accept drops without a wake time. Working and Needs you rows only drag out
+// as chat context: a thread leaves Needs you when its need ends, not when it moves.
 
-export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+export type SidebarSection = "needs-you" | "pinned" | "active" | "working" | "snoozed" | "settled";
 
 export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
+  readonly needsYou: boolean;
   readonly settled: boolean;
   readonly pinned: boolean;
 }): SidebarSection {
   if (input.snoozed) return "snoozed";
+  if (input.needsYou) return "needs-you";
   if (input.settled) return "settled";
   if (input.pinned) return "pinned";
   return "active";
@@ -199,6 +203,7 @@ export function resolveSidebarThreadSection(input: {
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
 export type SidebarListMarker =
+  | "needs-you-header"
   | "pinned-header"
   | "active-placeholder"
   | "settled-placeholder"
@@ -253,7 +258,9 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
   for (let i = 0; i < index && i < items.length; i += 1) {
     const item = items[i]!;
     if (item.kind !== "marker") continue;
-    if (item.marker === "pinned-divider") section = "active";
+    if (item.marker === "needs-you-header") section = "needs-you";
+    else if (item.marker === "pinned-header") section = "pinned";
+    else if (item.marker === "pinned-divider") section = "active";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
@@ -275,17 +282,21 @@ export function resolveSidebarDropTarget(
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
+  // Its slot is the list's first, which reads as Pinned.
+  if (overId === sidebarMarkerId("needs-you-header")) return null;
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "working" || section === "snoozed") return null;
+  if (section === "needs-you" || section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
   for (const item of moved) {
     if (item.kind === "followUp") continue;
     if (item.kind === "marker") {
-      if (item.marker === "pinned-divider") currentSection = "active";
+      if (item.marker === "needs-you-header") currentSection = "needs-you";
+      else if (item.marker === "pinned-header") currentSection = "pinned";
+      else if (item.marker === "pinned-divider") currentSection = "active";
       else if (
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
@@ -293,7 +304,7 @@ export function resolveSidebarDropTarget(
       )
         break;
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
-    else activeOrder.push(item.key);
+    else if (currentSection === "active") activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };
 }
@@ -327,7 +338,9 @@ export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || to === "working" || to === "snoozed") return null;
+  if (to === null || to === from || to === "needs-you" || to === "working" || to === "snoozed") {
+    return null;
+  }
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";
@@ -412,7 +425,7 @@ export function planSidebarThreadDrop(input: {
     activeKeysById,
     activeReorderableKeys,
   } = input;
-  if (activeSection === "working") return { kind: "none" };
+  if (activeSection === "working" || activeSection === "needs-you") return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
@@ -701,8 +714,10 @@ type ThreadStatusInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "pendingUserInputAt"
   | "pendingSubagentRequest"
   | "pendingGuestMessageCount"
+  | "openAsks"
   | "interactionMode"
   | "latestRun"
   | "runtime"
@@ -984,8 +999,10 @@ type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "pendingUserInputAt"
   | "pendingSubagentRequest"
   | "pendingGuestMessageCount"
+  | "openAsks"
   | "runtime"
   | "blockedOnThreadWait"
 >;
@@ -997,9 +1014,14 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return "input";
   }
-  // A guest is waiting on the owner; the agent's own requests come first.
-  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
-    return "request";
+  // A guest is waiting on the owner; the agent's own requests come first. An ask reads like a
+  // question even while the thread works on, since the agent waits on the answer.
+  switch (threadNeedsYou(thread)?.kind) {
+    case "guest":
+      return "request";
+    case "turn_end":
+    case "page":
+      return "input";
   }
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
@@ -1244,11 +1266,21 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
+  const need = threadNeedsYou(thread)?.kind;
+  if (need === "guest") {
     return {
       label: "Guest Request",
       colorClass: "text-guest-foreground",
       dotClass: "bg-guest",
+      pulse: false,
+    };
+  }
+
+  if (need === "turn_end" || need === "page") {
+    return {
+      label: "Awaiting Input",
+      colorClass: "text-indigo-600 dark:text-indigo-300/90",
+      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
       pulse: false,
     };
   }

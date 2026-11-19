@@ -1,5 +1,5 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
-import { pendingGuestMessageCount } from "@t3tools/contracts";
+import { pendingGuestMessageCount, threadOpenAsks, type ThreadAsk } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
@@ -225,6 +225,7 @@ export type ProjectionSettlementCandidate = Pick<
   | "pendingRuntimeRequest"
   | "pendingBackgroundTasks"
   | "pendingGuestMessageCount"
+  | "openAsks"
 > &
   Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt"> & {
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
@@ -684,6 +685,14 @@ export interface ProjectionStoreV2Shape {
     threadId: ThreadId,
     runId: RunId,
   ) => Effect.Effect<OrchestrationV2Run | undefined, ProjectionStoreV2Error>;
+  /**
+   * The newest `isUserReply` message by arrival, skipping queued sends cancelled before they ran.
+   * With `after`, only a message that arrived later, so the read stops at that point.
+   */
+  readonly getLatestUserReply: (
+    threadId: ThreadId,
+    after?: DateTime.Utc,
+  ) => Effect.Effect<OrchestrationV2ConversationMessage | undefined, ProjectionStoreV2Error>;
   readonly canStartQueuedRun: (
     threadId: ThreadId,
   ) => Effect.Effect<boolean, ProjectionStoreV2Error>;
@@ -865,6 +874,7 @@ export function applyToProjection(
     case "thread.model-selection-updated":
     case "thread.provider-switched":
     case "thread.guest-share-updated":
+    case "thread.asks-updated":
       return {
         ...base,
         thread: event.payload,
@@ -1534,6 +1544,7 @@ function secretRequestAsPendingInput(
     kind: "user_input",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
+    card: item.type === "secret_request" ? "secret" : "link",
   };
 }
 
@@ -1556,6 +1567,21 @@ const linkCardStillAsks = (
 ) =>
   latestUserAuthoredMessageAt === null ||
   !DateTime.isGreaterThan(latestUserAuthoredMessageAt, item.startedAt ?? item.updatedAt);
+
+/** Shells carry open asks only when there are some, so most rows stay as small as before. */
+function openAsksField(asks: ReadonlyArray<ThreadAsk> | undefined) {
+  const openAsks = threadOpenAsks(asks);
+  return openAsks.length === 0 ? {} : { openAsks };
+}
+
+function guestMessageFields(share: OrchestrationV2AppThread["guestShare"]) {
+  // Messages are stored in the order guests sent them.
+  const oldest = share?.messages.find((message) => message.status === "pending");
+  return {
+    pendingGuestMessageCount: pendingGuestMessageCount(share),
+    ...(oldest === undefined ? {} : { pendingGuestMessageAt: oldest.submittedAt }),
+  };
+}
 
 export function threadShellFromProjection(
   projection: OrchestrationV2ThreadProjection,
@@ -1688,7 +1714,8 @@ export function threadShellFromProjection(
       providerSession?.lastError ?? null,
     ),
     pendingRuntimeRequest,
-    pendingGuestMessageCount: pendingGuestMessageCount(projection.thread.guestShare),
+    ...guestMessageFields(projection.thread.guestShare),
+    ...openAsksField(projection.thread.asks),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1985,7 +2012,8 @@ function shellFromState(input: {
     lastErrorCode: input.state.lastErrorCode,
     usageLimitResetAt: input.state.usageLimitResetAt,
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
-    pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
+    ...guestMessageFields(input.state.thread.guestShare),
+    ...openAsksField(input.state.thread.asks),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -2085,7 +2113,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "thread.interaction-mode-updated":
             case "thread.model-selection-updated":
             case "thread.provider-switched":
-            case "thread.guest-share-updated": {
+            case "thread.guest-share-updated":
+            case "thread.asks-updated": {
               const payloadJson = yield* encodeThreadPayload(event.payload);
               const payload = parseEncodedPayload(payloadJson);
               yield* sql`
@@ -2903,7 +2932,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.interaction-mode-updated" &&
             event.type !== "thread.model-selection-updated" &&
             event.type !== "thread.provider-switched" &&
-            event.type !== "thread.guest-share-updated"
+            event.type !== "thread.guest-share-updated" &&
+            event.type !== "thread.asks-updated"
           ) {
             const updatedAt = yield* encodeThreadUpdatedAt(event.occurredAt);
             yield* sql`
@@ -4581,7 +4611,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
 
-    // SQLite trim defaults to ASCII spaces; compact recognition uses JavaScript trim.
+    // SQLite trim defaults to ASCII spaces; compact recognition and the reply rule use JavaScript trim.
     const javascriptTrimWhitespace =
       " \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
@@ -5608,6 +5638,33 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }),
         )
         .pipe(Effect.mapError(controlReadError(threadId)));
+
+    // Mirrors `isUserReply` (userTurn.ts) for stored messages; keep the two in step.
+    const getLatestUserReply: ProjectionStoreV2Shape["getLatestUserReply"] = (threadId, after) =>
+      sql<PayloadRow>`
+        SELECT message.payload_json FROM orchestration_v2_projection_messages AS message
+        LEFT JOIN orchestration_v2_projection_runs AS run ON run.run_id = message.run_id
+        WHERE message.thread_id = ${threadId}
+          ${after === undefined ? sql`` : sql`AND message.created_at > ${DateTime.formatIso(after)}`}
+          AND message.role = 'user'
+          AND json_extract(message.payload_json, '$.createdBy') = 'user'
+          AND json_extract(message.payload_json, '$.creationSource') IS NOT 'provider'
+          AND json_type(message.payload_json, '$.notification') IS NULL
+          AND json_type(message.payload_json, '$.delegatedCompletion') IS NULL
+          AND json_type(message.payload_json, '$.scheduledTaskId') IS NULL
+          AND NOT (
+            trim(json_extract(message.payload_json, '$.text'), ${javascriptTrimWhitespace}) = ''
+            AND coalesce(json_array_length(message.payload_json, '$.attachments'), 0) = 0
+            AND coalesce(json_array_length(message.payload_json, '$.context.records'), 0) = 0
+          )
+          AND NOT (run.status IS 'cancelled' AND json_extract(run.payload_json, '$.startedAt') IS NULL)
+        ORDER BY message.created_at DESC, message.message_id DESC
+        LIMIT 1`.pipe(
+        Effect.flatMap(([row]) =>
+          row === undefined ? Effect.undefined : decodeMessagePayload(row.payload_json),
+        ),
+        Effect.mapError(controlReadError(threadId)),
+      );
 
     const getRun: ProjectionStoreV2Shape["getRun"] = (threadId, runId) =>
       sql
@@ -6871,6 +6928,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   activityRunStartedAt: null,
                   pendingRuntimeRequest: null,
                   pendingGuestMessageCount: pendingGuestMessageCount(thread.guestShare),
+                  ...openAsksField(thread.asks),
                   pendingBackgroundTasks: derivePendingBackgroundWork({
                     latestRun:
                       latestRunId === null || status === "idle"
@@ -7753,6 +7811,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getCheckpointRollbackContext: readOnReader(getCheckpointRollbackContext),
       getRunMessage: readOnReader(getRunMessage),
       getRun: readOnReader(getRun),
+      getLatestUserReply: readOnReader(getLatestUserReply),
       canStartQueuedRun: readOnReader(canStartQueuedRun),
       getHeldQueuedRuns: readOnReader(getHeldQueuedRuns),
       getPendingNativeUserInputs: readOnReader(getPendingNativeUserInputs),

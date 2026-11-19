@@ -1,4 +1,6 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
+import * as DateTime from "effect/DateTime";
+
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
 import { effectiveSnoozed } from "./threadSettled.ts";
@@ -28,6 +30,116 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
     run.status !== "waiting" &&
     thread.runtime?.activeRunId !== run.runId;
   return !(thread.interactionMode === "plan" && thread.hasActionableProposedPlan && runSettled);
+}
+
+export type ThreadNeedKind =
+  | "approval"
+  | "question"
+  | "request"
+  | "guest"
+  | "subagent"
+  | "turn_end"
+  | "page";
+
+export interface ThreadNeed {
+  readonly kind: ThreadNeedKind;
+  /** The ask's text; null for requests, whose kind is the whole story. */
+  readonly text: string | null;
+  /** When the need started; null where the shell does not say, as for a subagent's request. */
+  readonly since: string | null;
+}
+
+type ThreadNeedsYouInput = Pick<
+  EnvironmentThreadShell,
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "pendingUserInputAt"
+  | "pendingSubagentRequest"
+  | "pendingGuestMessageCount"
+  | "openAsks"
+> & {
+  readonly source?: Pick<
+    EnvironmentThreadShell["source"],
+    "pendingRuntimeRequest" | "pendingGuestMessageAt"
+  >;
+};
+
+/**
+ * What the thread needs from the user, or null: the one rule every list, count, notification and
+ * triage view uses. The thread's own request comes first because it blocks the agent, then a
+ * subagent's, a guest's, and the oldest ask. Run state does not matter: a working thread whose
+ * page asks still needs the user. A failed run is not a need; it keeps its Failed status.
+ */
+export function threadNeedsYou(thread: ThreadNeedsYouInput): ThreadNeed | null {
+  const request = thread.source?.pendingRuntimeRequest ?? null;
+  const requestAt = request === null ? null : DateTime.formatIso(request.createdAt);
+  if (thread.hasPendingApprovals) return { kind: "approval", text: null, since: requestAt };
+  if (thread.hasPendingUserInput) {
+    return {
+      kind: request?.card === undefined ? "question" : "request",
+      text: null,
+      since: thread.pendingUserInputAt ?? requestAt,
+    };
+  }
+  if (thread.pendingSubagentRequest != null) return { kind: "subagent", text: null, since: null };
+  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
+    return { kind: "guest", text: null, since: thread.source?.pendingGuestMessageAt ?? null };
+  }
+  const oldest = (thread.openAsks ?? []).reduce<
+    NonNullable<ThreadNeedsYouInput["openAsks"]>[number] | null
+  >(
+    (current, ask) =>
+      current === null || Date.parse(ask.raisedAt) < Date.parse(current.raisedAt) ? ask : current,
+    null,
+  );
+  return oldest === null
+    ? null
+    : { kind: oldest.source.type, text: oldest.text, since: oldest.raisedAt };
+}
+
+const NEED_LABELS: Record<ThreadNeedKind, string> = {
+  approval: "Approval",
+  question: "Question",
+  request: "Request",
+  subagent: "Subagent waiting",
+  guest: "Guest message",
+  turn_end: "Question",
+  page: "Page",
+};
+
+/** One line for a list row: the ask's text, or what kind of request waits. */
+export function threadNeedLabel(need: ThreadNeed): string {
+  return need.text ?? NEED_LABELS[need.kind];
+}
+
+/**
+ * The Needs you order: the thread waiting longest first. Needs the shell has no start time for
+ * (a subagent's request, a guest's message from an older server) follow, the least recently
+ * updated first.
+ */
+export function sortThreadsByNeed<
+  T extends ThreadNeedsYouInput &
+    Pick<EnvironmentThreadShell, "id" | "environmentId" | "updatedAt">,
+>(threads: readonly T[]): T[] {
+  const since = new Map(
+    threads.map((thread) => [
+      thread,
+      toSortableTimestamp(threadNeedsYou(thread)?.since ?? undefined),
+    ]),
+  );
+  return [...threads].sort((left, right) => {
+    const leftSince = since.get(left) ?? null;
+    const rightSince = since.get(right) ?? null;
+    if (leftSince !== null && rightSince !== null && leftSince !== rightSince) {
+      return leftSince - rightSince;
+    }
+    if ((leftSince === null) !== (rightSince === null)) return leftSince === null ? 1 : -1;
+    return (
+      (toSortableTimestamp(left.updatedAt) ?? 0) - (toSortableTimestamp(right.updatedAt) ?? 0) ||
+      left.id.localeCompare(right.id) ||
+      left.environmentId.localeCompare(right.environmentId)
+    );
+  });
 }
 
 /**
@@ -126,6 +238,7 @@ type TrackedInboxThread = WorkingThreadInput &
       | "snoozedUntil"
       | "activeOrderKey"
       | "pendingGuestMessageCount"
+      | "openAsks"
     >
   >;
 
@@ -228,6 +341,7 @@ export function createInboxReturnTracker() {
           thread.hasPendingUserInput ||
           thread.pendingSubagentRequest != null ||
           (thread.pendingGuestMessageCount ?? 0) > 0 ||
+          (thread.openAsks?.length ?? 0) > 0 ||
           (thread.interactionMode === "plan" && thread.hasActionableProposedPlan) ||
           thread.runtime?.lastError != null ||
           thread.latestRun?.status === "failed";

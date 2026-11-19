@@ -44,7 +44,14 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import { resolveProjectExpanded } from "../uiStateStore";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadAskId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -259,6 +266,21 @@ describe("resolveSidebarThreadStatus", () => {
         pendingGuestMessageCount: 1,
       }),
     ).toBe("input");
+  });
+
+  it("shows an open ask as Input, even while the thread works on, below a guest's message", () => {
+    const openAsks = [
+      {
+        id: ThreadAskId.make("ask"),
+        source: { type: "page" as const, renderId: "render" },
+        text: "Pick a layout",
+        raisedAt: "2026-03-09T10:00:00.000Z",
+      },
+    ];
+    expect(resolveSidebarThreadStatus({ ...idle, openAsks, runtime })).toBe("input");
+    expect(
+      resolveSidebarThreadStatus({ ...idle, openAsks, pendingGuestMessageCount: 1, runtime }),
+    ).toBe("request");
   });
 
   it("keeps usage-limit stops Limited and visible until the thread recovers", () => {
@@ -1122,6 +1144,8 @@ describe("Working shelf (beta)", () => {
       section,
     });
     const items: readonly SidebarListItem[] = [
+      marker("needs-you-header"),
+      row("n1", "needs-you"),
       marker("pinned-header"),
       row("p1", "pinned"),
       marker("pinned-divider"),
@@ -1134,8 +1158,16 @@ describe("Working shelf (beta)", () => {
       row("s1", "settled"),
     ];
 
-    it("never drops into the Working shelf, and keeps it and follow-ups out of the inbox order", () => {
+    it("never drops into Needs you or the Working shelf, and keeps them and follow-ups out of the pinned and inbox orders", () => {
       expect(resolveSidebarDropTarget(items, "a1", "w1")).toBeNull();
+      expect(resolveSidebarDropTarget(items, "a1", "n1")).toBeNull();
+      // The header is the first slot, where no marker above it says which section it is in.
+      expect(resolveSidebarDropTarget(items, "a1", "sidebar-marker-needs-you-header")).toBeNull();
+      expect(resolveSidebarDropTarget(items, "a1", "p1")).toEqual({
+        section: "pinned",
+        pinnedOrder: ["a1", "p1"],
+        activeOrder: ["a2"],
+      });
       expect(resolveSidebarDropTarget(items, "p1", "a2")).toEqual({
         section: "active",
         pinnedOrder: [],
@@ -1148,6 +1180,7 @@ describe("Working shelf (beta)", () => {
       });
       expect(resolveSidebarDropTarget(items, "f1", "a1")).toBeNull();
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
+      expect(resolveSidebarDropVerb("active", "needs-you")).toBeNull();
     });
 
     it.each([
@@ -1155,25 +1188,30 @@ describe("Working shelf (beta)", () => {
       ["active", "a2"],
       ["settled", "s1"],
     ] as const)(
-      "does not move a Working thread into %s when its reference drag ends in the sidebar",
+      "does not move a Working or Needs you thread into %s when its reference drag ends in the sidebar",
       (section, overKey) => {
-        const target = resolveSidebarDropTarget(items, "w1", overKey);
-        expect(target?.section).toBe(section);
-        expect(
-          planSidebarThreadDrop({
-            activeKey: "w1",
-            activeSection: "working",
-            target: target!,
-            pinnedOrder: ["p1"],
-            pinnedKeysById: new Map([["p1", "m"]]),
-            activeOrder: ["a1", "a2"],
-            activeKeysById: new Map([
-              ["a1", "f"],
-              ["a2", "t"],
-            ]),
-            activeTimeOrdered: true,
-          }),
-        ).toEqual({ kind: "none" });
+        for (const [activeKey, activeSection] of [
+          ["w1", "working"],
+          ["n1", "needs-you"],
+        ] as const) {
+          const target = resolveSidebarDropTarget(items, activeKey, overKey);
+          expect(target?.section).toBe(section);
+          expect(
+            planSidebarThreadDrop({
+              activeKey,
+              activeSection,
+              target: target!,
+              pinnedOrder: ["p1"],
+              pinnedKeysById: new Map([["p1", "m"]]),
+              activeOrder: ["a1", "a2"],
+              activeKeysById: new Map([
+                ["a1", "f"],
+                ["a2", "t"],
+              ]),
+              activeTimeOrdered: true,
+            }),
+          ).toEqual({ kind: "none" });
+        }
       },
     );
 

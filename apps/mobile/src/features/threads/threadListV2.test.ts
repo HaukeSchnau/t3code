@@ -25,6 +25,7 @@ import {
   ProviderInstanceId,
   RunId,
   RuntimeRequestId,
+  ThreadAskId,
   ThreadId,
 } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -357,6 +358,81 @@ describe("buildThreadListV2Items", () => {
 
     expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "woken"]);
     expect(layout.snoozedCount).toBe(1);
+  });
+
+  it("leads with the threads that need the user, the longest waiting first, each listed once", () => {
+    const ask = (id: string, raisedAt: string) => ({
+      id: ThreadAskId.make(id),
+      source: { type: "turn_end" as const, runId: RunId.make(`run:${id}`) },
+      text: `Ask ${id}`,
+      raisedAt,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+        makeThread({
+          id: ThreadId.make("pinned-asks"),
+          title: "Pinned",
+          pinnedAt: "2026-06-01T07:00:00.000Z",
+          openAsks: [ask("late", "2026-06-01T10:00:00.000Z")],
+        }),
+        makeThread({
+          id: ThreadId.make("settled-asks"),
+          title: "Settled",
+          settledOverride: "settled",
+          settledAt: "2026-06-01T07:00:00.000Z",
+          openAsks: [ask("early", "2026-06-01T08:00:00.000Z")],
+        }),
+        makeThread({
+          id: ThreadId.make("working-asks"),
+          title: "Working",
+          runtime: {
+            status: "running",
+            activeRunId: RunId.make("run:working"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            providerName: "Codex",
+            lastError: null,
+            updatedAt: "2026-06-01T09:00:00.000Z",
+          },
+          openAsks: [ask("page", "2026-06-01T09:00:00.000Z")],
+        }),
+        makeThread({
+          id: ThreadId.make("snoozed-asks"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+          openAsks: [ask("snoozed", "2026-06-01T11:00:00.000Z")],
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      workingShelfEnabled: true,
+      workingShelfExpanded: true,
+    });
+
+    expect(layout.items.map((item) => [item.thread.id, item.needLabel])).toEqual([
+      ["settled-asks", "Ask early"],
+      ["working-asks", "Ask page"],
+      ["pinned-asks", "Ask late"],
+      ["active", null],
+    ]);
+    expect(layout.needsYouCount).toBe(3);
+    expect(layout.workingCount).toBe(0);
+    expect(layout.settledCount).toBe(0);
+    expect(layout.snoozedCount).toBe(1);
+    expect(
+      buildThreadListV2ListItems({ items: layout.items, pendingTasks: [], needsYouCount: 3 }).map(
+        (item) => (item.type === "v2-thread" ? item.item.thread.id : item.type),
+      ),
+    ).toEqual([
+      "v2-needs-you-section",
+      "settled-asks",
+      "working-asks",
+      "pinned-asks",
+      "v2-needs-you-end",
+      "active",
+    ]);
   });
 
   it("moves a settled pinned thread into the settled shelf — parity with web (#7969)", () => {
@@ -1691,12 +1767,14 @@ describe("Working section beta", () => {
 
   it("folds unpinned working threads into a collapsed shelf", () => {
     const layout = build();
+    // A working thread that asks for approval needs the user, so Needs you leads with it.
     expect(ids(layout)).toEqual([
+      "asks-approval",
       "pinned-working",
       "finished-late",
-      "asks-approval",
       "finished-early",
     ]);
+    expect(layout.needsYouCount).toBe(1);
     expect(layout.workingCount).toBe(1);
     expect(layout.workingShelfHeaderIndex).toBe(4);
 
@@ -1768,6 +1846,7 @@ describe("Working section beta", () => {
         items: layout.items,
         pendingTasks: [],
         followUpSlots: layout.followUpSlots,
+        needsYouCount: layout.needsYouCount,
         workingCount: layout.workingCount,
         workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
       }).map((item) =>
@@ -1780,16 +1859,18 @@ describe("Working section beta", () => {
     };
 
     expect(rows({})).toEqual([
+      "v2-needs-you-section",
+      "asks-approval",
+      "v2-needs-you-end",
       "pinned-working",
       "back-latest divider:true",
       "finished-late",
       "back-earlier divider:true",
-      "asks-approval",
       "finished-early",
       "v2-working-shelf",
     ]);
     // Hand-ordered rows have no return time to merge by, so follow-ups lead them.
-    expect(rows({ workingShelfEnabled: false }).slice(0, 3)).toEqual([
+    expect(rows({ workingShelfEnabled: false }).slice(3, 6)).toEqual([
       "pinned-working",
       "back-latest divider:true",
       "back-earlier divider:true",
@@ -1805,7 +1886,7 @@ describe("Working section beta", () => {
       inboxReturnAt: (thread) =>
         thread.id === "finished-early" ? Date.parse("2026-06-01T04:00:00.000Z") : undefined,
     });
-    expect(ids(layout).slice(1)).toEqual(["finished-early", "finished-late", "asks-approval"]);
+    expect(ids(layout).slice(2)).toEqual(["finished-early", "finished-late"]);
   });
 
   it("places the shelf after queued tasks and before snoozed and settled threads", () => {

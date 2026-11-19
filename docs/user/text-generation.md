@@ -1,7 +1,8 @@
 # Text generation models
 
 T3 Code writes some text for you: thread titles, commit messages, pull request titles and
-descriptions, branch names, and voice transcript cleanup. Pick the model for this in
+descriptions, branch names, and voice transcript cleanup. The same model reads how each turn
+ends to tell whether the agent [waits on you](./thread-sidebar.md#see-what-needs-you). Pick the model for this in
 **Settings → Threads → Text generation model**. **Settings → Source control** and
 **Settings → Voice** can each pick a different one.
 

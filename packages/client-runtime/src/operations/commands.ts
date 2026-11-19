@@ -28,6 +28,7 @@ import {
   type UploadChatAttachment,
   type ManagedWorkspaceLaunchStrategy,
   type GuestMessageId,
+  type ThreadAskId,
 } from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -574,6 +575,23 @@ export const snoozeThread = Effect.fn("EnvironmentCommands.snoozeThread")(functi
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     snoozedUntil: input.snoozedUntil,
+  });
+});
+
+export interface DismissThreadAsksInput extends ThreadCommandInput {
+  /** Absent dismisses every open ask of the thread. */
+  readonly askId?: ThreadAskId;
+}
+
+/** No reply needed: ends what the agent asked without sending it anything. */
+export const dismissThreadAsks = Effect.fn("EnvironmentCommands.dismissThreadAsks")(function* (
+  input: DismissThreadAsksInput,
+) {
+  return yield* dispatch({
+    type: "thread.ask.dismiss",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    ...(input.askId === undefined ? {} : { askId: input.askId }),
   });
 });
 

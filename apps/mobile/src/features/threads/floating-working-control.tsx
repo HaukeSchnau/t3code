@@ -92,6 +92,7 @@ export function FloatingWorkingControl(props: {
   const extensionOnly = props.status?.kind === "extension";
   const useGlass = NATIVE_LIQUID_GLASS_SUPPORTED && !extensionOnly;
   const action =
+    props.status?.kind === "ask" ||
     props.status?.kind === "background" ||
     props.status?.kind === "lifecycle" ||
     props.status?.kind === "stop"
@@ -444,6 +445,25 @@ function FloatingStatusLabel(props: {
   }
   if (props.status.kind === "compacting") {
     return <CompactingLabel key="compacting" onLayout={props.onLayout} />;
+  }
+  if (props.status.kind === "ask") {
+    return (
+      <StatusLabelRow
+        key="ask"
+        accessibilityLabel={`${props.status.page ? "A page is waiting for you" : "The agent asks"}: ${props.status.label}`}
+        className="gap-2"
+        onLayout={props.onLayout}
+      >
+        <SymbolView
+          name={props.status.page ? "doc.text" : "questionmark.bubble"}
+          size={13}
+          tintColorClassName="accent-adaptive-indigo-600-300"
+        />
+        <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
+          {props.status.label}
+        </Text>
+      </StatusLabelRow>
+    );
   }
   if (props.status.kind === "child-input") {
     return (

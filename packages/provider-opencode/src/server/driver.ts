@@ -183,6 +183,11 @@ function selectOpenCodeRuntimeTextGeneration(
         v1: v1.generateTranscriptionPostProcessing(input),
         v2: v2.generateTranscriptionPostProcessing(input),
       }),
+    generateTurnEndAsk: (input) =>
+      byOpenCodeRuntime(resolve, {
+        v1: v1.generateTurnEndAsk(input),
+        v2: v2.generateTurnEndAsk(input),
+      }),
   };
 }
 

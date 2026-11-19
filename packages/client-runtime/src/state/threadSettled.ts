@@ -77,6 +77,22 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly pendingUserInputAt?: string | null;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   readonly pendingGuestMessageCount?: number;
+  readonly openAsks?: ReadonlyArray<{ readonly raisedAt: string }>;
+}
+
+/**
+ * When the newest ask raised after the snooze was raised. Snoozing an open ask means "ask me
+ * later", like a question; an invalid time keeps the ask visible.
+ */
+function freshAskAt(shell: ThreadSnoozeShell): string | null {
+  let latest: string | null = null;
+  for (const ask of shell.openAsks ?? []) {
+    if (shell.snoozedAt != null && Date.parse(ask.raisedAt) <= Date.parse(shell.snoozedAt)) {
+      continue;
+    }
+    if (latest === null || !(Date.parse(ask.raisedAt) <= Date.parse(latest))) latest = ask.raisedAt;
+  }
+  return latest;
 }
 
 function pendingQuestionAt(shell: ThreadSnoozeShell): string | null {
@@ -108,6 +124,7 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
   }
   if (shell.pendingSubagentRequest != null) return true;
   if ((shell.pendingGuestMessageCount ?? 0) > 0) return true;
+  if (freshAskAt(shell) !== null) return true;
   const failedAt = failureEdgeAt(shell);
   return (
     failedAt !== undefined &&
@@ -186,10 +203,15 @@ export function threadWokeAt(
       questionAt != null &&
       shell.snoozedAt != null &&
       Date.parse(questionAt) > Date.parse(shell.snoozedAt);
-    if (freshFailure && (!freshQuestion || Date.parse(failedAt) >= Date.parse(questionAt))) {
+    const askAt = shell.snoozedAt == null ? null : freshAskAt(shell);
+    const requestAt =
+      freshQuestion && (askAt === null || Date.parse(questionAt) >= Date.parse(askAt))
+        ? questionAt
+        : askAt;
+    if (freshFailure && (requestAt === null || Date.parse(failedAt) >= Date.parse(requestAt))) {
       return failedAt;
     }
-    if (freshQuestion) return questionAt;
+    if (requestAt !== null) return requestAt;
     const runtime = shell.runtime ?? shell.session ?? null;
     return runtime?.updatedAt ?? shell.snoozedAt ?? null;
   }
