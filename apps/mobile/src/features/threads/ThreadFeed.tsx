@@ -4,6 +4,8 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
 import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdownVideo";
+import { htmlRenderFrameInView } from "@t3tools/client-runtime/state/html-render";
+import { HtmlRenderInViewContext } from "../pages/pagePresentation";
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import {
   enrichedContextLinkCustomization,
@@ -1086,12 +1088,28 @@ function ThreadFeedScrollView(props: ComponentPropsWithRef<typeof Animated.Scrol
   );
 }
 
-function ThreadMediaVisibility(props: { readonly children: ReactNode }) {
+// LegendList keeps one amount callback per row, so this one measures for everything in the row.
+function ThreadMediaVisibility(props: {
+  readonly children: ReactNode;
+  readonly htmlRender: boolean;
+}) {
+  const { htmlRender } = props;
   const [visible, setVisible] = useState(false);
+  const [inView, setInView] = useState(false);
   useViewabilityAmount<ThreadFeedEntry>(
-    useCallback((token) => setVisible(token.sizeVisible > 0), []),
+    useCallback(
+      (token) => {
+        setVisible(token.sizeVisible > 0);
+        if (htmlRender) setInView(htmlRenderFrameInView(token));
+      },
+      [htmlRender],
+    ),
   );
-  return <ThreadMediaVisibleContext value={visible}>{props.children}</ThreadMediaVisibleContext>;
+  return (
+    <ThreadMediaVisibleContext value={visible}>
+      <HtmlRenderInViewContext value={inView}>{props.children}</HtmlRenderInViewContext>
+    </ThreadMediaVisibleContext>
+  );
 }
 
 interface MarkdownLinkHandlers {
@@ -3982,7 +4000,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         threadId={props.threadId}
         workspaceRoot={props.workspaceRoot}
       >
-        <ThreadMediaVisibility>
+        <ThreadMediaVisibility htmlRender={info.item.type === "html-render"}>
           {info.item.type === "message" &&
           info.item.message.projectedItem?.item.type === "user_message" &&
           info.item.message.projectedItem.item.freshContext ? (

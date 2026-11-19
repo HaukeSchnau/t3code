@@ -2233,6 +2233,7 @@ export default function ChatView(props: ChatViewProps) {
     timelineAnchorMessageId,
     setTimelineAnchor,
   });
+  const revealHtmlRenderStable = useStableCallback(revealHtmlRender);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- schedules a frame to focus the composer DOM element when a thread opens with the terminal closed
   useEffect(() => {
@@ -3460,6 +3461,8 @@ export default function ChatView(props: ChatViewProps) {
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
+              onRevealPage={revealHtmlRenderStable}
+              onSendPageMessage={sendAppMessageStable}
             />
           </header>
         )}

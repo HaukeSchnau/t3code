@@ -18,6 +18,16 @@ Before publishing, agents check their work with screenshots from a small headles
 
 Previews can load public resources such as CDN scripts, but nothing on your local network. The machine running the environment looks up each name, and previews block names that resolve to private or reserved addresses. Clash or Mihomo in fake-IP DNS mode can return these addresses, so external resources can fail there. The preview's console messages can identify affected hostnames. Inline the resource, add its host to `fake-ip-filter`, or switch that machine's proxy DNS to `redir-host`.
 
+## Pages that wait for you
+
+When a page needs your input, such as picking one of several layouts, the agent marks it as waiting for you. The thread then sits under [Needs you](thread-sidebar.md#see-what-needs-you) with the page's question, even while the agent keeps working, and the end of the thread offers **Open** and **Jump to it**. The page stops waiting when you answer, by typing a reply or through the page itself, when you choose **No reply needed**, or when the agent takes the question back.
+
+## Find pages
+
+A thread with pages shows **Pages** and their count in its header, or in the row above the composer on iOS and Android. It lists the pages that wait for you, the ones you have not seen yet, and the rest. Pick one to scroll to it, or to open it full screen when it is further back in the thread.
+
+**Pages** in the sidebar's footer and in the command palette lists the pages of every thread, newest first, and filters for the ones waiting for you or new to you. On iOS and Android, open it from the Follow-ups tab or the command palette. A page counts as seen on all your devices once it was at least half on screen for a moment, or you opened it full screen. A new version makes it new again. A page shown before T3 Code had this list joins it when the agent updates the page.
+
 ## MCP apps
 
 Some MCP servers return an interactive app with their tool results, following the [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) standard. When an agent calls one of those tools, the app appears in the thread in place of the tool call, on web, desktop, and mobile. Codex and Claude support this today, for any MCP server you have configured for them. Claude needs Claude Code 2.1.301 or newer; older versions and other providers show these calls as ordinary tool calls.

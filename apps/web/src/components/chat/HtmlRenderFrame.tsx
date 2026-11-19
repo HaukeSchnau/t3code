@@ -17,7 +17,15 @@ import { useEffect, useState } from "react";
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 import { cn } from "~/lib/utils";
-import { htmlRenderEnvironment, htmlRenderStateStore } from "~/state/htmlRender";
+import {
+  HTML_RENDER_SEEN_AFTER_MS,
+  htmlRenderFrameInView,
+} from "@t3tools/client-runtime/state/html-render";
+import {
+  htmlRenderEnvironment,
+  htmlRenderStateStore,
+  markHtmlRenderSeen,
+} from "~/state/htmlRender";
 import { type HtmlRenderOpenTarget, registerHtmlRenderOpener } from "~/state/htmlRenderOpenRequest";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useEnvironmentQuery } from "~/state/query";
@@ -55,48 +63,13 @@ export function HtmlRenderFrame(props: {
   const shown = props.versions[index]?.htmlRender ?? props.htmlRender;
   const select = (next: number) => setSelected(next >= last ? null : next);
 
-  const savedState = useEnvironmentQuery(
-    props.threadRef === undefined
-      ? null
-      : htmlRenderEnvironment.stateQuery({
-          environmentId: props.environmentId,
-          input: { threadId: props.threadRef.threadId, renderId },
-        }),
-  );
-  // Versions opened later, and later visits, must see what this tab saved, not the state read
-  // at mount. The store also sends a page's last save when its frame goes away.
-  const { environmentId } = props;
-  const threadId = props.threadRef?.threadId;
-  const stateTarget = threadId === undefined ? undefined : { environmentId, threadId, renderId };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Counts mounted views; the last one to leave sends the page's latest save.
-  useEffect(() => {
-    if (threadId === undefined) return;
-    return htmlRenderStateStore.view({ environmentId, threadId, renderId });
-  }, [environmentId, threadId, renderId]);
-  // An older server lacks the state RPC; its pages still open, without saved state.
-  const stateReady =
-    props.threadRef === undefined || savedState.isSuccess || savedState.error !== null;
-  const readState = () =>
-    (stateTarget === undefined ? undefined : htmlRenderStateStore.read(stateTarget)) ??
-    savedState.data ??
-    NO_STATE;
-  const { onSendMessage } = props;
-  const bridge: HtmlRenderPageBridge | undefined =
-    props.threadRef === undefined
-      ? undefined
-      : {
-          environmentId: props.environmentId,
-          threadId: props.threadRef.threadId,
-          renderId,
-          title: shown.title,
-          onSendMessage:
-            onSendMessage === undefined
-              ? undefined
-              : (message) => onSendMessage(message.text, message.context),
-          onStateSaved: (state) => {
-            if (stateTarget !== undefined) htmlRenderStateStore.save(stateTarget, state);
-          },
-        };
+  const { bridge, readState, stateReady, stateTarget } = useHtmlRenderPageBridge({
+    environmentId: props.environmentId,
+    threadRef: props.threadRef,
+    renderId,
+    title: shown.title,
+    onSendMessage: props.onSendMessage,
+  });
 
   return (
     <div className="group/html-render relative">
@@ -171,15 +144,27 @@ function HtmlRenderVersionFrame(props: {
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
 }) {
   const { attachmentId, title } = props.htmlRender;
+  const { openTarget } = props;
+  // Stable, so the frame's callback ref keeps its observers across renders.
+  const markSeen = useStableCallback(() => {
+    if (openTarget !== undefined) markHtmlRenderSeen({ ...openTarget, attachmentId });
+  });
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
-  const observeBox = (box: HTMLDivElement) => {
-    setWidth(box.clientWidth);
-    return observeResize(box, ([entry]) => {
-      if (entry) setWidth(entry.contentRect.width);
-    });
-  };
   // Client fonts can exceed the server-measured height and cause nested scrolling.
   const [contentHeight, setContentHeight] = useState<number>();
+  // The page reports its height once it has loaded; before that the reader sees nothing.
+  const pageShown = contentHeight !== undefined;
+  const observeBox = (box: HTMLDivElement) => {
+    setWidth(box.clientWidth);
+    const stopResize = observeResize(box, ([entry]) => {
+      if (entry) setWidth(entry.contentRect.width);
+    });
+    const stopSeen = pageShown ? observeSeen(box, markSeen) : undefined;
+    return () => {
+      stopResize();
+      stopSeen?.();
+    };
+  };
   const height = htmlRenderFrameHeight(props.htmlRender, width, contentHeight);
   const fileName = htmlRenderFileName(title);
   const resource = {
@@ -204,8 +189,10 @@ function HtmlRenderVersionFrame(props: {
       loaded !== null && loaded.expiresAt - Date.now() > MIN_URL_LIFE_MS
         ? src
         : await refresh().catch(() => null);
-    if (url !== null) setExpandedSrc(url);
-    else
+    if (url !== null) {
+      setExpandedSrc(url);
+      markSeen();
+    } else
       toastManager.add({
         type: "error",
         title: "Page unavailable",
@@ -291,4 +278,111 @@ function HtmlRenderVersionFrame(props: {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Saved state and the `window.t3` bridge for one render, shared by its frame and a dialog opened
+ * outside the timeline.
+ */
+export function useHtmlRenderPageBridge(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadRef: ScopedThreadRef | undefined;
+  readonly renderId: string;
+  readonly title: string;
+  readonly onSendMessage:
+    | ((text: string, context: OrchestrationMessageContext) => Promise<void>)
+    | undefined;
+}) {
+  const { environmentId, renderId } = props;
+  const savedState = useEnvironmentQuery(
+    props.threadRef === undefined
+      ? null
+      : htmlRenderEnvironment.stateQuery({
+          environmentId,
+          input: { threadId: props.threadRef.threadId, renderId },
+        }),
+  );
+  // Versions opened later, and later visits, must see what this tab saved, not the state read
+  // at mount. The store also sends a page's last save when its frame goes away.
+  const threadId = props.threadRef?.threadId;
+  const stateTarget = threadId === undefined ? undefined : { environmentId, threadId, renderId };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Counts mounted views; the last one to leave sends the page's latest save.
+  useEffect(() => {
+    if (threadId === undefined) return;
+    return htmlRenderStateStore.view({ environmentId, threadId, renderId });
+  }, [environmentId, threadId, renderId]);
+  // An older server lacks the state RPC; its pages still open, without saved state.
+  const stateReady =
+    props.threadRef === undefined || savedState.isSuccess || savedState.error !== null;
+  const readState = () =>
+    (stateTarget === undefined ? undefined : htmlRenderStateStore.read(stateTarget)) ??
+    savedState.data ??
+    NO_STATE;
+  const { onSendMessage } = props;
+  const bridge: HtmlRenderPageBridge | undefined =
+    props.threadRef === undefined
+      ? undefined
+      : {
+          environmentId,
+          threadId: props.threadRef.threadId,
+          renderId,
+          title: props.title,
+          onSendMessage:
+            onSendMessage === undefined
+              ? undefined
+              : (message) => onSendMessage(message.text, message.context),
+          onStateSaved: (state) => {
+            if (stateTarget !== undefined) htmlRenderStateStore.save(stateTarget, state);
+          },
+        };
+  return { bridge, readState, stateReady, stateTarget };
+}
+
+// Fine steps, so a tall frame's share of the screen is measured close to where it crosses half.
+const SEEN_THRESHOLDS = Array.from({ length: 101 }, (_, step) => step / 100);
+
+/**
+ * Marks the shown version seen once the frame has stayed in view (`htmlRenderFrameInView`) for
+ * a moment while the tab is visible. Hiding the tab stops the clock; showing it starts again.
+ */
+function observeSeen(box: HTMLElement, onSeen: () => void): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inView = false;
+  const update = () => {
+    if (!inView || document.visibilityState !== "visible") {
+      clearTimeout(timer);
+      timer = undefined;
+      return;
+    }
+    timer ??= setTimeout(() => {
+      timer = undefined;
+      onSeen();
+    }, HTML_RENDER_SEEN_AFTER_MS);
+  };
+  const observer = new IntersectionObserver(
+    (entries) => {
+      // One callback can carry several queued entries for this frame. Replay them in order, so
+      // a moment out of view between two in-view entries restarts the clock.
+      for (const entry of entries) {
+        const visible = entry.isIntersecting ? entry.intersectionRect.height : 0;
+        const frame = entry.boundingClientRect.height;
+        const screen = entry.rootBounds?.height ?? window.innerHeight;
+        inView =
+          visible > 0 &&
+          htmlRenderFrameInView({
+            percentVisible: frame > 0 ? (visible / frame) * 100 : 0,
+            percentOfScroller: screen > 0 ? (visible / screen) * 100 : 0,
+          });
+        update();
+      }
+    },
+    { threshold: SEEN_THRESHOLDS },
+  );
+  observer.observe(box);
+  document.addEventListener("visibilitychange", update);
+  return () => {
+    clearTimeout(timer);
+    observer.disconnect();
+    document.removeEventListener("visibilitychange", update);
+  };
 }

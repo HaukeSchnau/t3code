@@ -1,10 +1,11 @@
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type OrchestrationMessageContext,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
@@ -42,6 +43,7 @@ import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
+import { ThreadPagesControl } from "./ThreadPagesControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -56,6 +58,11 @@ interface ChatHeaderProps {
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  /** Scrolls to a page; false when the loaded timeline does not hold it. */
+  onRevealPage?: ((renderId: string) => boolean) | undefined;
+  onSendPageMessage?:
+    | ((text: string, context: OrchestrationMessageContext) => Promise<void>)
+    | undefined;
 }
 
 function resolveRenameCommit(input: {
@@ -81,6 +88,8 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
+  onRevealPage,
+  onSendPageMessage,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -393,6 +402,15 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isServerThread && onRevealPage !== undefined ? (
+        <ThreadPagesControl
+          // A page left open must not outlive its thread, or it would send to the next one.
+          key={scopedThreadKey(activeThreadRef)}
+          threadRef={activeThreadRef}
+          onRevealPage={onRevealPage}
+          onSendMessage={onSendPageMessage}
+        />
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as HtmlRender from "../../../htmlRender/HtmlRender.ts";
+import * as HtmlRenderIndex from "../../../htmlRender/HtmlRenderIndex.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -35,6 +36,11 @@ const Title = Schema.String.check(
 
 const Height = Schema.Int.annotate({
   description: `Frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT} to ${HTML_RENDER_MAX_HEIGHT}. Use the contentHeight from html_preview.`,
+});
+
+const Ask = Schema.String.annotate({
+  description:
+    "Set when the page collects the reader's input: one line saying what to decide, under 120 chars.",
 });
 
 const HtmlRenderOutput = Schema.Struct({
@@ -101,6 +107,7 @@ const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
     ...pageSource,
     title: Title,
     height: Height,
+    ask: Schema.optional(Ask),
   }),
   success: Schema.Struct({
     htmlRender: HtmlRenderOutput,
@@ -131,6 +138,9 @@ const HtmlRenderUpdateTool = Tool.make(HTML_RENDER_UPDATE_TOOL_NAME, {
     ...pageSource,
     title: Schema.optional(Title),
     height: Schema.optional(Height),
+    ask: Schema.optional(
+      Schema.String.annotate({ description: 'Replaces the page\'s ask; "" ends it.' }),
+    ),
   }),
   success: Schema.Struct({
     htmlRenderUpdate: Schema.Struct({
@@ -148,6 +158,8 @@ const HtmlRenderUpdateTool = Tool.make(HTML_RENDER_UPDATE_TOOL_NAME, {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     HtmlRender.HtmlRender,
+    // Tells an update of a page apart from any other attachment of the thread.
+    HtmlRenderIndex.HtmlRenderIndex,
   ],
 })
   .annotate(Tool.Title, "Update HTML")

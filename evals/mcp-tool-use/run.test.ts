@@ -420,25 +420,32 @@ it("grades a page passed by path on the file the agent last wrote there", () => 
   ]);
 });
 
-it("bounds numbers and reads target.options in either schema form", () => {
+it("bounds numbers, matches regexes, and reads target.options in either schema form", () => {
   const expect = {
     calls: [
       { tool: "t3_thread_read", args: { limit: "<=20" } },
       { tool: "delegate_task", args: { "target.options.effort": "max", timeoutMs: ">=60000" } },
     ],
+    callsMustNot: [{ tool: "html_render", args: { ask: "/^\\s*$/" } }],
   };
-  const run = (limit: unknown, options: unknown, timeoutMs: number): SampleRun => ({
+  const run = (
+    limit: unknown,
+    options: unknown,
+    timeoutMs: number,
+    ask = "Pick one",
+  ): SampleRun => ({
     calls: [
       { step: 0, tool: "t3_thread_read", input: { limit } },
       { step: 0, tool: "delegate_task", input: { target: { options }, timeoutMs } },
+      { step: 0, tool: "html_render", input: { html: "<p>Pick</p>", ask } },
     ],
     text: "",
     stopReason: "end_turn",
   });
   assert.deepEqual(failed(expect, run(20, [{ id: "effort", value: "max" }], 60_000)), []);
   assert.deepEqual(failed(expect, run(5, { effort: "max" }, 90_000)), []);
-  assert.lengthOf(failed(expect, run(21, [{ id: "effort", value: "high" }], 59_999)), 2);
-  assert.lengthOf(failed(expect, run("10", {}, 60_000)), 2);
+  assert.lengthOf(failed(expect, run(21, [{ id: "effort", value: "high" }], 59_999, "")), 3);
+  assert.lengthOf(failed(expect, run("10", {}, 60_000, " \n")), 3);
 });
 
 const template = {

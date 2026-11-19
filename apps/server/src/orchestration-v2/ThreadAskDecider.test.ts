@@ -126,13 +126,23 @@ describe("decideThreadAskCommand", () => {
     expect(decide(current, raise("again", turnEnd("run-2")))).toBe(current);
   });
 
-  it("updates the text of a page's open ask instead of adding another", () => {
-    const first = decide(thread(), raise("p", page("render-1"), "Pick a layout"));
-    const second = decide(first, raise("p2", page("render-1"), "Pick a layout and a color"));
-    expect(second.asks?.map((ask) => [ask.id, ask.text])).toEqual([
-      ["p", "Pick a layout and a color"],
+  it("updates the text and run of a page's open ask instead of adding another", () => {
+    const byRun = (runId: string) => ({ ...page("render-1"), runId: RunId.make(runId) });
+    const first = decideThreadAskCommand({
+      thread: thread(),
+      command: raise("p", byRun("run-2"), "Pick a layout"),
+      now: at(12),
+      runs,
+      latestUserReplyAt: null,
+    });
+    const second = decide(first, raise("p2", byRun("run-3"), "Pick a layout and a color"));
+    expect(second.asks?.map((ask) => [ask.id, ask.text, ask.source, ask.raisedAt])).toEqual([
+      ["p", "Pick a layout and a color", byRun("run-3"), DateTime.formatIso(at(12))],
     ]);
-    expect(decide(second, raise("p3", page("render-1"), "Pick a layout and a color"))).toBe(second);
+    // The same text from another run still moves the ask to that run.
+    const third = decide(second, raise("p3", byRun("run-4"), "Pick a layout and a color"));
+    expect(third.asks?.[0]?.source).toEqual(byRun("run-4"));
+    expect(decide(third, raise("p4", byRun("run-4"), "Pick a layout and a color"))).toBe(third);
   });
 
   it("brings a settled thread back with a new ask", () => {

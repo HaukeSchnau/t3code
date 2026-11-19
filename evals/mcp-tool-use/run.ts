@@ -175,7 +175,8 @@ const PriorToolCall = Schema.Struct({
 
 /**
  * One expected call. `args` match partially: `~text` is a case-insensitive substring,
- * `"<=N"` / `">=N"` bound a number, `null` matches a missing key, and keys may be dotted paths.
+ * `"/re/"` is a regex a string must match, `"<=N"` / `">=N"` bound a number, `null` matches a
+ * missing key, and keys may be dotted paths.
  */
 const McpToolUseCall = Schema.Struct({
   tool: Schema.String,
@@ -1634,9 +1635,10 @@ export const answerToolCall = Effect.fn("evaluateMcpToolUse.answerToolCall")(fun
 });
 
 const BOUND = /^([<>]=)(-?\d+(?:\.\d+)?)$/;
+const PATTERN = /^\/(.+)\/$/s;
 /**
- * Partial match: `~text` is a case-insensitive substring, `<=N` / `>=N` bound a number, and `null`
- * matches a missing or null value.
+ * Partial match: `~text` is a case-insensitive substring, `/re/` a regex a string must match,
+ * `<=N` / `>=N` bound a number, and `null` matches a missing or null value.
  */
 const matches = (expected: unknown, actual: unknown): boolean => {
   if (expected === null) return actual === undefined || actual === null;
@@ -1645,6 +1647,8 @@ const matches = (expected: unknown, actual: unknown): boolean => {
     const limit = Number(bound[2]);
     return typeof actual === "number" && (bound[1] === "<=" ? actual <= limit : actual >= limit);
   }
+  const pattern = typeof expected === "string" ? PATTERN.exec(expected) : null;
+  if (pattern !== null) return typeof actual === "string" && new RegExp(pattern[1]!).test(actual);
   if (typeof expected === "string" && expected.startsWith("~")) {
     return valueText(actual).toLowerCase().includes(expected.slice(1).toLowerCase());
   }

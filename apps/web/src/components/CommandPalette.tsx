@@ -70,6 +70,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  AppWindowIcon,
   ListTodoIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -1648,6 +1649,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <ListTodoIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/follow-ups" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:pages",
+    searchTerms: ["pages", "page", "html", "renders", "visuals", "mockups", "waiting"],
+    title: "Open pages",
+    icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/pages" });
     },
   });
 

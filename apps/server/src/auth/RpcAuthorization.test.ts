@@ -68,6 +68,18 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("lets thread readers list pages, while marking one seen for every device needs operate", () => {
+    for (const method of [
+      WS_METHODS.htmlRenderListPages,
+      WS_METHODS.htmlRenderSubscribePageChanges,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.htmlRenderMarkSeen)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("lets thread readers observe and refresh checkout branches", () => {
     for (const method of [WS_METHODS.subscribeVcsBranch, WS_METHODS.vcsRefreshBranch]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);

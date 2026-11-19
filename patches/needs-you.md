@@ -14,7 +14,9 @@ prose asks waited over two hours or never got a reply.
 - An ask is something an agent needs from the user, stored on the thread with a start and an end.
   Visiting the thread never ends it; acting does.
 - Two sources raise asks: a `turn_end` ask when a top-level thread's turn ends waiting on the user,
-  and a `page` ask when a page asks its reader for input (raised by `html_render`, a later change).
+  and a `page` ask when a page asks its reader for input: `html_render` and `html_render_update`
+  take an optional `ask`, one line under 120 characters (longer text is cut), and an update with
+  `ask: ""` withdraws it. An update without `ask` leaves the page's ask as it is.
 - An ask ends when the user sends a user-authored message to the thread (any client, a
   notification reply, a page's `t3.send`), when the user chooses No reply needed for one ask or all
   of them, when the thread is settled, when the agent withdraws a page ask, or when a newer
@@ -41,8 +43,11 @@ prose asks waited over two hours or never got a reply.
 - The turn-end detector classifies the final assistant message of each completed run of a
   top-level thread with the text-generation model (`textGenerationModelSelection`), at most three
   at once. It skips subagent and delegated threads, runs whose stop was requested, threads with a
-  pending request or card, runs without a final message, and runs the user already answered.
-  Failures are logged and skipped.
+  pending request or card, runs without a final message, runs that set or updated a page's ask
+  that the agent did not withdraw (the page's ask covers the question even once answered or
+  dismissed before the run ends; each page ask records the run that last set it, and keeps its
+  first raise time), and runs the user already answered. Failures are logged and
+  skipped.
 - T3's agent instructions tell agents to ask every decision, approval or answer with their
   question tool, including one that comes up mid-work while they keep going. The turn-end detector
   only reads the final message, so a question in an earlier message would never become a need.
@@ -65,6 +70,34 @@ prose asks waited over two hours or never got a reply.
   Both offer No reply needed for that one ask. On mobile, background work the user can stop keeps
   the pill until it ends, because the pill holds its only Stop.
 
+- Pages: the server indexes every page `html_render` shows (one row per render, keyed by its first
+  version's attachment id) with its title, first and latest publish time, newest version and version
+  count. Pages shown before the index existed are not backfilled: finding them would scan the turn
+  item table, which runs to gigabytes, at startup. `html_render_update` of such a page reads that
+  thread's tool calls for it and indexes it with the new version, so a failed update indexes
+  nothing, and refuses an id that was never a first version shown in the thread.
+- A page is seen once a client showed its newest version, loaded, in view for 1.5 seconds while
+  the tab or app is in front: at least half of the page on screen, or the page covering half the
+  screen (a page taller than two screens is never half on screen). Opening it full screen sees it
+  too. Seen is stored on the server, so
+  every device agrees, and only for the version the reader saw on a thread that still exists. A
+  new version clears it.
+- Clients list pages by thread, waiting pages first so the list's cut never hides one, or across
+  threads filtered to pages that ask, unseen pages or all, newest first and paged; each batch starts after the previous batch as it stands now. Each row
+  carries the thread's title and the page's open ask. A change stream, per thread or for all
+  threads, sends the page count and moves on when a page is published or seen, or a thread with
+  pages has its asks, title, settling or deletion change; a list reloads only on changes in its
+  scope.
+- The web thread header shows **Pages** with the count and how many wait, in a popover grouped as
+  waiting, new and seen; a page the loaded timeline holds scrolls into view, an older one opens
+  full screen with the bridge it answers through. The closed chip reads the count from the thread's
+  change stream and the waiting count from the shell's open asks; the rows load when the popover
+  opens. Mobile shows the same entry in the thread screen's status row and opens a sheet. A
+  **Pages** view lists every thread's pages: on web at `/pages`, from the sidebar footer and the
+  command palette; on mobile as a screen opened from a row at the top of the Follow-ups tab and
+  from the command palette, so the app keeps four tabs (a fifth turns on tab customization, and
+  the Android tab bar shows no header actions).
+
 ## Implementation
 
 Fork-owned files:
@@ -81,6 +114,15 @@ Fork-owned files:
 - `apps/web/src/state/htmlRenderOpenRequest.ts`: lets the ask line open a page's full-screen
   dialog, which the page's frame owns with the bridge the page answers through.
 - Tests: `ThreadAskDecider.test.ts`, `ThreadAsk.test.ts`, `TurnEndAskDetector.test.ts`.
+- `packages/contracts/src/htmlRenderPages.ts`: the page row, list input and result, seen input,
+  change tick.
+- `apps/server/src/htmlRender/HtmlRenderIndex.ts`: the index (record, index an older page, seen,
+  list, change stream) and the reactor that passes on thread events lists show; migration 112
+  (`persistence/Migrations/112_HtmlRenders.ts`); `HtmlRenderIndex.test.ts`.
+- Web: `components/chat/ThreadPagesControl.tsx`, `components/chat/HtmlRenderPageDialog.tsx`,
+  `components/pages/` (`PagesPage.tsx`, `PageListRow.tsx`), `routes/_chat.pages.tsx`.
+- Mobile: `features/pages/` (the Pages screen, the thread's Pages sheet, the page row, the
+  thread pages query and route, the seen hooks, and `pagePresentation.ts`).
 
 Upstream-owned hooks:
 
@@ -114,7 +156,35 @@ Upstream-owned hooks:
   unsupported.
 - `packages/provider-core/src/server/orchestrationInstructions.ts`: the question-tool line, and
   `apps/server/src/provider/agentContextBudget.json` for its measured size.
-- `apps/server/src/server.ts`: starts the detector next to the title refresh.
+- `apps/server/src/server.ts`: starts the detector next to the title refresh, and provides the page
+  index once for `/mcp` and the WebSocket handlers.
+- `apps/server/src/htmlRender/HtmlRender.ts`: `publish` writes the index for a page and each later
+  version (a failed index write is logged; the page still shows). `mcp/toolkits/html/` adds `ask`
+  to both tools and raises or withdraws the page ask after publishing, with the calling thread's
+  active run, and checks with the index that an update names a page.
+  `apps/server/src/provider/agentContextBudget.json` holds the larger tool list.
+- RPCs `htmlRender.markSeen` (operate scope, client-guarded), `htmlRender.listPages` and
+  `htmlRender.subscribePageChanges` (read scope): `WS_METHODS` and `ForkWsRpcGroup` in
+  `packages/contracts/src/rpc.ts`, `clientRpcPermissions.ts`, `auth/RpcAuthorization.ts`,
+  `observability/RpcInstrumentation.ts`, the fork handler layer in `ws.ts`, and
+  `client-runtime/src/rpc/client.ts` (the stream tag). Migration 112 in `Migrations.ts`.
+- `packages/client-runtime/src/state/htmlRender.ts`: the `pages` query (refreshed by its scope's
+  change stream), the thread page count, `markSeen`, the once-per-version seen marker, the in-view
+  rule both clients use, and the waiting/new/seen grouping.
+- Web: `chat/HtmlRenderFrame.tsx` (marks seen on visibility and full screen; its state and bridge
+  hook is shared with the page dialog), `chat/ChatHeader.tsx` and `ChatView.tsx` (the Pages chip),
+  `sidebar/SidebarChrome.tsx`, `sidebar/mainAppLocation.ts`, `CommandPalette.tsx`,
+  `state/htmlRender.ts`, `routeTree.gen.ts`.
+- Mobile: `state/htmlRender.ts` (the seen marker), `features/threads/ThreadFeed.tsx` and
+  `HtmlRenderWebView.tsx` (a page row in view for 1.5 seconds is seen),
+  `features/files/AttachmentFileScreen.tsx` (opening a page full screen sees it),
+  `features/threads/floating-working-control.tsx` and `ThreadDetailScreen.tsx` (the Pages segment
+  above the composer), `Stack.tsx` and `features/layout/workspace-overlay-routes.ts` (the `Pages`
+  and `ThreadPages` routes), `features/follow-ups/FollowUpsScreen.tsx` (the Pages row),
+  `features/keyboard/CommandPalette.tsx`, `components/ui/AppSymbol.android.tsx` (`doc.richtext`).
+- `apps/server/src/orchestration-v2/TurnEndAskDetector.ts`: skips a run that set a page ask, so a
+  page that asks and the turn that showed it do not make two asks for one question.
+  `threadAsks.ts` adds `runId` to the page source and `ThreadAskDecider.ts` moves it with the text.
 - `packages/client-runtime`: `openAsks` on `EnvironmentThreadShell` (`state/models.ts`),
   `threadNeedsYou`, `threadNeedLabel`, `sortThreadsByNeed` and the inbox tracker's `actionable`
   (`state/threadInbox.ts`), snooze wakes for newer asks (`state/threadSettled.ts`),
@@ -143,18 +213,21 @@ Upstream-owned hooks:
 
 Retire this patch when upstream tracks what agents ask the user as durable state that only acting
 ends, detects turns that end waiting on the user, and lists those threads apart from finished ones.
+Retire the page index and lists when upstream keeps an index of html renders with seen state; drop
+migration 112's table only with a migration that removes it.
 
 ## Verification
 
 - `ThreadAskDecider.test.ts` covers raise, replace, the guard, runs that finish out of order, a
-  later run's ask in any status winning, page text updates, unsettle, withdraw, dismiss one and
-  all, remind, trimming, answering, reopening and settle.
+  later run's ask in any status winning, page text and run updates, unsettle, withdraw, dismiss
+  one and all, remind, trimming, answering, reopening and settle.
 - `ThreadAsk.test.ts` covers answering on a user's message (context-only too), a question card
   answer and not an agent's or an empty message, reopening on a cancelled queued reply, a turn-end
   ask landing past a cancelled queued reply or a Codex retry, the guard's reply read starting at
   the run's end, dismiss, settle, auto-settle refusing open asks, and unsettle through the
   orchestrator, with every shell path agreeing.
-- `TurnEndAskDetector.test.ts` covers the detector's skip rules and its guarded raise.
+- `TurnEndAskDetector.test.ts` covers the detector's skip rules (including a run that showed or
+  updated a page that asks, but not another run's page ask) and its guarded raise.
 - `ThreadSettlementService.test.ts`, client-runtime `threadInbox.test.ts` and
   `threadSnoozed.test.ts` cover settlement, snooze, the inbox and `threadNeedsYou`.
 - `evals/thread-asks` measures the detector prompt; `evals/mcp-tool-use` secrets, follow-up and
@@ -164,6 +237,16 @@ ends, detects turns that end waiting on the user, and lists those threads apart 
   inbox order) and asks reading as Input; `Sidebar.drag.test.ts` covers the section staying in
   place during a drag. Mobile `threadListV2.test.ts` covers the section's members, order and
   exclusion from Pinned, Working, Settled and Snoozed.
+- `mcp/toolkits/core.test.ts` covers `ask` raising, updating, truncating and withdrawing page asks,
+  refusing an update of a later version's id, and the index writes for each version.
+  `HtmlRenderIndex.test.ts` covers list order, paging, the thread filter, seen (per thread, cleared
+  by a new version, not on a deleted thread), the asks filter from the thread's open asks, deleted
+  threads, indexing a page shown before the index, and which thread changes reach which change
+  stream. Web `PagesPage.browser.test.tsx` covers Load more after a new page and a removed one.
+  client-runtime `htmlRender.test.ts` covers the in-view rule. `RpcAuthorization.test.ts` and
+  client-runtime `commandPermissions.test.ts` cover the RPC scopes. `evals/mcp-tool-use` cases
+  `page-collecting-choice-sets-ask` and `control-chart-page-no-ask` check that agents set `ask`
+  for a page that collects a choice and not for a chart.
 - Real clients (web and the iOS app): the Needs you section, No reply needed from the row, menu,
   swipe and ask line, a reply ending an ask, and the ask line, captured on a dev server with real
   turn-end asks from Claude Haiku and a question from Claude's question tool. Page asks arrive with

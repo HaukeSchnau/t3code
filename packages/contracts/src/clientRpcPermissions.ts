@@ -74,6 +74,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   [WS_METHODS.htmlRenderSetState]: AuthOrchestrationOperateScope,
   [WS_METHODS.htmlRenderCallTool]: AuthOrchestrationOperateScope,
+  // Seen is one server-wide mark that every device reads.
+  [WS_METHODS.htmlRenderMarkSeen]: AuthOrchestrationOperateScope,
   // Force stop kills agent processes, as Stop on a terminal does.
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.

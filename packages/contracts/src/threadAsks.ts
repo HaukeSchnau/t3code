@@ -19,8 +19,15 @@ export const THREAD_ASK_LIMIT = 20;
 export const ThreadAskSource = Schema.Union([
   /** A turn of a top-level thread ended waiting on the user. */
   Schema.Struct({ type: Schema.Literal("turn_end"), runId: RunId }),
-  /** A page (`html_render`) asks the reader for input. `renderId` is its first version's id. */
-  Schema.Struct({ type: Schema.Literal("page"), renderId: TrimmedNonEmptyString }),
+  /**
+   * A page (`html_render`) asks the reader for input. `renderId` is its first version's id;
+   * `runId` is the run that last set the ask, whose ending needs no ask of its own.
+   */
+  Schema.Struct({
+    type: Schema.Literal("page"),
+    renderId: TrimmedNonEmptyString,
+    runId: Schema.optional(RunId),
+  }),
 ]);
 export type ThreadAskSource = typeof ThreadAskSource.Type;
 

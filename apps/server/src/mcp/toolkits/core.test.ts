@@ -20,6 +20,7 @@ import {
   ThreadId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -37,6 +38,7 @@ import {
   OrchestratorDispatchError,
   OrchestratorProjectionError,
   OrchestratorProviderSelectionBusyError,
+  type OrchestratorV2DispatchResult,
 } from "../../orchestration-v2/Orchestrator.ts";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
@@ -45,6 +47,7 @@ import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapter
 import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
+import * as HtmlRenderIndex from "../../htmlRender/HtmlRenderIndex.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
@@ -309,32 +312,58 @@ it("bounds public command rejections and redacts internal dispatch causes", () =
 
 const fullAccessThreadId = ThreadId.make("mcp-core-full-access-thread");
 
-const layerHtmlToolkit = McpHttpServer.layerHtmlToolkit.pipe(
-  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(PreviewBrowser.layer),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
-  Layer.provide(
-    DocumentText.layer.pipe(
-      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+interface HtmlToolkitRecord {
+  readonly dispatched: Array<OrchestrationV2ServerCommand>;
+  readonly indexed: Array<
+    Parameters<HtmlRenderIndex.HtmlRenderIndex["Service"]["recordPublished"]>[0]
+  >;
+}
+
+const makeLayerHtmlToolkit = (record: HtmlToolkitRecord = { dispatched: [], indexed: [] }) =>
+  McpHttpServer.layerHtmlToolkit.pipe(
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+    Layer.provide(
+      Layer.mock(HtmlRenderIndex.HtmlRenderIndex)({
+        recordPublished: (input) => Effect.sync(() => void record.indexed.push(input)),
+        // Only a first version this test showed is a page to update.
+        isPage: ({ renderId }) =>
+          Effect.succeed(
+            record.indexed.some(
+              (page) => page.attachmentId === renderId && page.renderId === undefined,
+            ),
+          ),
+      }),
     ),
-  ),
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provide(
-    Layer.mock(ThreadManagement.ThreadManagementService)({
-      getThreadShell: (id) =>
-        Effect.succeed({
-          id,
-          deletedAt: null,
-          archivedAt: null,
-          activeRunId: RunId.make("mcp-core-run"),
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          runtimeMode: id === fullAccessThreadId ? "full-access" : "approval-required",
-          interactionMode: "default",
-        } as OrchestrationV2ThreadShell),
-    }),
-  ),
-);
+    Layer.provide(McpProviderSessions.layer),
+    Layer.provide(PreviewBrowser.layer),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
+    Layer.provide(
+      DocumentText.layer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: (id) =>
+          Effect.succeed({
+            id,
+            deletedAt: null,
+            archivedAt: null,
+            activeRunId: RunId.make("mcp-core-run"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: id === fullAccessThreadId ? "full-access" : "approval-required",
+            interactionMode: "default",
+          } as OrchestrationV2ThreadShell),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            record.dispatched.push(command);
+            return {} as OrchestratorV2DispatchResult;
+          }),
+      }),
+    ),
+  );
+const layerHtmlToolkit = makeLayerHtmlToolkit();
 
 const callHtmlTool = (
   name: string,
@@ -411,7 +440,94 @@ it.effect("publishes a new version only of a page this thread showed", () =>
       html: "<p>v2</p>",
     });
     expect(declaredFailure(foreign)).toMatchObject({ code: "invalid_request" });
+    // A later version is this thread's attachment too, but not a page.
+    const ofVersion = yield* callHtmlTool("html_render_update", {
+      renderId: update!.attachmentId,
+      html: "<p>v3</p>",
+    });
+    expect(declaredFailure(ofVersion)).toMatchObject({ code: "invalid_request" });
   }).pipe(Effect.provide(layerHtmlToolkit)),
+);
+
+it.effect("indexes each version and keeps the title an update leaves out", () => {
+  const record: HtmlToolkitRecord = { dispatched: [], indexed: [] };
+  return Effect.gen(function* () {
+    const first = yield* callHtmlTool("html_render", {
+      html: "<p>v1</p>",
+      title: "Quiz",
+      height: 240,
+    });
+    const renderId = htmlRenderFromToolItem({
+      toolName: "t3-code.html_render",
+      output: first.structuredContent,
+    })!.attachmentId;
+    const second = yield* callHtmlTool("html_render_update", { renderId, html: "<p>v2</p>" });
+    yield* callHtmlTool("html_render_update", { renderId, html: "<p>v3</p>", title: "Quiz 3" });
+    const secondId = htmlRenderUpdateFromToolItem({
+      toolName: "t3-code.html_render_update",
+      output: second.structuredContent,
+    })!.attachmentId;
+
+    expect(record.indexed).toEqual([
+      { threadId, attachmentId: renderId, renderId: undefined, title: "Quiz" },
+      { threadId, attachmentId: secondId, renderId, title: undefined },
+      { threadId, attachmentId: expect.any(String), renderId, title: "Quiz 3" },
+    ]);
+  }).pipe(Effect.provide(makeLayerHtmlToolkit(record)));
+});
+
+it.effect(
+  "a page that asks raises its ask; an update replaces it, and an empty one ends it",
+  () => {
+    const record: HtmlToolkitRecord = { dispatched: [], indexed: [] };
+    return Effect.gen(function* () {
+      const shown = yield* callHtmlTool("html_render", {
+        html: "<p>Layouts</p>",
+        title: "Layouts",
+        height: 240,
+        ask: "  Pick one of\n3 layouts ",
+      });
+      const renderId = htmlRenderFromToolItem({
+        toolName: "t3-code.html_render",
+        output: shown.structuredContent,
+      })!.attachmentId;
+      yield* callHtmlTool("html_render_update", {
+        renderId,
+        html: "<p>2</p>",
+        ask: "x".repeat(130),
+      });
+      yield* callHtmlTool("html_render_update", { renderId, html: "<p>3</p>" });
+      // Leaving the ask out keeps it open.
+      expect(record.dispatched.map((command) => command.type)).toEqual([
+        "thread.ask.raise",
+        "thread.ask.raise",
+      ]);
+      yield* callHtmlTool("html_render_update", { renderId, html: "<p>4</p>", ask: " " });
+      // A new page with a blank ask asks nothing and has nothing to end.
+      yield* callHtmlTool("html_render", {
+        html: "<p>Chart</p>",
+        title: "Chart",
+        height: 240,
+        ask: "",
+      });
+
+      expect(record.dispatched).toEqual([
+        expect.objectContaining({
+          type: "thread.ask.raise",
+          threadId,
+          askId: `page:${renderId}`,
+          source: { type: "page", renderId, runId: RunId.make("mcp-core-run") },
+          text: "Pick one of 3 layouts",
+        }),
+        expect.objectContaining({
+          type: "thread.ask.raise",
+          source: { type: "page", renderId, runId: RunId.make("mcp-core-run") },
+          text: `${"x".repeat(119)}…`,
+        }),
+        expect.objectContaining({ type: "thread.ask.withdraw", threadId, renderId }),
+      ]);
+    }).pipe(Effect.provide(makeLayerHtmlToolkit(record)));
+  },
 );
 
 it.effect("records only failed calls of tools that hand off no work", () => {

@@ -3481,8 +3481,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
   }),
   /**
    * A `turn_end` ask lands only while no user-authored message came after its run, so a slow
-   * detector cannot raise what the user already answered. A page ask replaces the text of the
-   * open ask for the same render.
+   * detector cannot raise what the user already answered. A page ask replaces the text and run
+   * of the open ask for the same render, which keeps waiting since it was first raised.
    */
   Schema.Struct({
     type: Schema.Literal("thread.ask.raise"),

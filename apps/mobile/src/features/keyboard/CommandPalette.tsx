@@ -70,6 +70,7 @@ import {
 import { parseActiveThreadPath, type HardwareKeyboardCommand } from "./hardwareKeyboardCommands";
 import { threadJumpIndex } from "./threadKeyboardShortcuts";
 import { FOLLOW_UP_ICON } from "../follow-ups/followUpPresentation";
+import { PAGE_ICON } from "../pages/pagePresentation";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { openSettings } from "../settings/settings-navigation";
 import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
@@ -96,6 +97,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   usage: "chart.bar.xaxis",
   followUps: FOLLOW_UP_ICON,
   newFollowUp: "plus",
+  pages: PAGE_ICON,
   archive: "archivebox",
   files: "doc.text",
   terminal: "terminal",
@@ -348,6 +350,13 @@ export function CommandPalette(props: {
         title: "New follow-up",
         searchTerms: ["later", "todo", "capture", "note", "remember"],
         run: () => navigation.navigate("FollowUpCapture"),
+      },
+      {
+        key: "pages",
+        kind: "action",
+        title: "Pages",
+        searchTerms: ["html", "render", "waiting", "asks", "new"],
+        run: () => navigation.navigate("Pages"),
       },
       {
         key: "usage",
