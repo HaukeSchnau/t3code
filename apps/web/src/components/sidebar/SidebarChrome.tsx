@@ -2,6 +2,7 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   ChartNoAxesColumnIcon,
+  AppWindowIcon,
   ListTodoIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -253,6 +254,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     closeMobileSidebar();
     void navigate({ to: "/follow-ups" });
   };
+  const handlePagesClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/pages" });
+  };
 
   const handleUsageClick = () => {
     if (isMobile) {
@@ -294,6 +299,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Follow-ups"
             onClick={handleFollowUpsClick}
           />
+          <SidebarUtilityItem icon={<AppWindowIcon />} label="Pages" onClick={handlePagesClick} />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"

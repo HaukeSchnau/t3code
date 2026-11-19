@@ -791,6 +791,9 @@ const UpstreamWsRpcGroup = WsRpcGroup.omit(
   "vcs.jj.runAction",
   "vcs.jj.assignPaths",
   "vcs.jj.threadWork",
+  "htmlRender.markSeen",
+  "htmlRender.listPages",
+  "htmlRender.subscribePageChanges",
 );
 
 const layerUnusedConfigRpcServices = Layer.mergeAll(

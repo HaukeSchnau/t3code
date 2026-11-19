@@ -73,6 +73,14 @@ export function FollowUpsScreen() {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        {/* The Android workspace bar shows no actions, and a fifth tab turns on tab customization. */}
+        <SettingsSection>
+          <ListRow
+            label="Pages"
+            description="Pages agents showed in your threads"
+            onPress={() => navigation.navigate("Pages")}
+          />
+        </SettingsSection>
         {homes.length === 0 ? (
           <EmptyState
             variant="plain"

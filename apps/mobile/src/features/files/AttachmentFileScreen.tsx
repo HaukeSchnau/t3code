@@ -18,6 +18,7 @@ import { removeComposerDraftAttachment, useComposerDraft } from "../../state/use
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { useRefreshAssetUrl } from "../../state/assets";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { useMarkHtmlRenderSeenOnOpen } from "../pages/useHtmlRenderSeen";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { isZipFile, ZipArchiveView } from "./ZipArchiveView";
 import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentDocumentBody";
@@ -67,10 +68,23 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   );
   const [nativeError, setNativeError] = useState<string | null>(null);
   const pendingNativeError = useRef<string | null>(null);
+  const htmlRenderBridge =
+    environmentId !== null && params.threadId !== undefined && params.renderId !== undefined
+      ? {
+          environmentId,
+          threadId: ThreadId.make(params.threadId),
+          renderId: params.renderId,
+        }
+      : undefined;
   const handleBack = () => {
     if (navigation.canGoBack()) navigation.goBack();
   };
   const { uri, resource } = document;
+  useMarkHtmlRenderSeenOnOpen(
+    params.htmlRender === "1" && htmlRenderBridge !== undefined && uri
+      ? { ...htmlRenderBridge, attachmentId: params.attachmentId }
+      : null,
+  );
   // A file only the native viewer can show opens it as soon as the file resolves.
   if (nativeViewer === "pending" && uri) {
     setNativeViewer("open");
@@ -250,15 +264,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
         name={params.name}
         environmentId={environmentId}
         htmlRender={params.htmlRender === "1"}
-        htmlRenderBridge={
-          environmentId !== null && params.threadId !== undefined && params.renderId !== undefined
-            ? {
-                environmentId,
-                threadId: ThreadId.make(params.threadId),
-                renderId: params.renderId,
-              }
-            : undefined
-        }
+        htmlRenderBridge={htmlRenderBridge}
         nativeViewer={nativeViewer}
         nativeError={nativeError}
         onOpenNative={() => {

@@ -46,6 +46,7 @@ import { htmlRenderEnvironment, htmlRenderStateStore } from "../../state/htmlRen
 import { useEnvironmentQuery } from "../../state/query";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useMarkHtmlRenderSeenInView } from "../pages/useHtmlRenderSeen";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 const ROW_BOTTOM_MARGIN = 8;
@@ -154,6 +155,8 @@ type HtmlRenderWebViewProps = {
     | ((rect: { readonly top: number; readonly bottom: number }) => void)
     | undefined;
   readonly onLoadError?: () => void;
+  /** The page loaded and drew itself (true), or its document restarted or unmounted (false). */
+  readonly onLoadedChange?: (loaded: boolean) => void;
 };
 
 /** A page and, when it belongs to a thread, the state it saved. */
@@ -267,6 +270,10 @@ function HtmlRenderPage(
     };
   }, [bridged]);
 
+  const reportUnloaded = useEffectEvent(() => props.onLoadedChange?.(false));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a document that unmounts stops counting as loaded, so the same document mounted again waits for its own load
+  useEffect(() => () => reportUnloaded(), []);
+
   const restart = () => {
     crashes.current += 1;
     if (crashes.current > 1) {
@@ -275,6 +282,7 @@ function HtmlRenderPage(
     }
     shownTheme.current = null;
     setLoaded(false);
+    props.onLoadedChange?.(false);
     // The reloaded page starts from the latest save, not from what it opened with.
     setPageState(props.saved.read());
     setGeneration((value) => value + 1);
@@ -299,6 +307,7 @@ function HtmlRenderPage(
     if (height !== undefined) {
       if (!loaded) {
         setLoaded(true);
+        props.onLoadedChange?.(true);
         shownTheme.current = initialTheme;
         if (theme !== initialTheme) post(htmlRenderThemeMessage(theme));
       }
@@ -413,8 +422,13 @@ export function ThreadHtmlRender(props: {
   if (uri === null && asset._tag === "Success") setLoadedUri({ attachmentId, uri: asset.url });
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Only the mounted document's load counts toward being seen; a retry, a restart or a remount
+  // (a version shown again) starts over.
+  const documentKey = `${uri}:${attempt}`;
+  const [loadedDocument, setLoadedDocument] = useState<string | null>(null);
   const retried = useRef(false);
   const handleLoadError = () => {
+    setLoadedDocument(null);
     if (retried.current) {
       setFailed(true);
       return;
@@ -431,13 +445,16 @@ export function ThreadHtmlRender(props: {
     setFailed(false);
     props.onSelect(next >= last ? undefined : next);
   };
+  useMarkHtmlRenderSeenInView(
+    uri !== null && loadedDocument === documentKey && !failed ? { ...bridge, attachmentId } : null,
+  );
 
   return (
     <View style={{ marginBottom: ROW_BOTTOM_MARGIN }}>
       <View style={{ height }}>
         {uri !== null && !failed ? (
           <HtmlRenderWebView
-            key={`${uri}:${attempt}`}
+            key={documentKey}
             uri={uri}
             title={title}
             nested
@@ -445,6 +462,7 @@ export function ThreadHtmlRender(props: {
             onContentHeight={(contentHeight) => props.onContentHeight(attachmentId, contentHeight)}
             onFocusRect={props.onFocusRect}
             onLoadError={handleLoadError}
+            onLoadedChange={(loaded) => setLoadedDocument(loaded ? documentKey : null)}
           />
         ) : failed || asset._tag === "Failure" ? (
           <Pressable

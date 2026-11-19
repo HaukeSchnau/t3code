@@ -78,7 +78,8 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 Threads that wait on you sit under **Needs you** at the top of the sidebar, above your pins, with
 the one waiting longest first. A thread is there while its agent waits for an approval, an answer,
 a secret or a sign-in, or while a subagent or a guest's message waits on you. It is also there when
-an agent ends its turn on a question or a decision it needs from you. The question shows under the
+an agent ends its turn on a question or a decision it needs from you, or shows a
+[page that waits for you](html-renders.md#pages-that-wait-for-you). The question shows under the
 thread's title. T3 Code spots these with the model in **Settings → Threads → Text generation
 model**, so each finished turn costs one short request to it.
 

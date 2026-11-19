@@ -30,6 +30,14 @@ import {
   HtmlRenderStateInput,
 } from "./htmlRender.ts";
 import {
+  HtmlRenderListPagesInput,
+  HtmlRenderMarkSeenInput,
+  HtmlRenderPageChange,
+  HtmlRenderPageChangesInput,
+  HtmlRenderPageList,
+  HtmlRenderPagesError,
+} from "./htmlRenderPages.ts";
+import {
   PeerLink,
   PeerLinkCreateInput,
   PeerLinkError,
@@ -481,6 +489,9 @@ export const WS_METHODS = {
   htmlRenderGetState: "htmlRender.getState",
   htmlRenderSetState: "htmlRender.setState",
   htmlRenderCallTool: "htmlRender.callTool",
+  htmlRenderMarkSeen: "htmlRender.markSeen",
+  htmlRenderListPages: "htmlRender.listPages",
+  htmlRenderSubscribePageChanges: "htmlRender.subscribePageChanges",
 
   providerUploadFeedback: "provider.uploadFeedback",
   providerAuthStart: "provider.auth.start",
@@ -1571,6 +1582,24 @@ const WsHtmlRenderCallToolRpc = Rpc.make(WS_METHODS.htmlRenderCallTool, {
   error: Schema.Union([HtmlRenderRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsHtmlRenderMarkSeenRpc = Rpc.make(WS_METHODS.htmlRenderMarkSeen, {
+  payload: HtmlRenderMarkSeenInput,
+  error: Schema.Union([HtmlRenderRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsHtmlRenderListPagesRpc = Rpc.make(WS_METHODS.htmlRenderListPages, {
+  payload: HtmlRenderListPagesInput,
+  success: HtmlRenderPageList,
+  error: Schema.Union([HtmlRenderPagesError, EnvironmentAuthorizationError]),
+});
+
+const WsHtmlRenderSubscribePageChangesRpc = Rpc.make(WS_METHODS.htmlRenderSubscribePageChanges, {
+  payload: HtmlRenderPageChangesInput,
+  success: HtmlRenderPageChange,
+  error: Schema.Union([HtmlRenderPagesError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
   payload: ProviderUploadFeedbackInput,
   success: ProviderUploadFeedbackResult,
@@ -2193,6 +2222,9 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsVcsJjRunActionRpc,
   WsVcsJjAssignPathsRpc,
   WsVcsJjThreadWorkRpc,
+  WsHtmlRenderMarkSeenRpc,
+  WsHtmlRenderListPagesRpc,
+  WsHtmlRenderSubscribePageChangesRpc,
 ).middleware(RpcScopeAuthorization);
 
 export const WsRpcGroup = RpcGroup.make(

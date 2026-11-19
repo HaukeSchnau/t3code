@@ -82,7 +82,13 @@ export const make = Effect.gen(function* () {
       run?.status !== "completed" ||
       run.completedAt === null ||
       turnItems.length > 0 ||
-      thread.asks?.some((ask) => ask.source.type === "turn_end" && ask.source.runId === runId)
+      thread.asks?.some(
+        (ask) =>
+          (ask.source.type === "turn_end" && ask.source.runId === runId) ||
+          // The run set a page's ask; its ending repeats that question, even once the user
+          // answered or dismissed it. A withdrawn ask leaves the ending free to ask something else.
+          (ask.source.type === "page" && ask.status !== "withdrawn" && ask.source.runId === runId),
+      )
     ) {
       return;
     }

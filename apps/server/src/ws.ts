@@ -124,6 +124,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
+import * as HtmlRenderIndex from "./htmlRender/HtmlRenderIndex.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
@@ -691,6 +692,9 @@ const ServerUpstreamWsRpcGroup = ServerWsRpcGroup.omit(
   WS_METHODS.vcsJjRunAction,
   WS_METHODS.vcsJjAssignPaths,
   WS_METHODS.vcsJjThreadWork,
+  WS_METHODS.htmlRenderMarkSeen,
+  WS_METHODS.htmlRenderListPages,
+  WS_METHODS.htmlRenderSubscribePageChanges,
 );
 
 const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
@@ -700,6 +704,7 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
     const jjTurns = yield* JjTurnService.JjTurnService;
     const jjThreadWork = yield* JjThreadWork.JjThreadWork;
     const followUps = yield* FollowUps.FollowUps;
+    const htmlRenderPages = yield* HtmlRenderIndex.HtmlRenderIndex;
     return ServerForkWsRpcGroup.of({
       [WS_METHODS.agentAwarenessRegisterDevice]: (input) =>
         localAgentAwareness.registerDevice(input),
@@ -718,6 +723,10 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
         jjThreadWork.find(input.threadId).pipe(Effect.map((repositories) => ({ repositories }))),
       [WS_METHODS.vcsJjAssignPaths]: (input) =>
         jjTurns.assignPaths(input).pipe(Effect.map((assigned) => ({ assigned }))),
+      [WS_METHODS.htmlRenderMarkSeen]: (input) => htmlRenderPages.markSeen(input),
+      [WS_METHODS.htmlRenderListPages]: (input) => htmlRenderPages.list(input),
+      [WS_METHODS.htmlRenderSubscribePageChanges]: (input) =>
+        htmlRenderPages.changes(input.threadId),
     });
   }),
 );

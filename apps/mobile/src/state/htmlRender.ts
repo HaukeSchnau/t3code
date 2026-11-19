@@ -1,5 +1,8 @@
 import { makeHtmlRenderStateStore } from "@t3tools/client-runtime/html-render/state-store";
-import { createHtmlRenderEnvironmentAtoms } from "@t3tools/client-runtime/state/html-render";
+import {
+  createHtmlRenderEnvironmentAtoms,
+  makeHtmlRenderSeenMarker,
+} from "@t3tools/client-runtime/state/html-render";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { AppState } from "react-native";
 
@@ -15,6 +18,19 @@ export const htmlRenderStateStore = makeHtmlRenderStateStore({
         appAtomRegistry,
         htmlRenderEnvironment.setState,
         { environmentId, input: { threadId, renderId, state } },
+        { reportFailure: false },
+      )
+    )._tag === "Success",
+});
+
+/** Callers check `htmlRenderEnvironment.markSeen.permissionAtom` first. */
+export const htmlRenderSeenMarker = makeHtmlRenderSeenMarker({
+  mark: async ({ environmentId, threadId, renderId, attachmentId }) =>
+    (
+      await runAtomCommand(
+        appAtomRegistry,
+        htmlRenderEnvironment.markSeen,
+        { environmentId, input: { threadId, renderId, attachmentId } },
         { reportFailure: false },
       )
     )._tag === "Success",

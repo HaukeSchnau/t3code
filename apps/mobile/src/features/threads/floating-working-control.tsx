@@ -31,6 +31,7 @@ import { useNowMinuteMs } from "../../lib/clock";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { BrowserPreviewButton } from "../browser/browser-preview-button";
 import { DevicePreviewButton } from "../devices/device-preview-button";
+import { PAGE_ICON } from "../pages/pagePresentation";
 import type { FloatingWorkingStatus } from "./floating-working-status";
 import { ShimmeringWorkContent } from "./thread-work-log";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
@@ -80,6 +81,12 @@ export function FloatingWorkingControl(props: {
   readonly onOpenAgents: () => void;
   readonly queuedCount: number;
   readonly onOpenQueue: () => void;
+  /** The thread's pages, when it has any; `asking` when one of them waits for the user. */
+  readonly pages: {
+    readonly label: string;
+    readonly asking: boolean;
+    readonly onPress: () => void;
+  } | null;
   readonly lift?: SharedValue<number>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
@@ -99,6 +106,9 @@ export function FloatingWorkingControl(props: {
       ? props.status.action
       : null;
   const [agentsWidth, setAgentsWidth] = useState(0);
+  const [pagesWidth, setPagesWidth] = useState(0);
+  const pages = props.pages;
+  const hasPages = pages !== null;
   const hasQueue = props.queuedCount > 0;
   const hasPreview = props.devicePreview !== null || props.browserPreview !== null;
   const [previewWidth, setPreviewWidth] = useState(0);
@@ -113,6 +123,7 @@ export function FloatingWorkingControl(props: {
       (action !== null ? actionWidth : 0) -
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -
+      (hasPages ? pagesWidth : 0) -
       (hasPreview ? previewWidth : 0),
   );
   const labelWidth = Math.max(
@@ -150,7 +161,7 @@ export function FloatingWorkingControl(props: {
     capsuleWidth.set(first ? width : withTiming(width, CONTROL_TIMING));
   };
   const hasStatus = props.status !== null;
-  const hasCapsule = hasStatus || hasQueue || hasAgents || hasPreview;
+  const hasCapsule = hasStatus || hasQueue || hasAgents || hasPages || hasPreview;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the Reanimated capsule width value and measured width when the status goes away
   useEffect(() => {
     if (!hasStatus) {
@@ -172,6 +183,7 @@ export function FloatingWorkingControl(props: {
   const previewCompact =
     hasStatus ||
     hasAgents ||
+    hasPages ||
     hasQueue ||
     (props.devicePreview !== null && props.browserPreview !== null);
   const statusInteractive =
@@ -185,6 +197,7 @@ export function FloatingWorkingControl(props: {
     action !== null ||
     hasQueue ||
     hasAgents ||
+    hasPages ||
     hasPreview;
   const statusContent =
     props.status !== null ? (
@@ -282,6 +295,33 @@ export function FloatingWorkingControl(props: {
           </Text>
         </Pressable>
       ) : null}
+      {pages !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open pages, ${pages.label}${pages.asking ? ", one is waiting for you" : ""}`}
+          accessibilityHint="Lists this thread's pages"
+          onPress={pages.onPress}
+          onLayout={(event) => setPagesWidth(settleWidth(event.nativeEvent.layout.width))}
+          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+        >
+          {hasStatus || hasPreview || hasAgents ? (
+            <View className="absolute left-0 h-4 w-px bg-border" />
+          ) : null}
+          <SymbolView
+            name={PAGE_ICON}
+            size={13}
+            tintColorClassName={
+              pages.asking ? "accent-adaptive-indigo-600-300" : "accent-foreground"
+            }
+          />
+          <Text className="font-t3-medium text-xs tabular-nums" numberOfLines={1}>
+            {pages.label}
+          </Text>
+          {pages.asking ? (
+            <View className="size-1.5 rounded-full bg-adaptive-indigo-600-300" />
+          ) : null}
+        </Pressable>
+      ) : null}
       {hasQueue ? (
         <Pressable
           accessibilityRole="button"
@@ -292,7 +332,7 @@ export function FloatingWorkingControl(props: {
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
           className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents ? (
+          {hasStatus || hasPreview || hasAgents || hasPages ? (
             <View className="absolute left-0 h-4 w-px bg-border" />
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground" />

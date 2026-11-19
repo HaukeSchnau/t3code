@@ -85,6 +85,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpToolDirectory from "./mcp/McpToolDirectory.ts";
 import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
+import * as HtmlRenderIndex from "./htmlRender/HtmlRenderIndex.ts";
 import * as AgentWatches from "./watches/AgentWatches.ts";
 import * as WaitWatchdog from "./watches/WaitWatchdog.ts";
 import * as FollowUps from "./followUps/FollowUps.ts";
@@ -1302,6 +1303,8 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       // One directory: `/mcp` records its tools into it and page tool calls read them.
       Layer.provideMerge(HtmlRenderBridge.layer),
+      // One index: `/mcp` publishes into it and the page lists and their change stream read it.
+      Layer.provideMerge(HtmlRenderIndex.layerWithThreadChanges),
       Layer.provideMerge(McpToolDirectory.layer),
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(

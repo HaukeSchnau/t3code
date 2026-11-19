@@ -85,10 +85,15 @@ export function decideThreadAskCommand(input: {
             ask.source.type === "page" &&
             ask.source.renderId === source.renderId,
         );
+        // The ask keeps waiting since it was first raised; the run that set it last owns it.
         if (open !== undefined) {
-          return open.text === command.text
+          return open.text === command.text &&
+            open.source.type === "page" &&
+            open.source.runId === source.runId
             ? thread
-            : withAsks(asks.map((ask) => (ask === open ? { ...ask, text: command.text } : ask)));
+            : withAsks(
+                asks.map((ask) => (ask === open ? { ...ask, source, text: command.text } : ask)),
+              );
         }
         next = [...asks, raised];
       } else {

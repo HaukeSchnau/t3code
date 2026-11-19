@@ -15,6 +15,7 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  type ThreadAskStatus,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -195,10 +196,36 @@ const detectOnce = Effect.gen(function* () {
   yield* detector.drain;
 });
 
+/** Adds a page ask that `setBy` raised or last updated, first raised at `minute`. */
+const withPageAsk =
+  (minute: number, setBy: RunId, status: ThreadAskStatus = "open") =>
+  (base: OrchestrationV2ThreadProjection): OrchestrationV2ThreadProjection => ({
+    ...base,
+    thread: {
+      ...base.thread,
+      asks: [
+        ...(base.thread.asks ?? []),
+        {
+          id: ThreadAskId.make(`page:${setBy}`),
+          source: { type: "page", renderId: `layouts:${setBy}`, runId: setBy },
+          text: "Pick one of 3 layouts",
+          raisedAt: DateTime.formatIso(at(minute)),
+          status,
+        },
+      ],
+    },
+  });
+
 describe("TurnEndAskDetector", () => {
   it.effect("raises a guarded turn-end ask from the run's final message", () =>
     Effect.gen(function* () {
-      const harness = makeHarness(projection());
+      // A later run's page ask, raised before this run's detection, does not cover its ending,
+      // and neither does a page ask this run withdrew.
+      const harness = makeHarness(
+        projection((base) =>
+          withPageAsk(12, RunId.make("run:later"))(withPageAsk(5, runId, "withdrawn")(base)),
+        ),
+      );
       yield* detectOnce.pipe(Effect.provide(harness.layer));
 
       assert.equal(harness.generateTurnEndAsk.mock.calls.length, 1);
@@ -287,6 +314,12 @@ describe("TurnEndAskDetector", () => {
         ],
       }),
     ],
+    ["a run that showed a page that asks", withPageAsk(5, runId)],
+    // An earlier run first raised it; this run updated it, so its ending repeats it.
+    ["a run that updated a page's ask", withPageAsk(0, runId)],
+    // The user answered or dismissed the page before the run ended; the ending asks the same.
+    ["a run whose page ask was answered", withPageAsk(5, runId, "answered")],
+    ["a run whose page ask was dismissed", withPageAsk(5, runId, "dismissed")],
     [
       "a stopped run",
       (base: OrchestrationV2ThreadProjection) => ({ ...base, turnItems: [stopRequest] }),

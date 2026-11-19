@@ -21,6 +21,7 @@ import * as NodeURL from "node:url";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as HtmlRender from "./HtmlRender.ts";
+import * as HtmlRenderIndex from "./HtmlRenderIndex.ts";
 import { HtmlRenderBrowserError } from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
@@ -47,6 +48,9 @@ const layerHtmlRender = (
       ),
     ),
     Layer.provideMerge(McpProviderSessions.layer),
+    Layer.provide(
+      Layer.mock(HtmlRenderIndex.HtmlRenderIndex)({ recordPublished: () => Effect.void }),
+    ),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-html-render-" })),
     Layer.provideMerge(NodeServices.layer),
   );

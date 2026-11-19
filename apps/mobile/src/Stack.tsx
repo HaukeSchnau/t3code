@@ -64,6 +64,8 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { JjStackSheet } from "./features/threads/git/JjStackSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
+import { PagesScreen } from "./features/pages/PagesScreen";
+import { ThreadPagesSheet } from "./features/pages/ThreadPagesSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
@@ -520,6 +522,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
       linking: "follow-ups/new",
       options: sheetRoute({ detent: 0.75, android: "fullScreen" }),
     }),
+    Pages: createNativeStackScreen({
+      screen: PagesScreen,
+      linking: "pages",
+      options: pageRoute(),
+    }),
     PullRequestGuideStop: createNativeStackScreen({
       screen: PullRequestGuideStopScreen,
       options: pageRoute(),
@@ -694,6 +701,10 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,
+      options: sheetRoute({ detent: 0.5, androidMaxDetent: 0.9 }),
+    }),
+    ThreadPages: createNativeStackScreen({
+      screen: ThreadPagesSheet,
       options: sheetRoute({ detent: 0.5, androidMaxDetent: 0.9 }),
     }),
     GitOverview: createNativeStackScreen({

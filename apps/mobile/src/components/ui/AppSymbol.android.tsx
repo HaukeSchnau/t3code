@@ -60,6 +60,7 @@ import IconEdit from "@tabler/icons-react-native/IconEdit";
 import IconExternalLink from "@tabler/icons-react-native/IconExternalLink";
 import IconEyeOff from "@tabler/icons-react-native/IconEyeOff";
 import IconEye from "@tabler/icons-react-native/IconEye";
+import IconFileDescription from "@tabler/icons-react-native/IconFileDescription";
 import IconFileText from "@tabler/icons-react-native/IconFileText";
 import IconFileDiff from "@tabler/icons-react-native/IconFileDiff";
 import IconFilter from "@tabler/icons-react-native/IconFilter";
@@ -206,6 +207,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   doc: IconFileText,
   "doc.on.doc": IconCopy,
   "doc.text": IconFileText,
+  "doc.richtext": IconFileDescription,
   "file.diff": IconFileDiff,
   ellipsis: IconDots,
   moon: IconMoon,

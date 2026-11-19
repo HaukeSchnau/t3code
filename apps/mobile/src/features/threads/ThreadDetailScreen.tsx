@@ -204,6 +204,8 @@ import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
+import { threadPagesLabel } from "../pages/threadPages";
+import { htmlRenderEnvironment } from "../../state/htmlRender";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
@@ -520,6 +522,27 @@ function ThreadDetailBody(
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
+  // The segment reads only the count; the sheet loads the pages.
+  const pageCount = useAtomValue(
+    htmlRenderEnvironment.threadPageCount({
+      environmentId: props.environmentId,
+      threadId: props.selectedThread.id,
+    }),
+  );
+  const pagesSegment =
+    props.draftMode || pageCount === null || pageCount === 0
+      ? null
+      : {
+          label: threadPagesLabel(pageCount),
+          asking: props.selectedThread.openAsks?.some((ask) => ask.source.type === "page") ?? false,
+          onPress: () => {
+            Keyboard.dismiss();
+            navigation.navigate("ThreadPages", {
+              environmentId: props.environmentId,
+              threadId: props.selectedThread.id,
+            });
+          },
+        };
   const defaultComposerEditorRef = useRef<ComposerEditorHandle>(null);
   const composerEditorRef = props.draftMode?.editorRef ?? defaultComposerEditorRef;
   const isProviderSubagent = isProviderNativeSubagentThread(props.selectedThread.source);
@@ -957,6 +980,7 @@ function ThreadDetailBody(
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
+    pagesSegment !== null ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
     props.connectionStateLabel !== "connected" ||
@@ -1730,6 +1754,7 @@ function ThreadDetailBody(
                         threadId: props.selectedThread.id,
                       });
                     }}
+                    pages={pagesSegment}
                     queuedCount={queuedCount}
                     onOpenQueue={() => {
                       Keyboard.dismiss();

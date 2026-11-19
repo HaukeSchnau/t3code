@@ -38,6 +38,7 @@ import * as ServerConfig from "../config.ts";
 import * as HeadlessChrome from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
+import * as HtmlRenderIndex from "./HtmlRenderIndex.ts";
 
 const MIB = 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * MIB;
@@ -147,9 +148,11 @@ export class HtmlRender extends Context.Service<
   HtmlRender,
   {
     readonly prepare: (html: string) => Effect.Effect<string, HtmlRenderPrepareError>;
+    /** With `renderId`, publishes that render's next version. */
     readonly publish: (
       input: HtmlRenderSource & {
         readonly threadId: ThreadId;
+        readonly renderId?: string | undefined;
         readonly title: string;
         readonly height: number;
       },
@@ -372,6 +375,7 @@ const make = Effect.gen(function* () {
   const isServerInternalPath = yield* makeIsServerInternalPath;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const pages = yield* HtmlRenderIndex.HtmlRenderIndex;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
   >();
@@ -501,6 +505,7 @@ const make = Effect.gen(function* () {
   const publish = Effect.fn("HtmlRender.publish")(function* (
     input: HtmlRenderSource & {
       readonly threadId: ThreadId;
+      readonly renderId?: string | undefined;
       readonly title: string;
       readonly height: number;
     },
@@ -555,6 +560,24 @@ const make = Effect.gen(function* () {
           ],
           { discard: true },
         ),
+      ),
+      // The page is shown either way; a missing index row only hides it from page lists.
+      Effect.tap((reference) =>
+        pages
+          .recordPublished({
+            threadId: input.threadId,
+            attachmentId,
+            renderId: input.renderId,
+            title:
+              input.renderId !== undefined && input.title.trim() === ""
+                ? undefined
+                : reference.title,
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not index an HTML render.", { attachmentId, cause }),
+            ),
+          ),
       ),
     );
   });
