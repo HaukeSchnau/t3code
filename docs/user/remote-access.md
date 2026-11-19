@@ -190,10 +190,11 @@ it, **Prefer** to favor it, or **Less often** to reduce its share. These are pre
 fixed traffic percentages. Each machine stores its own preference, so every device that
 connects to it sees the same choice.
 
-Auto balance picks the machine with room for the most additional agents, counting free memory,
-the memory left to the agents' systemd slice on Linux, and idle CPU. It skips a machine under
-memory pressure (Linux PSI above 20%, or a macOS pressure level of warning or worse), even when
-it still reports free memory.
+Auto balance scores each machine by how many more agents fit, counting free memory, the memory
+left to the agents' systemd slice on Linux, and idle CPU. It multiplies that by the machine's
+preference and lowers it as memory pressure rises, so a preferred or calmer machine can win with
+less room. It skips a machine under memory pressure (Linux PSI of 20% or more, or a macOS pressure
+level of warning or worse), even when it still reports free memory.
 
 The composer checks eligible machines when choosing a draft's environment, then keeps
 that choice stable. Choose **Auto balance** again to check current resources, or choose
