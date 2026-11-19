@@ -6,7 +6,7 @@ import type {
   Project,
   ThreadId,
 } from "@t3tools/contracts";
-import { ProviderInstanceId, RuntimeRequestId } from "@t3tools/contracts";
+import { ProviderInstanceId, RunId, RuntimeRequestId, ThreadAskId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { projectThreadAwarenessV2 } from "./agentAwareness.ts";
@@ -25,7 +25,9 @@ describe("projectThreadAwarenessV2", () => {
         OrchestrationV2ThreadShell,
         | "activityRunStatus"
         | "latestRunBackgroundWake"
+        | "latestRunStartedByUser"
         | "latestRunStopRequested"
+        | "openAsks"
         | "status"
         | "pendingBackgroundTasks"
         | "pendingRuntimeRequest"
@@ -49,7 +51,10 @@ describe("projectThreadAwarenessV2", () => {
     ...overrides,
   });
 
-  it("does not announce completion after a manual stop", () => {
+  it.each([
+    ["after a manual stop", { latestRunStopRequested: true }],
+    ["for a run the user did not start", { latestRunStartedByUser: false }],
+  ] as const)("does not announce completion %s", (_, quiet) => {
     const input = {
       environmentId: "env-1" as EnvironmentId,
       project,
@@ -57,12 +62,35 @@ describe("projectThreadAwarenessV2", () => {
     };
     expect(projectThreadAwarenessV2(input)?.phase).toBe("completed");
     expect(
+      projectThreadAwarenessV2({ ...input, thread: { ...input.thread, ...quiet } }),
+    ).toBeNull();
+    // Its failure still alerts.
+    expect(
       projectThreadAwarenessV2({
         ...input,
-        thread: { ...input.thread, latestRunStopRequested: true },
-      }),
-    ).toBeNull();
+        thread: { ...input.thread, ...quiet, status: "failed" },
+      })?.phase,
+    ).toBe("failed");
   });
+
+  it.each(["running", "completed"] as const)(
+    "reads an open ask as waiting for input while the run is %s, quiet or not",
+    (status) => {
+      const ask = {
+        id: ThreadAskId.make("turn_end:run-1"),
+        source: { type: "turn_end" as const, runId: RunId.make("run-1") },
+        text: "Delete 23 leftover skill dirs?",
+        raisedAt: NOW,
+      };
+      expect(
+        projectThreadAwarenessV2({
+          environmentId: "env-1" as EnvironmentId,
+          project,
+          thread: v2Thread({ status, openAsks: [ask], latestRunStartedByUser: false }),
+        })?.phase,
+      ).toBe("waiting_for_input");
+    },
+  );
 
   it.each([
     ["holds a wake run", true, [{ taskId: "watch", kind: "monitor" as const }], "running"],

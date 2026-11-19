@@ -13,6 +13,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   RuntimeRequestId,
+  ThreadAskId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -401,6 +402,55 @@ it.effect("summarizes one thread with its question and the agent's latest words"
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("shows a subagent's approval as its parent's wait, as the list does", () =>
+  Effect.gen(function* () {
+    const control = yield* ThreadControl.ThreadControl;
+    const parentId = ThreadId.make("thread:parent");
+    const childId = ThreadId.make("thread:subagent");
+    yield* createThread(parentId);
+    const parent = (yield* projection(parentId)).thread;
+    yield* write(childId, [
+      {
+        type: "thread.created",
+        threadId: childId,
+        occurredAt: parent.createdAt,
+        payload: {
+          ...parent,
+          id: childId,
+          lineage: {
+            rootThreadId: parentId,
+            parentThreadId: parentId,
+            relationshipToParent: "subagent",
+          },
+        },
+      },
+    ]);
+    const run = yield* startRun(childId);
+    const now = yield* DateTime.now;
+    yield* write(childId, [
+      {
+        type: "runtime-request.updated",
+        threadId: childId,
+        occurredAt: now,
+        payload: {
+          id: RuntimeRequestId.make("request:subagent"),
+          nodeId: run.rootNodeId!,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "command",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      },
+    ]);
+
+    // Not a free-text reply, which would message the parent and leave the approval waiting.
+    assert.equal((yield* control.getGlance(parentId)).phase, "waiting_for_approval");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("lists threads that need the user or work, then the last day's unsettled results", () =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread:list-base");
@@ -442,12 +492,45 @@ it.effect("lists threads that need the user or work, then the last day's unsettl
         shell("archived", 1, { status: "running", archivedAt: hoursAgo(1) }),
         shell("idle", 1, { status: "idle" }),
         shell("other-project", 1, { status: "running", projectId: ProjectId.make("gone") }),
+        // A subagent's approval waits on its listed parent, and a guest's message waits alone.
+        shell("parent", 1, { status: "running" }),
+        shell("subagent", 1, {
+          status: "running",
+          activityRunStatus: "running",
+          lineage: {
+            rootThreadId: ThreadId.make("parent"),
+            parentThreadId: ThreadId.make("parent"),
+            relationshipToParent: "subagent",
+          },
+          pendingRuntimeRequest: pending("command"),
+        }),
+        shell("guest", 1, {
+          status: "idle",
+          pendingGuestMessageCount: 1,
+          pendingGuestMessageAt: DateTime.formatIso(hoursAgo(1)),
+        }),
+        // Snoozed with its ask, like the app icon count: back after the snooze.
+        shell("snoozed-ask", 1, {
+          status: "completed",
+          openAsks: [
+            {
+              id: ThreadAskId.make("ask:snoozed"),
+              source: { type: "page", renderId: "render:snoozed" },
+              text: "Pick a layout",
+              raisedAt: DateTime.formatIso(hoursAgo(3)),
+            },
+          ],
+          snoozedAt: hoursAgo(2),
+          snoozedUntil: DateTime.add(now, { hours: 1 }),
+        }),
       ],
     });
     assert.deepEqual(
       list.threads.map((row) => [row.threadTitle, row.phase]),
       [
         ["approval", "waiting_for_approval"],
+        ["parent", "waiting_for_approval"],
+        ["guest", "waiting_for_input"],
         ["asks", "waiting_for_input"],
         ["failed", "failed"],
         ["running", "running"],

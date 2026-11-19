@@ -3,6 +3,7 @@ import { type AgentAwarenessRegistrationResult, EnvironmentId } from "@t3tools/c
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 
 import {
+  ownerEnvironmentIds,
   registrationEnvironmentIds,
   runFirstConfiguredRegistration,
 } from "./registrationEnvironmentSelection";
@@ -42,18 +43,29 @@ describe("accountless awareness environment selection", () => {
       AsyncResult.success(environmentId === "environment-2" ? configured : unconfigured),
     );
 
-    await expect(runFirstConfiguredRegistration(environmentIds, operation)).resolves.toEqual(
-      configured,
-    );
+    // The server that delivers owns the device, and the app icon reads its count.
+    await expect(runFirstConfiguredRegistration(environmentIds, operation)).resolves.toEqual({
+      ...configured,
+      environmentId: "environment-2",
+    });
     expect(operation).toHaveBeenCalledTimes(2);
   });
 
   it("returns an unconfigured result only after trying every paired server", async () => {
     const operation = vi.fn(async () => AsyncResult.success(unconfigured));
 
-    await expect(runFirstConfiguredRegistration(environmentIds, operation)).resolves.toEqual(
-      unconfigured,
-    );
+    await expect(runFirstConfiguredRegistration(environmentIds, operation)).resolves.toEqual({
+      ...unconfigured,
+      environmentId: "environment-1",
+    });
     expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the count only from the environment that owns the device while it is paired", () => {
+    const [first, second] = environmentIds as [EnvironmentId, EnvironmentId];
+    expect(ownerEnvironmentIds(environmentIds, second)).toEqual([second]);
+    // Before the owner is known, or once it was removed, every paired server is a candidate.
+    expect(ownerEnvironmentIds(environmentIds, null)).toEqual([first, second]);
+    expect(ownerEnvironmentIds([first], second)).toEqual([first]);
   });
 });

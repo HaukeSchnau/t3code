@@ -23,6 +23,7 @@ import {
 } from "./remoteRegistration";
 import {
   commandFailure,
+  ownerEnvironmentIds,
   registrationEnvironmentIds,
   runFirstConfiguredRegistration,
 } from "./registrationEnvironmentSelection";
@@ -59,10 +60,11 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
       return;
     }
     const runFirst = async <A,>(
+      candidates: readonly EnvironmentId[],
       operation: (environmentId: EnvironmentId) => Promise<AtomCommandResult<A, unknown>>,
     ): Promise<A> => {
       let lastError: Error | null = null;
-      for (const environmentId of environmentIds) {
+      for (const environmentId of candidates) {
         const result = await operation(environmentId);
         if (result._tag === "Success") return result.value;
         lastError = commandFailure(result);
@@ -75,13 +77,15 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
         runFirstConfiguredRegistration(environmentIds, (environmentId) =>
           registerDevice({ environmentId, input }),
         ),
-      registerLiveActivity: (input: AgentAwarenessLiveActivityRegistrationInput) =>
-        runFirstConfiguredRegistration(environmentIds, (environmentId) =>
-          registerLiveActivity({ environmentId, input }),
+      registerLiveActivity: (input: AgentAwarenessLiveActivityRegistrationInput, owner) =>
+        runFirstConfiguredRegistration(
+          ownerEnvironmentIds(environmentIds, owner),
+          (environmentId) => registerLiveActivity({ environmentId, input }),
         ),
-      getSnapshot: () =>
-        runFirst<AgentAwarenessSnapshot>((environmentId) =>
-          getSnapshot({ environmentId, input: {} }),
+      getSnapshot: (owner) =>
+        runFirst<AgentAwarenessSnapshot>(
+          ownerEnvironmentIds(environmentIds, owner),
+          (environmentId) => getSnapshot({ environmentId, input: {} }),
         ),
     };
     setAgentAwarenessEnvironmentTransport(transport);

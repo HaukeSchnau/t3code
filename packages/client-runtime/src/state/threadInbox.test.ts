@@ -11,11 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createInboxReturnTracker,
+  inboxReturnTime,
   isThreadWorking,
   sortInboxThreadsByReturn,
   sortThreadsByNeed,
   sortWorkingThreadsBySend,
   threadNeedsYou,
+  threadsNeedingYou,
 } from "./threadInbox.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -228,6 +230,32 @@ describe("createInboxReturnTracker", () => {
     ]);
   });
 
+  it.each([
+    ["completes", "completed", false],
+    ["fails", "failed", true],
+  ] as const)(
+    "stamps a run the user did not start only when it fails, not when it %s",
+    (_, status, stamped) => {
+      const tracker = createInboxReturnTracker();
+      const wake = (working: boolean) => ({
+        ...thread("wake", working),
+        latestRunStartedByUser: false,
+        latestRun: {
+          runId: RunId.make("run:wake"),
+          status: working ? ("running" as const) : status,
+          requestedAt: null,
+          startedAt: null,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      });
+      tracker.observe([wake(true)]);
+      tracker.observe([wake(false)]);
+      vi.advanceTimersByTime(2_000);
+      expect(tracker.observe([wake(false)]).returnedAt(wake(false)) !== undefined).toBe(stamped);
+    },
+  );
+
   it("cancels pending timers for removed threads and disabled shelves", () => {
     const tracker = createInboxReturnTracker();
     const notify = vi.fn();
@@ -242,6 +270,57 @@ describe("createInboxReturnTracker", () => {
     vi.advanceTimersByTime(2_000);
     expect(notify).not.toHaveBeenCalled();
     expect(tracker.returnedAt(thread("a", false))).toBeUndefined();
+  });
+});
+
+describe("inboxReturnTime", () => {
+  it.each([
+    ["a run the user started", true, "completed", Date.parse("2026-06-01T03:00:00.000Z")],
+    [
+      "a quiet run, from the user's last message",
+      false,
+      "completed",
+      Date.parse("2026-06-01T01:00:00.000Z"),
+    ],
+    ["a failed quiet run", false, "failed", Date.parse("2026-06-01T03:00:00.000Z")],
+  ] as const)("places %s", (_, latestRunStartedByUser, status, expected) => {
+    expect(
+      inboxReturnTime({
+        ...thread("thread", false),
+        latestUserAuthoredMessageAt: "2026-06-01T01:00:00.000Z",
+        latestRunStartedByUser,
+        latestRun: {
+          runId: RunId.make("run:latest"),
+          status,
+          requestedAt: "2026-06-01T02:00:00.000Z",
+          startedAt: "2026-06-01T02:00:00.000Z",
+          completedAt: "2026-06-01T03:00:00.000Z",
+          assistantMessageId: null,
+        },
+      }),
+    ).toBe(expected);
+  });
+
+  it("orders by the server's return time, through quiet runs, reloads and observed returns", () => {
+    // The user's run ended at 02:30; a wake ran after it and ended at 03:00.
+    const quietAfterMine = {
+      ...thread("thread", false),
+      latestUserAuthoredMessageAt: "2026-06-01T01:00:00.000Z",
+      returnedAt: "2026-06-01T02:30:00.000Z",
+      latestRunStartedByUser: false,
+      latestRun: {
+        runId: RunId.make("run:wake"),
+        status: "completed" as const,
+        requestedAt: "2026-06-01T02:50:00.000Z",
+        startedAt: "2026-06-01T02:50:00.000Z",
+        completedAt: "2026-06-01T03:00:00.000Z",
+        assistantMessageId: null,
+      },
+    };
+    expect(inboxReturnTime(quietAfterMine)).toBe(Date.parse("2026-06-01T02:30:00.000Z"));
+    expect(inboxReturnTime(quietAfterMine, () => Date.parse("2026-06-01T03:00:01.000Z"))).toBe(
+      Date.parse("2026-06-01T02:30:00.000Z"),
+    );
   });
 });
 
@@ -376,5 +455,17 @@ describe("threadNeedsYou", () => {
       "subagent",
       "guest-undated",
     ]);
+    // The count everywhere: the same order, without snoozed threads and threads that need nothing.
+    const snoozed = {
+      ...shell("snoozed", "2026-06-01T00:00:00.000Z", { openAsks: [asks[0]!] }),
+      snoozedAt: "2026-06-01T00:05:00.000Z",
+      snoozedUntil: "2026-06-02T00:00:00.000Z",
+    };
+    const idle = shell("idle", "2026-06-01T00:00:00.000Z", {});
+    expect(
+      threadsNeedingYou([...threads, snoozed, idle], { now: "2026-06-01T01:00:00.000Z" }).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["guest", "turn", "question", "page", "subagent", "guest-undated"]);
   });
 });

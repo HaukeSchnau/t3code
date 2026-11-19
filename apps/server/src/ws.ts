@@ -102,6 +102,7 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   FOLLOW_UP_WS_METHODS,
+  NEEDS_YOU_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
   ForkWsRpcGroup,
@@ -242,6 +243,7 @@ import * as DefectReporter from "./observability/DefectReporter.ts";
 import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
+import * as NeedsYouNotifications from "./agentAwareness/NeedsYouNotifications.ts";
 import { readArtifactMarkdown } from "./artifactMarkdown.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
@@ -688,6 +690,7 @@ const ServerUpstreamWsRpcGroup = ServerWsRpcGroup.omit(
   FOLLOW_UP_WS_METHODS.subscribe,
   FOLLOW_UP_WS_METHODS.save,
   FOLLOW_UP_WS_METHODS.history,
+  NEEDS_YOU_WS_METHODS.subscribe,
   WS_METHODS.artifactsReadMarkdown,
   WS_METHODS.vcsJjRunAction,
   WS_METHODS.vcsJjAssignPaths,
@@ -705,6 +708,7 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
     const jjThreadWork = yield* JjThreadWork.JjThreadWork;
     const followUps = yield* FollowUps.FollowUps;
     const htmlRenderPages = yield* HtmlRenderIndex.HtmlRenderIndex;
+    const needsYou = yield* NeedsYouNotifications.NeedsYouNotifications;
     return ServerForkWsRpcGroup.of({
       [WS_METHODS.agentAwarenessRegisterDevice]: (input) =>
         localAgentAwareness.registerDevice(input),
@@ -717,6 +721,7 @@ const layerForkWsRpc = ServerForkWsRpcGroup.toLayer(
       [FOLLOW_UP_WS_METHODS.save]: (input) => followUps.save(input, { kind: "user", thread: null }),
       [FOLLOW_UP_WS_METHODS.history]: (input) =>
         followUps.history(input.id).pipe(Effect.map((changes) => ({ changes }))),
+      [NEEDS_YOU_WS_METHODS.subscribe]: () => needsYou.subjects,
       [WS_METHODS.artifactsReadMarkdown]: (input) => readArtifactMarkdown(input.url),
       [WS_METHODS.vcsJjRunAction]: (input) => jjWorkflow.runAction(input),
       [WS_METHODS.vcsJjThreadWork]: (input) =>

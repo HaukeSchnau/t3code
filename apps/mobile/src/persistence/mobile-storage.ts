@@ -50,6 +50,8 @@ export interface AgentAwarenessRegistrationRecord {
   readonly identity: string;
   readonly signature: string;
   readonly pushToStartToken?: string;
+  /** The environment that took the registration and sends this device's pushes. */
+  readonly owner?: string;
 }
 
 export interface RecentThreadShortcut {
@@ -158,6 +160,7 @@ export const make = Effect.fn("MobileStorage.make")(function* () {
         ...(typeof parsed.pushToStartToken === "string" && parsed.pushToStartToken
           ? { pushToStartToken: parsed.pushToStartToken }
           : {}),
+        ...(typeof parsed.owner === "string" && parsed.owner ? { owner: parsed.owner } : {}),
       };
     }),
   );

@@ -787,6 +787,7 @@ const UpstreamWsRpcGroup = WsRpcGroup.omit(
   "followUps.subscribe",
   "followUps.save",
   "followUps.history",
+  "needsYou.subscribe",
   "artifacts.readMarkdown",
   "vcs.jj.runAction",
   "vcs.jj.assignPaths",

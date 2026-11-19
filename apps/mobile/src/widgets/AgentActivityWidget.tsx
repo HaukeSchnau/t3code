@@ -71,15 +71,16 @@ export function AgentActivityWidget(
     (a, b) => phasePriority(a.phase) - phasePriority(b.phase),
   );
   const shown = rows.slice(0, accessory || small ? 2 : 4);
-  const attentionCount = rows.filter(
-    (row) => row.phase === "waiting_for_approval" || row.phase === "waiting_for_input",
-  ).length;
+  const attentionCount =
+    props.attentionCount ??
+    rows.filter((row) => row.phase === "waiting_for_approval" || row.phase === "waiting_for_input")
+      .length;
   const workingCount = rows.filter(
     (row) => row.phase === "running" || row.phase === "starting",
   ).length;
   const summary =
     attentionCount > 0
-      ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} ${small ? "you" : "attention"}`
+      ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
       : workingCount > 0
         ? `${props.activeCount ?? workingCount} active`
         : rows.some((row) => row.phase === "stale")

@@ -19,6 +19,7 @@ import {
   armAgentAwarenessLiveActivityForLocalWork,
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
+  readAppIconCount,
   refreshActiveLiveActivityRemoteRegistration,
   registerLiveActivityPushToken,
   releaseAgentAwarenessEnvironmentTransport,
@@ -44,7 +45,11 @@ const environmentConfigsMock = vi.hoisted(() => ({
   >(),
 }));
 const registrationRecord = vi.hoisted(() => ({
-  value: null as { readonly identity: string; readonly signature: string } | null,
+  value: null as {
+    readonly identity: string;
+    readonly signature: string;
+    readonly owner?: string;
+  } | null,
 }));
 
 vi.mock("expo-constants", () => ({
@@ -112,6 +117,7 @@ vi.mock("../../state/server", () => ({
 vi.mock("../../lib/runtime", () => ({
   runtime: {
     runPromiseExit: <A, E>(operation: Effect.Effect<A, E>) => Effect.runPromiseExit(operation),
+    runPromise: <A, E>(operation: Effect.Effect<A, E>) => Effect.runPromise(operation),
   },
 }));
 // oxlint-enable t3code/no-manual-effect-runtime-in-tests
@@ -137,7 +143,11 @@ function transport(
   return {
     identity: "env-1",
     registerDevice: vi.fn(() =>
-      Promise.resolve({ accepted: true as const, deliveryConfigured: true }),
+      Promise.resolve({
+        accepted: true as const,
+        deliveryConfigured: true,
+        environmentId: "env-1" as EnvironmentId,
+      }),
     ),
     registerLiveActivity: vi.fn(() =>
       Promise.resolve({ accepted: true as const, deliveryConfigured: true }),
@@ -186,6 +196,55 @@ describe("accountless agent awareness registration", () => {
       }),
     );
     expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+  });
+
+  it("keeps reading the count from the server that took the registration after a relaunch", async () => {
+    const owner = "env-b" as EnvironmentId;
+    setAgentAwarenessEnvironmentTransport(
+      transport({
+        registerDevice: vi.fn(() =>
+          Promise.resolve({
+            accepted: true as const,
+            deliveryConfigured: true,
+            environmentId: owner,
+          }),
+        ),
+      }),
+    );
+    await vi.waitFor(() => expect(registrationRecord.value).toMatchObject({ owner }));
+    // A relaunch finds its registration stored and does not register again.
+    __resetAgentAwarenessRemoteRegistrationForTest();
+    const relaunched = transport();
+    setAgentAwarenessEnvironmentTransport(relaunched);
+    await vi.waitFor(() => expect(getAgentAwarenessRegistrationStatus()).toBe("registered"));
+    expect(relaunched.registerDevice).not.toHaveBeenCalled();
+    await readAppIconCount();
+    expect(relaunched.getSnapshot).toHaveBeenCalledWith(owner);
+
+    // A cold launch reads the count before its registration got as far as the stored record.
+    __resetAgentAwarenessRemoteRegistrationForTest();
+    vi.mocked(Notifications.getDevicePushTokenAsync).mockReturnValue(new Promise(() => {}));
+    const coldLaunch = transport();
+    setAgentAwarenessEnvironmentTransport(coldLaunch);
+    await readAppIconCount();
+    expect(coldLaunch.getSnapshot).toHaveBeenCalledWith(owner);
+
+    // Another environment was paired: the stored owner is for the old list, and the new one is not
+    // known until the registration finishes, so the icon keeps its count.
+    setAgentAwarenessEnvironmentTransport(transport({ identity: "env-1|env-c" }));
+    expect(await readAppIconCount()).toBeNull();
+  });
+
+  it("registers again when the stored registration predates owners, to learn its owner", async () => {
+    setAgentAwarenessEnvironmentTransport(transport());
+    await vi.waitFor(() => expect(registrationRecord.value).toMatchObject({ owner: "env-1" }));
+    const { owner: _owner, ...beforeOwners } = registrationRecord.value!;
+    registrationRecord.value = beforeOwners;
+    __resetAgentAwarenessRemoteRegistrationForTest();
+    const relaunched = transport();
+    setAgentAwarenessEnvironmentTransport(relaunched);
+    await vi.waitFor(() => expect(relaunched.registerDevice).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(registrationRecord.value).toMatchObject({ owner: "env-1" }));
   });
 
   it("registers again with an environment that forgot this device", async () => {
@@ -246,7 +305,11 @@ describe("accountless agent awareness registration", () => {
   it("reports missing server APNs credentials as a failed registration", async () => {
     const environment = transport({
       registerDevice: vi.fn(() =>
-        Promise.resolve({ accepted: true as const, deliveryConfigured: false }),
+        Promise.resolve({
+          accepted: true as const,
+          deliveryConfigured: false,
+          environmentId: "env-1" as EnvironmentId,
+        }),
       ),
     });
     setAgentAwarenessEnvironmentTransport(environment);
@@ -284,7 +347,11 @@ describe("accountless agent awareness registration", () => {
   it.effect("surfaces missing APNs credentials as an actionable error", () => {
     const environment = transport({
       registerDevice: vi.fn(() =>
-        Promise.resolve({ accepted: true as const, deliveryConfigured: false }),
+        Promise.resolve({
+          accepted: true as const,
+          deliveryConfigured: false,
+          environmentId: "env-1" as EnvironmentId,
+        }),
       ),
     });
     setAgentAwarenessEnvironmentTransport(environment);
@@ -314,10 +381,11 @@ describe("accountless agent awareness registration", () => {
 
     return Effect.gen(function* () {
       expect(yield* registerLiveActivityPushToken({ activity })).toBe(true);
-      expect(environment.registerLiveActivity).toHaveBeenCalledWith({
-        deviceId: "device-1",
-        activityPushToken: "activity-token",
-      });
+      // No server told it owns the device yet.
+      expect(environment.registerLiveActivity).toHaveBeenCalledWith(
+        { deviceId: "device-1", activityPushToken: "activity-token" },
+        null,
+      );
     });
   });
 
@@ -442,7 +510,11 @@ describe("accountless agent awareness registration", () => {
           getSnapshot,
           registerDevice: vi.fn(() => {
             markRegistered();
-            return Promise.resolve({ accepted: true as const, deliveryConfigured: true });
+            return Promise.resolve({
+              accepted: true as const,
+              deliveryConfigured: true,
+              environmentId: "env-1" as EnvironmentId,
+            });
           }),
         }),
       );

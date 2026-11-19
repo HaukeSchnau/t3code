@@ -10,7 +10,6 @@ const native = vi.hoisted(() => ({
   getFocusedWindow: vi.fn(() => null as object | null),
   image: { isEmpty: vi.fn(() => false) },
   createFromDataURL: vi.fn(),
-  webContents: { send: vi.fn() },
   listeners: new Map<string, () => void>(),
 }));
 vi.mock("electron", () => ({
@@ -42,7 +41,7 @@ beforeEach(() => {
   native.listeners.clear();
 });
 
-it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
+it.effect("validates IPC, keeps the count while focused, and clears on quit and disposal", () =>
   Effect.gen(function* () {
     const handlers = new Map<string, DesktopIpc.DesktopIpcHandleListener>();
     yield* Effect.scoped(
@@ -62,17 +61,10 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
         expect(native.setBadgeCount).not.toHaveBeenCalled();
         yield* Effect.promise(() => Promise.resolve(handler(event, badge)));
         expect(native.setBadgeCount).toHaveBeenLastCalledWith(2);
-        native.listeners.get("browser-window-focus")!();
-        expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
-        expect(native.webContents.send).toHaveBeenCalledWith("desktop:set-notification-badge");
+        expect(native.listeners.has("browser-window-focus")).toBe(false);
         native.getFocusedWindow.mockReturnValue({});
-        yield* Effect.promise(() => Promise.resolve(handler(event, badge)));
-        expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
-        expect(native.webContents.send).toHaveBeenCalledTimes(2);
-        yield* Effect.promise(() => Promise.resolve(handler(event, { count: 0, image: null })));
-        expect(native.webContents.send).toHaveBeenCalledTimes(2);
-        native.getFocusedWindow.mockReturnValue(null);
-        yield* Effect.promise(() => Promise.resolve(handler(event, badge)));
+        yield* Effect.promise(() => Promise.resolve(handler(event, { ...badge, count: 3 })));
+        expect(native.setBadgeCount).toHaveBeenLastCalledWith(3);
         native.listeners.get("before-quit")!();
         expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
       }),

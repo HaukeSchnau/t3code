@@ -147,6 +147,8 @@ export const RelayAgentActivityAggregateState = Schema.Struct({
   title: TrimmedNonEmptyString,
   subtitle: TrimmedNonEmptyString,
   activeCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** Threads that need the user, all of them, not only the listed rows. Absent from older servers. */
+  attentionCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   updatedAt: TrimmedNonEmptyString,
   activities: Schema.Array(RelayAgentActivityAggregateRow),
 });

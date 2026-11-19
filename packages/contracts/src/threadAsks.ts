@@ -54,18 +54,15 @@ export const ThreadAsk = Schema.Struct({
   resolvedAt: Schema.optional(IsoDateTime),
   /** The user message that answered it, so cancelling that queued message reopens the ask. */
   answeredBy: Schema.optional(MessageId),
-  /** Set once, when the user was reminded of the still-open ask. */
-  remindedAt: Schema.optional(IsoDateTime),
 });
 export type ThreadAsk = typeof ThreadAsk.Type;
 
 /** An open ask as thread lists see it. */
-export const ThreadOpenAsk = ThreadAsk.mapFields(({ id, source, text, raisedAt, remindedAt }) => ({
+export const ThreadOpenAsk = ThreadAsk.mapFields(({ id, source, text, raisedAt }) => ({
   id,
   source,
   text,
   raisedAt,
-  remindedAt,
 }));
 export type ThreadOpenAsk = typeof ThreadOpenAsk.Type;
 
@@ -75,14 +72,18 @@ export const threadOpenAsks = (
 ): ReadonlyArray<ThreadOpenAsk> =>
   (asks ?? []).flatMap((ask) =>
     ask.status === "open"
-      ? [
-          {
-            id: ask.id,
-            source: ask.source,
-            text: ask.text,
-            raisedAt: ask.raisedAt,
-            ...(ask.remindedAt === undefined ? {} : { remindedAt: ask.remindedAt }),
-          },
-        ]
+      ? [{ id: ask.id, source: ask.source, text: ask.text, raisedAt: ask.raisedAt }]
       : [],
   );
+
+/**
+ * The run whose ending an ask stands in for, so that ending needs no ask and no Done of its own:
+ * a turn-end ask's run in any status, or the run that last set a page's ask unless the agent
+ * withdrew it (an answered or dismissed page ask still covers it).
+ */
+export const askedRunId = (ask: Pick<ThreadAsk, "source" | "status">): RunId | undefined =>
+  ask.source.type === "turn_end"
+    ? ask.source.runId
+    : ask.status === "withdrawn"
+      ? undefined
+      : ask.source.runId;

@@ -156,6 +156,8 @@ export interface EnvironmentThreadShell {
   readonly delegatedFrom: OrchestrationV2ThreadShell["delegatedFrom"] | null;
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
+  /** False when a wake, another agent or a schedule started the latest run, not the user. */
+  readonly latestRunStartedByUser?: boolean;
   readonly runtime: ThreadRuntimeSummary | null;
   readonly blockedOnThreadWait?: boolean;
   readonly latestUserMessageAt: string | null;
@@ -184,6 +186,8 @@ export interface EnvironmentThreadShell {
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
   readonly unsettledAt: string | null;
+  /** When a run the user started ended, a run failed, or an agent asked. Absent from older servers. */
+  readonly returnedAt?: string;
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
@@ -309,6 +313,9 @@ export function presentThreadShell(
     delegatedFrom: thread.delegatedFrom ?? null,
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,
+    ...(thread.latestRunStartedByUser === undefined
+      ? {}
+      : { latestRunStartedByUser: thread.latestRunStartedByUser }),
     runtime,
     blockedOnThreadWait: thread.blockedOnThreadWait ?? false,
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
@@ -344,6 +351,7 @@ export function presentThreadShell(
     settledOverride: thread.settledOverride,
     settledAt: nullableIso(thread.settledAt),
     unsettledAt: nullableIso(thread.unsettledAt ?? null),
+    ...(thread.returnedAt === undefined ? {} : { returnedAt: thread.returnedAt }),
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     limitRecovery: thread.limitRecovery ?? null,

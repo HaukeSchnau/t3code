@@ -17,29 +17,23 @@ import {
 import { forkParked } from "../serverActivation.ts";
 import * as LocalAgentAwareness from "./LocalAgentAwareness.ts";
 
-const CONFIRMATION_DELAY_MS = 5_000;
-
 function publishIdentity(state: AgentAwarenessState): string {
   const { updatedAt: _updatedAt, ...meaningful } = state;
   return JSON.stringify(meaningful);
 }
 
 /**
- * Feeds paired devices from V2 thread events with the relay publisher's rules: only work finished
- * by this process may raise a first terminal alert, and a tombstone or "completed" state goes out
- * only if the projection still holds it five seconds later.
+ * Feeds the Live Activity rows of paired devices from V2 thread events. Alerts do not come from
+ * these rows (see `NeedsYouNotifications`), so a row changes as soon as the thread does. A
+ * finished row appears only for work that finished after this process started.
  */
 export const make = Effect.gen(function* () {
   const awareness = yield* LocalAgentAwareness.LocalAgentAwareness;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const scope = yield* Effect.scope;
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const published = new Map<ThreadId, string>();
-  const confirmationDeadlines = new Map<ThreadId, number>();
-  const heldCompletions = new Set<ThreadId>();
-  let scheduleConfirmation: (threadId: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
   const publishSnapshot = Effect.fn("LocalAgentAwarenessPublisher.publishSnapshot")(function* (
     threadId: ThreadId,
@@ -63,43 +57,7 @@ export const make = Effect.gen(function* () {
       return;
     }
     const identity = state === null ? undefined : publishIdentity(state);
-    if (identity === previous) {
-      confirmationDeadlines.delete(threadId);
-      heldCompletions.delete(threadId);
-      return;
-    }
-    if (state === null || state.phase === "completed") {
-      if (state !== null) heldCompletions.add(threadId);
-      const now = (yield* DateTime.now).epochMilliseconds;
-      const deadline = confirmationDeadlines.get(threadId);
-      if (deadline === undefined) {
-        confirmationDeadlines.set(threadId, now + CONFIRMATION_DELAY_MS);
-        return yield* scheduleConfirmation(threadId);
-      }
-      if (now < deadline) return;
-      // Settled during the hold, not resumed: alert the held completion, then clear the card on a
-      // new window. Only settlement may hide it; queued or silent runs also project to null.
-      const unsettled =
-        state === null &&
-        heldCompletions.has(threadId) &&
-        thread?.settledOverride === "settled" &&
-        Option.isSome(project)
-          ? projectThreadAwarenessV2({
-              environmentId,
-              project: project.value,
-              thread: { ...thread, settledOverride: null },
-            })
-          : null;
-      if (unsettled?.phase === "completed") {
-        heldCompletions.delete(threadId);
-        yield* awareness.publish({ threadId, state: unsettled });
-        published.set(threadId, publishIdentity(unsettled));
-        confirmationDeadlines.set(threadId, now + CONFIRMATION_DELAY_MS);
-        return yield* scheduleConfirmation(threadId);
-      }
-    }
-    confirmationDeadlines.delete(threadId);
-    heldCompletions.delete(threadId);
+    if (identity === previous) return;
     yield* awareness.publish({ threadId, state });
     if (identity === undefined) published.delete(threadId);
     else published.set(threadId, identity);
@@ -112,13 +70,6 @@ export const make = Effect.gen(function* () {
       ),
     ),
   );
-  scheduleConfirmation = (threadId) =>
-    Effect.sleep(CONFIRMATION_DELAY_MS).pipe(
-      Effect.andThen(worker.enqueue(threadId)),
-      Effect.forkIn(scope),
-      Effect.asVoid,
-    );
-
   const publishActiveThreads = Effect.gen(function* () {
     const [projectSnapshot, shellSnapshot] = yield* Effect.all([
       projects.snapshot,

@@ -139,16 +139,25 @@ export function subscribeAgentAwarenessRegistrationStatus(listener: () => void):
 let activeLiveActivityRegistrationRetry: ReturnType<typeof setTimeout> | null = null;
 export interface AgentAwarenessEnvironmentTransport {
   readonly identity: string;
+  /** Also says which environment took the registration. */
   readonly registerDevice: (
     input: AgentAwarenessDeviceRegistrationInput,
-  ) => Promise<AgentAwarenessRegistrationResult>;
+  ) => Promise<AgentAwarenessRegistrationResult & { readonly environmentId: EnvironmentId }>;
+  /** `owner` is the environment that took the device registration, once known. */
   readonly registerLiveActivity: (
     input: AgentAwarenessLiveActivityRegistrationInput,
+    owner: EnvironmentId | null,
   ) => Promise<AgentAwarenessRegistrationResult>;
-  readonly getSnapshot: () => Promise<AgentAwarenessSnapshot>;
+  readonly getSnapshot: (owner: EnvironmentId | null) => Promise<AgentAwarenessSnapshot>;
 }
 
 let environmentTransport: AgentAwarenessEnvironmentTransport | null = null;
+// The environment that took the device registration: it sends the pushes, so the app icon, the
+// widget and the Live Activity read it too. Kept in the registration record across launches,
+// which skip registering again.
+let deviceOwner: EnvironmentId | null = null;
+// The last paired environment was removed, unlike a remount that releases the transport.
+let pairedEnvironmentsRemoved = false;
 let deviceRegistrationGeneration = 0;
 let activeDeviceRegistration: {
   readonly input: DeviceRegistrationInput;
@@ -196,8 +205,10 @@ export function setAgentAwarenessEnvironmentTransport(
     activeDeviceRegistration = null;
     pendingDeviceRegistration = null;
     registeredActivityPushTokens.clear();
+    deviceOwner = null;
   }
   environmentTransport = transport;
+  pairedEnvironmentsRemoved = transport === null;
   if (!transport) {
     clearAndroidAgentNotifications();
     pushTokenSubscription?.remove();
@@ -392,12 +403,15 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
       body.platform === "android" &&
       (androidDeviceReplayedAt === null ||
         now - androidDeviceReplayedAt >= ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS);
+    // A record from before owners were kept registers again to learn its owner.
     if (
       persisted &&
       persisted.identity === identity &&
       persisted.signature === signature &&
+      persisted.owner !== undefined &&
       !needsAndroidReplay
     ) {
+      deviceOwner = persisted.owner as EnvironmentId;
       setRegistrationStatus("registered");
       return;
     }
@@ -420,11 +434,13 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
     if (body.platform === "android") {
       androidDeviceReplayedAt = yield* Clock.currentTimeMillis;
     }
+    deviceOwner = result.environmentId;
     setRegistrationStatus("registered");
     yield* Effect.promise(() =>
       saveAgentAwarenessRegistrationRecord({
         identity,
         signature,
+        owner: result.environmentId,
       }).catch((error: unknown) => {
         logRegistrationError("persist registration record failed", error);
       }),
@@ -500,14 +516,37 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
   }
 }
 
-const readAgentActivitySnapshot: () => Effect.Effect<AgentAwarenessSnapshot | null> = Effect.fn(
+/**
+ * The environment that owns this device's pushes. Right after a launch the registration has not
+ * restored it yet, so it comes from the stored record of these paired environments.
+ */
+const deviceOwnerOf = Effect.fn("remoteRegistration.deviceOwnerOf")(function* (
+  transport: AgentAwarenessEnvironmentTransport,
+) {
+  if (deviceOwner !== null) return deviceOwner;
+  const record = yield* Effect.tryPromise({
+    try: () => loadAgentAwarenessRegistrationRecord(),
+    catch: (cause) =>
+      new AgentAwarenessOperationError({ operation: "load-registration-record", cause }),
+  }).pipe(Effect.orElseSucceed(() => null));
+  return record?.identity === transport.identity && record.owner !== undefined
+    ? (record.owner as EnvironmentId)
+    : null;
+});
+
+const readAgentActivitySnapshot: (
+  /** Only from the owner, null while it is not known: the icon's count is the owner's alone. */
+  ownerOnly?: boolean,
+) => Effect.Effect<AgentAwarenessSnapshot | null> = Effect.fn(
   "remoteRegistration.readAgentActivitySnapshot",
 )(
-  function* () {
+  function* (ownerOnly = false) {
     const transport = environmentTransport;
     if (!transport) return null;
+    const owner = yield* deviceOwnerOf(transport);
+    if (owner === null && ownerOnly) return null;
     return yield* Effect.tryPromise({
-      try: () => transport.getSnapshot(),
+      try: () => transport.getSnapshot(owner),
       catch: (cause) =>
         new AgentAwarenessOperationError({
           operation: "read-agent-awareness-snapshot",
@@ -523,6 +562,17 @@ const readAgentActivitySnapshot: () => Effect.Effect<AgentAwarenessSnapshot | nu
   ),
 );
 
+/**
+ * The app icon's count: the needs-you count of the server that sends this device's pushes, 0 once
+ * no server is paired, null while it cannot be read or that server is not known yet.
+ */
+export function readAppIconCount(): Promise<number | null> {
+  if (environmentTransport === null) return Promise.resolve(pairedEnvironmentsRemoved ? 0 : null);
+  return runtime
+    .runPromise(readAgentActivitySnapshot(true))
+    .then((snapshot) => (snapshot === null ? null : (snapshot.aggregate?.attentionCount ?? 0)));
+}
+
 const registerLiveActivityWithEnvironment = Effect.fn(
   "remoteRegistration.registerLiveActivityWithEnvironment",
 )(function* (
@@ -530,8 +580,9 @@ const registerLiveActivityWithEnvironment = Effect.fn(
 ): Effect.fn.Return<boolean, AgentAwarenessOperationError> {
   const transport = environmentTransport;
   if (!transport) return false;
+  const owner = yield* deviceOwnerOf(transport);
   const result = yield* Effect.tryPromise({
-    try: () => transport.registerLiveActivity(body),
+    try: () => transport.registerLiveActivity(body, owner),
     catch: (cause) =>
       new AgentAwarenessOperationError({
         operation: "register-live-activity-with-environment",
@@ -813,6 +864,7 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   pendingDeviceRegistration = null;
   registrationStatus = "unknown";
   androidDeviceReplayedAt = null;
+  deviceOwner = null;
   registrationStatusListeners.clear();
   registeredActivityPushTokens.clear();
   activityPushTokenLocks.clear();
@@ -1066,6 +1118,9 @@ export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
                 title: aggregate.title,
                 subtitle: aggregate.subtitle,
                 activeCount: aggregate.activeCount,
+                ...(aggregate.attentionCount === undefined
+                  ? {}
+                  : { attentionCount: aggregate.attentionCount }),
                 updatedAt: aggregate.updatedAt,
                 activities: aggregate.activities,
               },

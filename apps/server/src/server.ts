@@ -30,6 +30,8 @@ import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ApnsProvider from "./agentAwareness/ApnsProvider.ts";
 import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
 import * as LocalAgentAwarenessPublisher from "./agentAwareness/LocalAgentAwarenessPublisher.ts";
+import * as NeedsYouLedger from "./agentAwareness/NeedsYouLedger.ts";
+import * as NeedsYouNotifications from "./agentAwareness/NeedsYouNotifications.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import { withUntracedRequests } from "./http.ts";
@@ -696,6 +698,13 @@ const layerServerRestart = Layer.effect(
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   LocalAgentAwarenessPublisher.layer,
+  // One ledger: the detector reads the completed runs the needs-you service records in it.
+  Layer.mergeAll(
+    NeedsYouNotifications.layer,
+    Layer.effectDiscard(
+      TurnEndAskDetector.make.pipe(Effect.flatMap((service) => service.start())),
+    ).pipe(Layer.provide(ProjectionStoreV2.layer)),
+  ).pipe(Layer.provide(NeedsYouLedger.layer)),
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
@@ -708,9 +717,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WaitWatchdog.layer,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(ThreadTitleRefresh.make.pipe(Effect.flatMap((service) => service.start()))),
-  Layer.effectDiscard(
-    TurnEndAskDetector.make.pipe(Effect.flatMap((service) => service.start())),
-  ).pipe(Layer.provide(ProjectionStoreV2.layer)),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;

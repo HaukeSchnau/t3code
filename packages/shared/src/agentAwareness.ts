@@ -77,8 +77,10 @@ export interface ProjectThreadAwarenessV2Input {
     | "id"
     | "lineage"
     | "latestRunBackgroundWake"
+    | "latestRunStartedByUser"
     | "latestRunStopRequested"
     | "modelSelection"
+    | "openAsks"
     | "pendingBackgroundTasks"
     | "pendingRuntimeRequest"
     | "settledOverride"
@@ -100,7 +102,13 @@ export function projectThreadAwarenessV2(
   if (phase === null) {
     return null;
   }
-  if (phase === "completed" && thread.latestRunStopRequested === true) return null;
+  // A stopped run, or one the user did not start (a wake, another agent, a schedule), ends quietly.
+  if (
+    phase === "completed" &&
+    (thread.latestRunStopRequested === true || thread.latestRunStartedByUser === false)
+  ) {
+    return null;
+  }
   // Resolve the phase first so live or waiting work stays visible after settlement.
   const runStatus = thread.activityRunStatus ?? thread.status;
   if (
@@ -152,6 +160,8 @@ function resolveThreadAwarenessPhaseV2(
   // The parent can finish its own turn while a delegated child keeps working,
   // so a child's request outranks the parent's run status.
   if (childAwaitsApproval) return "waiting_for_approval";
+  // An agent's ask waits on the user whatever its run does, like the Needs you list.
+  if ((thread.openAsks?.length ?? 0) > 0) return "waiting_for_input";
   switch (thread.activityRunStatus ?? thread.status) {
     case "preparing":
     case "starting":

@@ -107,6 +107,7 @@ import {
   AgentAwarenessSnapshot,
 } from "./agentAwareness.ts";
 import { WsFollowUpsHistoryRpc, WsFollowUpsSaveRpc, WsFollowUpsSubscribeRpc } from "./followUps.ts";
+import { WsNeedsYouSubscribeRpc } from "./needsYou.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -2218,6 +2219,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsFollowUpsSubscribeRpc,
   WsFollowUpsSaveRpc,
   WsFollowUpsHistoryRpc,
+  WsNeedsYouSubscribeRpc,
   WsArtifactsReadMarkdownRpc,
   WsVcsJjRunActionRpc,
   WsVcsJjAssignPathsRpc,

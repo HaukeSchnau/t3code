@@ -153,7 +153,8 @@ import {
   threadAfterUserReply,
   type ThreadAskCommand,
 } from "./ThreadAskDecider.ts";
-import { isUserReply } from "./userTurn.ts";
+import { readRunEnd, threadAfterRunEnded } from "./threadReturn.ts";
+import { isUserReply, isUserTurn } from "./userTurn.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -523,6 +524,10 @@ export interface OrchestratorV2Shape {
     readonly eventType?: OrchestrationV2DomainEvent["type"];
   }) => Stream.Stream<OrchestrationV2StoredEvent, OrchestratorV2Error>;
   readonly streamDomainEvents: Stream.Stream<OrchestrationV2DomainEvent, OrchestratorV2Error>;
+  /** Like `streamDomainEvents`, from a snapshot's sequence, so no change falls between them. */
+  readonly streamDomainEventsAfter: (
+    afterSequence: number,
+  ) => Stream.Stream<OrchestrationV2StoredEvent, OrchestratorV2Error>;
 }
 
 export class OrchestratorV2 extends Context.Service<OrchestratorV2, OrchestratorV2Shape>()(
@@ -610,7 +615,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.ask.raise":
     case "thread.ask.withdraw":
     case "thread.ask.dismiss":
-    case "thread.ask.remind":
+    case "thread.return":
     case "thread.settle":
     case "thread.auto-settle":
     case "thread.unsettle":
@@ -3567,6 +3572,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  const dispatchThreadReturn = Effect.fn("orchestrationV2.dispatch.threadReturn")(function* (
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.return" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const mapProjectionError = Effect.mapError(
+      (cause: unknown) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+    );
+    const ended = yield* readRunEnd(
+      projectionStore.getThreadRecords,
+      command.threadId,
+      command.runId,
+    ).pipe(mapProjectionError);
+    if (ended === null) return;
+    const { thread } = ended;
+    const now = yield* DateTime.now;
+    const returned = threadAfterRunEnded({ ...ended, now });
+    if (returned === null) return;
+    yield* emit(
+      events,
+      command,
+    )({
+      type:
+        returned.settledOverride === thread.settledOverride
+          ? "thread.metadata-updated"
+          : "thread.unsettled",
+      threadId: command.threadId,
+      providerInstanceId: returned.providerInstanceId,
+      occurredAt: now,
+      payload: returned,
+    });
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -6151,7 +6188,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : run.id === command.restartContinuationOfRunId,
     )?.delegatedTaskId;
 
-    if (projection.thread.settledOverride !== null) {
+    // Work the user did not start keeps a settled thread settled; its ask or failure brings it back.
+    if (
+      projection.thread.settledOverride === "active" ||
+      (projection.thread.settledOverride === "settled" && isUserTurn({ ...command, role: "user" }))
+    ) {
       const now = yield* DateTime.now;
       const thread: OrchestrationV2AppThread = {
         ...projection.thread,
@@ -13876,8 +13917,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.ask.raise":
       case "thread.ask.withdraw":
       case "thread.ask.dismiss":
-      case "thread.ask.remind":
         yield* dispatchThreadAsk(command, events);
+        break;
+      case "thread.return":
+        yield* dispatchThreadReturn(command, events);
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
@@ -14234,7 +14277,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "thread.ask.raise" ||
           command.type === "thread.ask.withdraw" ||
           command.type === "thread.ask.dismiss" ||
-          command.type === "thread.ask.remind" ||
+          command.type === "thread.return" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({
@@ -14246,9 +14289,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.catch((cause) =>
         Effect.gen(function* () {
           // Refusals depend on modes the user can change; a recorded rejection would block the retry.
+          // The needs-you service sends a failed `thread.return` again under the same id.
           if (
             cause._tag === "OrchestratorThreadAboveModeLimitError" ||
-            cause._tag === "OrchestratorRuntimeModeAboveCeilingError"
+            cause._tag === "OrchestratorRuntimeModeAboveCeilingError" ||
+            command.type === "thread.return"
           ) {
             return yield* cause;
           }
@@ -14956,6 +15001,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       ),
+    streamDomainEventsAfter: (afterSequence) =>
+      eventSink
+        .stream({ afterSequence })
+        .pipe(Stream.mapError((cause) => new OrchestratorDomainEventStreamError({ cause }))),
     // Start at the latest sequence; awareness needs no historical replay.
     streamDomainEvents: Stream.unwrap(
       eventSink

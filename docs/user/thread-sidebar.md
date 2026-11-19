@@ -93,6 +93,23 @@ open.
 A snoozed thread leaves **Needs you** until it wakes, and wakes early when an agent asks something
 new.
 
+The browser tab title, the tab's icon, and the dock or taskbar icon of the desktop app show how many
+threads need you. The number stays until you act on them; looking at a thread or the app does not
+clear it.
+
+Notifications follow the same idea. You hear about a thread when it starts needing you, including
+a guest's message, and when a run fails. A finished turn notifies you only when you started it with a message of your own, and
+right away. If it turns out to end on a question, the question takes the finished notification's
+place without a second sound. Turns that a wake, a watcher, another agent or a scheduled task
+started end quietly, unless they end on a question. They leave the thread where it was in the list,
+and a settled thread stays settled; a question or a failure brings it back, unless you settled it
+after the failure. A snoozed thread notifies you only of what wakes it.
+
+An hour after an agent started waiting on you, you get one reminder, and at 7 pm in the server's
+time zone one notification says how many threads still need you. Each browser shows each
+notification once, in one window, also after a reload or with several tabs open. Choose how you are
+notified under **Notifications** in Settings.
+
 ### Triage what needs you
 
 Triage goes through **Needs you** one thread at a time, the one waiting longest first. Open it with
