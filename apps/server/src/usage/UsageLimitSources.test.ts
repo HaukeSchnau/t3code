@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { SecretProviderId, ServerConfigStreamEvent, UsageLimitSourceId } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
@@ -10,10 +11,14 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
+import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "./UsageLimitSources.ts";
 
 const encodeConfigEvent = Schema.encodeSync(ServerConfigStreamEvent);
+const testFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-usage-limit-sources-" }).pipe(
+  Layer.provideMerge(NodeServices.layer),
+);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 it.effect("keeps malformed source URLs encodable for config subscribers", () =>
@@ -85,6 +90,7 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         HttpClient.make(() => Effect.die("Unexpected network request")),
       ),
       NodeCrypto.layer,
+      testFiles,
     ]),
     Effect.scoped,
   ),
@@ -94,8 +100,8 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
  * A hub with one Claude account whose quota reads answer with `statuses` in turn. Tests change
  * `authFile` to stand for the hub rewriting the account's auth file.
  */
-function hubLayer(
-  statuses: Array<{ status: number; retryAfter?: string }>,
+function hubDependencies(
+  statuses: Array<{ status: number; retryAfter?: string; utilization?: number }>,
   authFile: { modtime?: string } = {},
 ) {
   const http = HttpClient.make((request) =>
@@ -122,33 +128,41 @@ function hubLayer(
         Response.json({
           status_code: next.status,
           header: next.retryAfter ? { "Retry-After": [next.retryAfter] } : null,
-          body: encodeJson({ seven_day: { utilization: 14, resets_at: "2099-01-01T00:00:00Z" } }),
+          body: encodeJson({
+            seven_day: { utilization: next.utilization ?? 14, resets_at: "2099-01-01T00:00:00Z" },
+          }),
         }),
       );
     }),
   );
+  return Layer.mergeAll(
+    Layer.succeed(HttpClient.HttpClient, http),
+    NodeCrypto.layer,
+    Layer.succeed(SecretResolver.SecretResolver, {
+      label: (provider) => Effect.succeed(provider),
+      read: (references) => Effect.succeed(references.map(() => undefined)),
+      invalidate: () => Effect.void,
+    }),
+    ServerSettings.layerTest({
+      usageLimitSources: {
+        [UsageLimitSourceId.make("hub")]: {
+          kind: "cliproxy",
+          url: "http://hub.test:8317",
+          managementKey: "management-secret",
+          enabled: true,
+        },
+      },
+    }),
+    testFiles,
+  );
+}
+
+function hubLayer(
+  statuses: Array<{ status: number; retryAfter?: string }>,
+  authFile: { modtime?: string } = {},
+) {
   return Layer.effect(UsageLimitSources.UsageLimitSources, UsageLimitSources.make).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(HttpClient.HttpClient, http),
-        NodeCrypto.layer,
-        Layer.succeed(SecretResolver.SecretResolver, {
-          label: (provider) => Effect.succeed(provider),
-          read: (references) => Effect.succeed(references.map(() => undefined)),
-          invalidate: () => Effect.void,
-        }),
-        ServerSettings.layerTest({
-          usageLimitSources: {
-            [UsageLimitSourceId.make("hub")]: {
-              kind: "cliproxy",
-              url: "http://hub.test:8317",
-              managementKey: "management-secret",
-              enabled: true,
-            },
-          },
-        }),
-      ),
-    ),
+    Layer.provide(hubDependencies(statuses, authFile)),
   );
 }
 
@@ -290,7 +304,48 @@ it.effect("reads a management key from its secret provider", () => {
         ),
       ),
       NodeCrypto.layer,
+      testFiles,
     ]),
     Effect.scoped,
+  );
+});
+
+it.effect("measures nothing from a failed read that keeps the last reading", () => {
+  const statuses = [{ status: 200 }, { status: 429, retryAfter: "60" }];
+  return Effect.gen(function* () {
+    const sources = yield* UsageLimitSources.UsageLimitSources;
+    yield* firstSnapshot;
+    yield* TestClock.adjust("25 hours");
+    yield* sources.refresh;
+    const window = (yield* sources.current)[0]?.accounts[0]?.usageLimits.windows[0];
+    expect(window?.usedPercent).toBe(14);
+    expect(window?.recentSpend).toBeUndefined();
+  }).pipe(Effect.provide(hubLayer(statuses)));
+});
+
+it.effect("measures an account's pace from readings kept across a restart", () => {
+  const firstWindow = Effect.scoped(
+    UsageLimitSources.make.pipe(
+      Effect.flatMap((sources) =>
+        sources.streamChanges.pipe(
+          Stream.filter((snapshots) => snapshots.length > 0),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        ),
+      ),
+      Effect.map((snapshots) => snapshots[0]?.accounts[0]?.usageLimits.windows[0]),
+    ),
+  );
+  return Effect.gen(function* () {
+    expect((yield* firstWindow)?.recentSpend).toBeUndefined();
+    yield* TestClock.adjust("25 hours");
+    expect((yield* firstWindow)?.recentSpend).toEqual({ percentPerHour: 12 / 25, hours: 25 });
+  }).pipe(
+    Effect.provide(
+      hubDependencies([
+        { status: 200, utilization: 14 },
+        { status: 200, utilization: 26 },
+      ]),
+    ),
   );
 });

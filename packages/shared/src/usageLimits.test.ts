@@ -190,6 +190,24 @@ describe("pace", () => {
     expect((projection!.dry[0]!.from - now) / HOUR).toBeCloseTo(3, 0);
   });
 
+  it("paces a pool by what the server measured it spending, not by how full its windows are", () => {
+    // Two accounts drained, the third reset an hour ago: the fill reads as 2.19% an hour.
+    const pool = [weeklyIn(100, 16.42), weeklyIn(100, 46), weeklyIn(0, 167)];
+    const byFill = projectLimitWindows(pool, now);
+    expect((byFill!.dry[0]!.until - byFill!.dry[0]!.from) / HOUR).toBeCloseTo(30, 0);
+
+    const measured = pool.map((window) => ({
+      ...window,
+      recentSpend: { percentPerHour: 0.5, hours: 72 },
+    }));
+    expect(projectLimitWindows(measured, now)).toMatchObject({ shortPercent: 0, dry: [] });
+    expect(projectionPaces(measured, now).safe).toBeCloseTo(300 / 167 / 1.5, 2);
+    // A fresh pool has too little fill to read, but a measured pace still projects it.
+    expect(
+      projectLimitWindows([{ ...weeklyIn(1, 167), recentSpend: measured[0]!.recentSpend }], now),
+    ).not.toBeNull();
+  });
+
   it("counts room that resets before the pace reaches it, and skips windows it can't time", () => {
     const projection = projectLimitWindows(
       [weeklyIn(20, 8), weeklyIn(90, 96), weeklyIn(95, 144)],
