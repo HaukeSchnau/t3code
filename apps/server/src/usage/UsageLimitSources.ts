@@ -164,7 +164,7 @@ export const make = Effect.gen(function* () {
   ) {
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const history = new Map(yield* Ref.get(spendHistory));
-    let recorded = false;
+    let changed = false;
     const decorated = snapshots.map((source) => ({
       ...source,
       accounts: source.accounts.map((account) => {
@@ -182,7 +182,7 @@ export const make = Effect.gen(function* () {
               const samples = recordSpendSample(previous, window, at);
               if (samples !== previous) {
                 history.set(key, samples);
-                recorded = true;
+                changed = true;
               }
               return recentSpend ? { ...window, recentSpend } : window;
             }),
@@ -190,12 +190,14 @@ export const make = Effect.gen(function* () {
         };
       }),
     }));
-    if (recorded) {
-      // Accounts that left the hub stop being read; drop them once their readings age out.
-      for (const [key, samples] of history) {
-        if ((samples.at(-1)?.[0] ?? 0) < nowMs - SPEND_HISTORY_HOURS * 3_600_000)
-          history.delete(key);
+    // Accounts or hubs that are gone stop being read; drop them once their readings age out.
+    for (const [key, samples] of history) {
+      if ((samples.at(-1)?.[0] ?? 0) < nowMs - SPEND_HISTORY_HOURS * 3_600_000) {
+        history.delete(key);
+        changed = true;
       }
+    }
+    if (changed) {
       yield* Ref.set(spendHistory, history);
       yield* encodeSpendHistory(Object.fromEntries(history)).pipe(
         Effect.flatMap((contents) =>
