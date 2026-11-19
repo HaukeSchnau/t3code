@@ -167,23 +167,28 @@ export const make = Effect.gen(function* () {
     let recorded = false;
     const decorated = snapshots.map((source) => ({
       ...source,
-      accounts: source.accounts.map((account) => ({
-        ...account,
-        usageLimits: {
-          ...account.usageLimits,
-          windows: account.usageLimits.windows.map(({ recentSpend: _, ...window }) => {
-            const key = `${source.id}\u0000${account.id}\u0000${window.id}`;
-            const previous = history.get(key) ?? [];
-            const recentSpend = measuredSpend(previous, window, nowMs);
-            const samples = recordSpendSample(previous, window, nowMs);
-            if (samples !== previous) {
-              history.set(key, samples);
-              recorded = true;
-            }
-            return recentSpend ? { ...window, recentSpend } : window;
-          }),
-        },
-      })),
+      accounts: source.accounts.map((account) => {
+        // A failed read keeps the last good one, with its time, so it records nothing new.
+        const readAt = Date.parse(account.usageLimits.checkedAt);
+        const at = Number.isFinite(readAt) ? readAt : nowMs;
+        return {
+          ...account,
+          usageLimits: {
+            ...account.usageLimits,
+            windows: account.usageLimits.windows.map(({ recentSpend: _, ...window }) => {
+              const key = `${source.id}\u0000${account.id}\u0000${window.id}`;
+              const previous = history.get(key) ?? [];
+              const recentSpend = measuredSpend(previous, window, at);
+              const samples = recordSpendSample(previous, window, at);
+              if (samples !== previous) {
+                history.set(key, samples);
+                recorded = true;
+              }
+              return recentSpend ? { ...window, recentSpend } : window;
+            }),
+          },
+        };
+      }),
     }));
     if (recorded) {
       // Accounts that left the hub stop being read; drop them once their readings age out.

@@ -310,6 +310,19 @@ it.effect("reads a management key from its secret provider", () => {
   );
 });
 
+it.effect("measures nothing from a failed read that keeps the last reading", () => {
+  const statuses = [{ status: 200 }, { status: 429, retryAfter: "60" }];
+  return Effect.gen(function* () {
+    const sources = yield* UsageLimitSources.UsageLimitSources;
+    yield* firstSnapshot;
+    yield* TestClock.adjust("25 hours");
+    yield* sources.refresh;
+    const window = (yield* sources.current)[0]?.accounts[0]?.usageLimits.windows[0];
+    expect(window?.usedPercent).toBe(14);
+    expect(window?.recentSpend).toBeUndefined();
+  }).pipe(Effect.provide(hubLayer(statuses)));
+});
+
 it.effect("measures an account's pace from readings kept across a restart", () => {
   const firstWindow = Effect.scoped(
     UsageLimitSources.make.pipe(
