@@ -387,6 +387,7 @@ export function applyServerSettingsPatch(
   const patch = translateLegacyProjectOverridePatch(current, rawPatch);
   const selectionPatch = patch.textGenerationModelSelection;
   const {
+    migratePlacementWeight,
     migrateModelPreferences,
     setModelFavorites,
     setModelsHidden,
@@ -501,6 +502,10 @@ export function applyServerSettingsPatch(
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
+    placementWeight:
+      patch.placementWeight !== undefined
+        ? patch.placementWeight
+        : (current.placementWeight ?? migratePlacementWeight ?? null),
     favorites,
     providerModelPreferences: nextModelPreferences,
     ...(worktreeCleanupPatch === undefined

@@ -12,6 +12,27 @@ export const HostResourcesSnapshot = Schema.Struct({
   cpuCount: NonNegativeInt,
   availableMemoryBytes: NonNegativeInt,
   totalMemoryBytes: NonNegativeInt,
+  // Fork (patches/fleet-placement.md): absent where the host cannot report a value.
+  /** Linux PSI `some` line of /proc/pressure/memory, in percent. */
+  memoryPressure: Schema.optionalKey(
+    Schema.Struct({
+      someAvg10: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+      someAvg60: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+    }),
+  ),
+  /** macOS kern.memorystatus_vm_pressure_level. */
+  memoryPressureLevel: Schema.optionalKey(Schema.Literals(["normal", "warning", "critical"])),
+  swapFreeBytes: Schema.optionalKey(NonNegativeInt),
+  swapTotalBytes: Schema.optionalKey(NonNegativeInt),
+  /** The systemd slice every agent scope runs in. */
+  agents: Schema.optionalKey(
+    Schema.Struct({
+      running: NonNegativeInt,
+      memoryCurrentBytes: NonNegativeInt,
+      /** Absent when the slice has no limit. */
+      memoryMaxBytes: Schema.optionalKey(NonNegativeInt),
+    }),
+  ),
 });
 export type HostResourcesSnapshot = typeof HostResourcesSnapshot.Type;
 

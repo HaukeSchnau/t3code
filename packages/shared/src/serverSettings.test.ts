@@ -896,6 +896,19 @@ describe("worktreesDirectory", () => {
   });
 });
 
+describe("placement", () => {
+  it("applies a migrated weight only while the machine has none", () => {
+    const migrated = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      migratePlacementWeight: 25,
+    });
+    expect(migrated.placementWeight).toBe(25);
+    const manual = applyServerSettingsPatch(migrated, { placementWeight: 0 });
+    expect(applyServerSettingsPatch(manual, { migratePlacementWeight: 100 }).placementWeight).toBe(
+      0,
+    );
+  });
+});
+
 describe("synchronized model preferences", () => {
   it("supports provider identifiers that match inherited object keys", () => {
     const provider = ProviderInstanceId.make("toString");

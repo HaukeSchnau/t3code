@@ -4,7 +4,21 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { useContext } from "react";
 
+import { environmentAtomList, environmentIdsKey } from "../state/environmentAtomList";
 import { serverEnvironment } from "../state/server";
+
+// Live settings: a remote environment's serverConfig keeps its connect-time settings.
+const placementWeightsAtom = environmentAtomList("placement-weights", (environmentId) =>
+  Atom.map(
+    serverEnvironment.settingsValueAtom(environmentId),
+    (settings) => settings?.placementWeight,
+  ),
+);
+
+/** Each machine's own Auto balance weight; null when unset, undefined while settings load. */
+export function usePlacementWeights(environmentIds: readonly EnvironmentId[]) {
+  return useAtomValue(placementWeightsAtom(environmentIdsKey(environmentIds)));
+}
 
 // Mirrors the freshness window in chooseLoadBalancedEnvironment.
 const HOST_RESOURCES_FRESH_MS = 15_000;

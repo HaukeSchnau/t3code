@@ -181,14 +181,20 @@ different permissions.
 
 ### Balance new threads across machines
 
-Auto balance is off by default. On web and desktop, enable it in
-**Settings → Environments → Load balancing** to automatically choose a machine for
-new threads in projects grouped across connected environments. The section
-appears once two or more machines are switched on.
-Each machine starts at **Normal**. Choose **Prefer** to favor it when it has CPU and
-memory available, **Less often** to reduce its share, or **Manual only** to exclude
-it from automatic selection. These are preferences, not fixed traffic percentages.
-Preferences are saved separately in each client.
+Auto balance is off until a machine takes balanced work. On web and desktop, open
+**Settings → Environments → Load balancing** to choose, for each machine, whether new threads
+in projects grouped across connected environments may start there. The section appears once
+two or more machines are switched on.
+Each machine starts at **Manual only**. Choose **Normal** to let Auto balance place threads on
+it, **Prefer** to favor it, or **Less often** to reduce its share. These are preferences, not
+fixed traffic percentages. Each machine stores its own preference, so every device that
+connects to it sees the same choice.
+
+Auto balance scores each machine by how many more agents fit, counting free memory, the memory
+left to the agents' systemd slice on Linux, and idle CPU. It multiplies that by the machine's
+preference and lowers it as memory pressure rises, so a preferred or calmer machine can win with
+less room. It skips a machine under memory pressure (Linux PSI of 20% or more, or a macOS pressure
+level of warning or worse), even when it still reports free memory.
 
 The composer checks eligible machines when choosing a draft's environment, then keeps
 that choice stable. Choose **Auto balance** again to check current resources, or choose

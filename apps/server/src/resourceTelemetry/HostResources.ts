@@ -9,6 +9,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { AGENT_SLICE } from "../process/agentScope.ts";
+import {
+  parseDarwinMemoryPressureLevel,
+  parseMemoryPressure,
+  parseSwap,
+  readAgentSlice,
+} from "./HostPressure.ts";
+
 export class HostResources extends Context.Service<
   HostResources,
   { readonly read: Effect.Effect<HostResourcesSnapshot> }
@@ -41,6 +49,25 @@ const make = Effect.fn("makeHostResources")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const runString = (command: string, args: ReadonlyArray<string>) =>
+    spawner.string(ChildProcess.make(command, args, { stdin: "ignore", stderr: "ignore" })).pipe(
+      Effect.timeout("1 second"),
+      Effect.orElseSucceed(() => ""),
+    );
+  // The slice appears with the first agent; until then each sample asks systemd again.
+  let agentSliceDirectory: string | undefined;
+  const resolveAgentSlice = Effect.gen(function* () {
+    if (agentSliceDirectory !== undefined) return agentSliceDirectory;
+    const controlGroup = (yield* runString("systemctl", [
+      "--user",
+      "show",
+      AGENT_SLICE,
+      "--property=ControlGroup",
+      "--value",
+    ])).trim();
+    if (controlGroup.startsWith("/")) agentSliceDirectory = `/sys/fs/cgroup${controlGroup}`;
+    return agentSliceDirectory;
+  });
 
   const sample = Effect.fn("HostResources.sample")(function* () {
     const previousCpu = readCpu();
@@ -55,20 +82,31 @@ const make = Effect.fn("makeHostResources")(function* () {
     const totalMemoryBytes = NodeOS.totalmem();
     // On Windows libuv returns GlobalMemoryStatusEx.ullAvailPhys, including standby memory.
     let availableMemoryBytes = NodeOS.freemem();
+    let pressure: Partial<HostResourcesSnapshot> = {};
     if (platform === "linux") {
       const meminfo = yield* fs
         .readFileString("/proc/meminfo")
         .pipe(Effect.orElseSucceed(() => ""));
       const available = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(meminfo)?.[1];
       if (available) availableMemoryBytes = Number(available) * 1024;
+      const memoryPressure = parseMemoryPressure(
+        yield* fs.readFileString("/proc/pressure/memory").pipe(Effect.orElseSucceed(() => "")),
+      );
+      const sliceDirectory = yield* resolveAgentSlice;
+      const agents =
+        sliceDirectory === undefined ? undefined : yield* readAgentSlice(sliceDirectory);
+      pressure = {
+        ...(memoryPressure ? { memoryPressure } : {}),
+        ...parseSwap(meminfo),
+        ...(agents ? { agents } : {}),
+      };
     } else if (platform === "darwin") {
-      const output = yield* spawner
-        .string(ChildProcess.make("/usr/bin/vm_stat", [], { stdin: "ignore", stderr: "ignore" }))
-        .pipe(
-          Effect.timeout("1 second"),
-          Effect.orElseSucceed(() => ""),
-        );
+      const output = yield* runString("/usr/bin/vm_stat", []);
       availableMemoryBytes = darwinAvailableMemory(output) ?? availableMemoryBytes;
+      const memoryPressureLevel = parseDarwinMemoryPressureLevel(
+        yield* runString("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]),
+      );
+      if (memoryPressureLevel) pressure = { memoryPressureLevel };
     }
     return {
       sampledAt: DateTime.toEpochMillis(yield* DateTime.now),
@@ -76,6 +114,7 @@ const make = Effect.fn("makeHostResources")(function* () {
       cpuCount: cpu.count,
       availableMemoryBytes: Math.min(totalMemoryBytes, Math.max(0, availableMemoryBytes)),
       totalMemoryBytes,
+      ...pressure,
     };
   });
 

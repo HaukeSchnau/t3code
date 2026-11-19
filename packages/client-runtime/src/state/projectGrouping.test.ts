@@ -2,7 +2,7 @@ import { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/co
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
-import { chooseLoadBalancedEnvironment } from "../load-balancing.ts";
+import { chooseLoadBalancedEnvironment, placementMigrationPatch } from "../load-balancing.ts";
 import {
   buildProjectGroups,
   deriveLogicalProjectKeyFromSettings,
@@ -17,12 +17,13 @@ const environmentId = EnvironmentId.make("environment");
 
 describe("load balancing shared project machines", () => {
   const now = 100_000;
+  const GiB = 1024 ** 3;
   const resources = {
     sampledAt: now,
     cpuUtilization: 0.2,
     cpuCount: 8,
-    availableMemoryBytes: 8_000,
-    totalMemoryBytes: 16_000,
+    availableMemoryBytes: 8 * GiB,
+    totalMemoryBytes: 16 * GiB,
   };
 
   it("compares three machines using free capacity and preference", () => {
@@ -64,6 +65,80 @@ describe("load balancing shared project machines", () => {
         ],
         now,
       ),
+    ).toBeNull();
+  });
+
+  it("skips a machine under memory pressure even when it reports free memory", () => {
+    // srv-2 on 2026-11-16: MemAvailable looked fine while PSI sat near 90 and oomd killed agents.
+    const thrashing = {
+      ...resources,
+      cpuCount: 16,
+      availableMemoryBytes: 12 * GiB,
+      memoryPressure: { someAvg10: 91.6, someAvg60: 78 },
+    };
+    const idle = { ...resources, memoryPressure: { someAvg10: 1.5, someAvg60: 1.6 } };
+    const candidates = [
+      { environmentId: "srv-2", resources: thrashing, weight: 100 },
+      { environmentId: "dev-hauke", resources: idle, weight: 50 },
+    ];
+    expect(chooseLoadBalancedEnvironment(candidates, now)).toBe("dev-hauke");
+    const recovering = { ...thrashing, memoryPressure: { someAvg10: 2, someAvg60: 25 } };
+    expect(
+      chooseLoadBalancedEnvironment([{ ...candidates[0]!, resources: recovering }], now),
+    ).toBeNull();
+    const mac = { ...resources, cpuCount: 16, memoryPressureLevel: "warning" as const };
+    expect(
+      chooseLoadBalancedEnvironment(
+        [
+          { environmentId: "m1", resources: mac, weight: 100 },
+          { environmentId: "dev-hauke", resources: idle, weight: 50 },
+        ],
+        now,
+      ),
+    ).toBe("dev-hauke");
+  });
+
+  it("counts room left in the agents slice, sized by the agents already running", () => {
+    const sliceNearlyFull = {
+      ...resources,
+      cpuCount: 24,
+      availableMemoryBytes: 14 * GiB,
+      agents: { running: 10, memoryCurrentBytes: 26 * GiB, memoryMaxBytes: 28 * GiB },
+    };
+    // Ten agents at 2.6 GiB each leave room for no more in 2 GiB, despite 14 GiB available.
+    expect(
+      chooseLoadBalancedEnvironment(
+        [{ environmentId: "full-slice", resources: sliceNearlyFull, weight: 100 }],
+        now,
+      ),
+    ).toBeNull();
+    const roomy = {
+      ...sliceNearlyFull,
+      agents: { running: 10, memoryCurrentBytes: 6 * GiB, memoryMaxBytes: 28 * GiB },
+    };
+    expect(
+      chooseLoadBalancedEnvironment(
+        [
+          { environmentId: "small", resources, weight: 100 },
+          { environmentId: "roomy", resources: roomy, weight: 100 },
+        ],
+        now,
+      ),
+    ).toBe("roomy");
+  });
+
+  it("migrates a browser's Auto balance choice only onto machines without one", () => {
+    const legacy = {
+      loadBalancingEnabled: true,
+      loadBalancingWeights: { "srv-1": 25, tower: 0 },
+    };
+    const unset = { placementWeight: null };
+    expect(placementMigrationPatch(unset, legacy, "srv-1")).toEqual({ migratePlacementWeight: 25 });
+    expect(placementMigrationPatch(unset, legacy, "srv-2")).toEqual({ migratePlacementWeight: 50 });
+    expect(placementMigrationPatch(unset, legacy, "tower")).toEqual({ migratePlacementWeight: 0 });
+    expect(placementMigrationPatch({ placementWeight: 0 }, legacy, "srv-1")).toBeNull();
+    expect(
+      placementMigrationPatch(unset, { ...legacy, loadBalancingEnabled: false }, "srv-1"),
     ).toBeNull();
   });
 
