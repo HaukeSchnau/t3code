@@ -12,9 +12,12 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
@@ -24,10 +27,18 @@ import {
   USAGE_LIMITS_MIN_READ_GAP_MS,
 } from "@t3tools/provider-core/server/usageLimits";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import * as ServerConfig from "../config.ts";
 import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+import {
+  measuredSpend,
+  recordSpendSample,
+  SPEND_HISTORY_HOURS,
+  type SpendSample,
+} from "./usageSpendHistory.ts";
 
 export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
@@ -61,6 +72,17 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
     : "Could not read the management key from its secret provider.";
 }
 
+// Readings of each hub account window, kept across restarts so the measured pace survives deploys.
+const SPEND_HISTORY_FILE = "usage-spend-history.json";
+const SpendHistoryFile = Schema.fromJsonString(
+  Schema.Record(
+    Schema.String,
+    Schema.Array(Schema.Tuple([Schema.Number, Schema.Number, Schema.NullOr(Schema.Number)])),
+  ),
+);
+const decodeSpendHistory = Schema.decodeUnknownEffect(SpendHistoryFile);
+const encodeSpendHistory = Schema.encodeEffect(SpendHistoryFile);
+
 /** @public */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
@@ -72,6 +94,16 @@ export const make = Effect.gen(function* () {
     const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
     return settingsSecretLiteral(resolved.managementKey);
   });
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const historyPath = path.join(config.stateDir, SPEND_HISTORY_FILE);
+  const spendHistory = yield* fileSystem.readFileString(historyPath).pipe(
+    Effect.flatMap(decodeSpendHistory),
+    Effect.map((record) => new Map<string, readonly SpendSample[]>(Object.entries(record))),
+    Effect.orElseSucceed(() => new Map<string, readonly SpendSample[]>()),
+    Effect.flatMap((initial) => Ref.make(initial)),
+  );
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
@@ -126,9 +158,66 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const publish = Effect.fn("UsageLimitSources.publish")(function* (
-    next: ReadonlyArray<UsageLimitSourceSnapshot>,
+  /** Records each account window's reading and attaches what it spent per hour lately. */
+  const withMeasuredSpend = Effect.fn("UsageLimitSources.withMeasuredSpend")(function* (
+    snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
   ) {
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    const history = new Map(yield* Ref.get(spendHistory));
+    let changed = false;
+    const decorated = snapshots.map((source) => ({
+      ...source,
+      accounts: source.accounts.map((account) => {
+        // A failed read keeps the last good one, with its time, so it records nothing new.
+        const readAt = Date.parse(account.usageLimits.checkedAt);
+        const at = Number.isFinite(readAt) ? readAt : nowMs;
+        return {
+          ...account,
+          usageLimits: {
+            ...account.usageLimits,
+            windows: account.usageLimits.windows.map(({ recentSpend: _, ...window }) => {
+              const key = `${source.id}\u0000${account.id}\u0000${window.id}`;
+              const previous = history.get(key) ?? [];
+              const recentSpend = measuredSpend(previous, window, at);
+              const samples = recordSpendSample(previous, window, at);
+              if (samples !== previous) {
+                history.set(key, samples);
+                changed = true;
+              }
+              return recentSpend ? { ...window, recentSpend } : window;
+            }),
+          },
+        };
+      }),
+    }));
+    // Accounts or hubs that are gone stop being read; drop them once their readings age out.
+    for (const [key, samples] of history) {
+      if ((samples.at(-1)?.[0] ?? 0) < nowMs - SPEND_HISTORY_HOURS * 3_600_000) {
+        history.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      yield* Ref.set(spendHistory, history);
+      yield* encodeSpendHistory(Object.fromEntries(history)).pipe(
+        Effect.flatMap((contents) =>
+          writeFileStringAtomically({ filePath: historyPath, contents }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("usage spend history write failed", { cause }),
+        ),
+      );
+    }
+    return decorated;
+  });
+
+  const publish = Effect.fn("UsageLimitSources.publish")(function* (
+    measured: ReadonlyArray<UsageLimitSourceSnapshot>,
+  ) {
+    const next = yield* withMeasuredSpend(measured);
     const changed = yield* Ref.modify(stateRef, (previous) =>
       Equal.equals(previous, next) ? [false, previous] : [true, next],
     );

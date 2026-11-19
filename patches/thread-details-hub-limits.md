@@ -23,7 +23,9 @@ every subscription's room at a glance without opening Usage.
 - Below the selected provider, the row lists every other driver on the environment that has
   readable limits, from its own login or a hub, pooled like Usage → Limits. Those groups always
   carry a caption with the provider's name, and the selected provider's group does once any follow.
-- Each row projects its window at the pace it shows so far, until every account has refilled once,
+- Each row projects its window until every account has refilled once, at the pace its hub accounts
+  spent over the last three days once the server has a day of their readings, and otherwise at the
+  pace the window shows so far,
   and answers two questions: does the pool run dry before a refill lands, and does an account reset
   with room left? The bar is solid for room the pace uses, dashed for room that resets unused, and
   amber for room it is short, with a notch at what the pace needs. The tooltip says when it runs
@@ -43,6 +45,12 @@ They spend a pool the way infra's claude-pool priorities route it
 takes every new session, otherwise the one with the most room per hour does. Change both together.
 Codex accounts on the hub keep CLIProxyAPI's round robin, so a Codex pool can waste more than the
 projection shows.
+
+The fill alone misjudges a pool: it reads every account as spending in parallel, while the pool
+drains one at a time, and an account that just reset hides its last week. So `UsageLimitSources`
+records each hub account window's readings (`apps/server/src/usage/usageSpendHistory.ts`, kept in
+`usage-spend-history.json` under the state directory so deploys don't lose them) and publishes the
+measured `recentSpend` on the window. The projection uses it when every member has it.
 
 ## Removal
 

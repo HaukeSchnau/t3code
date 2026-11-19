@@ -746,10 +746,10 @@ const PROJECTION_NOISE = 0.5;
 const PROJECTION_EPSILON = 1e-6;
 
 /**
- * Replays the windows at the pace they show so far until each has reset once. Spending follows
- * infra's claude-pool priorities: within a seventh of its window (a day of a week) a member takes
- * all new work, soonest reset first, and otherwise the member with the most room per hour does.
- * Null without reset clocks on every member, or before a tenth of the windows has elapsed.
+ * Replays the windows at their measured pace, or else their fill's pace, until each resets once.
+ * Spending follows infra's claude-pool priorities: in the last seventh of its window a member takes
+ * all new work, soonest reset first, else the one with the most room per hour does. Null without
+ * reset clocks on every member, or, unmeasured, before a tenth of the windows has elapsed.
  */
 function replayLimitWindows(
   windows: readonly ServerProviderUsageWindow[],
@@ -765,10 +765,15 @@ function replayLimitWindows(
   if (members.length === 0 || members.length !== windows.length) return null;
   const elapsed = members.reduce((sum, member) => sum + member.length - member.resetsIn, 0);
   const lengths = members.reduce((sum, member) => sum + member.length, 0);
-  if (elapsed < lengths / 10) return null;
+  // Without the server's measured spend, the fill is read as every account spending in parallel,
+  // which a pool that drains one account at a time, or one that just reset, misjudges.
+  const measured = windows.every((window) => window.recentSpend !== undefined);
+  if (!measured && elapsed < lengths / 10) return null;
   const spentPerMs =
-    (members.length * members.reduce((sum, member) => sum + 100 - member.room, 0) * paceScale) /
-    elapsed;
+    (measured
+      ? windows.reduce((sum, window) => sum + window.recentSpend!.percentPerHour, 0) / HOUR
+      : (members.length * members.reduce((sum, member) => sum + 100 - member.room, 0)) / elapsed) *
+    paceScale;
 
   const step = Math.min(...members.map((member) => member.length)) / PROJECTION_STEPS_PER_WINDOW;
   const horizon = Math.max(...members.map((member) => member.resetsIn));

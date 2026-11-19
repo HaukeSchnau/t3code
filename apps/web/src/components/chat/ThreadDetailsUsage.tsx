@@ -364,6 +364,9 @@ function ProjectionLines({
   const dryTotal = projection.dry.reduce((sum, stretch) => sum + stretch.until - stretch.from, 0);
   const expiring = projection.expiring.toSorted((a, b) => b.percent - a.percent).slice(0, 2);
   const safe = Math.floor(paces.safe * 10) / 10;
+  const measuredDays = windows.every((window) => window.recentSpend)
+    ? Math.max(1, Math.round(Math.min(...windows.map((window) => window.recentSpend!.hours)) / 24))
+    : null;
   return (
     <>
       {dry ? (
@@ -405,6 +408,12 @@ function ProjectionLines({
             ? "Covered even at 3× this pace"
             : `Covered up to ${safe}× this pace`}
       </span>
+      {measuredDays !== null ? (
+        <span className="text-muted-foreground">
+          This pace is what {accounts && accounts.length > 1 ? "the accounts" : "the account"} spent
+          over the last {measuredDays === 1 ? "day" : `${measuredDays} days`}
+        </span>
+      ) : null}
       {paces.usesAll !== null ? (
         <span className="text-muted-foreground">
           At {Math.ceil(paces.usesAll * 10) / 10}× this pace, nothing resets unused
