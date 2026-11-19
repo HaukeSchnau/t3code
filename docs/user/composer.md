@@ -330,8 +330,10 @@ Thread details** to see context usage in the thread details card. It appears
 once the provider reports usage.
 
 Turn on **Usage limits** there to see every provider's limits in the same card. Each bar projects
-your pace so far: dashes are room that resets before you'd use it, amber is room you'd run short
-of before the next refill, and the mark is what your pace needs. Hover a row for when that happens.
+your pace: dashes are room that resets before you'd use it, amber is room you'd run short of before
+the next refill, and the mark is what your pace needs. Hover a row for when that happens. For
+accounts on a CLIProxyAPI hub, the pace is what they actually spent over the last three days, once
+T3 has read them for a day; until then it is the pace their limits show so far.
 
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).
