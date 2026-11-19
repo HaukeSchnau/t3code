@@ -43,8 +43,9 @@ prose asks waited over two hours or never got a reply.
   at once. It skips subagent and delegated threads, runs whose stop was requested, threads with a
   pending request or card, runs without a final message, and runs the user already answered.
   Failures are logged and skipped.
-- T3's agent instructions tell agents to ask decisions with their question tool instead of ending
-  a turn on a question in prose.
+- T3's agent instructions tell agents to ask every decision, approval or answer with their
+  question tool, including one that comes up mid-work while they keep going. The turn-end detector
+  only reads the final message, so a question in an earlier message would never become a need.
 - Web and mobile lists open with a **Needs you** section above Pinned: every listed thread that
   `threadNeedsYou` reports and that is not archived or snoozed, the one waiting longest first and
   needs without a start time after them. Settled and pinned threads count too. A thread there is
@@ -156,8 +157,8 @@ ends, detects turns that end waiting on the user, and lists those threads apart 
 - `TurnEndAskDetector.test.ts` covers the detector's skip rules and its guarded raise.
 - `ThreadSettlementService.test.ts`, client-runtime `threadInbox.test.ts` and
   `threadSnoozed.test.ts` cover settlement, snooze, the inbox and `threadNeedsYou`.
-- `evals/thread-asks` measures the detector prompt; `evals/mcp-tool-use` secrets and follow-up
-  cases checked the instruction line.
+- `evals/thread-asks` measures the detector prompt; `evals/mcp-tool-use` secrets, follow-up and
+  question cases check the instruction line.
 - client-runtime `threadInbox.test.ts` covers the Needs you order. Web `Sidebar.logic.test.ts`
   covers drop targets and plans with the section (no drops in, none out, no row in the pinned or
   inbox order) and asks reading as Input; `Sidebar.drag.test.ts` covers the section staying in
