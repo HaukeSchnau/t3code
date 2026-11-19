@@ -746,11 +746,10 @@ const PROJECTION_NOISE = 0.5;
 const PROJECTION_EPSILON = 1e-6;
 
 /**
- * Replays the windows at their measured pace, or the pace their fill shows, until each has reset
- * once. Spending follows infra's claude-pool priorities: within a seventh of its window (a day of a
- * week) a member takes all new work, soonest reset first, and otherwise the member with the most
- * room per hour does. Null without reset clocks on every member, or, unmeasured, before a tenth of
- * the windows has elapsed.
+ * Replays the windows at their measured pace, or else their fill's pace, until each resets once.
+ * Spending follows infra's claude-pool priorities: in the last seventh of its window a member takes
+ * all new work, soonest reset first, else the one with the most room per hour does. Null without
+ * reset clocks on every member, or, unmeasured, before a tenth of the windows has elapsed.
  */
 function replayLimitWindows(
   windows: readonly ServerProviderUsageWindow[],
