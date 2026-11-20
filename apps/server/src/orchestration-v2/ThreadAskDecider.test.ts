@@ -145,16 +145,23 @@ describe("decideThreadAskCommand", () => {
     expect(decide(third, raise("p4", byRun("run-4"), "Pick a layout and a color"))).toBe(third);
   });
 
-  it("brings a settled thread back with a new ask", () => {
+  it("returns the thread to the inbox with a new ask, and brings a settled thread back", () => {
     const decided = decide(
       thread({ settledOverride: "settled", settledAt: at(5) }),
       raise("p", page("render-1")),
     );
-    expect([decided.settledOverride, decided.settledAt, decided.unsettledAt]).toEqual([
-      null,
-      null,
-      now,
-    ]);
+    expect([
+      decided.settledOverride,
+      decided.settledAt,
+      decided.unsettledAt,
+      decided.returnedAt,
+    ]).toEqual([null, null, now, DateTime.formatIso(now)]);
+    // A page that only rewords its open ask does not return the thread again.
+    const reworded = decide(
+      { ...decided, returnedAt: "2026-01-01T00:00:00.000Z" },
+      raise("p2", page("render-1"), "Pick one"),
+    );
+    expect(reworded.returnedAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
   it("withdraws only the open ask of the named page", () => {
@@ -184,18 +191,6 @@ describe("decideThreadAskCommand", () => {
     const all = decide(current, dismiss());
     expect(statuses(all)).toEqual(["t:dismissed", "p:dismissed"]);
     expect(decide(all, dismiss())).toBe(all);
-  });
-
-  it("marks a reminder once", () => {
-    const remind: ThreadAskCommand = {
-      type: "thread.ask.remind",
-      commandId: CommandId.make("remind"),
-      threadId,
-      askId: ThreadAskId.make("t"),
-    };
-    const reminded = decide(thread({ asks: [open("t", turnEnd("run-1"), 11)] }), remind);
-    expect(reminded.asks?.[0]?.remindedAt).toBe(DateTime.formatIso(now));
-    expect(decide(reminded, remind)).toBe(reminded);
   });
 
   it("keeps every open ask and only the newest resolved ones", () => {

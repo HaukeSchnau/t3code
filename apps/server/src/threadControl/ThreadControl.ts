@@ -21,6 +21,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { type NeedsYouThread, needsYouThreads } from "../agentAwareness/needsYouRules.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import type * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -79,6 +80,17 @@ const EXCERPT_LIMIT = 280;
 
 type Phase = ThreadGlanceRow["phase"];
 const isFinished = (phase: Phase) => phase === "completed" || phase === "failed";
+
+/** What the thread waits on the user for, by the app icon count's rule, else its own phase. */
+const needPhase = <P extends Phase | null | undefined>(
+  entry: NeedsYouThread | undefined,
+  own: P,
+) =>
+  entry?.need == null
+    ? own
+    : entry.need.kind === "approval"
+      ? ("waiting_for_approval" as const)
+      : ("waiting_for_input" as const);
 
 // Attention first, then failures, then work in flight, then finished work.
 function phaseRank(phase: Phase): number {
@@ -239,9 +251,18 @@ const make = Effect.gen(function* () {
       const project = yield* projects.getShell(shell.projectId);
       const projectTitle = Option.match(project, { onNone: () => "", onSome: (p) => p.title });
       const environmentId = yield* environment.getEnvironmentId;
-      const phase =
+      const ownPhase =
         projectThreadAwarenessV2({ environmentId, project: { title: projectTitle }, thread: shell })
           ?.phase ?? null;
+      // As in the list, so a child's request shows as a wait instead of offering to message this
+      // thread.
+      const snapshot = yield* threads.getShellSnapshot();
+      const phase = needPhase(
+        needsYouThreads(snapshot.threads, (yield* DateTime.now).epochMilliseconds).find(
+          (entry) => entry.shell.id === shell.id,
+        ),
+        ownPhase,
+      );
       const excerpt = yield* latestAgentExcerpt(shell);
       const target = yield* pendingReplyTarget(shell);
       const pending = target.kind === "question" ? target : null;
@@ -264,7 +285,7 @@ const make = Effect.gen(function* () {
               },
             }),
         // Work is in flight, including work blocked on the user. Stop also ends background work.
-        canStop: phase !== null && !isFinished(phase),
+        canStop: ownPhase !== null && !isFinished(ownPhase),
       };
     },
   );
@@ -285,25 +306,33 @@ export function buildThreadGlanceList(input: {
   readonly nowMs: number;
 }): ThreadGlanceList {
   const projectsById = new Map(input.projects.map((project) => [project.id, project]));
+  // The app icon count's rule: child requests wait on their parent, guests' messages count, and
+  // a snoozed thread's wait shows again when the snooze ends.
+  const needs = new Map(
+    needsYouThreads(input.threads, input.nowMs).map((entry) => [entry.shell.id, entry]),
+  );
   const rows = input.threads.flatMap((thread): ReadonlyArray<ThreadGlanceRow> => {
     const project = projectsById.get(thread.projectId);
     if (!project || thread.archivedAt !== null) return [];
     const state = projectThreadAwarenessV2({ environmentId: input.environmentId, project, thread });
-    if (!state) return [];
+    const entry = needs.get(thread.id);
+    if (entry?.need != null && entry.snoozed) return [];
+    const phase = needPhase(entry, state?.phase);
+    if (phase === undefined) return [];
     if (
-      isFinished(state.phase) &&
+      isFinished(phase) &&
       input.nowMs - DateTime.toEpochMillis(thread.updatedAt) > RECENT_WINDOW_MS
     ) {
       return [];
     }
     return [
       {
-        environmentId: state.environmentId,
-        threadId: state.threadId,
-        projectTitle: state.projectTitle,
-        threadTitle: state.threadTitle,
-        phase: state.phase,
-        updatedAt: state.updatedAt,
+        environmentId: input.environmentId,
+        threadId: thread.id,
+        projectTitle: project.title,
+        threadTitle: thread.title,
+        phase,
+        updatedAt: state?.updatedAt ?? DateTime.formatIso(thread.updatedAt),
       },
     ];
   });

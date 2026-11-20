@@ -55,20 +55,21 @@ authorization boundary and is intentionally not removed.
 - Persist device registrations in the paired server's secret store and publish that server's local
   aggregate directly to APNs (`agentAwareness/LocalAgentAwareness.ts`, `ApnsProvider.ts`).
   Cross-environment aggregation is intentionally unsupported. Each server knows only its own
-  threads, and the first reachable server is authoritative for the card.
+  threads, and the server that owns the device registration is authoritative for the card, the
+  widget's snapshot and the app icon's count.
 - `agentAwareness/LocalAgentAwarenessPublisher.ts` feeds that aggregate from orchestration v2 thread
-  events. It reuses the helpers in upstream's `relay/AgentAwarenessRelay.ts` and follows the relay
-  publisher's rules. Only work that finished after the server started can raise a first terminal
-  alert. A tombstone or a `completed` state goes out only if the projection still holds it five
-  seconds later, because a run can complete moments before its continuation starts. A completion
-  settled during that hold still alerts, then clears on a new window. The publisher reimplements
-  this hold, so port relay changes to it by hand.
+  events. It reuses the helpers in upstream's `relay/AgentAwarenessRelay.ts`. A row changes as soon
+  as the thread does, and a finished row appears only for work that finished after the server
+  started. Rows never alert: the phone's alerts come from `NeedsYouNotifications.ts`, decided per
+  subject and delivered per device through a ledger (see [needs you](needs-you.md)), so the
+  relay's five-second completion confirmation is not needed here.
 - `ws.ts` serves the four `agentAwareness.*` RPCs that mobile calls: register device, unregister
   device, register Live Activity, and get snapshot. Upstream's v2 server has none of them.
   `auth/RpcAuthorization.ts` gives the three writes the operate scope and the snapshot the read
   scope.
 - Alerts go out as regular notifications so they can carry Reply actions; see
-  [notification replies](notification-replies.md).
+  [notification replies](notification-replies.md). A device without a push token gets no alerts;
+  the Live Activity only displays.
 
 ## APNs server configuration
 

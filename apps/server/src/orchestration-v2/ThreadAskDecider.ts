@@ -15,11 +15,7 @@ import { isUserReply } from "./userTurn.ts";
 export type ThreadAskCommand = Extract<
   OrchestrationV2ServerCommand,
   {
-    readonly type:
-      | "thread.ask.raise"
-      | "thread.ask.withdraw"
-      | "thread.ask.dismiss"
-      | "thread.ask.remind";
+    readonly type: "thread.ask.raise" | "thread.ask.withdraw" | "thread.ask.dismiss";
   }
 >;
 
@@ -118,15 +114,11 @@ export function decideThreadAskCommand(input: {
         const open = asks.find((ask) => ask.status === "open" && ask.source.type === "turn_end");
         next = [...asks.map((ask) => (ask === open ? resolve(ask, "replaced", now) : ask)), raised];
       }
-      // A new ask needs the user, so a settled thread comes back as a new message brings it.
+      // A new ask needs the user: the thread returns to the inbox, and a settled one comes back.
+      const returned = { ...withAsks(next), returnedAt: raised.raisedAt };
       return thread.settledOverride === "settled"
-        ? {
-            ...withAsks(next),
-            settledOverride: null,
-            settledAt: null,
-            unsettledAt: now,
-          }
-        : withAsks(next);
+        ? { ...returned, settledOverride: null, settledAt: null, unsettledAt: now }
+        : returned;
     }
     case "thread.ask.withdraw": {
       const open = asks.find(
@@ -145,18 +137,6 @@ export function decideThreadAskCommand(input: {
       return asks.some(dismissed)
         ? withAsks(asks.map((ask) => (dismissed(ask) ? resolve(ask, "dismissed", now) : ask)))
         : thread;
-    }
-    case "thread.ask.remind": {
-      const open = asks.find(
-        (ask) => ask.id === command.askId && ask.status === "open" && ask.remindedAt === undefined,
-      );
-      return open === undefined
-        ? thread
-        : withAsks(
-            asks.map((ask) =>
-              ask === open ? { ...ask, remindedAt: DateTime.formatIso(now) } : ask,
-            ),
-          );
     }
   }
 }

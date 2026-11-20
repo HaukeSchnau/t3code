@@ -115,6 +115,7 @@ import Migration0109 from "./Migrations/109_ScheduledTaskOnceRunAt.ts";
 import Migration0110 from "./Migrations/110_FollowUps.ts";
 import Migration0111 from "./Migrations/111_DropSkillPacks.ts";
 import Migration0112 from "./Migrations/112_HtmlRenders.ts";
+import Migration0113 from "./Migrations/113_NeedsYouLedger.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -235,6 +236,7 @@ const migrationEntries = [
   [110, "FollowUps", Migration0110],
   [111, "DropSkillPacks", Migration0111],
   [112, "HtmlRenders", Migration0112],
+  [113, "NeedsYouLedger", Migration0113],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

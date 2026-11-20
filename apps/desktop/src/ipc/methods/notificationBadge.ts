@@ -22,14 +22,13 @@ function applyNotificationBadge(
   { count, image }: typeof NotificationBadge.Type,
 ): void {
   try {
-    if (Electron.BrowserWindow.getFocusedWindow()) count = 0;
     if (platform === "win32") {
       const overlay = count > 0 && image ? Electron.nativeImage.createFromDataURL(image) : null;
       for (const window of Electron.BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) {
           window.setOverlayIcon(
             overlay?.isEmpty() ? null : overlay,
-            count > 0 ? `${count} threads with new notifications` : "",
+            count === 1 ? "1 thread needs you" : count > 0 ? `${count} threads need you` : "",
           );
         }
       }
@@ -46,25 +45,16 @@ export const installNotificationBadge = Effect.fn("desktop.ipc.installNotificati
     const ipc = yield* DesktopIpc.DesktopIpc;
     const app = yield* ElectronApp.ElectronApp;
     const platform = yield* HostProcess.Platform;
-    const clear = () => {
-      applyNotificationBadge(platform, { count: 0, image: null });
-      for (const window of Electron.BrowserWindow.getAllWindows()) {
-        if (!window.isDestroyed()) window.webContents.send(SET_NOTIFICATION_BADGE_CHANNEL);
-      }
-    };
+    const clear = () => applyNotificationBadge(platform, { count: 0, image: null });
     yield* ipc.handle(
       DesktopIpc.makeIpcMethod({
         channel: SET_NOTIFICATION_BADGE_CHANNEL,
         payload: NotificationBadge,
         result: Schema.Void,
-        handler: (badge) =>
-          Effect.sync(() => {
-            if (badge.count > 0 && Electron.BrowserWindow.getFocusedWindow()) clear();
-            else applyNotificationBadge(platform, badge);
-          }),
+        // The count is threads that need the user, so focusing the app leaves it in place.
+        handler: (badge) => Effect.sync(() => applyNotificationBadge(platform, badge)),
       }),
     );
-    yield* app.on("browser-window-focus", clear);
     yield* app.on("before-quit", clear);
     yield* Effect.addFinalizer(() => Effect.sync(clear));
   },

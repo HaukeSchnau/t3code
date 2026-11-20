@@ -6,6 +6,7 @@ import {
   type ClientGuardedRpcTag,
   ORCHESTRATION_V2_WS_METHODS,
   FOLLOW_UP_WS_METHODS,
+  NEEDS_YOU_WS_METHODS,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -66,6 +67,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.serverGetStorageCleanupReport
   | typeof WS_METHODS.serverGetDatabaseStorage
   | typeof FOLLOW_UP_WS_METHODS.subscribe
+  | typeof NEEDS_YOU_WS_METHODS.subscribe
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
   | typeof WS_METHODS.subscribeDiscoveredLocalServers

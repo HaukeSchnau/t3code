@@ -24,23 +24,43 @@ export function registrationEnvironmentIds(
     .sort();
 }
 
+/** A registration, with the environment that took it: it owns the device's pushes. */
+export type OwnedRegistration = AgentAwarenessRegistrationResult & {
+  readonly environmentId: EnvironmentId;
+};
+
+/**
+ * Registers with the first environment that can deliver APNs, else the first that accepted, and
+ * says which one.
+ */
 export async function runFirstConfiguredRegistration(
   environmentIds: readonly EnvironmentId[],
   operation: (
     environmentId: EnvironmentId,
   ) => Promise<AtomCommandResult<AgentAwarenessRegistrationResult, unknown>>,
-): Promise<AgentAwarenessRegistrationResult> {
-  let unconfiguredResult: AgentAwarenessRegistrationResult | null = null;
+): Promise<OwnedRegistration> {
+  let unconfigured: OwnedRegistration | null = null;
   let lastError: Error | null = null;
   for (const environmentId of environmentIds) {
     const result = await operation(environmentId);
     if (result._tag === "Success") {
-      if (result.value.deliveryConfigured) return result.value;
-      unconfiguredResult ??= result.value;
+      if (result.value.deliveryConfigured) return { ...result.value, environmentId };
+      unconfigured ??= { ...result.value, environmentId };
       continue;
     }
     lastError = commandFailure(result);
   }
-  if (unconfiguredResult) return unconfiguredResult;
+  if (unconfigured) return unconfigured;
   throw lastError ?? new Error("No paired environment is available.");
+}
+
+/**
+ * The environments the count and the Live Activity come from: the one that owns the device's
+ * pushes while it is still paired, so the app icon never shows another server's number.
+ */
+export function ownerEnvironmentIds(
+  environmentIds: readonly EnvironmentId[],
+  owner: EnvironmentId | null,
+): readonly EnvironmentId[] {
+  return owner !== null && environmentIds.includes(owner) ? [owner] : environmentIds;
 }

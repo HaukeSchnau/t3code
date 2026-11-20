@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   FOLLOW_UP_WS_METHODS,
+  NEEDS_YOU_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
 } from "@t3tools/contracts";
@@ -45,6 +46,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.agentAwarenessRegisterLiveActivity]: "agentAwareness",
   [WS_METHODS.agentAwarenessGetSnapshot]: "agentAwareness",
   [FOLLOW_UP_WS_METHODS.subscribe]: "followUps",
+  [NEEDS_YOU_WS_METHODS.subscribe]: "needsYou",
   [FOLLOW_UP_WS_METHODS.save]: "followUps",
   [FOLLOW_UP_WS_METHODS.history]: "followUps",
   [WS_METHODS.serverProbe]: "server",

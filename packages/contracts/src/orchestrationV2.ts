@@ -492,6 +492,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
   /** What agents asked the user, open and recently resolved. Absent on threads that never asked. */
   asks: Schema.optional(Schema.Array(ThreadAsk)),
+  /**
+   * When the thread last came back to the user without them acting: a run they started ended, a
+   * run failed, or an agent asked. The inbox orders by it. Absent until then.
+   */
+  returnedAt: Schema.optional(IsoDateTime),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2143,6 +2148,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunStopRequested: Schema.optional(Schema.Boolean),
   /** The latest run answers a background-work progress wake, like a Monitor line, not a terminal one. Absent from older servers. */
   latestRunBackgroundWake: Schema.optional(Schema.Boolean),
+  /**
+   * False when the latest run started without a message the user wrote (a wake, another agent, a
+   * scheduled task); a continuation counts as the run it continues. Absent from older servers.
+   */
+  latestRunStartedByUser: Schema.optional(Schema.Boolean),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   activityRunStatus: Schema.optional(
@@ -2161,6 +2171,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingGuestMessageAt: Schema.optional(IsoDateTime),
   /** Asks waiting for the user, oldest first. Absent when there are none and from older servers. */
   openAsks: Schema.optional(Schema.Array(ThreadOpenAsk)),
+  /** The thread's `returnedAt`. Absent until it first returns and from older servers. */
+  returnedAt: Schema.optional(IsoDateTime),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
@@ -2183,6 +2195,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** When the last snooze ended, kept after a wake clears the snooze. Absent until then. */
+  lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2780,6 +2794,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -3498,11 +3513,12 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     renderId: TrimmedNonEmptyString,
   }),
+  /** The run ended: a run the user started, or a failure, returns the thread (`returnedAt`). */
   Schema.Struct({
-    type: Schema.Literal("thread.ask.remind"),
+    type: Schema.Literal("thread.return"),
     commandId: CommandId,
     threadId: ThreadId,
-    askId: ThreadAskId,
+    runId: RunId,
   }),
   /** Moves a thread to a project rooted at the folder it already works in, so its cwd never changes. */
   Schema.Struct({

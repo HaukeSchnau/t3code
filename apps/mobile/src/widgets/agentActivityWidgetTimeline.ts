@@ -36,6 +36,7 @@ export function agentActivityWidgetTimeline(source: AgentActivityWidgetSource, n
     title: aggregate.title,
     subtitle: aggregate.subtitle,
     activeCount: aggregate.activeCount,
+    ...(aggregate.attentionCount === undefined ? {} : { attentionCount: aggregate.attentionCount }),
     updatedAt: aggregate.updatedAt,
     activities: aggregate.activities,
   };
