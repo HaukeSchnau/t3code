@@ -98,6 +98,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   followUps: FOLLOW_UP_ICON,
   newFollowUp: "plus",
   pages: PAGE_ICON,
+  needsYouTriage: "checkmark.bubble",
   archive: "archivebox",
   files: "doc.text",
   terminal: "terminal",
@@ -350,6 +351,13 @@ export function CommandPalette(props: {
         title: "New follow-up",
         searchTerms: ["later", "todo", "capture", "note", "remember"],
         run: () => navigation.navigate("FollowUpCapture"),
+      },
+      {
+        key: "needsYouTriage",
+        kind: "action",
+        title: "Triage what needs you",
+        searchTerms: ["needs you", "waiting", "asks", "questions", "reply", "inbox"],
+        run: () => navigation.navigate("Triage"),
       },
       {
         key: "pages",

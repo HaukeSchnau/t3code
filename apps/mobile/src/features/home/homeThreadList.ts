@@ -1,4 +1,8 @@
-import { buildProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  buildProjectGroups,
+  pickableProjectGroups,
+  resolveScratchProjectScopeKey,
+} from "@t3tools/client-runtime/state/project-grouping";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -68,6 +72,24 @@ export function buildHomeProjectScopes(input: {
       archived: group.archived,
     };
   });
+}
+
+/**
+ * The scope a thread list's project filter selects. A legacy per-environment scratch key reads as
+ * the shared scratch scope on every read (the stored key changes only when the user picks a
+ * filter), and an archived or missing project reads as all projects, matching the filter menu.
+ */
+export function resolveHomeProjectScope(input: {
+  readonly scopes: ReadonlyArray<HomeProjectScope>;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly projectKey: string | null;
+  readonly projectGroupingMode: SidebarProjectGroupingMode;
+}): HomeProjectScope | null {
+  const key = resolveScratchProjectScopeKey(input.projectKey, input.projects, {
+    sidebarProjectGroupingMode: input.projectGroupingMode,
+    sidebarProjectGroupingOverrides: {},
+  });
+  return pickableProjectGroups(input.scopes).find((scope) => scope.key === key) ?? null;
 }
 
 export function findHomeProjectScope(

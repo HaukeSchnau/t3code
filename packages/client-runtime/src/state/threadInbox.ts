@@ -85,16 +85,21 @@ export function threadNeedsYou(thread: ThreadNeedsYouInput): ThreadNeed | null {
   if ((thread.pendingGuestMessageCount ?? 0) > 0) {
     return { kind: "guest", text: null, since: thread.source?.pendingGuestMessageAt ?? null };
   }
-  const oldest = (thread.openAsks ?? []).reduce<
+  const oldest = oldestOpenAsk(thread);
+  return oldest === null
+    ? null
+    : { kind: oldest.source.type, text: oldest.text, since: oldest.raisedAt };
+}
+
+/** The ask a thread's need reads from when it has no request of its own. */
+export function oldestOpenAsk(thread: Pick<ThreadNeedsYouInput, "openAsks">) {
+  return (thread.openAsks ?? []).reduce<
     NonNullable<ThreadNeedsYouInput["openAsks"]>[number] | null
   >(
     (current, ask) =>
       current === null || Date.parse(ask.raisedAt) < Date.parse(current.raisedAt) ? ask : current,
     null,
   );
-  return oldest === null
-    ? null
-    : { kind: oldest.source.type, text: oldest.text, since: oldest.raisedAt };
 }
 
 const NEED_LABELS: Record<ThreadNeedKind, string> = {

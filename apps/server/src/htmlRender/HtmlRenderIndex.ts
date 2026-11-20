@@ -313,6 +313,7 @@ const make = Effect.gen(function* () {
           AND json_extract(ask.value, '$.source.renderId') = page.render_id
         WHERE thread.deleted_at IS NULL
           AND ${ofThread ? sql`page.thread_id = ${input.threadId}` : sql`1`}
+          AND ${input.renderId === undefined ? sql`1` : sql`page.render_id = ${input.renderId}`}
           AND ${
             input.filter === "asks"
               ? sql`ask.value IS NOT NULL`

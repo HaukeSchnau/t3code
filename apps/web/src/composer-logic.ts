@@ -56,6 +56,11 @@ export function composerRequiresModifier(
   );
 }
 
+/** A key that belongs to an IME composition, including the Enter some browsers report as 229. */
+export function isImeCompositionKey(event: { isComposing?: boolean; keyCode?: number }) {
+  return event.isComposing === true || event.keyCode === 229;
+}
+
 export function composerSubmissionIntentForKey(input: {
   event: ShortcutEventLike & { isComposing?: boolean; keyCode?: number; repeat?: boolean };
   keybindings: ResolvedKeybindingsConfig;
@@ -67,7 +72,7 @@ export function composerSubmissionIntentForKey(input: {
   prompt?: string;
 }): ComposerSubmissionIntent | null {
   const { event } = input;
-  if (event.isComposing || event.keyCode === 229 || event.repeat) return null;
+  if (isImeCompositionKey(event) || event.repeat) return null;
   if (input.isSoftwareKeyboardOpen && event.key === "Enter" && !event.metaKey && !event.ctrlKey)
     return null;
   const command = resolveShortcutCommand(event, input.keybindings, {

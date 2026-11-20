@@ -93,6 +93,35 @@ open.
 A snoozed thread leaves **Needs you** until it wakes, and wakes early when an agent asks something
 new.
 
+### Triage what needs you
+
+Triage goes through **Needs you** one thread at a time, the one waiting longest first. Open it with
+**Triage** in the section's header, **Triage what needs you** in the command palette, or `mod+shift+y`
+in the desktop app (`ctrl+shift+y` in a browser on macOS, `alt+shift+y` in other browsers). On iOS
+and Android, tap **Triage** in the header or find it in the command palette. Triage shows the
+threads that **Needs you** lists: it follows the thread list's project filter, and on iOS and
+Android also its environment filter.
+
+Each card shows the thread's project and title, how long it has waited, what it needs from you, and
+the agent's last message. A page that waits for you shows on the card and answers its thread as it
+does in the thread. A single question shows its options; pick one, or type your own answer when the
+question allows it. Approvals, questions with several parts and questions that give you text to
+edit open the thread instead.
+
+Type a reply and press `Enter` to send it (`Shift+Enter` for a new line). The other keys are `o` to
+open the thread, `s` to snooze it for an hour, `x` for **No reply needed**, `j` and `k` for the
+next and previous card, and `Esc` to close. They do nothing while you type in the reply box or use
+the page. In the reply box, `Esc` leaves the box, and pressing `Esc` again closes triage. On iOS
+and Android, swipe sideways between cards and use the buttons under each card, and Back from a
+thread you opened in triage returns to triage.
+
+When a thread stops needing you while you triage, for example because you answered it on another
+device, the next card takes its place. A reply you started stays with its thread until you close
+or reload the app, so it is still there if that thread needs you again. A reply you send while
+offline waits on your device and goes out when the connection is back. Until a reply or answer you
+sent arrives, its card does not send another, even after you close and reopen triage, and a page
+on the card that tries to send is told to try again.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

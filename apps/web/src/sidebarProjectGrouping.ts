@@ -6,6 +6,7 @@ import type {
 import {
   buildProjectGroups,
   derivePhysicalProjectKey,
+  pickableProjectGroups,
   resolveScratchProjectScopeKey,
   type ProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
@@ -107,7 +108,7 @@ export function resolveSidebarProjectScopeKey(input: {
   return group?.projectKey ?? (input.canClearMissingScope ? null : input.key);
 }
 
-export function resolveSidebarProjectScopeKeys(input: {
+function resolveSidebarProjectScopeKeys(input: {
   readonly groups: ReadonlyArray<SidebarProjectSnapshot>;
   readonly keys: ReadonlyArray<string>;
   readonly settings?: ProjectGroupingSettings;
@@ -116,6 +117,40 @@ export function resolveSidebarProjectScopeKeys(input: {
   return [
     ...new Set(input.keys.flatMap((key) => resolveSidebarProjectScopeKey({ ...input, key }) ?? [])),
   ];
+}
+
+/**
+ * The sidebar's project filter: the chosen groups and the `environmentId:projectId` keys of
+ * their projects, or null keys for every project. A scope whose project is gone reads as all
+ * projects once every snapshot has loaded; an archived project's scope does too, matching the
+ * menu. The stored keys are left alone, so the scope returns with its project.
+ */
+export function resolveSidebarProjectScope(input: {
+  readonly groups: ReadonlyArray<SidebarProjectSnapshot>;
+  readonly keys: ReadonlyArray<string>;
+  readonly settings?: ProjectGroupingSettings;
+  readonly canClearMissingScope?: boolean;
+}) {
+  const archivedProjectKeys = new Set(
+    input.groups.filter((project) => project.archived).map((project) => project.projectKey),
+  );
+  const scopeKeys = resolveSidebarProjectScopeKeys(input).filter(
+    (key) => !archivedProjectKeys.has(key),
+  );
+  const groups = pickableProjectGroups(input.groups).filter((project) =>
+    scopeKeys.includes(project.projectKey),
+  );
+  const projectKeys =
+    groups.length === 0
+      ? null
+      : new Set(
+          groups.flatMap((project) =>
+            project.memberProjectRefs.map(
+              (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
+            ),
+          ),
+        );
+  return { scopeKeys, groups, projectKeys };
 }
 
 export function buildPhysicalToLogicalProjectKeyMap(input: {

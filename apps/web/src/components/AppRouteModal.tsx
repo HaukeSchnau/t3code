@@ -13,7 +13,16 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
  * backdrop returns to the page that opened it. Keyboard guards that skip dialogs exempt
  * `[data-app-modal]`, because these pages own their shortcuts.
  */
-export function AppRouteModal({ label, children }: { label: string; children: ReactNode }) {
+export function AppRouteModal({
+  label,
+  children,
+  escapeCloses,
+}: {
+  label: string;
+  children: ReactNode;
+  /** Whether this Esc closes the modal; by default every Esc does. */
+  escapeCloses?: (event: KeyboardEvent) => boolean;
+}) {
   const closeAppModal = useCloseAppModal();
   const [open, setOpen] = useState(true);
   // Text selection that ends on the backdrop is not a dismissal.
@@ -31,8 +40,16 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
       open={open}
       // Portaled layers outside this tree (toasts, Clerk, confirm dialogs) are not backdrop presses.
       disablePointerDismissal
-      onOpenChange={(nextOpen) => {
+      onOpenChange={(nextOpen, details) => {
         if (nextOpen) return;
+        if (
+          details.reason === "escape-key" &&
+          details.event instanceof KeyboardEvent &&
+          escapeCloses?.(details.event) === false
+        ) {
+          details.cancel();
+          return;
+        }
         // Closing unmounts a focused field without a blur, so commit-on-blur rows would
         // drop what was typed. Blur first so they commit.
         const focused = document.activeElement;

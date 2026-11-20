@@ -316,6 +316,11 @@ function registerAppShellCommands(router: AnyRouter, shellElement: Element): () 
           event.stopPropagation();
           openSettings(router);
         },
+        "needsYou.triage": (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (router.state.location.pathname !== "/triage") void router.navigate({ to: "/triage" });
+        },
       },
       {
         capture: true,

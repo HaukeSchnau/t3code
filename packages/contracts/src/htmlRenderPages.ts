@@ -38,6 +38,8 @@ export type HtmlRenderPage = typeof HtmlRenderPage.Type;
 export const HtmlRenderListPagesInput = Schema.Struct({
   /** One thread's pages, waiting ones first; without it, every thread's. */
   threadId: Schema.optional(ThreadId),
+  /** Only this page, wherever it sorts. */
+  renderId: Schema.optional(HtmlRenderId),
   filter: HtmlRenderPageFilter,
   /** `nextCursor` of the previous page of results. */
   cursor: Schema.optional(TrimmedNonEmptyString),

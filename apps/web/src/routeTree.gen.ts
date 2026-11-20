@@ -19,6 +19,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
+import { Route as ChatTriageRouteImport } from './routes/_chat.triage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatPagesRouteImport } from './routes/_chat.pages'
@@ -102,6 +103,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
 const ChatUsageRoute = ChatUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatTriageRoute = ChatTriageRouteImport.update({
+  id: '/triage',
+  path: '/triage',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatSettingsRoute = ChatSettingsRouteImport.update({
@@ -299,6 +305,7 @@ export interface FileRoutesByFullPath {
   '/pages': typeof ChatPagesRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
+  '/triage': typeof ChatTriageRoute
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -344,6 +351,7 @@ export interface FileRoutesByTo {
   '/pages': typeof ChatPagesRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
+  '/triage': typeof ChatTriageRoute
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/': typeof ChatIndexRoute
@@ -392,6 +400,7 @@ export interface FileRoutesById {
   '/_chat/pages': typeof ChatPagesRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
+  '/_chat/triage': typeof ChatTriageRoute
   '/_chat/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/_chat/': typeof ChatIndexRoute
@@ -441,6 +450,7 @@ export interface FileRouteTypes {
     | '/pages'
     | '/pull-requests'
     | '/settings'
+    | '/triage'
     | '/usage'
     | '/projects/$projectKey'
     | '/$environmentId/$threadId'
@@ -486,6 +496,7 @@ export interface FileRouteTypes {
     | '/pages'
     | '/pull-requests'
     | '/settings'
+    | '/triage'
     | '/usage'
     | '/projects/$projectKey'
     | '/'
@@ -533,6 +544,7 @@ export interface FileRouteTypes {
     | '/_chat/pages'
     | '/_chat/pull-requests'
     | '/_chat/settings'
+    | '/_chat/triage'
     | '/_chat/usage'
     | '/projects/$projectKey'
     | '/_chat/'
@@ -650,6 +662,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/usage'
       preLoaderRoute: typeof ChatUsageRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/triage': {
+      id: '/_chat/triage'
+      path: '/triage'
+      fullPath: '/triage'
+      preLoaderRoute: typeof ChatTriageRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/settings': {
@@ -970,6 +989,7 @@ interface ChatRouteChildren {
   ChatPagesRoute: typeof ChatPagesRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
+  ChatTriageRoute: typeof ChatTriageRoute
   ChatUsageRoute: typeof ChatUsageRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
@@ -982,6 +1002,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatPagesRoute: ChatPagesRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,
+  ChatTriageRoute: ChatTriageRoute,
   ChatUsageRoute: ChatUsageRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,

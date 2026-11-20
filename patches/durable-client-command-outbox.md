@@ -93,6 +93,11 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   so it never overtakes them.
 - Guest share sends (`components/guest/GuestPage.tsx`) post to the guest routes and never reach
   the outbox.
+- Triage replies and the sends of a page on a triage card (`components/needsYou/TriageCard.tsx`,
+  patches/needs-you.md) always queue through `enqueueComposerSend`, and the card stays pending
+  while the outbox holds the message. The card shows no thread settings, so these entries set
+  `inheritThreadSettings`: delivery skips the mode sync and sends no model, and the server applies
+  the thread's model and modes as they are when the message arrives.
 - `apps/web/src/routes/_chat.tsx`: mounts `DurableOutboxDelivery`, which starts delivery for the
   session and shows a toast with an Open action when a message is rejected.
 - `packages/client-runtime/package.json`: the `./state/command-outbox` export.
@@ -122,3 +127,5 @@ command id, delivers them in order after reconnecting, and shows them in the thr
   settling entries the server already holds.
 - `apps/web/src/components/chat/durableOutboxPresentation.test.ts`: which states can be taken back
   and what the thread shows.
+- `apps/web/src/durableCommandOutboxDelivery.test.ts`: an entry that inherits the thread's settings
+  changes no mode and sends no model.

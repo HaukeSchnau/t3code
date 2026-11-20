@@ -112,6 +112,8 @@ export const DurableComposerCommand = Schema.Struct({
   dispatchMode: Schema.Literals(["auto", "queue", "steer", "restart"]),
   titleSeed: Schema.String,
   bootstrap: Schema.optionalKey(DurableThreadBootstrap),
+  // Sent with the thread's model and modes as they are when it arrives, not the ones above.
+  inheritThreadSettings: Schema.optionalKey(Schema.Literal(true)),
 });
 export type DurableComposerCommand = typeof DurableComposerCommand.Type;
 export type DurableComposerEntry = CommandOutboxEntry<DurableComposerCommand>;
@@ -444,6 +446,11 @@ export interface DurableComposerSend {
   } | null;
   /** Set instead of `prepareWorktree` when the server creates a managed workspace. */
   readonly prepareWorkspace: Omit<ManagedWorkspaceLaunchStrategy, "type"> | null;
+  /**
+   * For a reply sent outside the thread's composer, which shows no settings: it takes the
+   * thread's model and modes as they are when it arrives, so it never undoes a change made since.
+   */
+  readonly inheritThreadSettings?: true;
 }
 
 function threadBootstrap(
@@ -527,6 +534,7 @@ export async function enqueueComposerSend(
       dispatchMode: send.dispatchMode,
       titleSeed,
       ...(bootstrap ? { bootstrap } : {}),
+      ...(send.inheritThreadSettings ? { inheritThreadSettings: true } : {}),
     },
     { acknowledgementLost: directSend?.acknowledgementLost === true },
   );

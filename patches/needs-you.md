@@ -98,6 +98,51 @@ prose asks waited over two hours or never got a reply.
   from the command palette, so the app keeps four tabs (a fifth turns on tab customization, and
   the Android tab bar shows no header actions).
 
+- Triage goes through the threads that need you one card at a time: the threads the Needs you
+  section lists, in its order. It follows the section's filters and snooze rule: on web the
+  sidebar's project filter (`resolveSidebarProjectScope`, shared with `Sidebar.tsx`) and a snooze
+  only once the environment's config has loaded; on mobile the list's environment and project
+  filters, read from the list's own layout (`buildThreadListV2Items`) under the scope the lists
+  resolve (`resolveHomeProjectScope`, which reads a legacy per-environment scratch key as "No
+  project"). A search hides the section on both, so no search applies. A card shows the project, the thread's title, how long it waited,
+  the need's text, the agent's newest message as Markdown, the page inline for a page ask (newest
+  version, answering through the page bridge; looked up in the page index by thread and render id
+  and mounted under that id when the loaded timeline does not hold it), and a single question's
+  options. A reply box sends a
+  user message, which ends the thread's asks; for a single question it sends a typed answer when
+  the question allows one, built by the thread's own answer builder. Approvals, requests,
+  questions with several parts and questions with text to edit (`initialAnswer`) list what they
+  wait on and open the thread to answer. Actions: open the thread (pushed on both mobile
+  platforms, and Android's thread Back pops to the deck below it), snooze for an hour, No reply
+  needed (only with open asks).
+- The deck stays on its card while other threads come and go. When the card's thread stops
+  needing the user (answered elsewhere, dismissed, snoozed), the first card after it that is still
+  there comes next, then the first card that was not before it, else the last. The reply typed on a
+  card stays with its thread for the session; a send that lands clears it only while it still
+  holds the sent text, also after triage closed. A card's send stays pending per thread for the
+  session, so Send and the question's options stay disabled until it settles, also across closing
+  and reopening triage. Replies and the page's sends go through the client's command outbox (web's
+  durable outbox, mobile's thread outbox), so one sent offline or cut off on the way arrives once,
+  and stays pending until the outbox delivers or drops it. A reply takes the thread's model and
+  modes as they are when it arrives, so one that waited offline never undoes a change made on
+  another client meanwhile. A page's `t3.send` on a card shares the per-thread rule, also once the
+  page is expanded full screen: while a send is pending it rejects with a message the page can
+  show, and the page may try again. An empty deck says "Nothing needs you" with a close button.
+- Web and desktop: triage is the `/triage` route, shown as an app modal over the last view like
+  Settings and Usage, so `Esc` and the close button return to it, the view behind stays mounted,
+  and the link works. Entry points: the `needsYou.triage` keybinding (`mod+shift+y` in desktop,
+  `ctrl+shift+y` in macOS browsers and `alt+shift+y` in other browsers, since Firefox on Linux
+  opens Downloads with `ctrl+shift+y`), the command palette ("Triage what needs you") and a Triage
+  button in the Needs you header. Keys: plain `Enter` sends (`Shift+Enter` new line; no other
+  chord and no IME commit sends), `o` open, `s` snooze, `x` No reply needed, `j`/`k` next and
+  previous, `Esc` closes. Letter keys and `Esc` never act with a modifier, during IME
+  composition, while typing in a field (there `Esc` leaves the field, under the same guard), or in
+  a layer over the deck (a menu, the page's full screen view); a page's frame keeps its own keys. A
+  held `Esc` acts once, so the one that left the field does not close triage.
+- Mobile: a Triage screen (route `triage`) with the same cards, a sideways swipe between them (a
+  cancelled swipe springs back and stays on the card), and buttons for Send, Open thread, Snooze
+  1 h and No reply needed, opened from Triage in the Needs you header and the command palette.
+
 ## Implementation
 
 Fork-owned files:
@@ -123,6 +168,16 @@ Fork-owned files:
   `components/pages/` (`PagesPage.tsx`, `PageListRow.tsx`), `routes/_chat.pages.tsx`.
 - Mobile: `features/pages/` (the Pages screen, the thread's Pages sheet, the page row, the
   thread pages query and route, the seen hooks, and `pagePresentation.ts`).
+- `packages/client-runtime/src/state/needsYouTriage.ts` (exported as `state/needs-you-triage`): the
+  deck's threads, its position (`reconcileNeedsYouDeck`, `stepNeedsYouDeck`), the session's
+  drafts (`makeNeedsYouDraftStore`), `needsYouCard`, what a card offers (the newest assistant
+  message, the page's versions, a single question, the reply mode, what an Open-thread card waits
+  on), `needsYouPageFrame` (timeline or page index) and `needsYouAnswers` (through
+  `buildPendingUserInputAnswers`). Test: `needsYouTriage.test.ts`.
+- Web: `components/needsYou/` (`TriagePage.tsx`, `TriageCard.tsx`, `NeedsYouTriageButton.tsx`,
+  `triageKeys.ts` with `triageKeys.browser.test.ts`), `routes/_chat.triage.tsx`.
+- Mobile: `features/needs-you/` (`TriageScreen.tsx`, `triageDeck.ts` with `triageDeck.test.ts`,
+  `triageSession.ts` with the session's store and the outbox sends of replies and pages).
 
 Upstream-owned hooks:
 
@@ -208,13 +263,36 @@ Upstream-owned hooks:
   `features/threads/ThreadDetailScreen.tsx`, `floating-working-status.ts` and
   `floating-working-control.tsx`. `components/ui/AppSymbol.android.tsx` maps `checkmark.bubble`.
 - Docs: `docs/user/thread-sidebar.md` (See what needs you) and `docs/user/text-generation.md`.
+- Triage: `needsYou.triage` in `STATIC_KEYBINDING_COMMANDS` (`packages/contracts/src/keybindings.ts`)
+  and its defaults in `packages/shared/src/keybindings.ts` (through `clientSpecificKeybindings`); the
+  handler in `AppSidebarLayout.tsx` (app shell commands); its label in
+  `settings/KeybindingsSettings.logic.ts`; `resolveSidebarProjectScope` in `sidebarProjectGrouping.ts`
+  (the sidebar's project filter, moved out of `Sidebar.tsx` so triage shares it);
+  `isImeCompositionKey` in `composer-logic.ts` (the composer's IME check, shared); an
+  `escapeCloses` guard on `AppRouteModal.tsx`; `/triage` in
+  `isAppModalPage` (`sidebar/mainAppLocation.ts`); the palette entry in `CommandPalette.tsx`;
+  `routeTree.gen.ts`; an `action` slot on `SidebarSectionHeader` (`sidebar/SidebarListMarkers.tsx`)
+  that `Sidebar.tsx` fills with the Triage button; `oldestOpenAsk` in client-runtime
+  `threadInbox.ts`. Mobile: the `Triage` route in `Stack.tsx`, the palette entry in
+  `features/keyboard/CommandPalette.tsx`, the header action in
+  `features/threads/thread-list-v2-items.tsx`, `resolveHomeProjectScope` in
+  `features/home/homeThreadList.ts` (the lists' project scope, shared by `HomeRouteScreen.tsx`,
+  `ThreadNavigationSidebar.tsx` and triage), Back from a thread over Triage popping in
+  `lib/android-workspace-navigation.ts`, and a `triage` flag on `ThreadHtmlRender`
+  (`features/threads/HtmlRenderWebView.tsx`) that sends a card's page through triage and carries
+  over to its full-screen route (`triage` on `AttachmentFileScreen.tsx`'s params, read by
+  `htmlRenderRouteBridge` in `features/pages/threadPages.ts`). Web replies queue through
+  `enqueueComposerSend` with `inheritThreadSettings` (patches/durable-client-command-outbox.md). The
+  page host gives a refused send back to the page (patches/html-render-bridge.md). Docs:
+  `docs/user/thread-sidebar.md` (Triage what needs you) and `docs/user/keybindings.md`.
 
 ## Removal
 
 Retire this patch when upstream tracks what agents ask the user as durable state that only acting
 ends, detects turns that end waiting on the user, and lists those threads apart from finished ones.
 Retire the page index and lists when upstream keeps an index of html renders with seen state; drop
-migration 112's table only with a migration that removes it.
+migration 112's table only with a migration that removes it. Retire triage with the rest; it only reads the
+Needs you set and the existing reply, answer, snooze and dismiss paths.
 
 ## Verification
 
@@ -247,6 +325,20 @@ migration 112's table only with a migration that removes it.
   client-runtime `commandPermissions.test.ts` cover the RPC scopes. `evals/mcp-tool-use` cases
   `page-collecting-choice-sets-ask` and `control-chart-page-no-ask` check that agents set `ask`
   for a page that collects a choice and not for a chart.
+- client-runtime `needsYouTriage.test.ts` covers the deck's members and order under the list's
+  filter and snooze rule, staying on a card while others come and go, moving on when the card's
+  thread leaves (to the next surviving card before a new one, and when the next card left with it),
+  a send clearing only the sent text and one send per thread at a time (a reply the outbox holds
+  until the outbox lets it go, and a page's send refused meanwhile), stepping, which cards answer in place (not editor prompts),
+  answers built like the thread's question card, and a page mounted from the page index under its
+  render id. Web `triageKeys.browser.test.ts` covers the key guards (fields, editors, menus, the
+  page's full screen view, modifiers, IME input including keyCode 229, held keys, Esc from the reply
+  box, Shift+Esc and a held Esc, Enter chords); `keybindings.test.ts` covers the triage chord per
+  client. Mobile `triageDeck.test.ts` covers the deck under a legacy "No project" filter,
+  `threadPages.test.ts` a page expanded from a card refused behind the card's queued reply, and
+  `android-workspace-navigation.test.ts` Back from a thread opened in triage. Web
+  `durableCommandOutboxDelivery.test.ts` covers a triage reply delivered with the thread's settings.
+  `HtmlRenderIndex.test.ts` covers the list's lookup by render id.
 - Real clients (web and the iOS app): the Needs you section, No reply needed from the row, menu,
   swipe and ask line, a reply ending an ask, and the ask line, captured on a dev server with real
   turn-end asks from Claude Haiku and a question from Claude's question tool. Page asks arrive with

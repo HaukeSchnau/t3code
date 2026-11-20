@@ -18,6 +18,7 @@ import { removeComposerDraftAttachment, useComposerDraft } from "../../state/use
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { useRefreshAssetUrl } from "../../state/assets";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { htmlRenderRouteBridge } from "../pages/htmlRenderRouteBridge";
 import { useMarkHtmlRenderSeenOnOpen } from "../pages/useHtmlRenderSeen";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { isZipFile, ZipArchiveView } from "./ZipArchiveView";
@@ -34,6 +35,8 @@ export type AttachmentFileRouteParams = {
   readonly htmlRender?: "1";
   /** The render this page is a version of, so the page can reach its thread. */
   readonly renderId?: string;
+  /** Opened from a triage card, whose rule for the page's sends it keeps. */
+  readonly triage?: "1";
 };
 
 type AttachmentFileScreenProps = StaticScreenProps<AttachmentFileRouteParams>;
@@ -68,14 +71,7 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   );
   const [nativeError, setNativeError] = useState<string | null>(null);
   const pendingNativeError = useRef<string | null>(null);
-  const htmlRenderBridge =
-    environmentId !== null && params.threadId !== undefined && params.renderId !== undefined
-      ? {
-          environmentId,
-          threadId: ThreadId.make(params.threadId),
-          renderId: params.renderId,
-        }
-      : undefined;
+  const htmlRenderBridge = htmlRenderRouteBridge(params);
   const handleBack = () => {
     if (navigation.canGoBack()) navigation.goBack();
   };

@@ -29,6 +29,7 @@ import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3t
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import { useNavigation } from "@react-navigation/native";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
 import { Platform, Pressable, Text as RNText, useWindowDimensions, View } from "react-native";
@@ -206,6 +207,12 @@ function ThreadListV2Section(props: {
     readonly accessibilityLabel: string;
     readonly accessibilityHint: string;
   };
+  /** A text button after the rule, outside the disclosure. */
+  readonly action?: {
+    readonly label: string;
+    readonly accessibilityLabel: string;
+    readonly onPress: () => void;
+  };
 }) {
   const snoozed = props.tone === "snoozed";
   const sidebarPane = props.pane === "sidebar";
@@ -247,6 +254,17 @@ function ThreadListV2Section(props: {
           type="monochrome"
           style={{ transform: [{ rotate: props.disclosure.expanded ? "180deg" : "0deg" }] }}
         />
+      ) : null}
+      {props.action ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={props.action.accessibilityLabel}
+          hitSlop={10}
+          onPress={props.action.onPress}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Text className="text-xs font-t3-medium text-primary">{props.action.label}</Text>
+        </Pressable>
       ) : null}
     </>
   );
@@ -313,7 +331,18 @@ export const ThreadListV2NeedsYouHeader = memo(function ThreadListV2NeedsYouHead
   readonly count: number;
   readonly pane?: "screen" | "sidebar";
 }) {
-  return <ThreadListV2Section label={`Needs you (${props.count})`} pane={props.pane} />;
+  const navigation = useNavigation();
+  return (
+    <ThreadListV2Section
+      label={`Needs you (${props.count})`}
+      pane={props.pane}
+      action={{
+        label: "Triage",
+        accessibilityLabel: "Triage what needs you, one thread at a time",
+        onPress: () => navigation.navigate("Triage"),
+      }}
+    />
+  );
 });
 
 export const ThreadListV2NeedsYouEnd = memo(function ThreadListV2NeedsYouEnd(props: {

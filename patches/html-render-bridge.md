@@ -13,7 +13,9 @@ a provider session.
 - A page calls `window.t3.send(text)`, `t3.callTool(name, args)` and `t3.copy(text)`. Sends and
   tool calls need the reader using the frame (focus plus transient activation, or the mobile
   relay's `active` flag) and one trusted click each. Sends carry an `html-render` context record,
-  which the agent sees as a line saying the page wrote the message.
+  which the agent sees as a line saying the page wrote the message. A send the client refuses
+  (`HtmlRenderHostRefusal`, such as triage's one send per thread at a time) never went out, so it
+  spends neither the click nor a place under the message cap, and the page can try again.
 - `localStorage` in a page is a shim over one server-stored map per render (64 KiB), passed in the
   URL fragment at load. The page hands each change to its host on the next tick; the host
   debounces the write and sends it when the page's last view goes away or the app leaves the
