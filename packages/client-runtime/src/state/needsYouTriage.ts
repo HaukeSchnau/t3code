@@ -10,6 +10,11 @@ import { htmlRenderFromToolItem, htmlRenderUpdateFromToolItem } from "@t3tools/s
 import { HtmlRenderHostRefusal } from "../htmlRender/host.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 import { buildPendingUserInputAnswers, type PendingUserInputQuestion } from "./pendingUserInput.ts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "./runtime.ts";
 import { oldestOpenAsk, sortThreadsByNeed, threadNeedsYou } from "./threadInbox.ts";
 import type { PendingThreadRequests } from "./threadRequests.ts";
 import { effectiveSnoozed, type ThreadSnoozeShell } from "./threadSettled.ts";
@@ -109,18 +114,16 @@ function withDraft(drafts: NeedsYouDrafts, key: string, text: string): NeedsYouD
 
 export interface NeedsYouSession {
   readonly drafts: NeedsYouDrafts;
-  /** The threads whose reply or answer is still on its way. */
-  readonly sending: ReadonlySet<string>;
 }
 
-/** The client's command outbox, which keeps a reply until it is delivered or dropped. */
+/** The client's command outbox, which keeps a message until it is delivered or dropped. */
 export interface NeedsYouOutbox {
-  readonly holds: (messageId: string) => boolean;
+  /** Settles once it has read the messages it saved before the app started. */
+  readonly loaded: () => Promise<unknown>;
+  /** Whether it holds a message for the thread (by deck key), also one restored at app start. */
+  readonly holdsThread: (key: string) => boolean;
   readonly subscribe: (listener: () => void) => () => void;
 }
-
-/** How a send went: nothing went out, it landed, or the outbox holds it under that message id. */
-export type NeedsYouSent = boolean | { readonly queued: string };
 
 /** What a page's send from a card is refused with while the thread's last send is on its way. */
 export const NEEDS_YOU_SEND_BUSY =
@@ -128,69 +131,77 @@ export const NEEDS_YOU_SEND_BUSY =
 
 /**
  * The replies started in triage, per thread, for the app session, and the sends still on their
- * way. Both outlive closing triage and a card leaving the deck, so a reopened card waits for the
- * send it started, and a send that finishes after triage closed still clears its own draft.
+ * way. Drafts outlive closing triage and a card leaving the deck, and a send that finishes after
+ * triage closed still clears its own draft. A thread's send is on its way while it is handed over
+ * and then while the outbox holds a message for the thread, offline or after a restart too.
  */
 export function makeNeedsYouDraftStore(outbox: NeedsYouOutbox) {
-  let session: NeedsYouSession = { drafts: {}, sending: new Set() };
+  let session: NeedsYouSession = { drafts: {} };
+  const handingOver = new Set<string>();
   const listeners = new Set<() => void>();
-  const write = (next: NeedsYouSession) => {
-    if (next.drafts === session.drafts && next.sending === session.sending) return;
-    session = next;
+  const notify = () => {
     for (const listener of listeners) listener();
   };
-  const withSending = (key: string, sending: boolean) => {
-    const next = new Set(session.sending);
-    if (sending) next.add(key);
-    else next.delete(key);
-    return next;
+  const set = (key: string, text: string) => {
+    const drafts = withDraft(session.drafts, key, text);
+    if (drafts === session.drafts) return;
+    session = { drafts };
+    notify();
   };
-  const whenReleased = (messageId: string, settle: () => void) => {
-    if (!outbox.holds(messageId)) {
-      settle();
-      return;
-    }
-    const stop = outbox.subscribe(() => {
-      if (outbox.holds(messageId)) return;
-      stop();
-      settle();
-    });
+  // Until the outbox has read what it saved, any thread may hold a reply. The read starts with the
+  // first reader, since the clients start their outbox with the app, not with this store.
+  let outboxLoaded = false;
+  let loading: Promise<void> | null = null;
+  const loadOutbox = () => {
+    const done = () => {
+      outboxLoaded = true;
+      notify();
+    };
+    loading ??= outbox.loaded().then(done, done);
+    return loading;
   };
+  const sending = (key: string) => !outboxLoaded || handingOver.has(key) || outbox.holdsThread(key);
   /**
    * Sends for the thread unless a send of it is still on its way, and then resolves false. A send
-   * with `text` that went out clears the draft only while it still holds that text. A send the
-   * outbox holds stays on its way until the outbox delivers or drops it, offline too.
+   * with `text` that went out clears the draft only while it still holds that text.
    */
-  const send = async (key: string, deliver: () => Promise<NeedsYouSent>, text?: string) => {
-    if (session.sending.has(key)) return false;
-    write({ ...session, sending: withSending(key, true) });
-    let sent: NeedsYouSent = false;
+  const send = async (key: string, deliver: () => Promise<boolean>, text?: string) => {
+    if (handingOver.has(key)) return false;
+    handingOver.add(key);
+    notify();
+    let sent = false;
     try {
+      if (!outboxLoaded) await loadOutbox();
+      if (outbox.holdsThread(key)) return false;
       sent = await deliver();
     } finally {
-      if (sent !== false && text !== undefined && session.drafts[key] === text) {
-        write({ ...session, drafts: withDraft(session.drafts, key, "") });
-      }
-      const settle = () => write({ ...session, sending: withSending(key, false) });
-      if (typeof sent === "object") whenReleased(sent.queued, settle);
-      else settle();
+      if (sent && text !== undefined && session.drafts[key] === text) set(key, "");
+      handingOver.delete(key);
+      notify();
     }
     return true;
   };
   return {
     getSnapshot: () => session,
+    /** Also hears the outbox and starts its read, so `sending` can be read under it. */
     subscribe: (listener: () => void) => {
       listeners.add(listener);
-      return () => void listeners.delete(listener);
+      const stop = outbox.subscribe(listener);
+      void loadOutbox();
+      return () => {
+        listeners.delete(listener);
+        stop();
+      };
     },
-    set: (key: string, text: string) =>
-      write({ ...session, drafts: withDraft(session.drafts, key, text) }),
+    set,
+    /** Whether a reply or answer of the thread is still on its way. */
+    sending,
     send,
     /**
      * A page's `t3.send` from the card, one at a time with the card's own sends. The refusal
      * reaches the page, which may try again.
      */
-    sendFromPage: async (key: string, deliver: () => Promise<NeedsYouSent>) => {
+    sendFromPage: async (key: string, deliver: () => Promise<boolean>) => {
       if (!(await send(key, deliver))) throw new HtmlRenderHostRefusal(NEEDS_YOU_SEND_BUSY);
     },
   };
@@ -276,6 +287,19 @@ export function needsYouAnswers(
     [question.id]:
       "option" in reply ? { selectedOptionValues: [reply.option] } : { customAnswer: reply.text },
   });
+}
+
+/**
+ * Whether a card's answer went out. An interrupted one may not have reached the environment, so
+ * it keeps its draft like any failure, but only a failure that is not an interrupt is reported.
+ */
+export function needsYouAnswerSent(
+  result: AtomCommandResult<unknown, unknown>,
+  report: (error: unknown) => void,
+): boolean {
+  if (result._tag === "Success") return true;
+  if (!isAtomCommandInterrupted(result)) report(squashAtomCommandFailure(result));
+  return false;
 }
 
 /**

@@ -51,3 +51,15 @@ export function triageDeckThreads(input: {
     honorsSnooze: (thread) => snoozeEnvironmentIds.has(thread.environmentId),
   });
 }
+
+/** A card's page: the version picked (undefined follows the newest) and each version's height. */
+export interface TriagePageView {
+  readonly renderId: string | null;
+  readonly selected: number | undefined;
+  readonly heights: ReadonlyMap<string, number>;
+}
+
+/** The view for the card's page now. Another page starts at its newest version, unmeasured. */
+export function triagePageView(view: TriagePageView, renderId: string | null): TriagePageView {
+  return view.renderId === renderId ? view : { renderId, selected: undefined, heights: new Map() };
+}

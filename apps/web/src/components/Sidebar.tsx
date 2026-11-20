@@ -1125,6 +1125,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     scopeKeys: chosenProjectScopeKeys,
     groups: chosenProjectGroups,
     projectKeys: chosenScopeProjectKeys,
+    loading: chosenScopeLoading,
   } = resolveSidebarProjectScope({
     groups: projectGroups,
     keys: persistedProjectScopeKeys,
@@ -1165,6 +1166,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeKey: routeRowThreadKey,
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
+    scopeLoading: chosenScopeLoading,
     delegatedUnderParent,
     findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
   });

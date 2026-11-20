@@ -213,6 +213,8 @@ export interface CommandOutboxControllerOptions<C extends CommandOutboxCommand> 
 
 export interface CommandOutboxController<C extends CommandOutboxCommand> {
   readonly entries: () => ReadonlyArray<CommandOutboxEntry<C>>;
+  /** Settles once `entries` holds what the store had when the controller started. */
+  readonly loaded: () => Promise<void>;
   readonly subscribe: (listener: () => void) => () => void;
   /**
    * Stores the command before any network attempt. With
@@ -400,12 +402,12 @@ export function createCommandOutboxController<C extends CommandOutboxCommand>(
     return result;
   };
 
-  void reload()
-    .then(() => flush())
-    .catch(onError);
+  const loaded = reload().then(() => undefined);
+  void loaded.then(() => flush()).catch(onError);
 
   return {
     entries: () => snapshot,
+    loaded: () => loaded,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

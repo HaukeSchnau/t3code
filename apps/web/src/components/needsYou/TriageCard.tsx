@@ -1,15 +1,11 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   needsYouAnswers,
+  needsYouAnswerSent,
   needsYouCard,
   needsYouPageFrame,
   TRIAGE_SNOOZE_MS,
-  type NeedsYouSent,
 } from "@t3tools/client-runtime/state/needs-you-triage";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadNeedLabel } from "@t3tools/client-runtime/state/thread-inbox";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
@@ -53,13 +49,13 @@ export function TriageCard(props: {
   readonly thread: EnvironmentThreadShell;
   readonly threadRef: ScopedThreadRef;
   readonly draft: string;
-  /** A reply or answer of this thread is still on its way, also one sent before triage closed. */
+  /** The thread's reply or answer is on its way, also one from before triage or the app closed. */
   readonly sending: boolean;
   readonly onDraftChange: (text: string) => void;
   /** Sends unless one is on its way; a send that went out with `text` clears that draft. */
-  readonly send: (deliver: () => Promise<NeedsYouSent>, text?: string) => Promise<boolean>;
+  readonly send: (deliver: () => Promise<boolean>, text?: string) => Promise<boolean>;
   /** The same for the page's sends, refused while one is on its way. */
-  readonly sendFromPage: (deliver: () => Promise<NeedsYouSent>) => Promise<void>;
+  readonly sendFromPage: (deliver: () => Promise<boolean>) => Promise<void>;
   readonly onStep: (delta: 1 | -1) => void;
 }) {
   const { thread, threadRef, sending } = props;
@@ -134,7 +130,7 @@ export function TriageCard(props: {
       prepareWorkspace: null,
       inheritThreadSettings: true,
     });
-    return { queued: messageId };
+    return true;
   };
 
   const answer = async (reply: Parameters<typeof needsYouAnswers>[1]) => {
@@ -144,11 +140,7 @@ export function TriageCard(props: {
       environmentId: threadRef.environmentId,
       input: { threadId: threadRef.threadId, requestId: question.requestId, answers },
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      fail("Could not send the answer", squashAtomCommandFailure(result));
-      return false;
-    }
-    return true;
+    return needsYouAnswerSent(result, (error) => fail("Could not send the answer", error));
   };
 
   const submitReply = () => {
@@ -223,6 +215,8 @@ export function TriageCard(props: {
           {need.kind === "page" ? (
             pageFrame !== null ? (
               <HtmlRenderFrame
+                // The page's render id: the thread's next page starts at its newest version.
+                key={pageFrame.render.attachmentId}
                 environmentId={threadRef.environmentId}
                 htmlRender={pageFrame.render}
                 versions={pageFrame.versions}

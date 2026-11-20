@@ -120,10 +120,10 @@ function resolveSidebarProjectScopeKeys(input: {
 }
 
 /**
- * The sidebar's project filter: the chosen groups and the `environmentId:projectId` keys of
- * their projects, or null keys for every project. A scope whose project is gone reads as all
- * projects once every snapshot has loaded; an archived project's scope does too, matching the
- * menu. The stored keys are left alone, so the scope returns with its project.
+ * The sidebar's project filter: the chosen groups and their projects' `environmentId:projectId`
+ * keys, or null keys for every project. A chosen project that has not loaded yet adds no keys and
+ * sets `loading`. One that is gone once every snapshot loaded, or archived (as in the menu), scopes
+ * to all; the stored keys stay, so the scope returns with its project.
  */
 export function resolveSidebarProjectScope(input: {
   readonly groups: ReadonlyArray<SidebarProjectSnapshot>;
@@ -141,7 +141,7 @@ export function resolveSidebarProjectScope(input: {
     scopeKeys.includes(project.projectKey),
   );
   const projectKeys =
-    groups.length === 0
+    scopeKeys.length === 0
       ? null
       : new Set(
           groups.flatMap((project) =>
@@ -150,7 +150,7 @@ export function resolveSidebarProjectScope(input: {
             ),
           ),
         );
-  return { scopeKeys, groups, projectKeys };
+  return { scopeKeys, groups, projectKeys, loading: groups.length < scopeKeys.length };
 }
 
 export function buildPhysicalToLogicalProjectKeyMap(input: {

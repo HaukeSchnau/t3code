@@ -103,7 +103,8 @@ prose asks waited over two hours or never got a reply.
 
 - Triage goes through the threads that need you one card at a time: the threads the Needs you
   section lists, in its order. It follows the section's filters and snooze rule: on web the
-  sidebar's project filter (`resolveSidebarProjectScope`, shared with `Sidebar.tsx`) and a snooze
+  sidebar's project filter (`resolveSidebarProjectScope`, shared with `Sidebar.tsx`; a chosen
+  project that has not loaded yet scopes to no thread, not to all) and a snooze
   only once the environment's config has loaded; on mobile the list's environment and project
   filters, read from the list's own layout (`buildThreadListV2Items`) under the scope the lists
   resolve (`resolveHomeProjectScope`, which reads a legacy per-environment scratch key as "No
@@ -122,11 +123,15 @@ prose asks waited over two hours or never got a reply.
   needing the user (answered elsewhere, dismissed, snoozed), the first card after it that is still
   there comes next, then the first card that was not before it, else the last. The reply typed on a
   card stays with its thread for the session; a send that lands clears it only while it still
-  holds the sent text, also after triage closed. A card's send stays pending per thread for the
-  session, so Send and the question's options stay disabled until it settles, also across closing
-  and reopening triage. Replies and the page's sends go through the client's command outbox (web's
-  durable outbox, mobile's thread outbox), so one sent offline or cut off on the way arrives once,
-  and stays pending until the outbox delivers or drops it. A reply takes the thread's model and
+  holds the sent text, also after triage closed; an answer cut off by an interrupt may not have
+  arrived, so it keeps its draft, without an error. Replies and the page's sends go through the
+  client's command outbox (web's durable outbox, mobile's thread outbox), so one sent offline or
+  cut off on the way arrives once. A thread's send stays pending while the outbox has not yet read
+  what it saved (`loaded`), while the send is handed over and then while the outbox holds a message
+  for the thread (`holdsThread`), so Send and the question's
+  options stay disabled until it settles, also across closing and reopening triage and after a
+  restart that restored the message. A card whose thread shows another page starts that page at
+  its newest version, without the last page's load failure. A reply takes the thread's model and
   modes as they are when it arrives, so one that waited offline never undoes a change made on
   another client meanwhile. A page's `t3.send` on a card shares the per-thread rule, also once the
   page is expanded full screen: while a send is pending it rejects with a message the page can
@@ -469,7 +474,9 @@ Upstream-owned hooks:
   and its defaults in `packages/shared/src/keybindings.ts` (through `clientSpecificKeybindings`); the
   handler in `AppSidebarLayout.tsx` (app shell commands); its label in
   `settings/KeybindingsSettings.logic.ts`; `resolveSidebarProjectScope` in `sidebarProjectGrouping.ts`
-  (the sidebar's project filter, moved out of `Sidebar.tsx` so triage shares it);
+  (the sidebar's project filter, moved out of `Sidebar.tsx` so triage shares it; a chosen project
+  that has not loaded yet adds no thread and sets `loading`, so a route reveal in
+  `sidebar/routeReveal.ts` does not widen, and so clear, a scope still loading);
   `isImeCompositionKey` in `composer-logic.ts` (the composer's IME check, shared); an
   `escapeCloses` guard on `AppRouteModal.tsx`; `/triage` in
   `isAppModalPage` (`sidebar/mainAppLocation.ts`); the palette entry in `CommandPalette.tsx`;
@@ -533,13 +540,16 @@ dismiss paths.
 - client-runtime `needsYouTriage.test.ts` covers the deck's members and order under the list's
   filter and snooze rule, staying on a card while others come and go, moving on when the card's
   thread leaves (to the next surviving card before a new one, and when the next card left with it),
-  a send clearing only the sent text and one send per thread at a time (a reply the outbox holds
-  until the outbox lets it go, and a page's send refused meanwhile), stepping, which cards answer in place (not editor prompts),
+  a send clearing only the sent text and one send per thread at a time (while the outbox holds a
+  message for the thread, also one restored after a restart and read only once triage opened, and
+  a page's send refused meanwhile),
+  an interrupted answer keeping its draft without a report, stepping, which cards answer in place (not editor prompts),
   answers built like the thread's question card, and a page mounted from the page index under its
   render id. Web `triageKeys.browser.test.ts` covers the key guards (fields, editors, menus, the
   page's full screen view, modifiers, IME input including keyCode 229, held keys, Esc from the reply
   box, Shift+Esc and a held Esc, Enter chords); `keybindings.test.ts` covers the triage chord per
-  client. Mobile `triageDeck.test.ts` covers the deck under a legacy "No project" filter,
+  client. Mobile `triageDeck.test.ts` covers the deck under a legacy "No project" filter and a
+  card's next page starting at its newest version,
   `threadPages.test.ts` a page expanded from a card refused behind the card's queued reply, and
   `android-workspace-navigation.test.ts` Back from a thread opened in triage. Web
   `durableCommandOutboxDelivery.test.ts` covers a triage reply delivered with the thread's settings.
