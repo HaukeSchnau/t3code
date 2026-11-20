@@ -118,9 +118,10 @@ thread you opened in triage returns to triage.
 When a thread stops needing you while you triage, for example because you answered it on another
 device, the next card takes its place. A reply you started stays with its thread until you close
 or reload the app, so it is still there if that thread needs you again. A reply you send while
-offline waits on your device and goes out when the connection is back. Until a reply or answer you
-sent arrives, its card does not send another, even after you close and reopen triage, and a page
-on the card that tries to send is told to try again.
+offline waits on your device and goes out when the connection is back. Until a reply you sent
+arrives, its card does not send another, even after you close and reopen triage or the app. An
+answer to a question holds its card while it is on its way, until you close the app. A page on the
+card that tries to send meanwhile is told to try again.
 
 ## Pin and reorder threads
 

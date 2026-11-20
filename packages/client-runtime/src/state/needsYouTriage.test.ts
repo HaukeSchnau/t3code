@@ -1,4 +1,6 @@
 import { EnvironmentId, RunId, RuntimeRequestId, ThreadAskId, ThreadId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +8,7 @@ import {
   makeNeedsYouDraftStore,
   NEEDS_YOU_SEND_BUSY,
   needsYouAnswers,
+  needsYouAnswerSent,
   needsYouCard,
   needsYouDeckIndex,
   needsYouDeckThreads,
@@ -13,6 +16,7 @@ import {
   reconcileNeedsYouDeck,
   stepNeedsYouDeck,
 } from "./needsYouTriage.ts";
+import type { AtomCommandResult } from "./runtime.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const NOW = "2026-06-01T12:00:00.000Z";
@@ -108,15 +112,22 @@ describe("reconcileNeedsYouDeck", () => {
   });
 
   it("keeps a reply until its send lands, what was typed after it, and one send at a time", async () => {
-    const queued = new Set<string>();
+    const held = new Set<string>();
     const outboxListeners = new Set<() => void>();
-    const session = makeNeedsYouDraftStore({
-      holds: (messageId) => queued.has(messageId),
-      subscribe: (listener) => {
+    let read = Promise.resolve();
+    const outbox = {
+      loaded: () => read,
+      holdsThread: (key: string) => held.has(key),
+      subscribe: (listener: () => void) => {
         outboxListeners.add(listener);
         return () => void outboxListeners.delete(listener);
       },
-    });
+    };
+    const release = (key: string) => {
+      held.delete(key);
+      for (const listener of outboxListeners) listener();
+    };
+    const session = makeNeedsYouDraftStore(outbox);
     session.set("a", "Use the blue one");
     session.set("b", "Ship it");
     await session.send("a", () => Promise.resolve(true), "Use the blue one");
@@ -134,36 +145,61 @@ describe("reconcileNeedsYouDeck", () => {
     // Typed on while the send was pending: the send leaves the new text alone.
     session.set("b", "Ship it, then tag it");
     // Triage closed and opened again before the send landed: Send waits for it.
-    expect(session.getSnapshot().sending.has("b")).toBe(true);
+    expect(session.sending("b")).toBe(true);
     expect(await session.send("b", deliver, "Ship it, then tag it")).toBe(false);
     // A page on the card sends under the same rule and sees why it may not.
     await expect(session.sendFromPage("b", deliver)).rejects.toThrow(NEEDS_YOU_SEND_BUSY);
     expect(deliveries).toBe(1);
     land(true);
     await pending;
-    expect(session.getSnapshot()).toEqual({
-      drafts: { b: "Ship it, then tag it" },
-      sending: new Set(),
-    });
+    expect(session.getSnapshot()).toEqual({ drafts: { b: "Ship it, then tag it" } });
+    expect(session.sending("b")).toBe(false);
 
     // A reply the outbox holds, offline say, stays on its way until the outbox lets it go.
     await session.send(
       "b",
       async () => {
-        queued.add("message-1");
-        return { queued: "message-1" };
+        held.add("b");
+        return true;
       },
       "Ship it, then tag it",
     );
-    expect(session.getSnapshot()).toEqual({ drafts: {}, sending: new Set(["b"]) });
+    expect(session.getSnapshot()).toEqual({ drafts: {} });
+    expect(session.sending("b")).toBe(true);
     await expect(session.sendFromPage("b", deliver)).rejects.toThrow(NEEDS_YOU_SEND_BUSY);
-    queued.delete("message-1");
-    for (const listener of outboxListeners) listener();
-    expect(session.getSnapshot().sending).toEqual(new Set());
+    release("b");
+    expect(session.sending("b")).toBe(false);
     const fromPage = session.sendFromPage("b", deliver);
     expect(deliveries).toBe(2);
     land(true);
     await fromPage;
+
+    // After a restart the outbox reads what it saved only once triage is open, and finds a reply
+    // that no send of the new session started. Until then, any thread may hold one.
+    let finishRead = () => {};
+    read = new Promise((resolve) => {
+      finishRead = resolve;
+    });
+    const restarted = makeNeedsYouDraftStore(outbox);
+    let heard = 0;
+    const unsubscribe = restarted.subscribe(() => void (heard += 1));
+    expect(restarted.sending("a")).toBe(true);
+    const early = restarted.sendFromPage("b", async () => {
+      deliveries += 1;
+      return true;
+    });
+    held.add("b");
+    finishRead();
+    await expect(early).rejects.toThrow(NEEDS_YOU_SEND_BUSY);
+    expect(deliveries).toBe(2);
+    // It heard the page's send start, the read end and the send give up.
+    expect(heard).toBe(3);
+    expect(restarted.sending("a")).toBe(false);
+    expect(restarted.sending("b")).toBe(true);
+    release("b");
+    expect(heard).toBe(4);
+    expect(restarted.sending("b")).toBe(false);
+    unsubscribe();
   });
 
   it("steps between cards and stops at either end", () => {
@@ -294,6 +330,28 @@ describe("needsYouCard", () => {
     expect(needsYouAnswers(only, { option: "Red" })).toBeNull();
     expect(needsYouAnswers(only, { text: "  Navy  " })).toEqual({ q0: "Navy" });
     expect(needsYouAnswers(only, { text: "   " })).toBeNull();
+  });
+
+  it("keeps an answer's draft unless it went out, and reports failures but not interrupts", async () => {
+    const session = makeNeedsYouDraftStore({
+      loaded: () => Promise.resolve(),
+      holdsThread: () => false,
+      subscribe: () => () => undefined,
+    });
+    const reported: unknown[] = [];
+    const answer = (result: AtomCommandResult<unknown, unknown>) => async () =>
+      needsYouAnswerSent(result, (error) => reported.push(error));
+    session.set("a", "Navy");
+    // Cut off on the way, it may never have arrived.
+    await session.send("a", answer(AsyncResult.failure(Cause.interrupt())), "Navy");
+    expect(session.getSnapshot().drafts).toEqual({ a: "Navy" });
+    expect(reported).toEqual([]);
+    const declined = new Error("The question was already answered.");
+    await session.send("a", answer(AsyncResult.failure(Cause.fail(declined))), "Navy");
+    expect(session.getSnapshot().drafts).toEqual({ a: "Navy" });
+    expect(reported).toEqual([declined]);
+    await session.send("a", answer(AsyncResult.success(undefined)), "Navy");
+    expect(session.getSnapshot().drafts).toEqual({});
   });
 
   it("mounts a page the timeline does not hold from the page index, under its render id", () => {

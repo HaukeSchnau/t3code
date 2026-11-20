@@ -1,6 +1,6 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   EMPTY_NEEDS_YOU_DECK,
   makeNeedsYouDraftStore,
@@ -38,10 +38,11 @@ import { TriageCard } from "./TriageCard";
 import { triageEscapeCloses, triageKeyTarget } from "./triageKeys";
 
 const triageDrafts = makeNeedsYouDraftStore({
-  holds: (messageId) =>
+  loaded: () => durableCommandOutbox().loaded(),
+  holdsThread: (key) =>
     durableCommandOutbox()
       .entries()
-      .some((entry) => entry.command.messageId === messageId),
+      .some((entry) => scopedThreadKey(entry.command) === key),
   subscribe: (listener) => durableCommandOutbox().subscribe(listener),
 });
 
@@ -84,6 +85,10 @@ export function TriagePage() {
   if (deck !== stored) setStored(deck);
   const index = needsYouDeckIndex(deck);
   const thread = index === -1 ? null : (cards[index] ?? null);
+  const sending = useSyncExternalStore(
+    triageDrafts.subscribe,
+    () => thread !== null && triageDrafts.sending(needsYouDeckKey(thread)),
+  );
 
   const step = (delta: 1 | -1) => setStored((current) => stepNeedsYouDeck(current, delta));
 
@@ -142,7 +147,7 @@ export function TriagePage() {
             thread={thread}
             threadRef={scopeThreadRef(thread.environmentId, thread.id)}
             draft={session.drafts[needsYouDeckKey(thread)] ?? ""}
-            sending={session.sending.has(needsYouDeckKey(thread))}
+            sending={sending}
             onDraftChange={(text) => triageDrafts.set(needsYouDeckKey(thread), text)}
             send={(deliver, text) => triageDrafts.send(needsYouDeckKey(thread), deliver, text)}
             sendFromPage={(deliver) => triageDrafts.sendFromPage(needsYouDeckKey(thread), deliver)}

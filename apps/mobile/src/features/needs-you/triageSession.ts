@@ -17,10 +17,9 @@ import { enqueueThreadOutboxMessage, threadOutboxManager } from "../../state/thr
 const queuedMessages = threadOutboxManager.queuedMessagesByThreadKeyAtom;
 
 export const triageDrafts = makeNeedsYouDraftStore({
-  holds: (messageId) =>
-    Object.values(appAtomRegistry.get(queuedMessages)).some((messages) =>
-      messages.some((message) => message.messageId === messageId),
-    ),
+  loaded: () => threadOutboxManager.load(),
+  // The outbox groups its messages by the thread key, which is the deck key.
+  holdsThread: (key) => (appAtomRegistry.get(queuedMessages)[key]?.length ?? 0) > 0,
   subscribe: (listener) => appAtomRegistry.subscribe(queuedMessages, listener),
 });
 
@@ -50,7 +49,7 @@ export async function queueTriageMessage(
     dispatchMode: "queue",
     createdAt: new Date().toISOString(),
   });
-  return { queued: messageId };
+  return true;
 }
 
 /** The sends of a page on a triage card, also expanded full screen, one at a time with the card's. */

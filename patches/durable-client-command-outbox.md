@@ -95,7 +95,8 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   the outbox.
 - Triage replies and the sends of a page on a triage card (`components/needsYou/TriageCard.tsx`,
   patches/needs-you.md) always queue through `enqueueComposerSend`, and the card stays pending
-  while the outbox holds the message. The card shows no thread settings, so these entries set
+  while the outbox holds a message for the thread, also one restored after a reload, and until the
+  controller's first read (`loaded`) is done. The card shows no thread settings, so these entries set
   `inheritThreadSettings`: delivery skips the mode sync and sends no model, and the server applies
   the thread's model and modes as they are when the message arrives.
 - `apps/web/src/routes/_chat.tsx`: mounts `DurableOutboxDelivery`, which starts delivery for the

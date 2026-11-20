@@ -1562,6 +1562,7 @@ describe("resolveSidebarRouteReveal", () => {
         routeKey: hiddenKey,
         isSearching: false,
         scopedProjectKeys,
+        scopeLoading: false,
         delegatedUnderParent: new Set(),
         findThread,
       }),
@@ -1576,6 +1577,7 @@ describe("resolveSidebarRouteReveal", () => {
         routeKey: hiddenKey,
         isSearching: false,
         scopedProjectKeys,
+        scopeLoading: false,
         delegatedUnderParent: new Set(),
         findThread,
       }),
@@ -1592,6 +1594,7 @@ describe("resolveSidebarRouteReveal", () => {
         routeKey,
         isSearching: false,
         scopedProjectKeys,
+        scopeLoading: false,
         delegatedUnderParent: new Set(),
         findThread,
       });
@@ -1599,13 +1602,26 @@ describe("resolveSidebarRouteReveal", () => {
     expect(resolve(hiddenKey)).toEqual({ pendingKey: hiddenKey, widensScope: true });
   });
 
-  it("holds a pending reveal without widening while searching", () => {
+  it("holds a pending reveal without widening while searching or while the scope loads", () => {
     expect(
       resolveSidebarRouteReveal({
         reveal: { observedKey: hiddenKey, pendingKey: hiddenKey },
         routeKey: hiddenKey,
         isSearching: true,
         scopedProjectKeys,
+        scopeLoading: false,
+        delegatedUnderParent: new Set(),
+        findThread,
+      }),
+    ).toEqual({ pendingKey: hiddenKey, widensScope: false });
+    // One chosen project has loaded and another, which may hold the thread, has not yet.
+    expect(
+      resolveSidebarRouteReveal({
+        reveal: { observedKey: hiddenKey, pendingKey: hiddenKey },
+        routeKey: hiddenKey,
+        isSearching: false,
+        scopedProjectKeys,
+        scopeLoading: true,
         delegatedUnderParent: new Set(),
         findThread,
       }),

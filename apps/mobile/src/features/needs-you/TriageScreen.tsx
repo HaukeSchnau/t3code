@@ -3,7 +3,6 @@ import { StackActions, useNavigation } from "@react-navigation/native";
 import {
   EMPTY_NEEDS_YOU_DECK,
   needsYouAnswers,
-  type NeedsYouSent,
   needsYouCard,
   needsYouDeckIndex,
   needsYouDeckKey,
@@ -53,7 +52,7 @@ import { useThreadListActions } from "../home/useThreadListActions";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { ThreadHtmlRender } from "../threads/HtmlRenderWebView";
 import { useThreadListNow } from "../threads/use-thread-list-now";
-import { triageDeckThreads } from "./triageDeck";
+import { triageDeckThreads, triagePageView, type TriagePageView } from "./triageDeck";
 import { queueTriageMessage, triageDrafts } from "./triageSession";
 
 const SWIPE_DISTANCE = 80;
@@ -92,6 +91,10 @@ export function TriageScreen() {
   if (deck !== stored) setStored(deck);
   const index = needsYouDeckIndex(deck);
   const thread = index === -1 ? null : (cards[index] ?? null);
+  const sending = useSyncExternalStore(
+    triageDrafts.subscribe,
+    () => thread !== null && triageDrafts.sending(needsYouDeckKey(thread)),
+  );
 
   const step = (delta: 1 | -1) => setStored((current) => stepNeedsYouDeck(current, delta));
 
@@ -113,7 +116,7 @@ export function TriageScreen() {
           thread={thread}
           position={{ index, total: cards.length }}
           draft={session.drafts[needsYouDeckKey(thread)] ?? ""}
-          sending={session.sending.has(needsYouDeckKey(thread))}
+          sending={sending}
           onDraftChange={(text) => triageDrafts.set(needsYouDeckKey(thread), text)}
           send={(deliver, text) => triageDrafts.send(needsYouDeckKey(thread), deliver, text)}
           onStep={step}
@@ -127,11 +130,11 @@ function TriageCard(props: {
   readonly thread: EnvironmentThreadShell;
   readonly position: { readonly index: number; readonly total: number };
   readonly draft: string;
-  /** A reply or answer of this thread is still on its way, also one sent before triage closed. */
+  /** The thread's reply or answer is on its way, also one from before triage or the app closed. */
   readonly sending: boolean;
   readonly onDraftChange: (text: string) => void;
   /** Sends unless one is on its way; a send that went out with `text` clears that draft. */
-  readonly send: (deliver: () => Promise<NeedsYouSent>, text?: string) => Promise<boolean>;
+  readonly send: (deliver: () => Promise<boolean>, text?: string) => Promise<boolean>;
   readonly onStep: (delta: 1 | -1) => void;
 }) {
   const { thread, sending } = props;
@@ -154,10 +157,11 @@ function TriageCard(props: {
     threadEnvironment.respondToUserInput,
     "thread user input response",
   );
-  const [pageView, setPageView] = useState<{
-    readonly selected: number | undefined;
-    readonly heights: ReadonlyMap<string, number>;
-  }>({ selected: undefined, heights: new Map() });
+  const [storedPageView, setPageView] = useState<TriagePageView>({
+    renderId: null,
+    selected: undefined,
+    heights: new Map(),
+  });
   const [frameWidth, setFrameWidth] = useState(0);
 
   const card = needsYouCard({
@@ -166,6 +170,8 @@ function TriageCard(props: {
     requests: detail === null ? null : derivePendingThreadRequests(detail),
   });
   const { need, latest, page, question, waitingOn, replyMode, answersHere } = card;
+  const pageView = triagePageView(storedPageView, page?.renderId ?? null);
+  if (pageView !== storedPageView) setPageView(pageView);
   // A page further back than the loaded timeline comes from the thread's page index.
   const indexedPages = useEnvironmentQuery(
     page !== null && page.versions === null
@@ -285,6 +291,8 @@ function TriageCard(props: {
             {page !== null ? (
               pageFrame !== null && frameWidth > 0 ? (
                 <ThreadHtmlRender
+                  // The page's render id: the thread's next page starts without this one's load state.
+                  key={page.renderId}
                   environmentId={thread.environmentId}
                   threadId={thread.id}
                   render={pageFrame.render}

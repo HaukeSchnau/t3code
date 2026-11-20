@@ -55,6 +55,8 @@ export function resolveSidebarRouteReveal<T extends RevealableThread>(input: {
   readonly routeKey: string | null;
   readonly isSearching: boolean;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
+  /** Whether a chosen project has not loaded yet, so the thread may be in the scope. */
+  readonly scopeLoading: boolean;
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly findThread: (key: string) => T | undefined;
 }): { readonly pendingKey: string | null; readonly widensScope: boolean } {
@@ -66,6 +68,7 @@ export function resolveSidebarRouteReveal<T extends RevealableThread>(input: {
   const widensScope =
     thread !== undefined &&
     scopedProjectKeys !== null &&
+    !input.scopeLoading &&
     filterSidebarV2VisibleThreads([thread], scopedProjectKeys, delegatedUnderParent).length === 0 &&
     filterSidebarV2VisibleThreads([thread], null, delegatedUnderParent).length === 1;
   return { pendingKey, widensScope };

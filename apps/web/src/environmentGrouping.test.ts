@@ -8,6 +8,7 @@ import {
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  resolveSidebarProjectScope,
   resolveSidebarProjectScopeKey,
   getSidebarProjectSettingsKey,
 } from "./sidebarProjectGrouping";
@@ -123,6 +124,28 @@ describe("environment grouping", () => {
     });
     const key = deriveLogicalProjectKeyFromSettings(ordinary, defaultGroupingSettings);
     expect(resolveSidebarProjectScopeKey({ groups, key, canClearMissingScope: true })).toBe(key);
+  });
+
+  it("scopes to no project while the chosen one loads, and to all once it is gone or archived", () => {
+    const project = makeProject();
+    const groups = buildSidebarProjectSnapshots({
+      projects: [project],
+      settings: defaultGroupingSettings,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: () => null,
+    });
+    const scope = (keys: string[], canClearMissingScope: boolean, scopeGroups = groups) =>
+      resolveSidebarProjectScope({ groups: scopeGroups, keys, canClearMissingScope });
+    const loading = "github.com/example/not-loaded-yet";
+    expect(scope([loading], false)).toMatchObject({ projectKeys: new Set(), loading: true });
+    expect(scope([loading], true)).toMatchObject({ projectKeys: null, loading: false });
+    const chosen = groups[0]!.projectKey;
+    expect(scope([chosen, loading], false)).toMatchObject({
+      projectKeys: new Set([`${project.environmentId}:${project.id}`]),
+      loading: true,
+    });
+    expect(scope([chosen], false).loading).toBe(false);
+    expect(scope([chosen], false, [{ ...groups[0]!, archived: true }]).projectKeys).toBeNull();
   });
 
   it("dedupes stale project rows with the same environment and workspace path", () => {

@@ -4,7 +4,7 @@ import { EnvironmentId, ProjectId, RunId, ThreadAskId, ThreadId } from "@t3tools
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadShellFixture } from "../../test-fixtures";
-import { triageDeckThreads } from "./triageDeck";
+import { triageDeckThreads, triagePageView } from "./triageDeck";
 
 const NOW = "2026-06-01T12:00:00.000Z";
 
@@ -69,5 +69,17 @@ describe("triageDeckThreads", () => {
       "thread-scratch-local",
       "thread-scratch-remote",
     ]);
+  });
+});
+
+describe("triagePageView", () => {
+  it("keeps the page's picked version and heights, and starts another page at its newest", () => {
+    const onA = { renderId: "page-a", selected: 0, heights: new Map([["page-a-v1", 320]]) };
+    expect(triagePageView(onA, "page-a")).toBe(onA);
+    expect(triagePageView(onA, "page-b")).toEqual({
+      renderId: "page-b",
+      selected: undefined,
+      heights: new Map(),
+    });
   });
 });
