@@ -124,12 +124,6 @@ function requireDesiredState(state: SupervisorConnectionState): void {
   }
 }
 
-function requireAvailableNetwork(state: SupervisorConnectionState): void {
-  if (state.network === "offline") {
-    invalidProjectionSource(`${state.phase} connection claims an offline network`);
-  }
-}
-
 function requirePositiveAttempt(state: SupervisorConnectionState): void {
   if (!Number.isInteger(state.attempt) || state.attempt <= 0) {
     invalidProjectionSource(`${state.phase} connection has a non-positive attempt`);
@@ -179,7 +173,6 @@ export function projectEnvironmentConnectionProgress(
       };
     case "connecting":
       requireDesiredState(state);
-      requireAvailableNetwork(state);
       requirePositiveAttempt(state);
       if (state.stage === null || state.retryAt !== null) {
         return invalidProjectionSource(
@@ -195,7 +188,6 @@ export function projectEnvironmentConnectionProgress(
       };
     case "backoff":
       requireDesiredState(state);
-      requireAvailableNetwork(state);
       requirePositiveAttempt(state);
       if (state.stage !== null || state.retryAt === null) {
         return invalidProjectionSource("backoff connection lacks an exclusive retry time");
@@ -210,7 +202,6 @@ export function projectEnvironmentConnectionProgress(
       };
     case "connected":
       requireDesiredState(state);
-      requireAvailableNetwork(state);
       requirePositiveAttempt(state);
       if (state.stage !== null || state.lastFailure !== null || state.retryAt !== null) {
         return invalidProjectionSource("connected connection carries pending attempt state");
@@ -224,7 +215,6 @@ export function projectEnvironmentConnectionProgress(
       };
     case "blocked":
       requireDesiredState(state);
-      requireAvailableNetwork(state);
       requirePositiveAttempt(state);
       if (state.stage !== null || state.retryAt !== null) {
         return invalidProjectionSource("blocked connection carries an active stage or retry time");

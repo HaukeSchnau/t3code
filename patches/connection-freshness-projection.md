@@ -23,7 +23,9 @@ reachable server.
   never publish. The projection throws on those instead of emitting an invalid value, such as a
   blocked connection without a failure or a live shell without a snapshot. A backoff after a lost
   live session carries no failure, because upstream does not count a dropped session as a failed
-  connection.
+  connection. Connecting, backoff and blocked states copy the platform's network hint
+  unnormalized, so a session replaced after the device reports offline publishes a connecting
+  state with `offline`. Active phases ignore the hint.
 - `connection/supervisor.ts` (`normalizeDesiredIntent`) treats a browser `offline` report as
   `unknown` while the connection is desired: at startup, during automatic recovery, after a live
   session is replaced, and on an explicit retry. Connection attempts and their backoff decide
