@@ -55,6 +55,7 @@ import {
   THREAD_HISTORY_PAGE_POLICY,
   THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT,
 } from "./threadHistoryPaging.ts";
+import { readRunEnd } from "./threadReturn.ts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 
 import { layerReaderDatabase, traceSqlRouting } from "../persistence/testkit/SqliteRouting.ts";
@@ -941,6 +942,159 @@ it.effect("shells flag a latest run triggered by a provider background wake", ()
       yield* assertShellIndexCoversShells();
     }
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "shells tell whether the user started the latest run, when the thread last returned and woke",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("started-by-user");
+      const initial = yield* store.getThreadProjection(threadId);
+      const at = initial.updatedAt;
+      const runOf = (id: string) => RunId.make(`run:started-by-user:${id}`);
+      // Seventeen restarts in a row: the run that started them decides, here a wake's or a user's.
+      const restarts = (origin: string, expected: boolean) =>
+        Array.from(
+          { length: 17 },
+          (_, index) =>
+            [
+              `${origin}-restart-${index + 1}`,
+              { createdBy: "agent", creationSource: "server" },
+              {
+                restartContinuationOfRunId: runOf(
+                  index === 0 ? origin : `${origin}-restart-${index}`,
+                ),
+              },
+              expected,
+            ] as const,
+        );
+      let ordinal = 1;
+      for (const [id, message, continues, expected] of [
+        ["user", { createdBy: "user", creationSource: "web" }, undefined, true],
+        ["agent", { createdBy: "agent", creationSource: "mcp" }, undefined, false],
+        [
+          "scheduled",
+          { createdBy: "user", creationSource: "server", scheduledTaskId: "task:nightly" },
+          undefined,
+          false,
+        ],
+        [
+          "wake",
+          {
+            createdBy: "agent",
+            creationSource: "server",
+            notification: { source: { kind: "monitor" }, outcome: "updated", summary: "Line" },
+          },
+          undefined,
+          false,
+        ],
+        // A restart continues the run it interrupted, so it is the user's when that run was.
+        [
+          "restart-of-user",
+          { createdBy: "agent", creationSource: "server" },
+          { restartContinuationOfRunId: runOf("user") },
+          true,
+        ],
+        [
+          "restart-of-wake",
+          { createdBy: "agent", creationSource: "server" },
+          { restartContinuationOfRunId: runOf("wake") },
+          false,
+        ],
+        // However many continuations follow one another, the run they continue decides.
+        [
+          "restart-of-restart",
+          { createdBy: "agent", creationSource: "server" },
+          { restartContinuationOfRunId: runOf("restart-of-wake") },
+          false,
+        ],
+        [
+          "limit-of-restart",
+          { createdBy: "agent", creationSource: "server" },
+          { usageLimitContinuationOfRunId: runOf("restart-of-user") },
+          true,
+        ],
+        ["unknown-message", null, undefined, true],
+        ...restarts("wake", false),
+        ...restarts("user", true),
+      ] as const) {
+        const messageId = MessageId.make(`message:started-by-user:${id}`);
+        if (message !== null) {
+          yield* store.apply({
+            id: EventId.make(`event:started-by-user:${id}:message`),
+            type: "message.updated",
+            threadId,
+            occurredAt: at,
+            payload: {
+              id: messageId,
+              threadId,
+              runId: runOf(id),
+              nodeId: null,
+              role: "user",
+              text: id,
+              attachments: [],
+              streaming: false,
+              createdAt: at,
+              updatedAt: at,
+              ...message,
+            } as never,
+          });
+        }
+        ordinal += 1;
+        yield* store.apply({
+          id: EventId.make(`event:started-by-user:${id}:run`),
+          type: "run.created",
+          threadId,
+          occurredAt: at,
+          payload: {
+            ...initial.runs[0]!,
+            id: runOf(id),
+            ordinal,
+            userMessageId: messageId,
+            status: "completed",
+            completedAt: at,
+            ...continues,
+          },
+        });
+        const shells = [
+          yield* store.getThreadShell(threadId),
+          ProjectionStore.threadShellFromProjection(yield* store.getThreadProjection(threadId)),
+        ];
+        const ended = yield* readRunEnd(store.getThreadRecords, threadId, runOf(id));
+        assert.deepEqual(
+          [...shells.map((shell) => shell?.latestRunStartedByUser), ended?.startedByUser],
+          [expected, expected, expected],
+          id,
+        );
+      }
+      yield* store.apply({
+        id: EventId.make("event:started-by-user:returned"),
+        type: "thread.metadata-updated",
+        threadId,
+        occurredAt: at,
+        payload: {
+          ...initial.thread,
+          returnedAt: "2026-11-19T10:00:00.000Z",
+          lastSnoozeWakeAt: DateTime.makeUnsafe("2026-11-19T09:00:00.000Z"),
+        },
+      });
+      const shells = [
+        yield* store.getThreadShell(threadId),
+        ProjectionStore.threadShellFromProjection(yield* store.getThreadProjection(threadId)),
+      ];
+      assert.deepEqual(
+        shells.map((shell) => [
+          shell?.returnedAt,
+          shell?.lastSnoozeWakeAt && DateTime.formatIso(shell.lastSnoozeWakeAt),
+        ]),
+        [
+          ["2026-11-19T10:00:00.000Z", "2026-11-19T09:00:00.000Z"],
+          ["2026-11-19T10:00:00.000Z", "2026-11-19T09:00:00.000Z"],
+        ],
+      );
+      yield* assertShellIndexCoversShells();
+    }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("SQL queue readiness skips held runs without bypassing active work", () =>

@@ -42,8 +42,11 @@ prose asks waited over two hours or never got a reply.
   Failed runs are not needs.
 - The turn-end detector classifies the final assistant message of each completed run of a
   top-level thread with the text-generation model (`textGenerationModelSelection`), at most three
-  at once. It skips subagent and delegated threads, runs whose stop was requested, threads with a
-  pending request or card, runs without a final message, runs that set or updated a page's ask
+  at once. It skips subagent and delegated threads, runs whose stop was requested, runs that ended
+  while a request or card waited on the user (each one counts, also behind a later run's
+  approval; a later run's own request does not; a sign-in request never does; as in the shell, a
+  secret card counts only while its run is live; a link card the user answered after the run
+  ended, such as by linking, still counts), runs without a final message, runs that set or updated a page's ask
   that the agent did not withdraw (the page's ask covers the question even once answered or
   dismissed before the run ends; each page ask records the run that last set it, and keeps its
   first raise time), and runs the user already answered. Failures are logged and
@@ -148,6 +151,137 @@ prose asks waited over two hours or never got a reply.
   cancelled swipe springs back and stays on the card), and buttons for Send, Open thread, Snooze
   1 h and No reply needed, opened from Triage in the Needs you header and the command palette.
 
+### Notifications and the count
+
+- Notifications mean "your turn". Web, desktop and the iPhone notify when a thread starts needing
+  the user (an ask, a question, an approval, a guest's message, a subagent's or side chat's request
+  on its parent) and when a run fails, also while an ask is open. A run's completion
+  notifies only when the user started that run: a user-authored message started or steered it,
+  or it continues a run the user started (after restarts or usage limits, however many in a row).
+  A run that a wake, a watcher, another agent or a scheduled task started, and that ends without
+  an ask, is quiet.
+- Alerts come from committed events, never from what a thread shows at some later moment. The
+  needs-you service reads the orchestration event stream in order from a durable cursor and
+  records each alert once, as a subject keyed by what it is about: `run:<id>` when a run the user
+  started completes, `run:<id>@<epoch ms it ended>` when any run fails (a run whose workspace
+  preparation failed runs again under its id, and each end counts on its own, while repeated
+  updates of one end do not), `ask:<id>` when an agent asks, `request:<id>` for each pending
+  question, approval, secret card or link card (a subagent's approval and a side chat's request
+  on their listed parent), and `guest:<id>` for a guest's message. Every thread event carries
+  the thread's asks, so an ask also ends with an event that is not its own, such as settling. A
+  later run, such as a wake queued right behind the user's, a hold, an archive or a reconnect
+  cannot erase or repeat one. The first start puts the cursor at the current event and keeps its
+  time: what started before it is history, also when a later event repeats it, so a deploy alerts
+  nothing from before it. After that, a restart reads the events it missed. Before the cursor
+  passes a run's end, the service stamps the thread's `returnedAt` (`thread.return`, a no-op
+  when repeated). The cursor moves only once everything a batch of events calls for (subjects,
+  runs to read, return stamps) is recorded. A batch that fails, or a stream that breaks, is read
+  again from the cursor, backing off up to a minute, while the minute tick goes on.
+- Current state only decides whether a recorded subject still alerts: when it is recorded, when
+  held work ends, and again right before each delivery. Something older than ten minutes no
+  longer alerts. An archived or snoozed thread alerts about nothing, though a child thread's
+  request still wakes its parent, and a failure after the snooze began wakes it, also when a later
+  run such as a queued wake is the thread's latest. A need that ended no longer alerts: for a
+  guest, that message was sent or dismissed, whatever other messages still wait; a secret card
+  ends with its run, as in the shell. A
+  completion does not alert once its run has an ask: a turn-end ask in any state, or a page's ask
+  that run set unless the agent withdrew it (PR 2's rule). The completion records that it was
+  superseded, for good, so No reply needed never brings it back, on the phone or on a browser
+  catching up. It also does not alert once the user wrote in the thread or settled it, or while
+  the thread waits on something else. A failure stays its own alert. While background work or a
+  `t3_watch` watch holds a completion, it waits, also through an outage longer than ten minutes;
+  its ten minutes count from the last minute it was seen held, so a long hold still ends in one
+  alert, and one whose hold ended unseen, such as during an outage, alerts when it is first seen
+  free.
+- The ledger (migration 113) keeps the cursor, the subjects, one delivery row per device that
+  wants a subject, and the completed runs the turn-end detector has to read. Subject versions,
+  which browsers resume from, come from a counter on the cursor row, so pruning old subjects never
+  hands a version out again. Each start prunes subjects unchanged for 30 days, but keeps needs
+  still open and their reminders, so a long snooze still ends in a reminder and none reminds
+  twice. One worker sends deliveries one at a time and checks each right before
+  it goes out, once it holds the lock that badge and Live Activity requests share, so no delivery
+  acts on state read for another or read before a request ahead of it. An ask that replaces its run's completion takes its place (the same APNs
+  collapse id and web notification tag) and is quiet only on a device whose APNs accepted that
+  completion; a device still waiting for the completion gets only the ask, with a sound. When a
+  need ends (an ask answered or dismissed, a request resolved), its deliveries that have not gone
+  out are cancelled. When APNs does not answer, the delivery counts as failed and goes out again a
+  minute later, within the ten minutes: a missed "your turn" costs more than a second buzz, and
+  the collapse id folds the copies on the phone. Every APNs request has a fifteen-second deadline,
+  after which its HTTP/2 session is closed, so a stalled badge or Live Activity update never holds
+  up an alert.
+- The turn-end detector reads each completed run of a listed thread that the needs-you service
+  records, by its id, so a wake queued behind it does not hide it. A read counts as done only
+  after it succeeded and raised any ask. A failed read is tried again for seven and a half
+  minutes, and so is a failed lookup or write of whether the run was read, each on its own, so a
+  failed write does not read the run again. A start reads what was left unread in the last ten
+  minutes. When reading that list fails, it is read again on the same schedule, from the last ten minutes as they are then,
+  while new runs are read meanwhile.
+- An ask, a pending question, approval or card, or a guest's message that still waits an hour
+  after it started reminds once (`remind:<subject>`), each on its own. A need a snooze covered
+  reminds an hour after the snooze ended, also when the user woke the thread early (the shell
+  keeps `lastSnoozeWakeAt` after the wake clears the snooze). The server schedules reminders from
+  current state each minute, so a restart after the hour still reminds, up to a day late, and a
+  need snoozed for days reminds after its snooze, however long ago it started. It reads the
+  thread again before recording one, so a snooze it has not seen in the events yet defers the
+  reminder instead of using it up. An ask that opens
+  again because the user cancelled the queued message that answered it reminds an hour after it
+  opened again, also when the service reads the answer and the cancellation together, with or
+  without the raise. Needs that were open before the first start do not remind.
+- At 19:00 server time, if anything needs the user, one subject (`digest:<local date>`) says how
+  many threads need them and names the one waiting longest. A server that was down more than 30
+  minutes past 19:00 skips that day's. The hour is a constant.
+- Web and desktop present the same subjects. Each environment streams the subjects it published or
+  resolved in the last ten minutes (`needsYou.subscribe`); a failed read of them is retried,
+  never sent as none. A browser presents each subject at most
+  once: it keeps the last version it saw per environment and claims each subject, by environment
+  and id (every server has its own `digest:<date>`), for two days in `localStorage` under a Web
+  Lock. Only a
+  tab that can present a subject claims it, through the channel it then uses: a toast in a
+  focused tab, a system notification in a background one, a sound otherwise, and for reminders and
+  the digest a system notification whenever those are on. When the browser refuses a system
+  notification it allows, a focused tab uses its other channels. It claims the subject once it
+  presented it, so one whose system notification the browser refused stays for another tab. A tab that
+  cannot present it tries again when it gains focus. A subject whose thread the tab has not loaded
+  yet waits for it, and so does an ask the tab's thread does not show open: the shell can show the
+  answer before the stream resolves the ask, or the ask after its subject. The version the browser
+  saves stays before what waits, so a reload presents it. A tab saves a version only under the claims lock, once it presented, passed over or
+  set waiting every subject up to it, also when several snapshots queue behind another tab's
+  claims. It reads what waits under that lock too, and never presents a version that a newer one
+  of the same subject, such as its resolution, replaced, also when a later snapshot no longer
+  lists the subject. A waiting subject that a snapshot no longer lists, such as an ask answered
+  and cancelled in one go, presents nothing. Before presenting, a tab checks its own view of the thread (archived, snoozed,
+  hidden by a tag filter; a failure after the snooze began still presents). A superseded completion
+  is never presented: a browser catching up presents only its open ask, with a sound, or nothing
+  when the ask ended. A browser that never watched an environment treats what it finds there as
+  history.
+- A server built before `needsYou.subscribe` reports the same orchestration protocol and answers
+  that method as unknown. A tab then alerts about that environment from its threads as it shows
+  them, as browsers did before for needs and failures: once when a thread starts needing the user
+  (by thread and need, so the same need alerts again only after the thread needed nothing) and
+  once per failed run. There are no reminders, no digest and no completion alerts, and what the
+  tab finds first is history. An environment that answers the stream never uses this, and the
+  choice holds until the page reloads.
+- The inbox orders by `returnedAt`, which the server keeps on the thread: a run the user started
+  ending, a run failing (`thread.return`, dispatched by the needs-you service when it sees the
+  run end) or an ask being raised advances it, besides the user's own messages and unsettling.
+  Quiet runs leave it alone, and they no longer unsettle a settled thread; an ask or a failure
+  still does, unless the user settled the thread after the failure. Threads without
+  `returnedAt` (older servers, history from before it) keep the previous rule.
+- The count of threads in Needs you is state, not unread notifications. Web shows it in the tab
+  title ("(2) T3 Code") and the favicon badge, desktop on the dock or taskbar icon (focusing the
+  window no longer clears it). The phone's count is the server's own threads, with its subagents'
+  and side chats' requests on their parents, and is the one number on the app icon (APNs `badge`
+  on every alert, badge-only pushes coalesced for three seconds with `apns-expiration: 0` so they
+  never replace a stored alert, retried per token when a token is new or the last push failed),
+  the widget and the Live Activity (`attentionCount`, also when no row is left). While open, the
+  app shows the count of the server that took its device registration, which sends its pushes,
+  leaves the icon alone while it does not know that server yet, and clears the icon once no server
+  is paired. The watch's list waits by the same rule: a parent waiting on a subagent's approval, a
+  guest's message, snoozed threads left out. A thread's detail on the watch does too, so a parent
+  waiting on a child's request offers no reply that would only reach the parent.
+- A thread with open asks reads as waiting for input in agent awareness, so the Live Activity, the
+  widget and the watch list it, whatever its run does. These rows only display; they never alert.
+
 ## Implementation
 
 Fork-owned files:
@@ -155,7 +289,8 @@ Fork-owned files:
 - `packages/contracts/src/threadAsks.ts`: the ask entry, its source and status, the 120-character
   ask text, and the shell's open-ask summary.
 - `apps/server/src/orchestration-v2/ThreadAskDecider.ts`: raise, replace, guard, withdraw,
-  dismiss, remind, answer on reply, reopen on a cancelled reply, dismiss on settle. Pure, like
+  dismiss, answer on reply, reopen on a cancelled reply, dismiss on settle; a raise also stamps
+  `returnedAt`. Pure, like
   `GuestShareDecider.ts`. Keeps every open ask and the newest resolved ones, 20 in all.
 - `apps/server/src/orchestration-v2/TurnEndAskDetector.ts`: the reactor on completed runs.
 - `apps/server/src/orchestration-v2/userTurn.ts`: `isUserTurn`, shared by the title refresh and
@@ -163,7 +298,24 @@ Fork-owned files:
 - `evals/thread-asks/`: the detector eval.
 - `apps/web/src/state/htmlRenderOpenRequest.ts`: lets the ask line open a page's full-screen
   dialog, which the page's frame owns with the bridge the page answers through.
-- Tests: `ThreadAskDecider.test.ts`, `ThreadAsk.test.ts`, `TurnEndAskDetector.test.ts`.
+- `apps/server/src/agentAwareness/NeedsYouNotifications.ts`: the event consumer that records
+  subjects, resolutions and runs to read; the count; the minute tick (held completions,
+  reminders, the digest); the delivery worker; the subjects stream for clients.
+- `apps/server/src/agentAwareness/needsYouRules.ts`: when a subject alerts (`subjectVerdict`),
+  which listed thread a child's request waits on, reminder and digest times, and what a thread
+  needs for the count (`needsYouThreads`, mirroring the clients' `threadNeedsYou` with child
+  requests on their parents and snoozes from `ThreadSettlementService.isSnoozed`), which is also
+  the watch list's rule.
+- `apps/server/src/agentAwareness/NeedsYouLedger.ts` and
+  `apps/server/src/persistence/Migrations/113_NeedsYouLedger.ts`: the cursor, subjects,
+  deliveries per device and runs to read. Migration 112 is needs-you PR 2's; the migrator refuses
+  to skip an id, so 112 must ship first.
+- `packages/contracts/src/needsYou.ts`: the subject clients receive and `needsYou.subscribe`.
+- `apps/server/src/orchestration-v2/threadReturn.ts`: who started a run (`readRunEnd`) and when its
+  end returns a thread.
+- `apps/mobile/src/features/agent-awareness/appIconBadge.ts`: the app icon count while the app runs.
+- Tests: `ThreadAskDecider.test.ts`, `ThreadAsk.test.ts`, `TurnEndAskDetector.test.ts`,
+  `NeedsYouNotifications.test.ts`.
 - `packages/contracts/src/htmlRenderPages.ts`: the page row, list input and result, seen input,
   change tick.
 - `apps/server/src/htmlRender/HtmlRenderIndex.ts`: the index (record, index an older page, seen,
@@ -186,28 +338,77 @@ Fork-owned files:
 
 Upstream-owned hooks:
 
-- `packages/contracts/src/orchestrationV2.ts`: `asks` on `OrchestrationV2AppThread`, stored in the
-  thread's `payload_json` with no migration; `openAsks` on the thread shell, present only when
-  there are some; `pendingGuestMessageAt` on the shell, so a guest's message sorts by when it
-  waits; `card` on the pending request summary so clients can tell a secret or link card
-  from a question; client command `thread.ask.dismiss`; internal commands `thread.ask.raise`,
-  `thread.ask.withdraw`, `thread.ask.remind`; event `thread.asks-updated`, carrying the thread like
-  `thread.guest-share-updated`. `baseSchemas.ts` adds `ThreadAskId`.
+- `packages/contracts/src/orchestrationV2.ts`: `asks` and `returnedAt` on
+  `OrchestrationV2AppThread`, stored in the thread's `payload_json` with no migration; `openAsks`
+  on the thread shell, present only when there are some, and `returnedAt`;
+  `latestRunStartedByUser` and `lastSnoozeWakeAt` on the shell; `pendingGuestMessageAt` on the shell, so a guest's message
+  sorts by when it waits; `card` on the pending request summary so clients can tell a secret or
+  link card from a question; client command `thread.ask.dismiss`; internal commands
+  `thread.ask.raise`, `thread.ask.withdraw` and `thread.return`; event `thread.asks-updated`,
+  carrying the thread like `thread.guest-share-updated`. `baseSchemas.ts` adds `ThreadAskId`.
 - `apps/server/src/orchestration-v2/Orchestrator.ts`: dispatches the ask commands, answers open
   asks in `dispatchMessage` in the same commit as the message, so every user-authored message
   answers them (sends, guest sends, an answer to a question card the agent did not wait on),
   reopens them in `queued-run.cancel`, dismisses them in `thread.settle`, refuses
-  `thread.auto-settle` while asks are open, and accepts ask commands that change nothing.
+  `thread.auto-settle` while asks are open, accepts ask commands that change nothing, stamps
+  `returnedAt` in `thread.return`, and lets only a user's message unsettle a settled thread in
+  `dispatchMessage`. `streamDomainEventsAfter` (also on `ThreadManagementService`) streams from a
+  sequence, so the needs-you service resumes from its cursor.
 - `apps/server/src/orchestration-v2/ProjectionStore.ts`: the event in the projection switches and
-  the updatedAt list, `openAsks` and `pendingGuestMessageAt` in both shell paths, `openAsks` in
-  settlement candidates, `card` on secret and link cards, and `getLatestUserReply` (the newest
+  the updatedAt list, `openAsks` and `pendingGuestMessageAt` in both shell paths,
+  `latestRunStartedByUser` (`runStartedByUser`, repeated in SQL as `isUserStartedShellRun`, which
+  follow continuations back to the run they continue, however many, and treat a chain that loops
+  as the user's), `returnedAt` and
+  `lastSnoozeWakeAt` in both shell paths, `openAsks` in the awareness snapshot and settlement
+  candidates, `card` on secret and link cards, and `getLatestUserReply` (the newest
   `isUserReply` message in SQL, without cancelled queued sends), which the guard and the detector
   read instead of every run and message of the thread. Under the command lock the guard reads
   only messages after the run ended.
 - `apps/server/src/orchestration-v2/ThreadSettlementService.ts`: open asks block auto-settle; a
   newer ask ends a snooze.
 - `AgentAwarenessRelay.ts`, `GuestShareService.ts`, `testkit/OrchestratorScenario.ts`, client-runtime
-  `orchestrationV2Projection.ts`: the new event and command in their switches.
+  `orchestrationV2Projection.ts`: the new event and command in their switches. The relay's event
+  filter publishes `thread.asks-updated`.
+- `TurnEndAskDetector.ts` reads the completed runs the needs-you service records instead of its
+  own event subscription, marks each read once it succeeded, retries a failed read, and on start
+  reads what was left unread in the last ten minutes.
+- Agent awareness: `packages/shared/src/agentAwareness.ts` (open asks read as
+  `waiting_for_input`, a quiet run's completion projects to nothing),
+  `LocalAgentAwarenessPublisher.ts` (rows only, published as they change),
+  `LocalAgentAwareness.ts` (`alertTargets` and `deliverAlert` for one device,
+  `setNeedsYouCount` with coalesced and retried badge pushes,
+  `attentionCount` on the aggregate, also without rows, `lastBadge` per stored device; rows no
+  longer alert; a Live Activity end APNs refused for now is sent again with the next publication), `ApnsProvider.ts` (`badge`, `silent`, the collapse id hashed from a collapse key, `sendBadge` with
+  `apns-expiration: 0`, and `sendApnsRequest`, which closes a request's HTTP/2 session at its
+  deadline), `packages/contracts/src/relay.ts` (optional `attentionCount` on the
+  aggregate, which older apps ignore), `threadControl/ThreadControl.ts` (the watch's waits by
+  `needsYouThreads`), `server.ts` (one ledger for the needs-you service and the detector), and
+  `ws.ts`, `auth/RpcAuthorization.ts` and `observability/RpcInstrumentation.ts`
+  (`needsYou.subscribe` with the read scope). The T3 Connect relay path (off in this fork) keeps upstream's
+  five-second completion confirmation; its relay decides alerts from state transitions, so
+  removing the confirmation could not collapse its alerts.
+- Web: `state/needsYou.ts` (the subjects of each environment), `ThreadNotificationCoordinator.logic.ts`
+  (new subjects by version, the presentation channel, claims and cursors in `localStorage`, and
+  for older servers `needsYouSource` and `shellAlerts`),
+  `ThreadNotificationCoordinator.tsx` (presents the environments' subjects instead of deriving
+  alerts from thread status changes, a notification or toast replacing only the one it takes the
+  place of, the count for the favicon and dock badge, `needsYouCountAtom`),
+  `threadNotifications.ts` (`threadNotificationTag` takes any subject), `appInit.tsx` (the tab
+  title). The upstream grace for a background wake's completion is gone: the server decides. Desktop:
+  `ipc/methods/notificationBadge.ts` no longer clears the badge on focus; the preload's
+  `onNotificationBadgeClear` stays in the bridge, unused.
+- client-runtime: `latestRunStartedByUser` and `returnedAt` on `EnvironmentThreadShell`, and in
+  `state/threadInbox.ts` `threadsNeedingYou`, `inboxReturnTime` (by `returnedAt` when the server
+  sends it; otherwise `isQuietRun` and the return tracker skipping quiet runs).
+- Mobile: `AgentActivity.tsx`, `AgentActivityWidget.tsx` and `agentActivityWidgetTimeline.ts` read
+  `attentionCount`; `App.tsx` installs the app icon badge, which shows the count of the server
+  that took the device registration and clears it once no server is paired. That owner is kept in
+  the stored registration record (`persistence/mobile-storage.ts`), so a relaunch that skips
+  registering still knows it, and the snapshot and the Live Activity registration go to it. A
+  cold launch reads the owner from that record before registering restores it, and a record from
+  before owners were kept registers again to learn its owner
+  (`readAppIconCount` in `remoteRegistration.ts`, `ownerEnvironmentIds` in
+  `registrationEnvironmentSelection.ts`, `AccountlessAgentAwarenessProvider.tsx`).
 - Text generation: `generateTurnEndAsk` on `ProviderTextGeneration`
   (`packages/provider-core/src/server/textGeneration.ts`), its prompt in `textGenerationPrompts.ts`,
   its operation in `textGenerationOperations.ts`, the sanitizer in `textGenerationUtils.ts`, the
@@ -267,7 +468,8 @@ Upstream-owned hooks:
   `features/threads/ThreadNavigationSidebar.tsx`, and the `ask` status in
   `features/threads/ThreadDetailScreen.tsx`, `floating-working-status.ts` and
   `floating-working-control.tsx`. `components/ui/AppSymbol.android.tsx` maps `checkmark.bubble`.
-- Docs: `docs/user/thread-sidebar.md` (See what needs you) and `docs/user/text-generation.md`.
+- Docs: `docs/user/thread-sidebar.md` (See what needs you), `docs/user/text-generation.md` and
+  `docs/user/mobile-notifications.md`.
 - Triage: `needsYou.triage` in `STATIC_KEYBINDING_COMMANDS` (`packages/contracts/src/keybindings.ts`)
   and its defaults in `packages/shared/src/keybindings.ts` (through `clientSpecificKeybindings`); the
   handler in `AppSidebarLayout.tsx` (app shell commands); its label in
@@ -298,14 +500,17 @@ Upstream-owned hooks:
 Retire this patch when upstream tracks what agents ask the user as durable state that only acting
 ends, detects turns that end waiting on the user, and lists those threads apart from finished ones.
 Retire the page index and lists when upstream keeps an index of html renders with seen state; drop
-migration 112's table only with a migration that removes it. Retire triage with the rest; it only reads the
-Needs you set and the existing reply, answer, snooze and dismiss paths.
+migration 112's table only with a migration that removes it. This patch's notification rules go
+when upstream notifies by who started a run and counts what needs the user on every surface. The
+web's alerts from shells go once no server built before `needsYou.subscribe` is in use. Retire
+triage with the rest; it only reads the Needs you set and the existing reply, answer, snooze and
+dismiss paths.
 
 ## Verification
 
 - `ThreadAskDecider.test.ts` covers raise, replace, the guard, runs that finish out of order, a
-  later run's ask in any status winning, page text and run updates, unsettle, withdraw, dismiss
-  one and all, remind, trimming, answering, reopening and settle.
+  later run's ask in any status winning, page text and run updates, unsettle and `returnedAt`,
+  withdraw, dismiss one and all, trimming, answering, reopening and settle.
 - `ThreadAsk.test.ts` covers answering on a user's message (context-only too), a question card
   answer and not an agent's or an empty message, reopening on a cancelled queued reply, a turn-end
   ask landing past a cancelled queued reply or a Codex retry, the guard's reply read starting at
@@ -349,8 +554,82 @@ Needs you set and the existing reply, answer, snooze and dismiss paths.
   `android-workspace-navigation.test.ts` Back from a thread opened in triage. Web
   `durableCommandOutboxDelivery.test.ts` covers a triage reply delivered with the thread's settings.
   `HtmlRenderIndex.test.ts` covers the list's lookup by render id.
+- Notifications: `NeedsYouNotifications.test.ts` drives the service with committed events over a
+  real ledger, across restarts (an ask replacing its run's Done and No reply needed staying
+  quiet; a user's run alerting, failing and returning its thread with a wake queued behind it,
+  the wake quiet; each delivery checked right before it goes out; a held completion staying
+  replaced by its ask after No reply needed; a completion held past the window alerting once a
+  watch closes without an event; every pending request alerting on its own, a subagent's approval
+  on its parent; a failed delivery not retried once the need ended, also a guest's message sent
+  before the service read it while another waits; start retried until the
+  cursor is seeded; nothing for the past on a deploy; a restart between recording and sending,
+  and one before the cursor moved; reminders after a restart, a snooze and a wake; the digest;
+  the count before alerts and never waiting on APNs; archive and unarchive; a failed batch, stream
+  or return stamp read again from the cursor; a page ask covering its run's Done; a run that ends
+  again under its id; a reopened ask reminding, also when its answer and cancellation, or its
+  raise with them, come in one batch; a long snooze reminding past the pruning, and a need that reminded never again; a
+  reminder a snooze defers before the service read it; a secret card whose run ended; a hold
+  across an outage, also one that ended during it; a failed read of the subjects retried;
+  settling ending an ask; versions across pruning), `TurnEndAskDetector.test.ts`
+  (reads only after success, retries within the window, also of the ledger's lookup and mark, a
+  run another process read, recovery of
+  the user's run with a wake queued behind it, also after a failed first read of that list, a later run's question and its own completed
+  secret card or a sign-in not covering it, a link card the run left waiting behind a later run's
+  approval or linked before the read), `ThreadAsk.test.ts` (`thread.return`, quiet runs
+  on settled threads, a late failure on a thread settled after it),
+  `ThreadNotificationCoordinator.logic.test.ts` (new subjects by version, the cursor kept before
+  waiting subjects, the presentation channel, claims per environment that expire, the stream or the shells
+  for an older server, alerts from shells by thread and need), `ThreadNotificationCoordinator.badge.browser.test.ts`
+  (the badge, each subject once per browser across reconnects, tabs and reloads, history for a
+  first-time browser, the quiet replacement, catching up past a superseded Done, a subject waiting
+  for its thread, also across snapshots queued behind another tab's claims, an ask waiting until
+  the tab's thread shows it open, a failure on a snoozed
+  thread, resolved subjects, also when the resolution, the thread's load and a snapshot without
+  the subject queue behind the claims, a waiting subject a snapshot leaves out, archive and
+  unarchive, the digest in one tab, a reminder and an alert the browser refused left to a tab
+  that can present them, or shown as a toast in a focused one), `LocalAgentAwareness.test.ts`
+  (rows never alert, a push token that changed while a Live Activity registered, a refused end sent
+  again, one alert per device and what became of it, an alert decided only once it
+  holds the lock, coalesced and retried badges, the count without rows),
+  `ApnsProvider.test.ts` (payloads, headers, collapse ids, the deadline closing a stalled
+  request), `ThreadControl.test.ts` (the watch's waits, also in a parent's detail), shared `agentAwareness.test.ts` (asks
+  wait, quiet completions vanish), `ProjectionStore.test.ts` (who started the latest run through
+  chains of continuations, also seventeen restarts long, there and in `readRunEnd`, `returnedAt` and `lastSnoozeWakeAt`, in both shell paths),
+  client-runtime `threadInbox.test.ts` (inbox time by `returnedAt` and for quiet runs, the count),
+  desktop `notificationBadge.test.ts`, mobile `registrationEnvironmentSelection.test.ts` and
+  `remoteRegistration.test.ts` (the owner of the device registration, kept across a relaunch and
+  read on a cold launch, learned again for a record from before owners, and no icon count while it
+  is not known).
 - Real clients (web and the iOS app): the Needs you section, No reply needed from the row, menu,
   swipe and ask line, a reply ending an ask, and the ask line, captured on a dev server with real
   turn-end asks from Claude Haiku and a question from Claude's question tool. Page asks arrive with
   `html_render` in a later change; their line, Open and Jump to it were checked with a page ask
-  written into a dev database.
+  written into a dev database. Notifications were checked on a dev server with real Claude Haiku
+  turns and APNs off: a Done and its ask taking its place without a second sound, a quiet
+  agent-started run, a server stopped while the detector read a run still giving one ask; and on
+  the iOS app, the icon count clearing when the last environment is removed.
+
+## Follow-ups
+
+- APNs: reuse one HTTP/2 session per origin instead of a connection per push. Declined for now;
+  the server sends tens of pushes a day.
+- The T3 Connect relay path keeps upstream's five-second completion confirmation, which fires
+  before the turn-end detector; the relay is off in this fork, and its alerts come from state
+  transitions, so they cannot be collapsed. Revisit if the relay is turned on.
+- Needs that were open before the first start with the ledger never remind, since no subject
+  records them. Declined in review (S50): a one-time edge of the first deploy.
+- The web digest follows the server's 19:00 and, with several environments, comes from each
+  server with only its own count. A browser-local digest across environments needs a client-side
+  merge of their needs. Declined in review (S49).
+- A request in a task delegated from another environment alerts from that environment, under the
+  task's own thread; the parent in the other environment does not show it.
+- On a server built before the needs-you stream, the web's shell fallback keys a subagent's request
+  by its parent alone, since the shell carries only the request's kind. A second delegated
+  approval under the same parent within two days stays quiet on such a server. Declined in review
+  (CodeRabbit 5535): carrying the child request's id into the shell for a rollout-only path.
+- The server's `lastBadge` is the last count APNs accepted, not the one the phone shows: APNs can
+  reorder pushes or drop an expired badge-only push. The app sets its own count from the server
+  whenever it is open, which corrects it. Declined in review (CodeRabbit 5520).
+- With sound as the only channel, a tab whose audio the browser has not unlocked yet can claim an
+  alert it then cannot play, and a tab that could play it skips it. Declined in review (CodeRabbit
+  5499): choosing the channel would need audio readiness and a retry once audio unlocks.

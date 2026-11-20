@@ -19,7 +19,10 @@ import { startAgentOpenedPreviews } from "./components/preview/agentOpenedPrevie
 import { startMainAppLocationTracking } from "./components/sidebar/mainAppLocation";
 import { startDesktopUpdateLaunchNotice } from "./components/sidebar/updateEverythingRun";
 import { startSlowRpcRequestToasts } from "./components/SlowRpcRequestToastCoordinator";
-import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
+import {
+  needsYouCountAtom,
+  startThreadNotifications,
+} from "./components/ThreadNotificationCoordinator";
 import { startGuideRunNotifications } from "./components/pullRequest/guide/PullRequestGuideRunCoordinator";
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "./branding";
 import { resolveServerBackedAppDisplayName } from "./branding.logic";
@@ -118,18 +121,19 @@ function startClientAppearance(): void {
 }
 
 function startDocumentTitle(): void {
-  appAtomRegistry.subscribe(
-    primaryServerConfigAtom,
-    (config) => {
-      document.title = resolveServerBackedAppDisplayName({
-        baseName: APP_BASE_NAME,
-        fallbackDisplayName: APP_DISPLAY_NAME,
-        fallbackStageLabel: APP_STAGE_LABEL,
-        primaryServerVersion: config?.environment.serverVersion ?? null,
-      });
-    },
-    { immediate: true },
-  );
+  const apply = () => {
+    const name = resolveServerBackedAppDisplayName({
+      baseName: APP_BASE_NAME,
+      fallbackDisplayName: APP_DISPLAY_NAME,
+      fallbackStageLabel: APP_STAGE_LABEL,
+      primaryServerVersion:
+        appAtomRegistry.get(primaryServerConfigAtom)?.environment.serverVersion ?? null,
+    });
+    const needsYou = appAtomRegistry.get(needsYouCountAtom);
+    document.title = needsYou > 0 ? `(${needsYou}) ${name}` : name;
+  };
+  appAtomRegistry.subscribe(primaryServerConfigAtom, apply, { immediate: true });
+  appAtomRegistry.subscribe(needsYouCountAtom, apply);
 }
 
 /**

@@ -3,7 +3,7 @@ import * as DateTime from "effect/DateTime";
 
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
-import { effectiveSnoozed } from "./threadSettled.ts";
+import { effectiveSnoozed, type ThreadSnoozeShell } from "./threadSettled.ts";
 
 type WorkingThreadInput = Pick<
   EnvironmentThreadShell,
@@ -148,6 +148,23 @@ export function sortThreadsByNeed<
 }
 
 /**
+ * The threads in Needs you, the one waiting longest first: they need the user and are not
+ * snoozed. Pass listed threads only (not archived, not shown under a parent). Every count of
+ * what needs the user (tab title, badges) reads this.
+ */
+export function threadsNeedingYou<
+  T extends ThreadNeedsYouInput &
+    ThreadSnoozeShell &
+    Pick<EnvironmentThreadShell, "id" | "environmentId" | "updatedAt">,
+>(threads: readonly T[], options: { readonly now: string }): T[] {
+  return sortThreadsByNeed(
+    threads.filter(
+      (thread) => threadNeedsYou(thread) !== null && !effectiveSnoozed(thread, options),
+    ),
+  );
+}
+
+/**
  * A thread its own client is launching reads as preparing until its first run lands.
  * The server commits the thread before its run, so the list would otherwise place it twice.
  */
@@ -168,19 +185,54 @@ export function asLaunchingThread<T extends EnvironmentThreadShell>(thread: T): 
 
 type InboxThreadInput = Pick<
   EnvironmentThreadShell,
-  "id" | "environmentId" | "createdAt" | "unsettledAt" | "latestRun"
+  | "id"
+  | "environmentId"
+  | "createdAt"
+  | "unsettledAt"
+  | "latestRun"
+  | "latestRunStartedByUser"
+  | "latestUserAuthoredMessageAt"
+  | "returnedAt"
 >;
 
-/** When the thread last came back to the inbox, the time the inbox orders by. */
+/**
+ * The latest run started without the user (a wake, another agent, a schedule) and did not fail.
+ * It notifies nobody and leaves the thread where it was in the inbox; an ask it raises still
+ * brings the thread to Needs you.
+ */
+function isQuietRun(
+  thread: Pick<EnvironmentThreadShell, "latestRun" | "latestRunStartedByUser">,
+): boolean {
+  return thread.latestRunStartedByUser === false && thread.latestRun?.status !== "failed";
+}
+
+/**
+ * When the thread last came back to the inbox, the time the inbox orders by: the user's own
+ * message or unsettle, or the server's `returnedAt` (a run they started ended, a run failed, an
+ * agent asked). Without `returnedAt` (older servers, history from before it), the latest run
+ * stands in unless it was quiet, and so does a return this client saw.
+ */
 export function inboxReturnTime<T extends InboxThreadInput>(
   thread: T,
   observedReturnAt?: (thread: T) => number | undefined,
 ): number {
+  if (thread.returnedAt !== undefined) {
+    return Math.max(
+      toSortableTimestamp(thread.createdAt) ?? 0,
+      toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
+      toSortableTimestamp(thread.latestUserAuthoredMessageAt ?? undefined) ?? 0,
+      toSortableTimestamp(thread.returnedAt) ?? 0,
+    );
+  }
+  // A quiet run keeps the place the user's own last message gave the thread.
+  const run = isQuietRun(thread) ? null : thread.latestRun;
   return Math.max(
     toSortableTimestamp(thread.createdAt) ?? 0,
     toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
-    toSortableTimestamp(thread.latestRun?.requestedAt ?? undefined) ?? 0,
-    toSortableTimestamp(thread.latestRun?.completedAt ?? undefined) ?? 0,
+    toSortableTimestamp(
+      (run === null ? thread.latestUserAuthoredMessageAt : run.requestedAt) ?? undefined,
+    ) ?? 0,
+    toSortableTimestamp(run?.completedAt ?? undefined) ?? 0,
     observedReturnAt?.(thread) ?? 0,
   );
 }
@@ -265,7 +317,7 @@ export function createInboxReturnTracker() {
   const keyOf = (thread: ThreadKeyInput) => `${thread.environmentId}:${thread.id}`;
   const states = new Map<
     string,
-    { working: boolean; deadline: number | null; placement: string | null }
+    { working: boolean; deadline: number | null; placement: string | null; quiet: boolean }
   >();
   const returns = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -290,7 +342,7 @@ export function createInboxReturnTracker() {
           if (state.deadline !== null && state.deadline <= at) {
             state.working = false;
             state.deadline = null;
-            returns.set(key, at);
+            if (!state.quiet) returns.set(key, at);
           }
         }
         schedule();
@@ -363,8 +415,9 @@ export function createInboxReturnTracker() {
             ? (previous.deadline ?? at + WORKING_EXIT_GRACE_MS)
             : null;
         const working = actual || (deadline !== null && deadline > at);
-        if (previous?.working && !working) returns.set(key, at);
-        states.set(key, { working, deadline: working ? deadline : null, placement });
+        const quiet = isQuietRun(thread);
+        if (previous?.working && !working && !quiet) returns.set(key, at);
+        states.set(key, { working, deadline: working ? deadline : null, placement, quiet });
       }
       for (const key of states.keys()) {
         if (!present.has(key)) {

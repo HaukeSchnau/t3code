@@ -1,5 +1,6 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
 import { pendingGuestMessageCount, threadOpenAsks, type ThreadAsk } from "@t3tools/contracts";
+import { isUserTurn } from "./userTurn.ts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
@@ -1058,6 +1059,7 @@ type ShellThreadRow = {
   readonly latest_run_completed_at: string | null;
   readonly latest_run_stop_requested: number;
   readonly latest_run_background_wake: number;
+  readonly latest_run_started_by_user: number;
   readonly active_run_id: string | null;
   readonly active_run_status: string | null;
   readonly activity_run_status: string | null;
@@ -1070,6 +1072,7 @@ type ShellThreadRow = {
   readonly blocking_run_completed_at: string | null;
   readonly blocking_run_stop_requested: number;
   readonly blocking_run_background_wake: number;
+  readonly blocking_run_started_by_user: number;
   readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
   readonly pending_secret_request_payload_json: string | null;
@@ -1574,6 +1577,14 @@ function openAsksField(asks: ReadonlyArray<ThreadAsk> | undefined) {
   return openAsks.length === 0 ? {} : { openAsks };
 }
 
+function returnedAtField(thread: Pick<OrchestrationV2AppThread, "returnedAt">) {
+  return thread.returnedAt === undefined ? {} : { returnedAt: thread.returnedAt };
+}
+
+function lastSnoozeWakeField(thread: Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt">) {
+  return thread.lastSnoozeWakeAt == null ? {} : { lastSnoozeWakeAt: thread.lastSnoozeWakeAt };
+}
+
 function guestMessageFields(share: OrchestrationV2AppThread["guestShare"]) {
   // Messages are stored in the order guests sent them.
   const oldest = share?.messages.find((message) => message.status === "pending");
@@ -1581,6 +1592,41 @@ function guestMessageFields(share: OrchestrationV2AppThread["guestShare"]) {
     pendingGuestMessageCount: pendingGuestMessageCount(share),
     ...(oldest === undefined ? {} : { pendingGuestMessageAt: oldest.submittedAt }),
   };
+}
+
+type ContinuedRun = Pick<
+  OrchestrationV2Run,
+  "id" | "userMessageId" | "restartContinuationOfRunId" | "usageLimitContinuationOfRunId"
+>;
+
+export const continuedRunId = (run: ContinuedRun) =>
+  run.restartContinuationOfRunId ?? run.usageLimitContinuationOfRunId;
+
+/**
+ * A user turn started or steered the run. A continuation after a restart or a usage limit,
+ * however many in a row, counts as the run they continue. `isUserStartedShellRun` repeats this
+ * in SQL.
+ */
+export function runStartedByUser(
+  run: ContinuedRun,
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
+): boolean {
+  const chain = [run];
+  for (let sourceId = continuedRunId(run); sourceId !== undefined;) {
+    const source = projection.runs.find((candidate) => candidate.id === sourceId);
+    // Missing history, or a chain that loops, notifies as it always did.
+    if (source === undefined || chain.some((candidate) => candidate.id === sourceId)) return true;
+    chain.push(source);
+    sourceId = continuedRunId(source);
+  }
+  const origin = chain.at(-1)!;
+  const runIds = new Set(chain.map((candidate) => candidate.id));
+  return (
+    !projection.messages.some((message) => message.id === origin.userMessageId) ||
+    projection.messages.some(
+      (message) => message.runId !== null && runIds.has(message.runId) && isUserTurn(message),
+    )
+  );
 }
 
 export function threadShellFromProjection(
@@ -1703,6 +1749,7 @@ export function threadShellFromProjection(
       ),
     latestRunBackgroundWake:
       latestRun != null && isBackgroundWakeRunForShell(latestRun, projection),
+    latestRunStartedByUser: latestRun == null || runStartedByUser(latestRun, projection),
     activeRunId: activeRun?.id ?? null,
     blockedOnThreadWait: deriveBlockedOnThreadWait({ activeRun, turnItems: projection.turnItems }),
     activityRunStatus: activityRun?.status ?? null,
@@ -1716,6 +1763,7 @@ export function threadShellFromProjection(
     pendingRuntimeRequest,
     ...guestMessageFields(projection.thread.guestShare),
     ...openAsksField(projection.thread.asks),
+    ...returnedAtField(projection.thread),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1743,6 +1791,7 @@ export function threadShellFromProjection(
     unsettledAt: projection.thread.unsettledAt ?? null,
     snoozedUntil: projection.thread.snoozedUntil ?? null,
     snoozedAt: projection.thread.snoozedAt ?? null,
+    ...lastSnoozeWakeField(projection.thread),
     pinnedAt: projection.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
@@ -1841,6 +1890,7 @@ type ShellThreadState = {
   readonly latestRunCompletedAt: DateTime.Utc | null;
   readonly latestRunStopRequested: boolean;
   readonly latestRunBackgroundWake: boolean;
+  readonly latestRunStartedByUser: boolean;
   readonly activeRunId: RunId | null;
   readonly blockedOnThreadWait: boolean;
   readonly activityRunStatus: ShellActivityRunStatus | null;
@@ -2002,6 +2052,7 @@ function shellFromState(input: {
     latestRunCompletedAt: input.state.latestRunCompletedAt,
     latestRunStopRequested: input.state.latestRunStopRequested,
     latestRunBackgroundWake: input.state.latestRunBackgroundWake,
+    latestRunStartedByUser: input.state.latestRunStartedByUser,
     activeRunId: input.state.activeRunId,
     blockedOnThreadWait: input.state.blockedOnThreadWait,
     activityRunStatus: input.state.activityRunStatus,
@@ -2014,6 +2065,7 @@ function shellFromState(input: {
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     ...guestMessageFields(input.state.thread.guestShare),
     ...openAsksField(input.state.thread.asks),
+    ...returnedAtField(input.state.thread),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -2031,6 +2083,7 @@ function shellFromState(input: {
     unsettledAt: input.state.thread.unsettledAt ?? null,
     snoozedUntil: input.state.thread.snoozedUntil ?? null,
     snoozedAt: input.state.thread.snoozedAt ?? null,
+    ...lastSnoozeWakeField(input.state.thread),
     pinnedAt: input.state.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
@@ -6413,6 +6466,51 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       )`;
     };
 
+    const continuedShellRunId = (run: Statement.Fragment) => sql`COALESCE(
+      json_extract(${run}.payload_json, '$.restartContinuationOfRunId'),
+      json_extract(${run}.payload_json, '$.usageLimitContinuationOfRunId')
+    )`;
+    // Mirrors runStartedByUser: the runs a continuation continues, back to the origin, and
+    // isUserTurn (userTurn.ts) for their messages.
+    const isUserStartedShellRun = (alias: string) => {
+      const run = sql.literal(alias);
+      const chain = sql.literal("chain");
+      const origin = sql.literal("origin");
+      return sql`(
+        ${run}.run_id IS NULL
+        OR COALESCE((
+          -- UNION ends a chain that loops.
+          WITH RECURSIVE chain(run_id, payload_json) AS (
+            SELECT ${run}.run_id, ${run}.payload_json
+            UNION
+            SELECT source.run_id, source.payload_json
+            FROM chain
+            JOIN orchestration_v2_projection_runs source
+              ON source.run_id = ${continuedShellRunId(chain)}
+          )
+          SELECT ${continuedShellRunId(origin)} IS NOT NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_messages start_message
+              WHERE start_message.message_id = json_extract(${origin}.payload_json, '$.userMessageId')
+            )
+            OR EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_messages user_turn
+              WHERE user_turn.run_id IN (SELECT run_id FROM chain)
+                AND user_turn.role = 'user'
+                AND json_extract(user_turn.payload_json, '$.createdBy') = 'user'
+                AND json_extract(user_turn.payload_json, '$.creationSource') IS NOT 'provider'
+                AND json_type(user_turn.payload_json, '$.notification') IS NULL
+                AND json_type(user_turn.payload_json, '$.delegatedCompletion') IS NULL
+                AND json_type(user_turn.payload_json, '$.scheduledTaskId') IS NULL
+            )
+          FROM chain origin
+          WHERE ${continuedShellRunId(origin)} IS NULL
+            OR ${continuedShellRunId(origin)} NOT IN (SELECT run_id FROM chain)
+          LIMIT 1
+        ), 1)
+      )`;
+    };
+
     const selectShellThreadRows = (
       threadId?: ThreadId,
       {
@@ -6446,6 +6544,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND stop_request.type = 'run_interrupt_request'
               ) AS latest_run_stop_requested,
               ${isBackgroundWakeShellRun("presented")} AS latest_run_background_wake,
+              ${isUserStartedShellRun("presented")} AS latest_run_started_by_user,
               active.run_id AS active_run_id,
               active.status AS active_run_status,
               (
@@ -6504,6 +6603,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND stop_request.type = 'run_interrupt_request'
               ) AS blocking_run_stop_requested,
               ${isBackgroundWakeShellRun("blocked")} AS blocking_run_background_wake,
+              ${isUserStartedShellRun("blocked")} AS blocking_run_started_by_user,
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
@@ -7113,6 +7213,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             : DateTime.makeUnsafe(row.latest_run_completed_at);
         let latestRunStopRequested = row.latest_run_stop_requested === 1;
         let latestRunBackgroundWake = row.latest_run_background_wake === 1;
+        let latestRunStartedByUser = row.latest_run_started_by_user === 1;
         if (row.blocking_run_id !== null && row.blocking_failure_payload_json !== null) {
           const blockingFailure = yield* decodeTurnItemPayload(
             row.blocking_failure_payload_json,
@@ -7127,6 +7228,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             latestRunId = RunId.make(row.blocking_run_id);
             latestRunStopRequested = row.blocking_run_stop_requested === 1;
             latestRunBackgroundWake = row.blocking_run_background_wake === 1;
+            latestRunStartedByUser = row.blocking_run_started_by_user === 1;
             latestRunStatus = "failed";
             latestRunRequestedAt =
               row.blocking_run_requested_at === null
@@ -7169,6 +7271,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunCompletedAt,
           latestRunStopRequested,
           latestRunBackgroundWake,
+          latestRunStartedByUser,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
           blockedOnThreadWait: deriveBlockedOnThreadWait({
             activeRun:
@@ -7461,7 +7564,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               latestRunCompletedAt: state.latestRunCompletedAt,
               latestRunStopRequested: state.latestRunStopRequested,
               latestRunBackgroundWake: state.latestRunBackgroundWake,
+              latestRunStartedByUser: state.latestRunStartedByUser,
               pendingRuntimeRequest: state.pendingRuntimeRequest,
+              ...openAsksField(state.thread.asks),
               pendingBackgroundTasks: state.pendingBackgroundTasks,
             })),
           ),

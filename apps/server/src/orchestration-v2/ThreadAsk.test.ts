@@ -415,3 +415,76 @@ it.effect("No reply needed and settling end asks; a new ask unsettles the thread
     assert.deepEqual(yield* openAskIds, ["three"]);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect(
+  "a run the user started, or a failure, returns the thread; other work leaves a settled thread settled",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* setup;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const end = (
+        messageId: string,
+        status: "completed" | "failed",
+        options: { readonly settledBeforeReturn?: boolean } = {},
+      ) =>
+        Effect.gen(function* () {
+          const run = (yield* projections.getThreadProjection(threadId)).runs.find(
+            (candidate) => candidate.userMessageId === messageId,
+          );
+          assert.isDefined(run);
+          yield* TestClock.adjust("1 minute");
+          const completedAt = yield* DateTime.now;
+          yield* projections.apply({
+            id: EventId.make(`event:${messageId}-ended`),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: completedAt,
+            payload: { ...run, status, completedAt },
+          });
+          if (options.settledBeforeReturn === true) {
+            yield* TestClock.adjust("1 minute");
+            yield* orchestrator.dispatch({
+              type: "thread.settle",
+              commandId: CommandId.make(`settle-before-return:${messageId}`),
+              threadId,
+            });
+          }
+          yield* orchestrator.dispatch({
+            type: "thread.return",
+            commandId: CommandId.make(`return:${messageId}`),
+            threadId,
+            runId: run.id,
+          });
+          return DateTime.formatIso(completedAt);
+        });
+      const thread = projections.getThread(threadId);
+
+      yield* send(orchestrator, "mine");
+      const mine = yield* end("mine", "completed");
+      assert.equal((yield* thread).returnedAt, mine);
+      assert.equal((yield* projections.getThreadShell(threadId))?.returnedAt, mine);
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle"),
+        threadId,
+      });
+      // A wake or another agent's message runs on a settled thread without bringing it back.
+      yield* send(orchestrator, "wake", { createdBy: "agent", creationSource: "mcp" });
+      assert.equal((yield* thread).settledOverride, "settled");
+      yield* end("wake", "completed");
+      assert.equal((yield* thread).returnedAt, mine);
+
+      yield* send(orchestrator, "watcher", { createdBy: "agent", creationSource: "mcp" });
+      const failed = yield* end("watcher", "failed");
+      const afterFailure = yield* thread;
+      assert.equal(afterFailure.returnedAt, failed);
+      assert.isNull(afterFailure.settledOverride);
+
+      // The return of a failure arrives after the user settled the thread: it stays settled.
+      yield* send(orchestrator, "late", { createdBy: "agent", creationSource: "mcp" });
+      yield* end("late", "failed", { settledBeforeReturn: true });
+      assert.equal((yield* thread).settledOverride, "settled");
+    }).pipe(Effect.provide(layerTest)),
+);

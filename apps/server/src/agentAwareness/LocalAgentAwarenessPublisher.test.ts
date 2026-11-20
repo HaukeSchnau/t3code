@@ -12,7 +12,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -104,30 +103,10 @@ const makePublisher = Effect.gen(function* () {
   return { publisher, currentShell, published };
 });
 
-it.effect("publishes live activity at once and confirms a tombstone after five seconds", () =>
+it.effect("publishes each row change at once, since alerts no longer come from rows", () =>
   Effect.gen(function* () {
     const { publisher, currentShell, published } = yield* makePublisher;
     yield* publisher.publishThread(THREAD_ID);
-    assert.deepEqual(
-      published.map((state) => state?.phase),
-      ["running"],
-    );
-
-    yield* Ref.set(currentShell, null);
-    yield* publisher.publishThread(THREAD_ID);
-    yield* TestClock.adjust("4 seconds");
-    yield* publisher.drain;
-    assert.equal(published.length, 1);
-
-    yield* TestClock.adjust("1 second");
-    yield* publisher.drain;
-    assert.deepEqual(published.at(-1), null);
-  }),
-);
-
-it.effect("drops a transient first completion that recovers within five seconds", () =>
-  Effect.gen(function* () {
-    const { publisher, currentShell, published } = yield* makePublisher;
     yield* Ref.set(
       currentShell,
       shell({
@@ -136,20 +115,16 @@ it.effect("drops a transient first completion that recovers within five seconds"
       }),
     );
     yield* publisher.publishThread(THREAD_ID);
-    assert.equal(published.length, 0);
-
-    yield* Ref.set(currentShell, shell());
+    yield* Ref.set(currentShell, null);
     yield* publisher.publishThread(THREAD_ID);
-    yield* TestClock.adjust("5 seconds");
-    yield* publisher.drain;
     assert.deepEqual(
-      published.map((state) => state?.phase),
-      ["running"],
+      published.map((state) => state?.phase ?? null),
+      ["running", "completed", null],
     );
   }),
 );
 
-it.effect("keeps completions from before startup quiet", () =>
+it.effect("keeps completions from before startup off the card", () =>
   Effect.gen(function* () {
     const { publisher, currentShell, published } = yield* makePublisher;
     yield* Ref.set(
@@ -160,58 +135,6 @@ it.effect("keeps completions from before startup quiet", () =>
       }),
     );
     yield* publisher.publishThread(THREAD_ID);
-    yield* TestClock.adjust("5 seconds");
-    yield* publisher.drain;
     assert.equal(published.length, 0);
-  }),
-);
-
-it.effect("drops a completion when the continuation starts within five seconds", () =>
-  Effect.gen(function* () {
-    const { publisher, currentShell, published } = yield* makePublisher;
-    yield* publisher.publishThread(THREAD_ID);
-    yield* Ref.set(
-      currentShell,
-      shell({
-        status: "completed",
-        latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
-      }),
-    );
-    yield* publisher.publishThread(THREAD_ID);
-
-    yield* Ref.set(currentShell, shell());
-    yield* publisher.publishThread(THREAD_ID);
-    yield* TestClock.adjust("5 seconds");
-    yield* publisher.drain;
-    assert.deepEqual(
-      published.map((state) => state?.phase),
-      ["running"],
-    );
-  }),
-);
-
-it.effect("alerts a held completion that is settled during the hold, then clears it", () =>
-  Effect.gen(function* () {
-    const { publisher, currentShell, published } = yield* makePublisher;
-    yield* publisher.publishThread(THREAD_ID);
-    const completed = shell({
-      status: "completed",
-      latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
-    });
-    yield* Ref.set(currentShell, completed);
-    yield* publisher.publishThread(THREAD_ID);
-
-    yield* Ref.set(currentShell, { ...completed, settledOverride: "settled" });
-    yield* publisher.publishThread(THREAD_ID);
-    yield* TestClock.adjust("5 seconds");
-    yield* publisher.drain;
-    assert.deepEqual(
-      published.map((state) => state?.phase ?? null),
-      ["running", "completed"],
-    );
-
-    yield* TestClock.adjust("5 seconds");
-    yield* publisher.drain;
-    assert.deepEqual(published.at(-1), null);
   }),
 );

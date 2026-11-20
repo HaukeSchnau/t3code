@@ -47,6 +47,8 @@ export interface AgentActivityProps {
   readonly title: string;
   readonly subtitle: string;
   readonly activeCount: number;
+  /** Every thread that needs the user, beyond the rows shown. Absent from older servers. */
+  readonly attentionCount?: number;
   readonly updatedAt: string;
   readonly activities: ReadonlyArray<AgentActivityRowProps>;
 }
@@ -136,10 +138,9 @@ function AgentActivity(
     : environment.isStale
       ? "Agent status out of date"
       : `${props.activeCount} active ${agentWord}`;
+  const attentionCount = props.attentionCount ?? attentionRows.length;
   const attentionSuffix =
-    attentionRows.length > 0
-      ? `${attentionRows.length} need${attentionRows.length === 1 ? "s" : ""} attention`
-      : "";
+    attentionCount > 0 ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you` : "";
   const activeLabel = allDone
     ? doneLabel
     : environment.isStale
@@ -296,7 +297,7 @@ function AgentActivity(
               lineLimit(1),
             ]}
           >
-            {attentionRows.length > 0 ? summary : activeLabel}
+            {attentionCount > 0 ? summary : activeLabel}
           </Text>
           <Spacer minLength={6} />
         </HStack>

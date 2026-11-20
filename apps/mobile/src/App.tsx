@@ -28,6 +28,7 @@ import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet
 import * as Dialog from "./components/ui/Dialog";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { AccountlessAgentAwarenessProvider } from "./features/agent-awareness/AccountlessAgentAwarenessProvider";
+import { installAppIconBadge } from "./features/agent-awareness/appIconBadge";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { installShowcaseCapture } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
@@ -199,6 +200,7 @@ const appServiceDisposers = [
   installComposerAttachmentUploads(),
   startIncomingShareInbox(),
   installAgentNotificationNavigation(linkToAppPath),
+  installAppIconBadge(appAtomRegistry),
   installAppShortcuts(linkToAppPath),
   installAppUpdateChecks(),
   installShowcaseCapture(rootPathnameFromState),

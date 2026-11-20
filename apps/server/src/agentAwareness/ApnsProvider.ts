@@ -29,11 +29,6 @@ interface ApnsTarget {
   readonly environment: "sandbox" | "production";
 }
 
-export interface ApnsAlert {
-  readonly title: string;
-  readonly body: string;
-}
-
 /**
  * Notification categories the iOS app registers at launch (t3-agent-notifications). Each one
  * adds a text Reply action, which the app hands to the thread reply endpoint without opening.
@@ -91,25 +86,14 @@ function contentState(state: RelayAgentActivityAggregateState) {
 export function makeLiveActivityPayload(input: {
   readonly event: "update" | "end";
   readonly state: RelayAgentActivityAggregateState | null;
-  readonly alert?: ApnsAlert | null;
   readonly nowEpochSeconds: number;
 }) {
-  const alert = input.alert
-    ? {
-        alert: {
-          title: input.alert.title,
-          body: input.alert.body,
-          sound: "default",
-        },
-      }
-    : {};
   if (input.event === "end") {
     return {
       aps: {
         timestamp: input.nowEpochSeconds,
         event: "end",
         ...(input.state ? { "content-state": contentState(input.state) } : {}),
-        ...alert,
         "dismissal-date":
           input.nowEpochSeconds +
           (input.state ? DISMISS_AFTER_SECONDS : CONTENTLESS_DISMISS_AFTER_SECONDS),
@@ -123,7 +107,6 @@ export function makeLiveActivityPayload(input: {
     aps: {
       timestamp: input.nowEpochSeconds,
       event: "update",
-      ...alert,
       "content-state": contentState(input.state),
       "stale-date": input.nowEpochSeconds + STALE_AFTER_SECONDS,
     },
@@ -139,19 +122,70 @@ export function makeNotificationPayload(input: {
   readonly category?: ApnsNotificationCategory | undefined;
   // Time-sensitive alerts break through Focus. Needs the app's time-sensitive entitlement.
   readonly interruptionLevel?: "time-sensitive" | undefined;
+  /** Threads that need the user, shown on the app icon. */
+  readonly badge?: number | undefined;
+  /** Replaces the thread's last alert without a sound, such as an ask after its run's "Done". */
+  readonly silent?: boolean | undefined;
 }) {
   return {
     aps: {
       alert: { title: input.title, body: input.body },
-      sound: "default",
+      ...(input.silent === true ? {} : { sound: "default" }),
       // Groups a thread's notifications on the lock screen and the watch.
       "thread-id": `${input.environmentId}/${input.threadId}`,
       ...(input.category ? { category: input.category } : {}),
       ...(input.interruptionLevel ? { "interruption-level": input.interruptionLevel } : {}),
+      ...(input.badge === undefined ? {} : { badge: input.badge }),
     },
     environmentId: input.environmentId,
     threadId: input.threadId,
     deepLink: input.deepLink,
+  };
+}
+
+/** Sets the app icon's count without an alert. */
+export function makeBadgeRequest(badge: number) {
+  return {
+    pushType: "alert",
+    priority: "5",
+    // APNs keeps one undelivered push per app for an offline phone; this one never takes the
+    // place of a stored alert, which carries the count anyway.
+    expiration: 0,
+    payload: { aps: { badge } },
+  } as const;
+}
+
+/**
+ * Alerts with the same collapse key replace one another on the phone, such as an ask and its
+ * run's "Done", or a retried alert and the copy APNs may already have delivered.
+ */
+export function apnsCollapseId(collapseKey: string): string {
+  // APNs rejects collapse ids over 64 bytes.
+  return NodeCrypto.createHash("sha256").update(collapseKey).digest("base64url").slice(0, 32);
+}
+
+export function makeApnsHeaders(input: {
+  readonly target: ApnsTarget;
+  readonly providerToken: string;
+  readonly pushType: "alert" | "liveactivity";
+  readonly priority: "5" | "10";
+  readonly collapseId?: string | undefined;
+  /** 0 delivers now or never, so an offline phone does not get it later. */
+  readonly expiration?: 0 | undefined;
+}): NodeHttp2.OutgoingHttpHeaders {
+  return {
+    ":method": "POST",
+    ":path": `/3/device/${input.target.token}`,
+    authorization: `bearer ${input.providerToken}`,
+    "apns-priority": input.priority,
+    "apns-push-type": input.pushType,
+    "apns-topic":
+      input.pushType === "liveactivity"
+        ? `${input.target.bundleId}.push-type.liveactivity`
+        : input.target.bundleId,
+    ...(input.collapseId === undefined ? {} : { "apns-collapse-id": input.collapseId }),
+    ...(input.expiration === undefined ? {} : { "apns-expiration": String(input.expiration) }),
+    "content-type": "application/json",
   };
 }
 
@@ -180,58 +214,82 @@ function parseApnsReason(body: string): string | null {
   );
 }
 
-function sendHttp2Request(input: {
-  readonly target: ApnsTarget;
-  readonly providerToken: string;
-  readonly pushType: "alert" | "liveactivity";
-  readonly priority: "5" | "10";
+/** Every APNs request gets this long; then its HTTP/2 session closes, so nothing waits on it. */
+export const APNS_REQUEST_DEADLINE = "15 seconds";
+
+/**
+ * One request on its own HTTP/2 session. Interrupting it (such as at the deadline) destroys the
+ * session, so a stalled request never outlives its caller.
+ */
+export function sendApnsRequest(input: {
+  readonly origin: string;
+  readonly headers: NodeHttp2.OutgoingHttpHeaders;
   readonly payload: unknown;
-}): Promise<ApnsDeliveryResult> {
-  return new Promise((resolve, reject) => {
-    const client = NodeHttp2.connect(apnsOrigin(input.target.environment));
-    let settled = false;
-    const finish = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      client.close();
-      action();
-    };
-    client.once("error", (cause) => finish(() => reject(cause)));
-    const request = client.request({
-      ":method": "POST",
-      ":path": `/3/device/${input.target.token}`,
-      authorization: `bearer ${input.providerToken}`,
-      "apns-priority": input.priority,
-      "apns-push-type": input.pushType,
-      "apns-topic":
-        input.pushType === "liveactivity"
-          ? `${input.target.bundleId}.push-type.liveactivity`
-          : input.target.bundleId,
-      "content-type": "application/json",
-    });
-    let responseHeaders: NodeHttp2.IncomingHttpHeaders = {};
-    let responseBody = "";
-    request.setEncoding("utf8");
-    request.on("response", (headers) => {
-      responseHeaders = headers;
-    });
-    request.on("data", (chunk: string) => {
-      responseBody += chunk;
-    });
-    request.once("error", (cause) => finish(() => reject(cause)));
-    request.on("end", () => {
-      const status = Number(responseHeaders[":status"] ?? 0);
-      finish(() =>
-        resolve({
-          ok: status >= 200 && status < 300,
-          status,
-          reason: parseApnsReason(responseBody),
-          apnsId: responseHeader(responseHeaders, "apns-id"),
-        }),
-      );
-    });
-    request.end(JSON.stringify(input.payload));
-  });
+  readonly tokenSuffix: string;
+}): Effect.Effect<ApnsDeliveryResult, ApnsProviderDeliveryError> {
+  return Effect.tryPromise({
+    try: (signal) =>
+      new Promise<ApnsDeliveryResult>((resolve, reject) => {
+        const client = NodeHttp2.connect(input.origin);
+        let settled = false;
+        const finish = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", abort);
+          client.close();
+          action();
+        };
+        const abort = () => {
+          if (settled) return;
+          settled = true;
+          client.destroy();
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        client.once("error", (cause) => finish(() => reject(cause)));
+        const request = client.request(input.headers);
+        let responseHeaders: NodeHttp2.IncomingHttpHeaders = {};
+        let responseBody = "";
+        request.setEncoding("utf8");
+        request.on("response", (headers) => {
+          responseHeaders = headers;
+        });
+        request.on("data", (chunk: string) => {
+          responseBody += chunk;
+        });
+        request.once("error", (cause) => finish(() => reject(cause)));
+        request.on("end", () => {
+          const status = Number(responseHeaders[":status"] ?? 0);
+          finish(() =>
+            resolve({
+              ok: status >= 200 && status < 300,
+              status,
+              reason: parseApnsReason(responseBody),
+              apnsId: responseHeader(responseHeaders, "apns-id"),
+            }),
+          );
+        });
+        request.end(JSON.stringify(input.payload));
+      }),
+    catch: (cause) =>
+      new ApnsProviderDeliveryError({
+        message: "APNs delivery failed before a response was received.",
+        tokenSuffix: input.tokenSuffix,
+        cause,
+      }),
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: APNS_REQUEST_DEADLINE,
+      orElse: () =>
+        Effect.fail(
+          new ApnsProviderDeliveryError({
+            message: `APNs did not answer within ${APNS_REQUEST_DEADLINE}.`,
+            tokenSuffix: input.tokenSuffix,
+            cause: "deadline",
+          }),
+        ),
+    }),
+  );
 }
 
 function configuredCredentialSource(
@@ -280,7 +338,6 @@ export class ApnsProvider extends Context.Service<
       readonly target: ApnsTarget;
       readonly event: "update" | "end";
       readonly state: RelayAgentActivityAggregateState | null;
-      readonly alert?: ApnsAlert | null;
     }) => Effect.Effect<ApnsDeliveryResult, ApnsProviderDeliveryError>;
     readonly sendNotification: (input: {
       readonly target: ApnsTarget;
@@ -291,6 +348,13 @@ export class ApnsProvider extends Context.Service<
       readonly deepLink: string;
       readonly category?: ApnsNotificationCategory | undefined;
       readonly interruptionLevel?: "time-sensitive" | undefined;
+      readonly badge?: number | undefined;
+      readonly silent?: boolean | undefined;
+      readonly collapseId: string;
+    }) => Effect.Effect<ApnsDeliveryResult, ApnsProviderDeliveryError>;
+    readonly sendBadge: (input: {
+      readonly target: ApnsTarget;
+      readonly badge: number;
     }) => Effect.Effect<ApnsDeliveryResult, ApnsProviderDeliveryError>;
   }
 >()("t3/agentAwareness/ApnsProvider") {}
@@ -336,25 +400,17 @@ const make = Effect.gen(function* () {
     return token;
   };
 
-  const send = Effect.fn("ApnsProvider.send")(function* (input: {
-    readonly target: ApnsTarget;
-    readonly pushType: "alert" | "liveactivity";
-    readonly priority: "5" | "10";
-    readonly payload: unknown;
-  }) {
+  const send = Effect.fn("ApnsProvider.send")(function* (
+    input: Omit<Parameters<typeof makeApnsHeaders>[0], "providerToken"> & {
+      readonly payload: unknown;
+    },
+  ) {
     const now = yield* Clock.currentTimeMillis;
-    return yield* Effect.tryPromise({
-      try: () =>
-        sendHttp2Request({
-          ...input,
-          providerToken: providerToken(now),
-        }),
-      catch: (cause) =>
-        new ApnsProviderDeliveryError({
-          message: "APNs delivery failed before a response was received.",
-          tokenSuffix: input.target.token.slice(-8),
-          cause,
-        }),
+    return yield* sendApnsRequest({
+      origin: apnsOrigin(input.target.environment),
+      headers: makeApnsHeaders({ ...input, providerToken: providerToken(now) }),
+      payload: input.payload,
+      tokenSuffix: input.target.token.slice(-8),
     });
   });
 
@@ -365,11 +421,10 @@ const make = Effect.gen(function* () {
       return yield* send({
         target: input.target,
         pushType: "liveactivity",
-        priority: input.event === "update" && !input.alert ? "5" : "10",
+        priority: input.event === "update" ? "5" : "10",
         payload: makeLiveActivityPayload({
           event: input.event,
           state: input.state,
-          alert: input.alert ?? null,
           nowEpochSeconds,
         }),
       });
@@ -379,8 +434,12 @@ const make = Effect.gen(function* () {
         target: input.target,
         pushType: "alert",
         priority: "10",
+        collapseId: input.collapseId,
         payload: makeNotificationPayload(input),
       });
+    }),
+    sendBadge: Effect.fn("ApnsProvider.sendBadge")(function* (input) {
+      return yield* send({ target: input.target, ...makeBadgeRequest(input.badge) });
     }),
   });
 });
