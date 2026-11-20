@@ -276,6 +276,19 @@ describe("connection freshness projection", () => {
     });
   });
 
+  it("projects a reconnect that runs while the device reports offline", () => {
+    // A wanted connection treats the offline report as a hint, so it replaces a
+    // session that stopped answering without waiting for the network to return.
+    for (const state of [
+      connectionState({ network: "offline" }),
+      connectionState({ network: "offline", phase: "backoff", stage: null, retryAt: 10_000 }),
+    ]) {
+      expect(projectEnvironmentConnectionProgress(state)).toEqual(
+        projectEnvironmentConnectionProgress({ ...state, network: "unknown" }),
+      );
+    }
+  });
+
   it("rejects impossible nullable source combinations instead of publishing invalid unions", () => {
     expect(() =>
       projectEnvironmentConnectionProgress(
@@ -327,7 +340,6 @@ describe("connection freshness projection", () => {
       connectionState({ desired: true, phase: "available", stage: null, attempt: 0 }),
       connectionState({ network: "online", phase: "offline", stage: null }),
       connectionState({ desired: false }),
-      connectionState({ network: "offline" }),
     ];
     for (const state of invalidRelationships) {
       expect(() => projectEnvironmentConnectionProgress(state)).toThrow(
@@ -362,9 +374,6 @@ describe("connection freshness projection", () => {
     for (const state of activeStates) {
       expect(() => projectEnvironmentConnectionProgress({ ...state, desired: false })).toThrow(
         `${state.phase} connection is not desired`,
-      );
-      expect(() => projectEnvironmentConnectionProgress({ ...state, network: "offline" })).toThrow(
-        `${state.phase} connection claims an offline network`,
       );
     }
   });
