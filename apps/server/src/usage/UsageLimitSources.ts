@@ -36,7 +36,7 @@ import { makeCliproxyApi } from "./cliproxyApi.ts";
 import {
   measuredSpend,
   recordSpendSample,
-  SPEND_HISTORY_HOURS,
+  ABANDONED_HISTORY_HOURS,
   type SpendSample,
 } from "./usageSpendHistory.ts";
 
@@ -192,7 +192,7 @@ export const make = Effect.gen(function* () {
     }));
     // Accounts or hubs that are gone stop being read; drop them once their readings age out.
     for (const [key, samples] of history) {
-      if ((samples.at(-1)?.[0] ?? 0) < nowMs - SPEND_HISTORY_HOURS * 3_600_000) {
+      if ((samples.at(-1)?.[0] ?? 0) < nowMs - ABANDONED_HISTORY_HOURS * 3_600_000) {
         history.delete(key);
         changed = true;
       }

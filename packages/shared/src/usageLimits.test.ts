@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerProviderUsageLimits,
+  type ServerProviderUsageWindow,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +23,7 @@ import {
   elapsedShare,
   exhaustedUsageWindow,
   paceOf,
+  measuredOverWindow,
   paceRemainingPercent,
   projectLimitWindows,
   projectionPaces,
@@ -177,40 +179,58 @@ describe("pace", () => {
       resetsAt: DateTime.formatIso(DateTime.makeUnsafe(now + hours * HOUR)),
     }) as const;
 
+  // A pool spending `perHour` in all, measured by the server over a full week.
+  const measuredAt = (perHour: number, pool: readonly ServerProviderUsageWindow[]) =>
+    pool.map((window) => ({
+      ...window,
+      recentSpend: { percentPerHour: perHour / pool.length, hours: 168 },
+    }));
+
   it("projects a nearly empty pool by when its accounts refill, not by even pace", () => {
-    const refillSoon = [weeklyIn(98, 2), weeklyIn(98, 24), weeklyIn(97, 48)];
+    // Each fixture spends at the pace its windows' fill implies: 3 x used / elapsed hours.
+    const refillSoon = measuredAt((3 * 293) / 430, [
+      weeklyIn(98, 2),
+      weeklyIn(98, 24),
+      weeklyIn(97, 48),
+    ]);
     expect(paceOf(refillSoon[2]!, now)).toBe("ahead");
     expect(projectLimitWindows(refillSoon, now)).toMatchObject({ shortPercent: 0, dry: [] });
     expect(projectionPaces(refillSoon, now).safe).toBeCloseTo(1.71, 2);
 
-    const refillsFarOff = [weeklyIn(97, 30), weeklyIn(98, 70), weeklyIn(96, 110)];
+    const refillsFarOff = measuredAt((3 * 291) / 294, [
+      weeklyIn(97, 30),
+      weeklyIn(98, 70),
+      weeklyIn(96, 110),
+    ]);
     const projection = projectLimitWindows(refillsFarOff, now);
     expect(projection?.shortPercent).toBeCloseTo(39, 0);
     expect(projection?.dry[0]).toMatchObject({ until: now + 30 * HOUR, refill: 0 });
     expect((projection!.dry[0]!.from - now) / HOUR).toBeCloseTo(3, 0);
   });
 
-  it("paces a pool by what the server measured it spending, not by how full its windows are", () => {
-    // Two accounts drained, the third reset an hour ago: the fill reads as 2.19% an hour.
+  it("paces a pool only by what the server measured it spending over most of a week", () => {
+    // Two accounts drained, the third reset an hour ago: the fill would read as 2.19% an hour.
     const pool = [weeklyIn(100, 16.42), weeklyIn(100, 46), weeklyIn(0, 167)];
-    const byFill = projectLimitWindows(pool, now);
-    expect((byFill!.dry[0]!.until - byFill!.dry[0]!.from) / HOUR).toBeCloseTo(30, 0);
-
-    const measured = pool.map((window) => ({
+    expect(projectLimitWindows(pool, now)).toBeNull();
+    // Three days measured over a weekend read near zero; a pool waits for most of a week.
+    const weekend = pool.map((window) => ({
       ...window,
-      recentSpend: { percentPerHour: 0.5, hours: 72 },
+      recentSpend: { percentPerHour: 0.07, hours: 72 },
     }));
+    expect(projectLimitWindows(weekend, now)).toBeNull();
+
+    const measured = measuredAt(1.5, pool);
     expect(projectLimitWindows(measured, now)).toMatchObject({ shortPercent: 0, dry: [] });
     expect(projectionPaces(measured, now).safe).toBeCloseTo(300 / 167 / 1.5, 2);
-    // A fresh pool has too little fill to read, but a measured pace still projects it.
-    expect(
-      projectLimitWindows([{ ...weeklyIn(1, 167), recentSpend: measured[0]!.recentSpend }], now),
-    ).not.toBeNull();
+    // A fresh window has too little fill to read, but a measured pace still projects it.
+    expect(projectLimitWindows([measured[2]!], now)).not.toBeNull();
+    expect(measuredOverWindow(weekend[2]!)).toBe(false);
+    expect(measuredOverWindow(measured[2]!)).toBe(true);
   });
 
   it("counts room that resets before the pace reaches it, and skips windows it can't time", () => {
     const projection = projectLimitWindows(
-      [weeklyIn(20, 8), weeklyIn(90, 96), weeklyIn(95, 144)],
+      measuredAt((3 * 205) / 256, [weeklyIn(20, 8), weeklyIn(90, 96), weeklyIn(95, 144)]),
       now,
     );
     expect(projection?.expiring).toEqual([
@@ -223,9 +243,6 @@ describe("pace", () => {
       { member: 0, at: now + 0.1 * HOUR, percent: expect.closeTo(0.94, 2) },
     ]);
     expect(projectLimitWindows([weeklyIn(1, 167)], now)).toBeNull();
-    expect(
-      projectLimitWindows([weeklyIn(5, 160), weeklyIn(5, 160), weeklyIn(5, 160)], now),
-    ).toBeNull();
     expect(
       projectLimitWindows([{ ...weeklyIn(50, 10), windowDurationMins: undefined }], now),
     ).toBeNull();

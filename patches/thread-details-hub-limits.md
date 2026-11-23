@@ -24,9 +24,9 @@ every subscription's room at a glance without opening Usage.
   readable limits, from its own login or a hub, pooled like Usage → Limits. Those groups always
   carry a caption with the provider's name, and the selected provider's group does once any follow.
 - Each row projects its window until every account has refilled once, at the pace its hub accounts
-  spent over the last three days once the server has a day of their readings, and otherwise at the
-  pace the window shows so far,
-  and answers two questions: does the pool run dry before a refill lands, and does an account reset
+  spent over the last window length (a week for a weekly window) once the server has read them for
+  most of one. A pool gets no projection before then; a lone window uses the pace its fill shows.
+  It answers two questions: does the pool run dry before a refill lands, and does an account reset
   with room left? The bar is solid for room the pace uses, dashed for room that resets unused, and
   amber for room it is short, with a notch at what the pace needs. The tooltip says when it runs
   out, what resets unused, and how much faster or slower stays covered. Claude's model-scoped
@@ -50,7 +50,9 @@ The fill alone misjudges a pool: it reads every account as spending in parallel,
 drains one at a time, and an account that just reset hides its last week. So `UsageLimitSources`
 records each hub account window's readings (`apps/server/src/usage/usageSpendHistory.ts`, kept in
 `usage-spend-history.json` under the state directory so deploys don't lose them) and publishes the
-measured `recentSpend` on the window. The projection uses it when every member has it.
+measured `recentSpend` on the window. The projection uses it when every member has it for 90% of
+a window. It has to cover a whole window because Hauke's spending follows the week: three days
+measured on a Monday were mostly weekend and read 0.22% an hour for a pool that spends 1.6 to 1.9%.
 
 ## Removal
 

@@ -16,6 +16,7 @@ import {
   type LimitPoolWindow,
   type LimitProjection,
   limitsNotice,
+  measuredOverWindow,
   paceOf,
   projectionPaces,
   projectLimitWindows,
@@ -277,6 +278,8 @@ function PoolRow({
     ? projectLimitWindows(windows, now)
     : null;
   const pooled = window.members.length > 1;
+  const measuring =
+    !projection && pooled && projectsLimitWindow(driver, window.id) ? measuringNote(windows) : null;
   return (
     <UsageRow
       label={label}
@@ -308,6 +311,8 @@ function PoolRow({
               now={now}
               {...(pooled ? { accounts: window.members.map((member) => member.account) } : {})}
             />
+          ) : measuring ? (
+            <span className="text-muted-foreground">{measuring}</span>
           ) : window.pace ? (
             <span className="text-muted-foreground">{PACE_LABEL[window.pace]}</span>
           ) : null}
@@ -337,6 +342,15 @@ function PoolRow({
   );
 }
 
+/** How much of its pace a pool has measured, while that is short of forecasting and a day or longer. */
+function measuringNote(windows: readonly ServerProviderUsageWindow[]): string | null {
+  if (windows.every(measuredOverWindow)) return null;
+  const windowDays = Math.max(...windows.map((window) => window.windowDurationMins ?? 0)) / 1440;
+  if (windowDays < 1) return null;
+  const days = Math.min(...windows.map((window) => window.recentSpend?.hours ?? 0)) / 24;
+  return `Measuring the pool's pace before forecasting: ${Math.floor(days)} of ${Math.round(windowDays)} days read`;
+}
+
 function AccountMark({ account }: { readonly account: LimitAccount }) {
   if (account.email) return <AccountChip email={account.email} />;
   return (
@@ -364,9 +378,10 @@ function ProjectionLines({
   const dryTotal = projection.dry.reduce((sum, stretch) => sum + stretch.until - stretch.from, 0);
   const expiring = projection.expiring.toSorted((a, b) => b.percent - a.percent).slice(0, 2);
   const safe = Math.floor(paces.safe * 10) / 10;
-  const measuredDays = windows.every((window) => window.recentSpend)
-    ? Math.max(1, Math.round(Math.min(...windows.map((window) => window.recentSpend!.hours)) / 24))
+  const measuredHours = windows.every(measuredOverWindow)
+    ? Math.min(...windows.map((window) => window.recentSpend!.hours))
     : null;
+  const measuredDays = measuredHours === null ? null : Math.round(measuredHours / 24);
   return (
     <>
       {dry ? (
@@ -408,10 +423,15 @@ function ProjectionLines({
             ? "Covered even at 3× this pace"
             : `Covered up to ${safe}× this pace`}
       </span>
-      {measuredDays !== null ? (
+      {measuredHours !== null && measuredDays !== null ? (
         <span className="text-muted-foreground">
           This pace is what {accounts && accounts.length > 1 ? "the accounts" : "the account"} spent
-          over the last {measuredDays === 1 ? "day" : `${measuredDays} days`}
+          over the last{" "}
+          {measuredHours < 24
+            ? formatDuration(measuredHours * 3_600_000)
+            : measuredDays === 1
+              ? "day"
+              : `${measuredDays} days`}
         </span>
       ) : null}
       {paces.usesAll !== null ? (
