@@ -380,6 +380,8 @@
           devenv = devenv.packages.${pkgs.stdenv.hostPlatform.system}.devenv;
         };
 
+      mkWorldfs = pkgs: pkgs.callPackage ./nix/worldfs.nix { };
+
       mkProjectRelease =
         system:
         let
@@ -387,6 +389,7 @@
           package = mkT3CodePackage pkgs;
           inherit (pkgs.stdenv.hostPlatform) isLinux;
           agentExec = mkAgentExec pkgs;
+          worldfs = mkWorldfs pkgs;
           runtimeIdentity = ''
             export HOME CODEX_HOME T3CODE_HOME
             HOME="$(project-context parameter homeDirectory)"
@@ -436,7 +439,13 @@
         nix-infra-modules.lib.projectRuntime.mkServiceRelease {
           inherit pkgs;
           descriptor = projectDescriptor;
-          payloads = [ package ] ++ lib.optional isLinux agentExec;
+          payloads = [
+            package
+          ]
+          ++ lib.optionals isLinux [
+            agentExec
+            worldfs
+          ];
           actions = {
             web = webAction;
             idle = idleAction;
@@ -463,6 +472,7 @@
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           agent-exec = mkAgentExec pkgs;
+          worldfs = mkWorldfs pkgs;
         }
       );
 
