@@ -127,6 +127,7 @@ export class Librarian extends Context.Service<
           readonly world: string;
           readonly repos: ReadonlyArray<string>;
         }>;
+        readonly unreachableWorlds?: ReadonlyArray<string>;
       },
       LibrarianError
     >;
@@ -155,42 +156,48 @@ export const make = Effect.fn("Librarian.make")(function* (worlds: ReadonlyArray
         );
   };
 
-  const post = Effect.fn("Librarian.post")(function* <A>(
-    world: LibrarianWorld,
-    endpoint: "search" | "list",
-    body: unknown,
-    schema: Schema.Decoder<A>,
-  ) {
-    const unavailable = (cause: unknown, httpStatus?: number) =>
-      new LibrarianUnavailableError({
-        world: world.world,
-        cause,
-        ...(httpStatus ? { httpStatus } : {}),
-      });
-    const response = yield* http
-      .execute(
-        HttpClientRequest.post(`${world.url.replace(/\/+$/, "")}/api/${endpoint}`).pipe(
-          HttpClientRequest.bodyJsonUnsafe(body),
-        ),
-      )
-      .pipe(
-        Effect.timeout("30 seconds"),
-        Effect.mapError((cause) => unavailable(cause)),
+  const post = Effect.fn("Librarian.post")(
+    function* <A>(
+      world: LibrarianWorld,
+      endpoint: "search" | "list",
+      body: unknown,
+      schema: Schema.Decoder<A>,
+    ) {
+      const unavailable = (cause: unknown, httpStatus?: number) =>
+        new LibrarianUnavailableError({
+          world: world.world,
+          cause,
+          ...(httpStatus ? { httpStatus } : {}),
+        });
+      const response = yield* http
+        .execute(
+          HttpClientRequest.post(`${world.url.replace(/\/+$/, "")}/api/${endpoint}`).pipe(
+            HttpClientRequest.bodyJsonUnsafe(body),
+          ),
+        )
+        .pipe(Effect.mapError((cause) => unavailable(cause)));
+      if (response.status === 400) {
+        const reply = yield* HttpClientResponse.schemaBodyJson(ZoektErrorReply)(response).pipe(
+          Effect.mapError((cause) => unavailable(cause, 400)),
+        );
+        return yield* new LibrarianQueryError({
+          world: world.world,
+          reason: reply.Error.slice(0, 300),
+        });
+      }
+      if (response.status !== 200) return yield* unavailable(undefined, response.status);
+      return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
+        Effect.mapError((cause) => unavailable(cause, response.status)),
       );
-    if (response.status === 400) {
-      const reply = yield* HttpClientResponse.schemaBodyJson(ZoektErrorReply)(response).pipe(
-        Effect.mapError((cause) => unavailable(cause, 400)),
-      );
-      return yield* new LibrarianQueryError({
-        world: world.world,
-        reason: reply.Error.slice(0, 300),
-      });
-    }
-    if (response.status !== 200) return yield* unavailable(undefined, response.status);
-    return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-      Effect.mapError((cause) => unavailable(cause, response.status)),
-    );
-  });
+    },
+    (effect, world) =>
+      // Covers the body too: a world that stalls after its headers must not hold the call.
+      Effect.timeoutOrElse(effect, {
+        duration: "30 seconds",
+        orElse: () =>
+          Effect.fail(new LibrarianUnavailableError({ world: world.world, cause: "timeout" })),
+      }),
+  );
 
   const zoektSearch = (world: LibrarianWorld, q: string, opts: Record<string, unknown>) =>
     post(world, "search", { Q: q, Opts: opts }, ZoektSearchReply).pipe(
@@ -304,21 +311,30 @@ export const make = Effect.fn("Librarian.make")(function* (worlds: ReadonlyArray
   const listRepos: Librarian["Service"]["listRepos"] = Effect.fn("Librarian.listRepos")(
     function* (input) {
       const targets = yield* select(input.world);
-      return {
-        worlds: yield* Effect.forEach(
-          targets,
-          (target) =>
-            listNames(target).pipe(
-              Effect.map((names) => ({
-                world: target.world,
-                repos: names
-                  .filter((name) => input.prefix === undefined || name.startsWith(input.prefix))
-                  .toSorted(),
-              })),
-            ),
-          { concurrency: "unbounded" },
-        ),
-      };
+      const settled = yield* Effect.forEach(
+        targets,
+        (target) => listNames(target).pipe(Effect.result),
+        { concurrency: "unbounded" },
+      );
+      const worlds: Array<{ world: string; repos: ReadonlyArray<string> }> = [];
+      const unreachable: Array<LibrarianError> = [];
+      for (const [index, outcome] of settled.entries()) {
+        if (outcome._tag === "Failure") {
+          unreachable.push(outcome.failure);
+          continue;
+        }
+        worlds.push({
+          world: targets[index]!.world,
+          repos: outcome.success
+            .filter((name) => input.prefix === undefined || name.startsWith(input.prefix))
+            .toSorted(),
+        });
+      }
+      if (worlds.length === 0) return yield* unreachable[0]!;
+      const unreachableWorlds = targets
+        .filter((target) => !worlds.some((entry) => entry.world === target.world))
+        .map((target) => target.world);
+      return unreachableWorlds.length > 0 ? { worlds, unreachableWorlds } : { worlds };
     },
   );
 

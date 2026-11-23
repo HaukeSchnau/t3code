@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ForgeRawFile from "./ForgeRawFile.ts";
@@ -21,6 +23,9 @@ const zoekt = (files: Record<string, string>) =>
       const json = (value: unknown) => HttpClientResponse.fromWeb(request, Response.json(value));
       if (request.url.startsWith("http://down"))
         return HttpClientResponse.fromWeb(request, new Response("", { status: 503 }));
+      // Headers arrive, the body never does.
+      if (request.url.startsWith("http://stall"))
+        return HttpClientResponse.fromWeb(request, new Response(new ReadableStream()));
       if (request.url.endsWith("/api/list"))
         return json({ List: { Repos: [{ Repository: { Name: REPO } }] } });
       // The `file:` argument as zoekt unquotes it, an RE2 anchored on the path.
@@ -129,11 +134,32 @@ describe("Librarian.readFile", () => {
           ],
         );
         expect(oneWorldDown.value).toMatchObject({ world: "acme", content: "one\ntwo\nthree" });
+        const listedWithOneDown = yield* run(files, (librarian) => librarian.listRepos({}), [
+          { world: "down", url: "http://down:6070" },
+          { world: "acme", url: "http://index:6070" },
+        ]);
+        expect(listedWithOneDown.value).toEqual({
+          worlds: [{ world: "acme", repos: [REPO] }],
+          unreachableWorlds: ["down"],
+        });
 
         const unknownRepo = yield* run(files, (librarian) =>
           librarian.readFile({ file: "git.example.com/acme/other/x.ts" }).pipe(Effect.flip),
         );
         expect(unknownRepo.value).toMatchObject({ reason: "no-repo" });
       }),
+  );
+});
+
+describe("Librarian requests", () => {
+  it.effect("give up on a world that stalls after its headers", () =>
+    Effect.gen(function* () {
+      const fiber = yield* run({}, (librarian) => librarian.listRepos({}).pipe(Effect.flip), [
+        { world: "stall", url: "http://stall:6070" },
+      ]).pipe(Effect.forkChild);
+      yield* TestClock.adjust("30 seconds");
+      const { value } = yield* Fiber.join(fiber);
+      expect(value).toMatchObject({ _tag: "LibrarianUnavailableError", world: "stall" });
+    }),
   );
 });

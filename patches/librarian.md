@@ -19,7 +19,8 @@ search.
   string back and finds the repository by the longest indexed name that prefixes it.
 - **`librarian_search` matches `git grep -F`** in literal mode. zoekt reads every term as a regex,
   splits on spaces, and treats `"` as query syntax, so literal mode escapes the pattern and writes
-  spaces and quotes as `\x20` and `\x22`; each line of a pattern is its own pattern, as in git.
+  spaces and quotes as `\x20` and `\x22`; each line of a pattern is its own pattern, as in git,
+  except that blank lines are dropped where `git grep -F` would match every line.
   Regexes and the `repo` and `path` filters go through zoekt's quoted argument, which hands RE2 the
   pattern unchanged.
   The query always sets `case:yes` unless `ignoreCase`, because zoekt otherwise ignores case for
@@ -35,8 +36,8 @@ search.
   option. For files zoekt marked `NOT-INDEXED` other than binaries, it reads the indexed commit from
   the forge with the CLI the host is already signed in to: `gh` for github.com, `tea` when a tea
   login matches the host, `glab` otherwise.
-- **One world down is not an error** when searching all worlds: the result lists
-  `unreachableWorlds`.
+- **One world down is not an error** when searching or listing all worlds: the result lists
+  `unreachableWorlds`, and a read still resolves against the worlds that answered.
 
 ## Upstream touch points
 

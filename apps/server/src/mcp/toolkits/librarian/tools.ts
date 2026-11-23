@@ -90,6 +90,7 @@ const LibrarianListReposTool = Tool.make("librarian_list_repos", {
     worlds: Schema.Array(
       Schema.Struct({ world: Schema.String, repos: Schema.Array(Schema.String) }),
     ),
+    unreachableWorlds: Schema.optional(Schema.Array(Schema.String)),
   }),
 })
   .annotate(Tool.Title, "List indexed repositories")
