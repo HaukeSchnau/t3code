@@ -332,8 +332,8 @@ once the provider reports usage.
 Turn on **Usage limits** there to see every provider's limits in the same card. Each bar projects
 your pace: dashes are room that resets before you'd use it, amber is room you'd run short of before
 the next refill, and the mark is what your pace needs. Hover a row for when that happens. For
-accounts on a CLIProxyAPI hub, the pace is what they actually spent over the last three days, once
-T3 has read them for a day; until then it is the pace their limits show so far.
+accounts on a CLIProxyAPI hub, the pace is what they actually spent over the last week. A pool
+shows no forecast until T3 has read it for most of a week.
 
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).

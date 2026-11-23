@@ -745,11 +745,22 @@ const PROJECTION_NOISE = 0.5;
 // Float residue from subtracting room; a millionth of a percent is no room at all.
 const PROJECTION_EPSILON = 1e-6;
 
+// A measured pace needs most of a window: a week's pace measured over its weekend reads near zero.
+const MEASURED_SHARE = 0.9;
+
+/** Whether the server measured this window's spend over enough of it to pace by. */
+export function measuredOverWindow(window: ServerProviderUsageWindow): boolean {
+  return (
+    window.recentSpend !== undefined &&
+    window.windowDurationMins !== undefined &&
+    window.recentSpend.hours * 60 >= window.windowDurationMins * MEASURED_SHARE
+  );
+}
+
 /**
- * Replays the windows at their measured pace, or else their fill's pace, until each resets once.
- * Spending follows infra's claude-pool priorities: in the last seventh of its window a member takes
- * all new work, soonest reset first, else the one with the most room per hour does. Null without
- * reset clocks on every member, or, unmeasured, before a tenth of the windows has elapsed.
+ * Replays windows at their measured pace (a lone unmeasured window: its fill's) until each resets.
+ * Spending follows infra's claude-pool priorities: in its window's last seventh a member takes all
+ * new work, soonest reset first, else the most room per hour wins. Null without clocks.
  */
 function replayLimitWindows(
   windows: readonly ServerProviderUsageWindow[],
@@ -765,10 +776,10 @@ function replayLimitWindows(
   if (members.length === 0 || members.length !== windows.length) return null;
   const elapsed = members.reduce((sum, member) => sum + member.length - member.resetsIn, 0);
   const lengths = members.reduce((sum, member) => sum + member.length, 0);
-  // Without the server's measured spend, the fill is read as every account spending in parallel,
-  // which a pool that drains one account at a time, or one that just reset, misjudges.
-  const measured = windows.every((window) => window.recentSpend !== undefined);
-  if (!measured && elapsed < lengths / 10) return null;
+  // A pool's fill reads as every account spending in parallel, which a pool that drains one
+  // account at a time, or one that just reset, misjudges; only its measured spend paces it.
+  const measured = windows.every(measuredOverWindow);
+  if (!measured && (members.length > 1 || elapsed < lengths / 10)) return null;
   const spentPerMs =
     (measured
       ? windows.reduce((sum, window) => sum + window.recentSpend!.percentPerHour, 0) / HOUR

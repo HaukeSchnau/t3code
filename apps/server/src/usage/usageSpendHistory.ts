@@ -1,12 +1,15 @@
 import type { ServerProviderUsageWindow } from "@t3tools/contracts";
 
 const HOUR = 3_600_000;
-/** How far back the measured pace looks. */
-export const SPEND_HISTORY_HOURS = 72;
-/** Less than a day of readings says more about the time of day than about the pace. */
-const MIN_OBSERVED_HOURS = 24;
+/** Readings of a window that stopped reporting this long ago belong to a removed account or hub. */
+export const ABANDONED_HISTORY_HOURS = 8 * 24;
 // Readings come at least hourly while T3 reads the hub, so a longer gap means nobody was reading.
 const MAX_GAP_MS = 2 * HOUR;
+
+// A full window covers its usage rhythm: a week's pace measured over a weekend reads near zero.
+function lookbackMs(window: ServerProviderUsageWindow): number | null {
+  return window.windowDurationMins ? window.windowDurationMins * 60_000 : null;
+}
 
 /** A reading: when, how much of the window was used, and when the window resets. */
 export type SpendSample = readonly [at: number, usedPercent: number, resetsAt: number | null];
@@ -38,23 +41,26 @@ export function recordSpendSample(
   if (last && at <= last[0]) return samples;
   const unchanged = last && last[1] === sample[1] && !startsNewWindow(last, sample);
   const next = unchanged && at - last[0] < HOUR ? samples : [...samples, sample];
-  const oldest = at - SPEND_HISTORY_HOURS * HOUR - MAX_GAP_MS;
+  const oldest = at - (lookbackMs(window) ?? ABANDONED_HISTORY_HOURS * HOUR) - MAX_GAP_MS;
   return next[0]![0] >= oldest ? next : next.filter(([sampleAt]) => sampleAt >= oldest);
 }
 
 /**
- * What the window's account spent per hour over the last three days of readings, counting what a
- * new window used since its reset. A gap across a reset hides what the old window spent last, so
- * it counts as unobserved. Undefined below a day of observed time.
+ * What the window's account spent per hour over the last window length of readings, counting what
+ * a new window used since its reset. A gap across a reset hides what the old window spent last, so
+ * it counts as unobserved. `hours` says how much of that length was observed; clients decide when
+ * it is enough.
  */
 export function measuredSpend(
   samples: readonly SpendSample[],
   window: ServerProviderUsageWindow,
   at: number,
 ): ServerProviderUsageWindow["recentSpend"] {
+  const lookback = lookbackMs(window);
+  if (lookback === null) return undefined;
   const last = samples.at(-1);
   const points = last && at <= last[0] ? samples : [...samples, sampleOf(window, at)];
-  const from = at - SPEND_HISTORY_HOURS * HOUR - MAX_GAP_MS;
+  const from = at - lookback;
   let spent = 0;
   let observedMs = 0;
   for (let index = 1; index < points.length; index += 1) {
@@ -62,10 +68,12 @@ export function measuredSpend(
     const next = points[index]!;
     const duration = next[0] - previous[0];
     const reset = startsNewWindow(previous, next);
-    if (previous[0] < from || (reset && duration > MAX_GAP_MS)) continue;
-    spent += reset ? next[1] : Math.max(0, next[1] - previous[1]);
-    observedMs += duration;
+    if (next[0] <= from || (reset && duration > MAX_GAP_MS)) continue;
+    // Readings come hourly when nothing changes, so the interval across `from` counts its share.
+    const share = previous[0] < from ? (next[0] - from) / duration : 1;
+    spent += (reset ? next[1] : Math.max(0, next[1] - previous[1])) * share;
+    observedMs += duration * share;
   }
   const hours = observedMs / HOUR;
-  return hours < MIN_OBSERVED_HOURS ? undefined : { percentPerHour: spent / hours, hours };
+  return hours > 0 ? { percentPerHour: spent / hours, hours } : undefined;
 }
