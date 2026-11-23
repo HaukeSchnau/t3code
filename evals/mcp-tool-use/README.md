@@ -243,6 +243,12 @@ Passes per case, main's runtime text (3 samples) → this branch's "Link every o
 
 After the change, the first reference to a file is an absolute link. The remaining failures come from two other kinds of span. Some repeat the file later as relative inline code (Sonnet's other-checkout failures). Others quote values rather than cite files, such as `main` set to `src/index.ts` or the import `./ws`. Chat still turns those spans into pills.
 
+## Librarian cases
+
+`cases/librarian.ndjson` checks the Librarian tools, which T3 lists only on hosts with `T3CODE_LIBRARIAN_WORLDS`; the eval always lists them. The `bad` case asks about a repository the thread has not checked out, which agents answered by grepping reference clones or cloning ([#191](https://git.schnau.dev/schnau/t3code/issues/191), "Spike: how agents search"). The guard reads a search hit by the path the search printed, since no local path exists. The control searches the thread's own uncommitted work, which the index does not hold.
+
+On 2026-11-23, without the toolkit the `bad` case failed 2/2 samples on Sonnet 5.5. With it, all three cases passed 3/3 on Sonnet 5.5 ($0.30) and Opus 5.5 ($0.46).
+
 ## Where T3's text lives
 
 - `packages/provider-core/src/server/runtimeInstructions.ts`

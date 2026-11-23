@@ -18,6 +18,7 @@ import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { JjStatusReader } from "../jj/JjStatusReader.ts";
 import { JjThreadWork } from "../jj/JjThreadWork.ts";
 import { JjWorkflow } from "../jj/JjWorkflow.ts";
+import { Librarian } from "../librarian/Librarian.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
@@ -65,6 +66,8 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(JjStatusReader)({}),
   Layer.mock(JjThreadWork)({}),
   Layer.mock(JjWorkflow)({}),
+  // Measures the tools as hosts with a world index see them.
+  Layer.mock(Librarian)({ worlds: [{ world: "acme", url: "http://127.0.0.1:6070" }] }),
   Layer.mock(ManagedProjectFolders)({ namedProjectsRoot: "" }),
   Layer.mock(ManagedWorkspaces)({}),
   Layer.mock(McpProviderSessions)({}),

@@ -29,6 +29,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
+import * as Librarian from "../librarian/Librarian.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -74,6 +75,8 @@ import * as WatchHandlers from "./toolkits/watch/handlers.ts";
 import * as FollowUpHandlers from "./toolkits/followUps/handlers.ts";
 import { FollowUpsToolkit } from "./toolkits/followUps/tools.ts";
 import { WatchToolkit } from "./toolkits/watch/tools.ts";
+import * as LibrarianHandlers from "./toolkits/librarian/handlers.ts";
+import { LibrarianToolkit } from "./toolkits/librarian/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -1213,6 +1216,15 @@ const layerJjToolkit = toolkitRegistration(JjToolkit, JjHandlers.layer);
 const layerWatchToolkit = toolkitRegistration(WatchToolkit, WatchHandlers.layer);
 const layerFollowUpsToolkit = toolkitRegistration(FollowUpsToolkit, FollowUpHandlers.layer);
 
+/** A host without `T3CODE_LIBRARIAN_WORLDS` has no index to search, so agents never see the tools. */
+const layerLibrarianToolkit = Layer.unwrap(
+  Effect.map(Librarian.Librarian, (librarian) =>
+    librarian.worlds.length === 0
+      ? Layer.empty
+      : toolkitRegistration(LibrarianToolkit, LibrarianHandlers.layer),
+  ),
+);
+
 const layerPreviewControlsRegistration = toolkitRegistration(
   PreviewControlsToolkit,
   PreviewControlsHandlers.layer,
@@ -1295,6 +1307,7 @@ export const layerTools = Layer.mergeAll(
   layerHtmlToolkit,
   layerWatchToolkit,
   layerFollowUpsToolkit,
+  layerLibrarianToolkit,
 );
 
 export const layer = layerMcpTransport(layerTools);
