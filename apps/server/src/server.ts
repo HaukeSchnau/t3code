@@ -84,6 +84,7 @@ import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import * as Librarian from "./librarian/Librarian.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpToolDirectory from "./mcp/McpToolDirectory.ts";
 import * as HtmlRenderBridge from "./htmlRender/HtmlRenderBridge.ts";
@@ -903,6 +904,7 @@ const layerMakeRoutes = Layer.mergeAll(
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+    Layer.provide(Librarian.layer),
   ),
   // Follows delegated tasks running in linked environments, including after a restart.
   Layer.effectDiscard(
