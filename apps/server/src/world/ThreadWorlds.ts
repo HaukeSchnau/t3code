@@ -24,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
@@ -37,9 +38,15 @@ import {
   isolatedWorkspacesAvailable,
 } from "../workspace/IsolatedWorkspaces.ts";
 import { keepsWorkspace } from "../workspace/ManagedWorkspaces.ts";
+import { ManagedWorkspaceError, runWorkspaceCommand } from "../workspace/WorkspaceCommand.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { looseFiles, removeEmptyTree } from "./looseFiles.ts";
-import { registeredThreadKey, registerThreadWorld } from "./ThreadWorldLauncher.ts";
+import {
+  pushThreadWorldNotes,
+  registeredThreadKey,
+  registerThreadWorld,
+  threadWorldNotesState,
+} from "./ThreadWorldLauncher.ts";
 import {
   isInWorlds,
   isWorldProjectRoot,
@@ -88,7 +95,46 @@ const make = Effect.gen(function* () {
     return { ...world, thread, socket: worldfsSocketPath(environment) };
   });
 
+  // The last failed notes push per thread world, shown on its notes until a push succeeds.
+  const notesErrors = new Map<string, string>();
+  const notesLocks = new Map<string, Semaphore.Semaphore>();
+
+  /** The world repo at the thread world's root, as one more repo with work no remote has. */
+  const notesRepo = Effect.fn("ThreadWorlds.notesRepo")(function* (
+    world: NonNullable<Effect.Success<ReturnType<typeof threadWorld>>>,
+  ) {
+    if (world.settings.repo === undefined) return [];
+    if (!NodeFS.existsSync(NodePath.join(world.root, ".git"))) return [];
+    const error = notesErrors.get(world.root);
+    const state = yield* threadWorldNotesState(world.root).pipe(
+      Effect.provide(context),
+      Effect.map((notes) => ({ ...notes, error })),
+      Effect.catch((cause) => Effect.succeed({ dirty: 0, ahead: 0, error: cause.message })),
+    );
+    return [
+      {
+        repo: world.settings.repo,
+        dir: ".",
+        checkedOut: true,
+        dirty: state.dirty,
+        commits: state.ahead,
+        branches: [],
+        // A state that couldn't be read is never a clean one.
+        lostOnTeardown: state.dirty > 0 || state.ahead > 0 || state.error !== undefined,
+        ...(state.error === undefined ? {} : { error: state.error }),
+      },
+    ];
+  });
+
   const readStatus = Effect.fn("ThreadWorlds.readStatus")(function* (
+    world: NonNullable<Effect.Success<ReturnType<typeof threadWorld>>>,
+  ): Effect.fn.Return<WorldThreadStatus> {
+    const daemon = yield* readDaemonStatus(world);
+    const notes = yield* notesRepo(world);
+    return notes.length === 0 ? daemon : { ...daemon, repos: [...notes, ...daemon.repos] };
+  });
+
+  const readDaemonStatus = Effect.fn("ThreadWorlds.readDaemonStatus")(function* (
     world: NonNullable<Effect.Success<ReturnType<typeof threadWorld>>>,
   ): Effect.fn.Return<WorldThreadStatus> {
     if (world.thread === undefined) return emptyWorldThreadStatus(world.id, world.settings.path);
@@ -192,7 +238,56 @@ const make = Effect.gen(function* () {
 
   const inWorld = (cwd: string) => Effect.succeed(isInWorlds(config.baseDir, cwd));
 
-  return { available, status, ensure, inWorld, claudePreToolUse, readStatus, threadWorld };
+  const pushNotes = Effect.fn("ThreadWorlds.pushNotes")(function* (root: string) {
+    let lock = notesLocks.get(root);
+    if (lock === undefined) {
+      lock = yield* Semaphore.make(1);
+      notesLocks.set(root, lock);
+    }
+    yield* lock.withPermits(1)(
+      pushThreadWorldNotes(root).pipe(
+        Effect.provide(context),
+        Effect.tap(() => Effect.sync(() => notesErrors.delete(root))),
+        Effect.catch((error) =>
+          Effect.sync(() => notesErrors.set(root, error.message)).pipe(
+            Effect.andThen(
+              Effect.logWarning("Could not push a thread world's notes", {
+                root,
+                reason: error.message,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
+  // Pushing waits on the network, so the turn's checkpoint doesn't wait for it.
+  const turnEnded = (input: {
+    readonly threadId: OrchestrationV2ThreadShell["id"];
+    readonly cwd: string;
+  }) =>
+    threadWorld(input.cwd).pipe(
+      Effect.flatMap((world) =>
+        world?.thread === undefined ||
+        world.settings.repo === undefined ||
+        !NodeFS.existsSync(NodePath.join(world.root, ".git"))
+          ? Effect.void
+          : pushNotes(world.root).pipe(Effect.forkDetach, Effect.asVoid),
+      ),
+      Effect.orElseSucceed(() => undefined),
+    );
+
+  return {
+    available,
+    status,
+    ensure,
+    inWorld,
+    claudePreToolUse,
+    readStatus,
+    threadWorld,
+    turnEnded,
+  };
 });
 
 /** Provides `WorldThreadHooks` to provider adapters, VCS status and the MCP tools. */
@@ -204,6 +299,7 @@ export const layer = Layer.effect(
       inWorld: worlds.inWorld,
       status: worlds.status,
       claudePreToolUse: worlds.claudePreToolUse,
+      turnEnded: worlds.turnEnded,
     })),
   ),
 ).pipe(Layer.provide(ProcessRunner.layer));
@@ -270,6 +366,32 @@ export const layerBackground = Layer.effectDiscard(
       ),
     });
 
+    /** The world repo's tracked files, when the thread world's root is one. */
+    const worldRepoFiles = Effect.fn("ThreadWorlds.worldRepoFiles")(function* (root: string) {
+      if (!NodeFS.existsSync(NodePath.join(root, ".git"))) return {};
+      const unlisted = (cause?: unknown) =>
+        new ManagedWorkspaceError({
+          operation: "ThreadWorlds.worldRepoFiles",
+          detail: "Could not list the world repo's files.",
+          ...(cause === undefined ? {} : { cause }),
+        });
+      const result = yield* runWorkspaceCommand({
+        operation: "ThreadWorlds.worldRepoFiles",
+        command: "git",
+        args: ["-C", root, "ls-files", "-z"],
+        timeout: "30 seconds",
+      }).pipe(Effect.provide(context), Effect.mapError(unlisted));
+      if (result.code !== 0 || result.stdoutTruncated) {
+        return yield* unlisted({
+          code: result.code,
+          stdoutTruncated: result.stdoutTruncated,
+          stderr: result.stderr,
+        });
+      }
+      // Untrimmed: a file name may start or end with a space.
+      return { tracked: new Set(result.stdout.split("\0").filter(Boolean)) };
+    });
+
     const allThreads = threads
       .getShellSnapshot()
       .pipe(Effect.map((snapshot) => [...snapshot.threads, ...snapshot.archivedThreads]));
@@ -298,6 +420,17 @@ export const layerBackground = Layer.effectDiscard(
           if (busyReason({ nowMs, createdMs, threads: users.map(threadUse) }) !== undefined) {
             continue;
           }
+          // A world whose files can't be listed stays; the sweep goes on with the next one.
+          const tracked = yield* worldRepoFiles(root).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("A thread world stays", {
+                root,
+                reason: error.message,
+                cause: error.cause,
+              }).pipe(Effect.as(null)),
+            ),
+          );
+          if (tracked === null) continue;
           const decision = teardownDecision({
             nowMs,
             createdMs,
@@ -306,7 +439,10 @@ export const layerBackground = Layer.effectDiscard(
               world.thread === undefined
                 ? emptyWorldThreadStatus(world.id, world.settings.path)
                 : yield* worlds.readStatus(world),
-            looseFiles: looseFiles(root, { includeRepos: world.thread === undefined }),
+            looseFiles: looseFiles(root, {
+              includeRepos: world.thread === undefined,
+              ...tracked,
+            }),
           });
           if (!decision.teardown) {
             yield* Effect.logDebug("Keeping a thread world", { root, reason: decision.reason });

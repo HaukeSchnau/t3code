@@ -3,13 +3,7 @@
  * namespaces and its registration with the worldfs daemon; T3 picks the host directory and the
  * daemon's thread key, and reads back the registration that routes the thread's processes.
  */
-import {
-  type ProjectId,
-  type ThreadId,
-  type WorldId,
-  WorldLayoutRule,
-  type WorldSettings,
-} from "@t3tools/contracts";
+import type { ProjectId, ThreadId, WorldId, WorldSettings } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -27,8 +21,6 @@ const decodeRegistration = Schema.decodeEffect(
     }),
   ),
 );
-
-const encodeLayout = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(WorldLayoutRule)));
 
 const fail = (operation: string, detail: string, cause?: unknown) =>
   new ManagedWorkspaceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
@@ -74,9 +66,8 @@ export const registerThreadWorld = Effect.fn("ThreadWorlds.register")(function* 
       thread,
       "--project-id",
       input.projectId,
-      ...(input.settings.layout.length === 0
-        ? []
-        : ["--layout", yield* encodeLayout(input.settings.layout).pipe(Effect.orDie)]),
+      ...(input.settings.repo === undefined ? [] : ["--repo", input.settings.repo]),
+      ...input.settings.mounts.flatMap((mount) => ["--mount", mount]),
     ],
     timeout: "2 minutes",
   });
@@ -105,4 +96,47 @@ export const registeredThreadKey = Effect.fn("ThreadWorlds.registeredKey")(funct
       fail("ThreadWorlds.registeredKey", "Could not read the thread world's registration.", cause),
   });
   return record?.root === root ? (record.workspace?.id ?? undefined) : undefined;
+});
+
+/**
+ * `agent-exec world-notes`: commits the thread's note changes in the world repo at the thread
+ * world's root, merges the remote's, and pushes, unless a file must never leave the machine.
+ */
+export const pushThreadWorldNotes = Effect.fn("ThreadWorlds.pushNotes")(function* (root: string) {
+  const launcher = yield* requireLauncher("ThreadWorlds.pushNotes");
+  yield* runWorkspaceCommandOrFail({
+    operation: "ThreadWorlds.pushNotes",
+    command: launcher,
+    args: ["world-notes", root],
+    timeout: "2 minutes",
+  });
+});
+
+/**
+ * What the world repo's remote doesn't have yet: changed files, and commits on HEAD or a local
+ * branch that no remote has (agent-exec's `notes_state`).
+ */
+export const threadWorldNotesState = Effect.fn("ThreadWorlds.notesState")(function* (root: string) {
+  const git = (args: ReadonlyArray<string>) =>
+    runWorkspaceCommandOrFail({
+      operation: "ThreadWorlds.notesState",
+      command: "git",
+      args: ["-C", root, ...args],
+      timeout: "30 seconds",
+    });
+  const changed = yield* git(["status", "--porcelain"]);
+  const ahead = yield* git([
+    "rev-list",
+    "--count",
+    "HEAD",
+    "--branches",
+    "--tags",
+    "--glob=refs/stas[h]",
+    "--not",
+    "--remotes=origin",
+  ]);
+  return {
+    dirty: changed === "" ? 0 : changed.split("\n").length,
+    ahead: Number.parseInt(ahead, 10) || 0,
+  };
 });

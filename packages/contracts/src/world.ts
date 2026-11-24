@@ -1,24 +1,25 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** A world's name in the machine cache, such as `buildlinx` (`/var/lib/worlds/<id>`). */
 export const WorldId = TrimmedNonEmptyString.check(Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/));
 export type WorldId = typeof WorldId.Type;
 
-/** Repos whose forge path starts with `prefix` sit at `<dir><rest>`; the daemon's `layout`. */
-export const WorldLayoutRule = Schema.Struct({
-  prefix: TrimmedNonEmptyString,
-  dir: TrimmedString,
-});
-export type WorldLayoutRule = typeof WorldLayoutRule.Type;
-
 export const WorldSettings = Schema.Struct({
   title: TrimmedNonEmptyString,
   /** Where every thread of the world sees it, such as `/home/haukeschnau/Buildlinx`. */
   path: TrimmedNonEmptyString.check(Schema.isPattern(/^\//)),
-  layout: Schema.Array(WorldLayoutRule).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
+   * The world repo, cloned as each thread world's root: instructions, notes, and the layout in
+   * its `world.json`. T3 pushes the thread's note changes at the end of each turn.
+   */
+  repo: Schema.optional(TrimmedNonEmptyString),
+  /** Host paths every thread of the world reads at the same path, read-only. */
+  mounts: Schema.Array(TrimmedNonEmptyString.check(Schema.isPattern(/^\//))).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type WorldSettings = typeof WorldSettings.Type;
 
