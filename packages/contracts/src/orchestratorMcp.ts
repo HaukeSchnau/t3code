@@ -24,6 +24,7 @@ import {
   SCHEDULED_TASK_MAX_CONSECUTIVE_FAILURES,
   ScheduledTaskRunStatus,
   ScheduledTaskSchedule,
+  ScheduledTaskPlacement,
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
 import { ProviderInteractionMode, ProviderRequestKind, RuntimeMode } from "./providerPolicy.ts";
@@ -116,7 +117,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   environmentId: Schema.optional(
     EnvironmentId.annotate({
       description:
-        "Linked environment to run in. Provider and model default to yours; others come from `orchestrator_capabilities` with this `environmentId`.",
+        'Linked environment to run in, or "auto" for the machine with the most room. There the task works in that machine\'s checkout, without your uncommitted edits. Provider and model default to yours; others come from `orchestrator_capabilities` with this `environmentId`.',
     }),
   ),
   projectId: Schema.optional(
@@ -333,6 +334,17 @@ export const OrchestratorMcpEnvironmentTarget = Schema.optional(
   EnvironmentId.annotate({
     description:
       "Linked environment to act in. Omit for this one. Ids are then that environment's.",
+  }),
+);
+
+/** Fork (patches/fleet-placement.md): the environment placement picks for a new thread. */
+export const PLACEMENT_AUTO_ENVIRONMENT = "auto";
+
+/** Where a new thread starts: like `OrchestratorMcpEnvironmentTarget`, or "auto". */
+export const OrchestratorMcpLaunchEnvironmentTarget = Schema.optional(
+  EnvironmentId.annotate({
+    description:
+      'Linked environment to start in, or "auto" for the machine with the most room. Omit for this one. Ids are then that environment\'s.',
   }),
 );
 
@@ -683,6 +695,12 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
         "Runs share one thread but each starts a fresh session without earlier runs' context. Unbound: the first run makes the thread.",
     }),
   ),
+  placement: Schema.optional(
+    ScheduledTaskPlacement.annotate({
+      description:
+        '"auto": each run\'s new thread starts on the machine with the most room. Only for a new thread per run.',
+    }),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
@@ -705,6 +723,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
   freshSession: Schema.Boolean,
+  placement: Schema.optional(ScheduledTaskPlacement),
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
@@ -756,6 +775,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
   freshSession: Schema.optional(Schema.Boolean),
+  placement: Schema.optional(ScheduledTaskPlacement),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;

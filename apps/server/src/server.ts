@@ -229,6 +229,8 @@ import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsag
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as Placement from "./placement/Placement.ts";
+import * as PlacementHttp from "./placement/PlacementHttp.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
@@ -914,6 +916,10 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
     Layer.provide(Librarian.layer),
   ),
+  // Linked peers read this environment's load and launch the threads placed here.
+  PlacementHttp.layer.pipe(Layer.provide(McpOAuth.layerMcpClientAuthenticator)),
+  // Reads linked peers' load every few seconds for placement.
+  Layer.effectDiscard(Placement.Placement.pipe(Effect.flatMap((placement) => placement.start()))),
   // Follows delegated tasks running in linked environments, including after a restart.
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),

@@ -53,6 +53,9 @@ import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as LocalPlacement from "../placement/LocalPlacement.ts";
+import * as Placement from "../placement/Placement.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
@@ -267,9 +270,13 @@ export const layerProjectSetupScriptRunner = ProjectSetupScriptRunner.layer.pipe
 const layerManagedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(layerProjectService),
 );
+const layerLocalPlacementProvided = LocalPlacement.layer.pipe(
+  Layer.provide(Layer.mergeAll(layerProjectService, layerThreadManagementProvided)),
+);
 const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerLocalPlacementProvided,
       layerProjectService,
       layerProjectSetupScriptRunner,
       layerManagedProjectFoldersProvided,
@@ -279,12 +286,26 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
     ),
   ),
 );
+// Auto launches from clients, agents and scheduled tasks; the same links serve Settings and /mcp.
+const layerPlacementProvided = Placement.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerLocalPlacementProvided,
+      layerThreadLaunchProvided,
+      layerThreadManagementProvided,
+      layerProjectService,
+      layerManagedProjectFoldersProvided,
+      PeerLinks.layer,
+    ),
+  ),
+);
 const layerSecretRequestsProvided = SecretRequests.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerPlacementProvided,
       layerThreadLaunchProvided,
       layerThreadManagementProvided,
       layerManagedProjectFoldersProvided,
@@ -377,6 +398,8 @@ export const layerProduction = Layer.mergeAll(
   layerProjectService,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
+  layerLocalPlacementProvided,
+  layerPlacementProvided,
   layerScheduledTaskProvided,
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,

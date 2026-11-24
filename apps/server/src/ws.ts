@@ -252,6 +252,8 @@ import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/Rpc
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as LocalPlacement from "./placement/LocalPlacement.ts";
+import * as Placement from "./placement/Placement.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
@@ -1622,6 +1624,8 @@ export const layerWsRpc = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
       const hostResources = yield* HostResources.HostResources;
+      const placement = yield* Placement.Placement;
+      const localPlacement = yield* LocalPlacement.LocalPlacement;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2820,6 +2824,90 @@ export const layerWsRpc = (
           }),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
+        [WS_METHODS.placementPreview]: (input) =>
+          placement
+            .preview({
+              projectId: input.projectId,
+              instanceId: input.instanceId,
+              workspaceStrategy: { type: "root" },
+              hasAttachments: false,
+              hasContext: false,
+            })
+            .pipe(Effect.map((preview) => ({ preview }))),
+        [WS_METHODS.placementLaunch]: (input) =>
+          startup
+            .enqueueCommand(
+              placement.launch({
+                commandId: input.commandId,
+                projectId: input.projectId,
+                title: input.title,
+                ...(input.generateTitle === undefined
+                  ? {}
+                  : { generateTitle: input.generateTitle }),
+                modelSelection: input.modelSelection,
+                runtimeMode: input.runtimeMode,
+                interactionMode: input.interactionMode,
+                workspaceStrategy: input.workspaceStrategy,
+                ...(input.initialMessage === undefined
+                  ? {}
+                  : {
+                      initialMessage: {
+                        ...(input.initialMessage.messageId === undefined
+                          ? {}
+                          : { messageId: input.initialMessage.messageId }),
+                        text: input.initialMessage.text,
+                        attachments: input.initialMessage.attachments,
+                        ...(input.initialMessage.context === undefined
+                          ? {}
+                          : { context: input.initialMessage.context }),
+                      },
+                    }),
+                ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                ...(input.reuseExistingThread === undefined
+                  ? {}
+                  : { reuseExistingThread: input.reuseExistingThread }),
+                createdBy: "user",
+                creationSource: input.creationSource ?? "web",
+              }),
+            )
+            .pipe(
+              Effect.map((launched) => ({
+                environmentId: launched.environmentId,
+                threadId: launched.threadId,
+                ...(launched.placement === undefined ? {} : { placement: launched.placement }),
+              })),
+              Effect.catchTags({
+                AttachmentClaimError: (cause) =>
+                  new OrchestrationV2ThreadLaunchError({
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    message: cause.message,
+                    cause,
+                  }),
+                ThreadLaunchError: (cause) =>
+                  new OrchestrationV2ThreadLaunchError({
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    message: "Failed to launch thread",
+                    cause,
+                  }),
+                ServerRuntimeStartupError: (cause) =>
+                  new OrchestrationV2ThreadLaunchError({
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    message: "Failed to launch thread",
+                    cause,
+                  }),
+                ThreadManagementProviderInstanceDisabledError: (cause) =>
+                  new OrchestrationV2ThreadLaunchError({
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    message: cause.message,
+                    cause,
+                  }),
+              }),
+            ),
+        [WS_METHODS.placementStartNow]: (input) => localPlacement.startNow(input.threadId),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>

@@ -53,6 +53,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as Placement from "../placement/Placement.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -218,6 +219,7 @@ interface ScheduledTaskRow {
   readonly project_id: string;
   readonly thread_id: string | null;
   readonly thread_mode: string;
+  readonly placement: string | null;
   readonly workspace_strategy_json: string;
   readonly model_selection_json: string;
   readonly runtime_mode: string;
@@ -458,6 +460,7 @@ const decodeRow = Effect.fnUntraced(
       projectId: row.project_id,
       threadId: row.thread_id,
       threadMode: row.thread_mode,
+      ...(row.placement === null ? {} : { placement: row.placement }),
       workspaceStrategy,
       modelSelection,
       runtimeMode: row.runtime_mode,
@@ -529,6 +532,8 @@ export const layer = Layer.effect(
     const digest = yield* Digest.Digest;
     const mac = yield* Mac.Mac;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+    // Optional so the service builds where placement is not composed, as in its tests.
+    const placement = yield* Effect.serviceOption(Placement.Placement);
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
     const secretRequests = yield* SecretRequests.SecretRequests;
@@ -584,6 +589,7 @@ export const layer = Layer.effect(
         project_id,
         thread_id,
         thread_mode,
+        placement,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -627,6 +633,7 @@ export const layer = Layer.effect(
         project_id,
         thread_id,
         thread_mode,
+        placement,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -707,6 +714,7 @@ export const layer = Layer.effect(
           project_id,
           thread_id,
           thread_mode,
+          placement,
           workspace_strategy_json,
           model_selection_json,
           runtime_mode,
@@ -733,6 +741,7 @@ export const layer = Layer.effect(
           ${task.projectId},
           ${task.threadId},
           ${scheduledTaskThreadMode(task)},
+          ${task.placement ?? null},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
@@ -766,6 +775,7 @@ export const layer = Layer.effect(
             ELSE COALESCE(excluded.thread_id, scheduled_tasks.thread_id)
           END,
           thread_mode = excluded.thread_mode,
+          placement = excluded.placement,
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -1163,34 +1173,35 @@ export const layer = Layer.effect(
         const preparation =
           active.threadId === null ? yield* Deferred.make<void, string>() : undefined;
         // Capture defects and interrupts too so dispatch failures still reach markCompleted.
+        const launchNew = (input: ThreadLaunchService.ThreadLaunchInput) =>
+          active.placement === "auto" && threadMode === "new_thread" && Option.isSome(placement)
+            ? placement.value.launch(input).pipe(Effect.map((launched) => launched.threadId))
+            : threadLaunch.launch(input).pipe(Effect.map((launched) => launched.threadId));
         const result =
           active.threadId === null
             ? yield* Effect.exit(
-                threadLaunch
-                  .launch({
-                    commandId,
-                    projectId: active.projectId,
-                    title: active.title,
-                    modelSelection: active.modelSelection,
-                    runtimeMode: active.runtimeMode,
-                    interactionMode: active.interactionMode,
-                    workspaceStrategy: active.workspaceStrategy,
-                    initialMessage: {
-                      messageId,
-                      scheduledTaskId: active.id,
-                      text: prompt,
-                      attachments: [],
-                    },
-                    createdBy: active.createdBy,
-                    creationSource: active.creationSource,
-                    ...(preparation === undefined ? {} : { preparation }),
-                  })
-                  .pipe(
-                    Effect.map((launched) => launched.threadId),
-                    Effect.tap((threadId) =>
-                      threadMode === "new_thread" ? Effect.void : bindThread(active, threadId),
-                    ),
+                launchNew({
+                  commandId,
+                  projectId: active.projectId,
+                  title: active.title,
+                  modelSelection: active.modelSelection,
+                  runtimeMode: active.runtimeMode,
+                  interactionMode: active.interactionMode,
+                  workspaceStrategy: active.workspaceStrategy,
+                  initialMessage: {
+                    messageId,
+                    scheduledTaskId: active.id,
+                    text: prompt,
+                    attachments: [],
+                  },
+                  createdBy: active.createdBy,
+                  creationSource: active.creationSource,
+                  ...(preparation === undefined ? {} : { preparation }),
+                }).pipe(
+                  Effect.tap((threadId) =>
+                    threadMode === "new_thread" ? Effect.void : bindThread(active, threadId),
                   ),
+                ),
               )
             : yield* Effect.exit(
                 // The stored selection only seeds fresh threads. A bound run
@@ -1662,6 +1673,9 @@ export const layer = Layer.effect(
         projectId: input.projectId,
         threadId,
         threadMode,
+        ...((input.placement ?? existingTask?.placement) === undefined
+          ? {}
+          : { placement: input.placement ?? existingTask?.placement }),
         workspaceStrategy,
         modelSelection: input.modelSelection,
         runtimeMode: input.runtimeMode,

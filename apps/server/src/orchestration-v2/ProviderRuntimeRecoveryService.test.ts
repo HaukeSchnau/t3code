@@ -508,10 +508,16 @@ it.effect.each([
   "starting-other-request",
   "starting-own-request",
   "starting-scheduled",
+  "preparing-waiting-for-room",
 ] as const)("recovers $0 work after restart", (scenario) => {
-  const status = scenario.startsWith("starting") ? "starting" : scenario;
+  const status = scenario.startsWith("starting")
+    ? "starting"
+    : scenario.startsWith("preparing")
+      ? "preparing"
+      : scenario;
+  const waitingForRoom = scenario === "preparing-waiting-for-room";
   const terminalized =
-    status === "preparing" ||
+    (status === "preparing" && !waitingForRoom) ||
     scenario === "starting-own-request" ||
     scenario === "starting-scheduled";
   const threadId = ThreadId.make("thread_queued_restart");
@@ -521,7 +527,10 @@ it.effect.each([
   let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
     null;
   const projection = {
-    thread: { id: threadId },
+    thread: {
+      id: threadId,
+      ...(waitingForRoom ? { placement: { waitingSince: "2026-11-24T12:00:00.000Z" } } : {}),
+    },
     runtimeRequests: scenario.endsWith("request")
       ? [
           {
@@ -592,7 +601,17 @@ it.effect.each([
             },
           ]
         : [],
-    turnItems: [],
+    turnItems: waitingForRoom
+      ? [
+          {
+            id: "worktree_preparation_restart",
+            type: "command_execution",
+            runId,
+            nodeId: rootNodeId,
+            status: "running",
+          },
+        ]
+      : [],
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(ServerSettings.layerTest()),
@@ -625,6 +644,8 @@ it.effect.each([
         }),
         Layer.mock(EffectOutbox.EffectOutboxV2)({
           reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+          cancelUnsettled: () => Effect.succeed([]),
+          signalCancellations: () => Effect.void,
         }),
       ),
     ),
@@ -635,6 +656,17 @@ it.effect.each([
       yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
     assert.equal(summary.terminalizedRuns, terminalized ? 1 : 0);
     const command = committedInput;
+    if (waitingForRoom) {
+      // It has started nothing, so it waits for room again after the restart.
+      const committed: ReadonlyArray<{ readonly type: string }> = command?.events ?? [];
+      assert.deepEqual(
+        committed.filter((event) =>
+          ["run.updated", "turn-item.updated", "node.updated"].includes(event.type),
+        ),
+        [],
+      );
+      return;
+    }
     assert.isNotNull(command);
     if (command === null) return;
     const runEvent = command.events.find((event) => event.type === "run.updated");

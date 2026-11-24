@@ -1,5 +1,6 @@
 import {
   OrchestratorMcpFailure,
+  PLACEMENT_AUTO_ENVIRONMENT,
   OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendResult,
@@ -162,6 +163,14 @@ const ThreadLaunchResult = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   runId: Schema.NullOr(RunId),
+  placement: Schema.optional(
+    Schema.Struct({
+      environmentId: Schema.String,
+      label: Schema.String,
+      reason: Schema.String,
+      waitingForRoom: Schema.Boolean,
+    }),
+  ),
 });
 
 const toolFailureDetail = (result: typeof ToolResult.Type) => {
@@ -626,12 +635,21 @@ const threadStartCommand = Command.make("start", {
     Flag.withDescription("Branch name for the new worktree."),
     Flag.optional,
   ),
+  anywhere: Flag.Boolean("anywhere").pipe(
+    Flag.withDescription("Start on whichever linked machine has room, which may be another one."),
+    Flag.withDefault(false),
+  ),
   wait: waitFlag,
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Start a thread in a project and print its id."),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      if (flags.anywhere && flags.wait) {
+        return yield* new ThreadUsageError({
+          detail: "--wait follows threads on this machine; --anywhere can start one elsewhere.",
+        });
+      }
       const message = yield* readMessageArgument(flags.message);
       const workspaceStrategy = yield* launchWorkspaceStrategy(flags);
       if (Option.isSome(flags.provider) !== Option.isSome(flags.model)) {
@@ -647,6 +665,7 @@ const threadStartCommand = Command.make("start", {
           const launched = yield* tools.call(
             "t3_thread_launch",
             {
+              ...(flags.anywhere ? { environmentId: PLACEMENT_AUTO_ENVIRONMENT } : {}),
               projectId: project.id,
               title,
               message,
@@ -662,6 +681,11 @@ const threadStartCommand = Command.make("start", {
             },
             ThreadLaunchResult,
           );
+          if (launched.placement !== undefined && !flags.json) {
+            yield* Console.error(
+              `${launched.placement.waitingForRoom ? "Waiting for room on" : "On"} ${launched.placement.label}: ${launched.placement.reason}`,
+            );
+          }
           if (flags.wait && launched.runId !== null) {
             if (!flags.json) yield* Console.error(`Thread ${launched.threadId}`);
             return yield* finishRun(tools, {

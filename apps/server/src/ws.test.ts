@@ -66,6 +66,8 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as LocalPlacement from "./placement/LocalPlacement.ts";
+import * as Placement from "./placement/Placement.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
@@ -821,6 +823,8 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(EnvironmentTheme.EnvironmentThemeService)({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(HostResources.HostResources)({}),
+  Layer.mock(LocalPlacement.LocalPlacement)({}),
+  Layer.mock(Placement.Placement)({}),
   Layer.mock(McpAppRequests.McpAppRequests)({}),
   Layer.mock(HtmlRenderBridge.HtmlRenderBridge)({}),
   Layer.mock(ModelManifest.ModelManifest)({}),

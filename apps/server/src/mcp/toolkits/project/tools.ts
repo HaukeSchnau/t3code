@@ -1,5 +1,6 @@
 import { McpAttachmentInput } from "../attachment/input.ts";
 import {
+  EnvironmentId,
   NonNegativeInt,
   ModelSelection,
   TrimmedNonEmptyString,
@@ -16,6 +17,7 @@ import {
   ProjectId,
   OrchestratorMcpClientRequestId,
   OrchestratorMcpEnvironmentTarget,
+  OrchestratorMcpLaunchEnvironmentTarget,
   OrchestratorMcpFailure,
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -126,7 +128,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   description:
     "Create one new top-level thread, bound to its workspace before the agent starts. Task in `message`. Omit `projectId`, model and modes to inherit yours (outside a thread, pass `projectId` or `scratch`); modes cannot exceed yours. After an error or lost reply, retry with the same `clientRequestId`. Follow it with `t3_thread_read` or `t3_thread_wait`. Mention it with its `link`.",
   parameters: Schema.Struct({
-    environmentId: OrchestratorMcpEnvironmentTarget,
+    environmentId: OrchestratorMcpLaunchEnvironmentTarget,
     projectId: Schema.optional(ProjectId),
     scratch: Schema.optional(
       Schema.Boolean.annotate({
@@ -161,6 +163,15 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     modelSelection: ModelSelection,
     runId: Schema.NullOr(RunId),
     status: Schema.NullOr(OrchestrationV2RunStatus),
+    /** Where "auto" started the thread; pass `environmentId` to follow it there. */
+    placement: Schema.optional(
+      Schema.Struct({
+        environmentId: EnvironmentId,
+        label: Schema.String,
+        reason: Schema.String,
+        waitingForRoom: Schema.Boolean,
+      }),
+    ),
   }),
   dependencies: [
     ...shared.dependencies,

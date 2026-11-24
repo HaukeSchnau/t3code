@@ -2,6 +2,8 @@ import {
   type EnvironmentId,
   type OrchestrationV2LinkOrigin,
   OrchestratorMcpEnvironmentTarget,
+  OrchestratorMcpLaunchEnvironmentTarget,
+  PLACEMENT_AUTO_ENVIRONMENT,
   OrchestratorMcpFailure,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -10,6 +12,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
 import * as Struct from "effect/Struct";
 import type * as Layer from "effect/Layer";
@@ -21,6 +24,8 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import { autoLaunch } from "../placement/autoLaunch.ts";
+import * as Placement from "../placement/Placement.ts";
 import { assertNotLinked, assertSameLink, callerLinkOrigin } from "./linkOrigin.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
@@ -355,13 +360,20 @@ const checkedHandlers = <Handlers>(declarations: Declarations<Handlers>): Handle
  * as `environmentId`. Other tools may name an environment for their own
  * reasons, such as the one to link or to move a thread to.
  */
-const takesLinkedEnvironment = (tool: Tool.Any) => {
+const environmentTargetOf = (tool: Tool.Any) => {
   const parameters: unknown = tool.parametersSchema;
-  return (
-    Predicate.hasProperty(parameters, "fields") &&
-    Predicate.hasProperty(parameters.fields, "environmentId") &&
-    parameters.fields.environmentId === OrchestratorMcpEnvironmentTarget
-  );
+  if (
+    !Predicate.hasProperty(parameters, "fields") ||
+    !Predicate.hasProperty(parameters.fields, "environmentId")
+  ) {
+    return undefined;
+  }
+  const target = parameters.fields.environmentId;
+  return target === OrchestratorMcpEnvironmentTarget
+    ? "linked"
+    : target === OrchestratorMcpLaunchEnvironmentTarget
+      ? "launch"
+      : undefined;
 };
 
 const linksUnavailable = new OrchestratorMcpFailure({
@@ -380,12 +392,14 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
   declarations: Handlers<Tools>,
   checked: Toolkit.HandlersFrom<Tools>,
 ) {
-  // Optional so toolkits that never leave this environment build without it.
+  // Optional so toolkits that never leave this environment build without them.
   const forwarding = yield* Effect.serviceOption(PeerForwarding.PeerForwarding);
+  const placement = yield* Effect.serviceOption(Placement.Placement);
   const handlers: Record<string, unknown> = { ...checked };
   for (const [name, declaration] of Object.entries<Declaration<unknown>>(declarations)) {
     const tool = toolkit.tools[name];
-    if (tool === undefined || !takesLinkedEnvironment(tool)) continue;
+    const targetKind = tool === undefined ? undefined : environmentTargetOf(tool);
+    if (tool === undefined || targetKind === undefined) continue;
     const remote = remoteCheckOf(declaration);
     if (remote === undefined)
       return yield* Effect.die(
@@ -397,6 +411,28 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
     handlers[name] = ({ environmentId, ...params }: { readonly environmentId?: EnvironmentId }) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
+        if (targetKind === "launch" && environmentId === PLACEMENT_AUTO_ENVIRONMENT) {
+          if (Option.isNone(placement)) return yield* here(params);
+          const decodeResult = Schema.decodeUnknownEffect(
+            tool.successSchema as Schema.Decoder<unknown>,
+          );
+          // Checked once placement picked a peer, so a link enabled meanwhile is checked too.
+          const beforePeer =
+            scope.linkedEnvironments === false
+              ? Effect.fail(PeerForwarding.linkedEnvironmentsOff)
+              : (remote as RemoteCheck<typeof params>)(params);
+          return yield* autoLaunch(placement.value, params as never, here, beforePeer, (result) =>
+            decodeResult(result).pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestratorMcpFailure({
+                    code: "orchestration_error",
+                    message: "The linked environment's answer did not match this version.",
+                  }),
+              ),
+            ),
+          );
+        }
         const target = PeerForwarding.remoteTarget(scope, environmentId);
         if (target === undefined) return yield* here(params);
         if (scope.linkedEnvironments === false) return yield* PeerForwarding.linkedEnvironmentsOff;

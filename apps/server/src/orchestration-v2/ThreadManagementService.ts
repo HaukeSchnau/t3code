@@ -81,8 +81,18 @@ export function withCreationProvenance(
   switch (command.type) {
     case "thread.create": {
       // Only the server stamps a link's origin, so a client cannot set one.
-      const { linkOrigin: _linkOrigin, delegatedFrom: _delegatedFrom, ...rest } = command;
+      const {
+        linkOrigin: _linkOrigin,
+        delegatedFrom: _delegatedFrom,
+        placement: _placement,
+        ...rest
+      } = command;
       return { ...rest, ...provenance };
+    }
+    case "thread.metadata.update": {
+      // Ending a wait goes through placement, which also releases the waiting launch.
+      const { placementWaitEnded: _placementWaitEnded, placement: _placement, ...rest } = command;
+      return rest;
     }
     case "message.dispatch":
     case "thread.fork":

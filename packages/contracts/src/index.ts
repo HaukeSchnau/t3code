@@ -78,6 +78,7 @@ export * from "./worktreeMcp.ts";
 export * from "./workspace.ts";
 export * from "./world.ts";
 export * from "./resourceTelemetry.ts";
+export * from "./placement.ts";
 export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";

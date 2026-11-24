@@ -108,10 +108,13 @@ const make = Effect.fn("makeHostResources")(function* () {
       );
       if (memoryPressureLevel) pressure = { memoryPressureLevel };
     }
+    // Windows reports zeros for the load average.
+    const loadAverage = platform === "win32" ? undefined : NodeOS.loadavg()[0];
     return {
       sampledAt: DateTime.toEpochMillis(yield* DateTime.now),
       cpuUtilization,
       cpuCount: cpu.count,
+      ...(loadAverage === undefined ? {} : { loadAverage }),
       availableMemoryBytes: Math.min(totalMemoryBytes, Math.max(0, availableMemoryBytes)),
       totalMemoryBytes,
       ...pressure,

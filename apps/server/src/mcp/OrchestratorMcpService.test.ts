@@ -1949,6 +1949,55 @@ describe("OrchestratorMcpService provider resolution", () => {
   );
 
   it.effect(
+    "an auto delegation retried after it started on a linked environment starts nothing here",
+    () =>
+      Effect.gen(function* () {
+        const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const layerDependencies = Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            // The first attempt recorded its peer child; its reply never arrived.
+            hasReceipt: (commandId) => Effect.succeed(commandId.includes(":remote-delegate:")),
+            getThreadRecords: (threadId) =>
+              Effect.succeed(threadId === parentThreadId ? parentProjection([]) : childProjection),
+            dispatch: (command) =>
+              Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                Effect.as({ sequence: 1, storedEvents: [] } as never),
+              ),
+          }),
+          providerRegistryLayer([
+            providerSnapshot({
+              instanceId: codexInstanceId,
+              driver: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4",
+            }),
+          ]),
+          adapterRegistryLayer([codexInstanceId]),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          ServerSettings.layerTest(),
+        );
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const failure = yield* service
+            .delegateTask(scope, {
+              task: "Summarize the diff.",
+              target: { environmentId: EnvironmentId.make("auto") },
+              mode: "async",
+              clientRequestId: "delegate-auto-started-elsewhere",
+            })
+            .pipe(Effect.flip);
+          assert.equal(failure.code, "invalid_request");
+          assert.deepEqual(yield* Ref.get(dispatched), []);
+        }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+      }),
+  );
+
+  it.effect(
     "retrying an accepted driver-only delegation replays even after the project disables every candidate",
     () =>
       Effect.gen(function* () {
