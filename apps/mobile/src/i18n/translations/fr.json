@@ -4730,6 +4730,10 @@
   },
   "a5ab121035166e53": "Complétez les réponses en attente",
   "545e67cafc32dc6b": "Cette connexion ne peut pas envoyer de réponses.",
+  "22da0c8a2fb4bf65": "That did not work. Try again.",
+  "8471bcbc03d4e2e1": "Waiting for room on {machine}",
+  "1b1892e9f6187f61": "Start anyway",
+  "8b93438ec6cc799b": "Cancel",
   "aa5674d75dc47395": "Clonage de {name} annulé",
   "3c38548cbd950933": "Échec du clonage de {name}",
   "c941a659fc35dc4c": [
@@ -5032,6 +5036,7 @@
   "d506b798402041ab": "Envoyer maintenant",
   "9a62f694ba5c35c5": "Ouverture du fil…",
   "bb24a2960c689a20": "Ce fil n’est pas disponible dans l’instantané mobile actuel.",
+  "c1ecddecb5aaa932": "Auto: {reason}",
   "41ca8f475c481866": "Sous-agent de {title}",
   "f3e00e6c416eab38": "Depuis {origin}",
   "bdfb9e7660ab25d3": "Impossible de reprendre le fil",

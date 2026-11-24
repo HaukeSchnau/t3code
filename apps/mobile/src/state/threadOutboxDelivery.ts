@@ -709,10 +709,13 @@ const settledCreationOutcomeKeysAtom = Atom.make((get): ReadonlyArray<string> =>
   );
 }).pipe(Atom.withLabel("mobile:thread-outbox:settled-creation-outcomes"));
 
-function deliveredSequence(
-  result: AtomCommandResult<{ readonly sequence?: number }, unknown>,
-): number | undefined {
-  return AsyncResult.isSuccess(result) ? result.value.sequence : undefined;
+function deliveredSequence(result: AtomCommandResult<object, unknown>): number | undefined {
+  // A placed launch answers with the machine it went to, not a commit sequence here.
+  return AsyncResult.isSuccess(result) &&
+    "sequence" in result.value &&
+    typeof result.value.sequence === "number"
+    ? result.value.sequence
+    : undefined;
 }
 
 const deliveryCommand = <W, A, E>(

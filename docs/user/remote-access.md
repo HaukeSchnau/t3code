@@ -210,27 +210,33 @@ different permissions.
 
 ### Balance new threads across machines
 
-Auto balance is off until a machine takes balanced work. On web and desktop, open
-**Settings → Environments → Load balancing** to choose, for each machine, whether new threads
-in projects grouped across connected environments may start there. The section appears once
-two or more machines are switched on.
-Each machine starts at **Manual only**. Choose **Normal** to let Auto balance place threads on
-it, **Prefer** to favor it, or **Less often** to reduce its share. These are preferences, not
-fixed traffic percentages. Each machine stores its own preference, so every device that
-connects to it sees the same choice.
+Auto balance starts each new thread on whichever linked machine has the most room for another
+agent. A thread in a repository goes only to a machine that has a project for that repository;
+a Scratch thread can go to any of them. It needs
+[Linked environments](#link-another-environment) between the machines: a machine places threads on the
+machines it links to.
 
-Auto balance scores each machine by how many more agents fit, counting free memory, the memory
-left to the agents' systemd slice on Linux, and idle CPU. It multiplies that by the machine's
-preference and lowers it as memory pressure rises, so a preferred or calmer machine can win with
-less room. It skips a machine under memory pressure (Linux PSI of 20% or more, or a macOS pressure
-level of warning or worse), even when it still reports free memory.
+On web and desktop, open **Settings → Environments → Load balancing** to choose, for each machine,
+whether it takes placed threads. Each machine starts at **Manual only**. Choose **Normal**,
+**Prefer** to favor it, or **Less often** to reduce its share, and optionally an **agent limit**,
+the most agents placement runs there at once. Each machine stores its own choice, so every device
+sees the same one.
 
-The composer checks eligible machines when choosing a draft's environment, then keeps
-that choice stable. Choose **Auto balance** again to check current resources, or choose
-a specific machine to override it. Choosing a branch or worktree also keeps the draft
-on that machine. Existing threads stay where they started. If resource checks are
-unavailable or all eligible machines are full, choose a machine manually to continue.
-Mobile keeps its manual environment selection.
+Placement scores each machine by how many more agents fit, counting free memory, the memory left
+to the agents' systemd slice on Linux, idle CPU and the agent limit, and multiplies that by the
+machine's preference. It skips a machine under memory pressure (Linux PSI of 20% or more, or a
+macOS pressure level of warning or worse). A world thread only goes to a Linux machine that
+serves that world, and a project thread prefers a machine that already has the repository.
+
+Choose **Auto** in the composer's machine picker to see where the thread would start, such as
+**Auto → dev-hauke**. Once sent, the thread header shows where it runs and why; select it to see
+every machine placement weighed. A thread with attachments, composer context, an existing worktree
+or a local base branch stays on this machine.
+
+When no machine has room, the thread waits on the best one and starts as soon as a slot frees up.
+The composer shows **Waiting for room on** the machine, with **Start anyway** and **Cancel**; the
+phone shows the same card. Agents start threads anywhere with `environmentId: "auto"`, and the CLI
+with `t3 thread start --anywhere`.
 
 ### Switch groups of machines with modes
 

@@ -29,9 +29,7 @@ never waits for room.
   running agents' average, and the host's `placementAgentLimit`. Launches in flight and threads
   already waiting count against every bound, so a burst spreads. A machine at PSI 20 or a macOS
   level above normal gets no work, and pressure below that scales its score down linearly. The
-  1.4 GiB and 20 come from the srv-2 incident above. The browser's Auto balance
-  (`client-runtime/src/load-balancing.ts`) uses the same slots until the clients switch to the
-  server's placement.
+  1.4 GiB and 20 come from the srv-2 incident above.
 - Each server stores `placementWeight` in its settings: null until set, 0 for Manual only, and
   25, 50 or 100 to take balanced work. The web settings section writes it per machine. The web
   client migrates a browser whose upstream switch was on once per machine, with
@@ -70,8 +68,24 @@ never waits for room.
   peer's own `t3_thread_launch` handler with the link's credential and stamps the decision through
   `PlacementStamp`, so no tool argument can claim a placement.
 - **Thread record.** `thread.placement` (`ThreadPlacement` in `packages/contracts/src/placement.ts`)
-  stores who decided, where, why, every candidate's score and note, and the wait. Clients do not
-  show it yet.
+  stores who decided, where, why, every candidate's score and note, and the wait.
+
+### Clients
+
+- Web replaces upstream's browser-side Auto balance, including its recheck of machine load before
+  a send (`refreshBeforeSend`), because the server decides at send time. An automatic draft stays
+  on its machine and shows the server's `placement.preview` ("Auto → dev-hauke"). Its send calls
+  `placement.launch` (`startThreadTurn` with `placement: "auto"`), resent after a dropped socket
+  like upstream's launch, and `redirectPromotedDraftThread` points the draft at the thread
+  wherever it started. A send that is offline or loses its reply waits in the
+  durable outbox with `placement: "auto"` and replays the same command, so the server's decision
+  and the peer's launch for it are reused while the server keeps that decision (10 minutes, in
+  memory); a replay after a restart can start the thread a second time. A follow-up queued during
+  the launch goes to the thread wherever it started (`placedDraftThreadRef`). The header's `ThreadPlacementChip` shows where and why with
+  every candidate; `placementWaitBannerItem` shows the wait with Start anyway and Cancel (the
+  run's stop). Settings → Load balancing edits each machine's weight and agent limit.
+- Mobile shows the reason in the thread header and the wait in `PlacementWaitCard`. Starting a
+  new task on Auto from the phone is not there yet.
 
 ## Limits
 

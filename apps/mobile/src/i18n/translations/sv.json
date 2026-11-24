@@ -4736,6 +4736,10 @@
   },
   "a5ab121035166e53": "Fyll i de väntande svaren",
   "545e67cafc32dc6b": "Den här anslutningen kan inte skicka svar.",
+  "22da0c8a2fb4bf65": "That did not work. Try again.",
+  "8471bcbc03d4e2e1": "Waiting for room on {machine}",
+  "1b1892e9f6187f61": "Start anyway",
+  "8b93438ec6cc799b": "Cancel",
   "aa5674d75dc47395": "Avbröt kloningen av {name}",
   "3c38548cbd950933": "Det gick inte att klona {name}",
   "c941a659fc35dc4c": [
@@ -5038,6 +5042,7 @@
   "d506b798402041ab": "Skicka nu",
   "9a62f694ba5c35c5": "Öppnar tråden…",
   "bb24a2960c689a20": "Tråden är inte tillgänglig i den aktuella mobilögonblicksbilden.",
+  "c1ecddecb5aaa932": "Auto: {reason}",
   "41ca8f475c481866": "Subagent till {title}",
   "f3e00e6c416eab38": "Från {origin}",
   "bdfb9e7660ab25d3": "Kunde inte återuppta tråden",

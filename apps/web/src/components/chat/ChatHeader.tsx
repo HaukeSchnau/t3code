@@ -4,6 +4,7 @@ import {
   type OrchestrationMessageContext,
   type ScopedThreadRef,
   type ThreadId,
+  type ThreadPlacement,
 } from "@t3tools/contracts";
 import { contextMenuSourceOf } from "~/contextMenuSource";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -47,12 +48,14 @@ import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
 import { ThreadPagesControl } from "./ThreadPagesControl";
+import { ThreadPlacementChip } from "./ThreadPlacementChip";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeThreadLinkOrigin?: string | null | undefined;
+  activeThreadPlacement?: ThreadPlacement | null | undefined;
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
@@ -83,6 +86,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeThreadLinkOrigin,
+  activeThreadPlacement,
   isServerThread,
   activeProject,
   parentThreadLink,
@@ -405,6 +409,9 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
             </Tooltip>
           )}
+          {renamingTitle === null && activeThreadPlacement ? (
+            <ThreadPlacementChip placement={activeThreadPlacement} />
+          ) : null}
           {renamingTitle === null && activeThreadLinkOrigin ? (
             <Tooltip>
               <TooltipTrigger render={<Badge variant="info" size="sm" />}>

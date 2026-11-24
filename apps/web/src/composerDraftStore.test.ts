@@ -9,6 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 import { makeThreadProjectionFixture } from "./test-fixtures";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
   scopedProjectKey,
@@ -87,6 +88,8 @@ import {
   clearBackgroundDraftSubmissionByRef,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
+  placedDraftThreadRef,
+  redirectPromotedDraftThread,
   resolveDraftPromotionNavigationTarget,
   restoreFailedDraftThread,
   subscribeDraftThreadPromotion,
@@ -99,6 +102,11 @@ import {
   DraftId,
 } from "./composerDraftStore";
 import { waitForDraftHeroTransition } from "./components/chat/draftHeroTransition";
+import {
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "./hooks/useLocalStorage";
 import { insertInlineContextReference } from "./lib/composerContextReferences";
 import {
   buildMessageContext,
@@ -3000,5 +3008,129 @@ describe("composerDraftStore checkout pull request", () => {
       vi.useRealTimers();
       resetComposerDraftStore();
     }
+  });
+});
+
+describe("composerDraftStore Auto placement", () => {
+  it("still knows where an Auto launch put its thread after the draft finalized", () => {
+    const sent = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-draft"));
+    const draftId = DraftId.make("draft-placed");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(
+        scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-placed")),
+        draftId,
+        { threadId: sent.threadId },
+      );
+    const placed = redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("dev-hauke"),
+      threadId: ThreadId.make("thread-placed"),
+    });
+    // The machine is out of reach, so the draft finalizes before a queued follow-up goes out.
+    finalizePromotedDraftThreadByRef(placed);
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
+    expect(placedDraftThreadRef(sent)).toEqual(placed);
+    expect(placed).toEqual(
+      scopeThreadRef(EnvironmentId.make("dev-hauke"), ThreadId.make("thread-placed")),
+    );
+  });
+
+  it("moves a finalized draft's redirect when a replay places its thread elsewhere", () => {
+    const sent = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-draft-moved"));
+    const draftId = DraftId.make("draft-moved");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(
+        scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-moved")),
+        draftId,
+        { threadId: sent.threadId },
+      );
+    const first = redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("dev-hauke"),
+      threadId: ThreadId.make("thread-placed-before"),
+    });
+    finalizePromotedDraftThreadByRef(first);
+    // The server lost its decision and placed the replay on another machine.
+    const replayed = redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("srv-2"),
+      threadId: ThreadId.make("thread-placed-after"),
+    });
+    expect(useComposerDraftStore.getState().getPromotedDraftRedirect(draftId)).toEqual(replayed);
+  });
+
+  it("finds where an Auto launch put its thread after a reload, days later", () => {
+    // Ten days on: a follow-up can wait that long for its machine.
+    using _now = vi.spyOn(Date, "now").mockReturnValue(10 * 24 * 60 * 60 * 1000);
+    const sent = scopeThreadRef(EnvironmentId.make("tower"), ThreadId.make("thread-reloaded"));
+    // Recorded by the page session that sent the launch, before this one loaded.
+    setLocalStorageItem(
+      "t3code:placed-threads:v1",
+      {
+        [scopedThreadKey(sent)]: {
+          environmentId: EnvironmentId.make("dev-hauke"),
+          threadId: ThreadId.make("thread-placed-earlier"),
+          at: 0,
+        },
+      },
+      Schema.Record(
+        Schema.String,
+        Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId, at: Schema.Number }),
+      ),
+    );
+    expect(placedDraftThreadRef(sent)).toEqual(
+      scopeThreadRef(EnvironmentId.make("dev-hauke"), ThreadId.make("thread-placed-earlier")),
+    );
+  });
+
+  it("still knows where an Auto launch put its thread when local storage lost the record", () => {
+    const sent = scopeThreadRef(EnvironmentId.make("tower"), ThreadId.make("thread-no-storage"));
+    const placed = redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("dev-hauke"),
+      threadId: ThreadId.make("thread-placed-in-session"),
+    });
+    // As when the write failed: nothing stored, and the draft finalized.
+    removeLocalStorageItem("t3code:placed-threads:v1");
+    finalizePromotedDraftThreadByRef(placed);
+    expect(placedDraftThreadRef(sent)).toEqual(placed);
+  });
+
+  it("forgets an earlier placement once a replay keeps the thread where it was sent", () => {
+    const sent = scopeThreadRef(EnvironmentId.make("tower"), ThreadId.make("thread-replayed"));
+    redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("dev-hauke"),
+      threadId: ThreadId.make("thread-placed-first"),
+    });
+    // After a restart the server decided again and kept it here.
+    redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("tower"),
+      threadId: ThreadId.make("thread-replayed"),
+    });
+    expect(placedDraftThreadRef(sent)).toBeNull();
+    const stored = getLocalStorageItem(
+      "t3code:placed-threads:v1",
+      Schema.Record(Schema.String, Schema.Unknown),
+    );
+    expect(stored?.[scopedThreadKey(sent)]).toBeUndefined();
+  });
+
+  it("keeps a replayed draft here when removing the earlier record fails", () => {
+    const sent = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-replayed-draft"));
+    const draftId = DraftId.make("draft-replayed");
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(
+      scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-replayed")),
+      draftId,
+      { threadId: sent.threadId },
+    );
+    redirectPromotedDraftThread(sent, {
+      environmentId: EnvironmentId.make("dev-hauke"),
+      threadId: ThreadId.make("thread-placed-first"),
+    });
+    using _write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    redirectPromotedDraftThread(sent, sent);
+    expect(placedDraftThreadRef(sent)).toBeNull();
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.promotedTo).toEqual(sent);
   });
 });

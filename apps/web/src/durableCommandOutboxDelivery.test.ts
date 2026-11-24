@@ -16,15 +16,24 @@ import { threadEnvironment } from "./state/threads";
 const environmentId = EnvironmentId.make("environment-1");
 
 const state = vi.hoisted(() => ({
-  sent: [] as Array<{ readonly command: unknown; readonly input: unknown }>,
+  sent: [] as Array<{
+    readonly command: unknown;
+    readonly environmentId: unknown;
+    readonly input: unknown;
+  }>,
   thread: null as null | { readonly runtimeMode: string; readonly interactionMode: string },
   capabilities: {} as Record<string, unknown>,
+  placed: null as null | { readonly environmentId: string; readonly threadId: string },
 }));
 
 vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@t3tools/client-runtime/state/runtime")>()),
-  runAtomCommand: async (_registry: unknown, command: unknown, request: { input: unknown }) => {
-    state.sent.push({ command, input: request.input });
+  runAtomCommand: async (
+    _registry: unknown,
+    command: unknown,
+    request: { environmentId: unknown; input: unknown },
+  ) => {
+    state.sent.push({ command, environmentId: request.environmentId, input: request.input });
     return AsyncResult.success({ sequence: 1 });
   },
 }));
@@ -32,12 +41,19 @@ vi.mock("./state/entities", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./state/entities")>()),
   readThreadShell: () => state.thread,
 }));
+vi.mock("./composerDraftStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./composerDraftStore")>()),
+  placedDraftThreadRef: () => state.placed,
+}));
 vi.mock("./state/server", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
   return {
     ...(await importOriginal<typeof import("./state/server")>()),
     environmentServerConfigsAtom: Atom.make(
-      new Map([["environment-1", { environment: { capabilities: state.capabilities } }]]),
+      new Map([
+        ["environment-1", { environment: { capabilities: state.capabilities } }],
+        ["environment-2", { environment: { capabilities: state.capabilities } }],
+      ]),
     ),
   };
 });
@@ -58,10 +74,14 @@ vi.mock("./state/session", async (importOriginal) => ({
   readPreparedConnection: () => ({ httpBaseUrl: "http://environment.test" }) as never,
 }));
 
-function setup(thread: { readonly runtimeMode: string; readonly interactionMode: string }) {
+function setup(
+  thread: { readonly runtimeMode: string; readonly interactionMode: string },
+  placed: { readonly environmentId: string; readonly threadId: string } | null = null,
+) {
   state.sent = [];
   state.thread = thread;
   for (const key of Object.keys(state.capabilities)) delete state.capabilities[key];
+  state.placed = placed;
 }
 
 describe("deliverDurableComposerCommand", () => {
@@ -149,4 +169,100 @@ describe("deliverDurableComposerCommand", () => {
       expect(state.sent.map(({ command }) => command)).not.toContain(threadEnvironment.startTurn);
     },
   );
+
+  it("sends a follow-up to the thread an Auto launch started on another machine", async () => {
+    // The user sent again while the first message's Auto launch was still deciding.
+    setup(
+      { runtimeMode: "full-access", interactionMode: "default" },
+      { environmentId: "environment-2", threadId: "thread-placed" },
+    );
+    const recorded: Array<unknown> = [];
+    await deliverDurableComposerCommand(
+      {
+        id: 2,
+        enqueuedAt: 0,
+        state: { _tag: "Pending" },
+        command: {
+          environmentId,
+          threadId: ThreadId.make("thread-draft"),
+          commandId: CommandId.make("command-2"),
+          messageId: MessageId.make("message-2"),
+          createdAt: "2026-11-20T10:00:00.000Z",
+          text: "And the tests too",
+          attachments: [],
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          titleSeed: "And the tests too",
+        },
+      },
+      async (command) => {
+        recorded.push(command);
+      },
+    );
+
+    expect(state.sent[0]?.environmentId).toBe("environment-2");
+    expect(state.sent[0]?.input).toMatchObject({ threadId: "thread-placed" });
+    expect(recorded[0]).toMatchObject({
+      environmentId: "environment-2",
+      threadId: "thread-placed",
+    });
+  });
+
+  it("refuses a follow-up whose attachment exists only as an upload to the machine it left", async () => {
+    setup(
+      { runtimeMode: "full-access", interactionMode: "default" },
+      { environmentId: "environment-2", threadId: "thread-placed" },
+    );
+    const recorded: Array<unknown> = [];
+    const delivered = deliverDurableComposerCommand(
+      {
+        id: 3,
+        enqueuedAt: 0,
+        state: { _tag: "Pending" },
+        command: {
+          environmentId,
+          threadId: ThreadId.make("thread-draft"),
+          commandId: CommandId.make("command-3"),
+          messageId: MessageId.make("message-3"),
+          createdAt: "2026-11-20T10:00:00.000Z",
+          text: "See the spec",
+          attachments: [
+            {
+              attachment: {
+                type: "file",
+                id: "attachment-1" as never,
+                name: "spec.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 10,
+              },
+              blob: null,
+              uploadedAttachmentId: "upload-on-environment-1",
+            },
+          ],
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          titleSeed: "See the spec",
+        },
+      },
+      async (command) => {
+        recorded.push(command);
+      },
+    );
+
+    await expect(delivered).rejects.toMatchObject({
+      classification: "permanent",
+      message: expect.stringContaining("never uploaded"),
+    });
+    expect(state.sent).toEqual([]);
+    // Opening or editing the rejected message lands on the placed thread, without the old upload.
+    expect(recorded[0]).toMatchObject({
+      environmentId: "environment-2",
+      threadId: "thread-placed",
+    });
+    expect(recorded[0]).not.toHaveProperty(["attachments", 0, "uploadedAttachmentId"]);
+  });
 });

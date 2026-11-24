@@ -1629,6 +1629,18 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
+    // Fork (patches/fleet-placement.md): where an auto launch from this environment would go.
+    placementPreview: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:placement-preview",
+      tag: WS_METHODS.placementPreview,
+      staleTimeMs: 5_000,
+      refreshIntervalMs: 10_000,
+      idleTtlMs: 0,
+    }),
+    placementStartNow: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:placement-start-now",
+      tag: WS_METHODS.placementStartNow,
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,

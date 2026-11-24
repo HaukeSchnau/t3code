@@ -82,6 +82,7 @@ function threadDetailToShell(
     activeProviderThreadId: thread.activeProviderThreadId,
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
+    ...(thread.placement === undefined ? {} : { placement: thread.placement }),
     createdBy: thread.createdBy,
     creationSource: thread.creationSource,
     latestRunId: latestRun?.runId ?? null,

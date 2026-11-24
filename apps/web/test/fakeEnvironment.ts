@@ -480,6 +480,8 @@ const handlers: Record<string, (input: never) => unknown> = {
       return Deferred.await(reply);
     }),
   // Held like any other unanswered call, until `answerAssetUrls`.
+  // Placement is off here, so a draft sends as before (patches/fleet-placement.md).
+  [WS_METHODS.placementPreview]: () => Effect.succeed({ preview: null }),
   [WS_METHODS.assetsCreateUrl]: () =>
     Effect.suspend(() => {
       const reply = Deferred.makeUnsafe<AssetCreateUrlResult>();

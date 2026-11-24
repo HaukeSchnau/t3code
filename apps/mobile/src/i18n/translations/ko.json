@@ -4715,6 +4715,10 @@
   },
   "a5ab121035166e53": "대기 중인 답변을 입력하세요",
   "545e67cafc32dc6b": "이 연결로는 답변을 제출할 수 없습니다.",
+  "22da0c8a2fb4bf65": "That did not work. Try again.",
+  "8471bcbc03d4e2e1": "Waiting for room on {machine}",
+  "1b1892e9f6187f61": "Start anyway",
+  "8b93438ec6cc799b": "Cancel",
   "aa5674d75dc47395": "{name} 복제 취소됨",
   "3c38548cbd950933": "{name}을(를) 복제하지 못했습니다",
   "c941a659fc35dc4c": [
@@ -5017,6 +5021,7 @@
   "d506b798402041ab": "지금 보내기",
   "9a62f694ba5c35c5": "스레드 여는 중…",
   "bb24a2960c689a20": "이 스레드는 현재 모바일 스냅샷에서 사용할 수 없습니다.",
+  "c1ecddecb5aaa932": "Auto: {reason}",
   "41ca8f475c481866": "{title}의 서브에이전트",
   "f3e00e6c416eab38": "출처: {origin}",
   "bdfb9e7660ab25d3": "스레드를 재개할 수 없습니다",

@@ -16,6 +16,7 @@ import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entitie
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
+import { PlacementWaitCard } from "./PlacementWaitCard";
 import { CodexOverloadRetryCard } from "./CodexOverloadRetryCard";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -1867,6 +1868,11 @@ function ThreadDetailBody(
                         />
                       </Animated.View>
                     ) : null}
+                    <PlacementWaitCard
+                      thread={props.selectedThread}
+                      environmentId={props.environmentId}
+                      canOperate={props.canOperateThread}
+                    />
                     <UsageLimitRecoveryCard
                       key={props.selectedThread.latestRun?.runId}
                       thread={props.selectedThread}

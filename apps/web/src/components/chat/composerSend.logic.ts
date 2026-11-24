@@ -1,7 +1,6 @@
-import type { EnvironmentId, ThreadContextRecord } from "@t3tools/contracts";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "../../i18n/messages";
-import { collectInlineContextIds } from "../../lib/composerContextReferences";
+import { isTriagePrompt } from "@t3tools/shared/triagePrompt";
 import type { ComposerThreadDraftState } from "../../composerDraftStore";
 
 /** Compare immutable user content without copying image bytes or upload metadata. */
@@ -24,54 +23,6 @@ export function composerDraftContentChanged(
     before.environmentContexts !== after.environmentContexts ||
     before.replyTo !== after.replyTo
   );
-}
-
-/** Attached threads the prompt still links to; replacing linked text leaves stale records. */
-export function referencedThreadContexts(draft: {
-  readonly prompt: string;
-  readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
-}): ReadonlyArray<ThreadContextRecord> {
-  if (draft.threadContexts.length === 0) return [];
-  const referenced = new Set(collectInlineContextIds(draft.prompt));
-  return draft.threadContexts.filter((record) => referenced.has(record.contextId));
-}
-
-/** Why a send waits for the user to pick a machine when no machine was chosen automatically. */
-export function loadBalancingSendWarning(
-  input: {
-    readonly pending: boolean;
-    readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
-    readonly candidateEnvironmentIds: ReadonlyArray<EnvironmentId>;
-  },
-  resolve: MessageResolver = m,
-) {
-  if (input.pending) {
-    return {
-      title: resolve(msg("Checking machine resources")),
-      description: resolve(
-        msg("Resource checks are still running. You can choose a machine in the composer."),
-      ),
-    };
-  }
-  const noMachineReadsEveryThread =
-    input.threadContexts.length > 0 &&
-    !input.candidateEnvironmentIds.some((environmentId) =>
-      input.threadContexts.every((record) => record.environmentId === environmentId),
-    );
-  return {
-    title: resolve(msg("Choose a machine to continue")),
-    description: noMachineReadsEveryThread
-      ? resolve(
-          msg(
-            "No machine can read every attached thread. Choose a machine in the composer or remove the threads.",
-          ),
-        )
-      : resolve(
-          msg(
-            "No eligible machine has available resources. Choose a machine in the composer to override.",
-          ),
-        ),
-  };
 }
 
 /**
@@ -119,4 +70,20 @@ export function approvalRedirectNotice(
     return resolve(msg("Another approval arrived, so your message wasn't sent."));
   }
   return null;
+}
+
+/** Whether Auto may place a new thread: a triage prompt links this machine's playbook, a
+ * repository choice names its paths, and a checked-out pull request is its checkout. */
+export function sendPlacesThread(input: {
+  readonly autoPlacement: boolean;
+  readonly worktreeRepositories: ReadonlyArray<{ readonly path: string }> | undefined;
+  readonly prompt: string;
+  readonly checksOutPullRequest: boolean;
+}): boolean {
+  return (
+    input.autoPlacement &&
+    input.worktreeRepositories === undefined &&
+    !isTriagePrompt(input.prompt) &&
+    !input.checksOutPullRequest
+  );
 }

@@ -11,6 +11,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   EnvironmentId,
+  PlacementLaunchResult,
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -56,7 +57,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { waitForDraftHeroTransition } from "./components/chat/draftHeroTransition";
-import { getLocalStorageItem } from "./hooks/useLocalStorage";
+import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 import { readThreadPreviewState } from "./previewStateStore";
 import {
   readInstanceCustomModels,
@@ -4833,6 +4834,138 @@ export function markPromotedDraftThreadByRef(threadRef: ScopedThreadRef): void {
       draftStore.markDraftThreadPromoting(DraftId.make(draftId), threadRef);
     }
   }
+}
+
+/**
+ * Points a sent draft at the thread placement started for it, which may be on another machine
+ * (patches/fleet-placement.md). Returns the thread the draft now follows.
+ */
+const isPlacementLaunchResult = Schema.is(PlacementLaunchResult);
+
+export function redirectPromotedDraftThread(
+  sentThreadRef: ScopedThreadRef,
+  launched: unknown,
+): ScopedThreadRef {
+  if (!isPlacementLaunchResult(launched)) return sentThreadRef;
+  const placedRef = scopeThreadRef(launched.environmentId, launched.threadId);
+  const staysHere = scopedThreadRefsEqual(placedRef, sentThreadRef);
+  const previous = placedDraftThreadRef(sentThreadRef) ?? sentThreadRef;
+  const next = staysHere ? sentThreadRef : placedRef;
+  // A draft that already finalized redirects through its record, which follows the replay too.
+  if (!scopedThreadRefsEqual(previous, next)) {
+    useComposerDraftStore.setState((state) => ({
+      promotedDraftRedirects: Object.fromEntries(
+        Object.entries(state.promotedDraftRedirects).map(([draftKey, promotedTo]) => [
+          draftKey,
+          scopedThreadRefsEqual(promotedTo, previous) ? next : promotedTo,
+        ]),
+      ),
+    }));
+  }
+  // A replay the server decided again may keep it here, after an earlier record moved it.
+  if (staysHere) forgetPlacedThread(sentThreadRef);
+  else rememberPlacedThread(sentThreadRef, placedRef);
+  const draftStore = useComposerDraftStore.getState();
+  for (const [draftId, draftThread] of Object.entries(draftStore.draftThreadsByThreadKey)) {
+    if (
+      draftThread.environmentId === sentThreadRef.environmentId &&
+      draftThread.threadId === sentThreadRef.threadId
+    ) {
+      draftStore.markDraftThreadPromoting(
+        DraftId.make(draftId),
+        staysHere ? sentThreadRef : placedRef,
+      );
+    }
+  }
+  return staysHere ? sentThreadRef : placedRef;
+}
+
+// Where each Auto launch started its thread, kept past the draft and across reloads: a draft
+// placed on an unreachable machine finalizes at once, before a follow-up queued behind it goes out.
+const PLACED_THREADS_KEY = "t3code:placed-threads:v1";
+// The newest ones; a follow-up may wait for its machine for days, so none expires by age.
+const PLACED_THREADS_KEPT = 200;
+const PlacedThreads = Schema.Record(
+  Schema.String,
+  Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId, at: Schema.Number }),
+);
+
+// The same records for this session, for when local storage cannot be written.
+// Null records that the thread stayed where it was sent, ahead of an older stored or draft record.
+const sessionPlacedThreads = new Map<string, ScopedThreadRef | null>();
+
+function readPlacedThreads(): typeof PlacedThreads.Type {
+  try {
+    return getLocalStorageItem(PLACED_THREADS_KEY, PlacedThreads) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function forgetPlacedThread(sentThreadRef: ScopedThreadRef): void {
+  const key = scopedThreadKey(sentThreadRef);
+  sessionPlacedThreads.set(key, null);
+  const stored = readPlacedThreads();
+  if (!(key in stored)) return;
+  const { [key]: _forgotten, ...rest } = stored;
+  try {
+    setLocalStorageItem(PLACED_THREADS_KEY, rest, PlacedThreads);
+  } catch {
+    // The session marker keeps it here; the stale stored record serves only after a reload.
+  }
+}
+
+function rememberPlacedThread(sentThreadRef: ScopedThreadRef, placedRef: ScopedThreadRef): void {
+  sessionPlacedThreads.set(scopedThreadKey(sentThreadRef), placedRef);
+  const now = Date.now();
+  const kept = Object.entries(readPlacedThreads())
+    .toSorted(([, left], [, right]) => right.at - left.at)
+    .slice(0, PLACED_THREADS_KEPT - 1);
+  try {
+    setLocalStorageItem(
+      PLACED_THREADS_KEY,
+      {
+        ...Object.fromEntries(kept),
+        [scopedThreadKey(sentThreadRef)]: {
+          environmentId: placedRef.environmentId,
+          threadId: placedRef.threadId,
+          at: now,
+        },
+      },
+      PlacedThreads,
+    );
+  } catch {
+    // Without storage the draft's own record still serves until it finalizes.
+  }
+}
+
+/**
+ * Where a draft thread sent with Auto actually started, when that is another thread (another
+ * machine); null while it started where it was sent, or the draft is gone.
+ */
+export function placedDraftThreadRef(sentThreadRef: ScopedThreadRef): ScopedThreadRef | null {
+  // This session's record is the newest; the stored one serves after a reload.
+  const key = scopedThreadKey(sentThreadRef);
+  if (sessionPlacedThreads.has(key)) return sessionPlacedThreads.get(key) ?? null;
+  const recorded = readPlacedThreads()[key];
+  if (recorded !== undefined) {
+    return scopeThreadRef(recorded.environmentId, recorded.threadId);
+  }
+  for (const draftThread of Object.values(
+    useComposerDraftStore.getState().draftThreadsByThreadKey,
+  )) {
+    const placed = draftThread.promotedTo;
+    if (
+      draftThread.environmentId === sentThreadRef.environmentId &&
+      draftThread.threadId === sentThreadRef.threadId &&
+      placed !== null &&
+      placed !== undefined &&
+      !scopedThreadRefsEqual(placed, sentThreadRef)
+    ) {
+      return placed;
+    }
+  }
+  return null;
 }
 
 export function restoreFailedDraftThread(

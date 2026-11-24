@@ -571,6 +571,13 @@ function ThreadRouteContent(
   const headerSubtitle = [
     selectedThreadProject?.title ?? null,
     selectedEnvironmentConnection?.environmentLabel ?? null,
+    // Why placement put the thread on this machine (patches/fleet-placement.md).
+    selectedThread?.placement
+      ? gt("Auto: {reason}", {
+          reason: selectedThread.placement.reason,
+          $context: "why automatic placement chose this machine",
+        })
+      : null,
     // A linked environment's delegated task names its parent; other linked work its origin.
     delegatedFrom !== null
       ? gt("Subagent of {title}", { title: delegatedFromThread?.title ?? delegatedFrom.title })
