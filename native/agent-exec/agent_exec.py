@@ -4,6 +4,7 @@
 import argparse
 import capabilities
 import workspaces
+import worlds
 import project_files
 import projects
 import fcntl
@@ -248,6 +249,15 @@ def argument_fd(arguments):
     return fd
 
 
+def world_instructions(world):
+    return (
+        f"{world['path']} shows every repository of the {world['name']} world. Read and search any of them in place, "
+        "without cloning. A repository checks out for this thread when you cd into it or write to it; the checkout "
+        "and its changes are this thread's alone. Work that no remote has keeps this thread's world from being "
+        "deleted, so push what should outlive the thread. "
+    )
+
+
 def launch(record, cwd, command, *, project=None):
     project_files.ensure(sys.modules[__name__], record)
     project_files.isolate_devenv_cwd(sys.modules[__name__], record, cwd)
@@ -267,9 +277,12 @@ def launch(record, cwd, command, *, project=None):
     namespace_fds = []
     # Every --setenv goes to bwrap through argument_fd: a command line is world-readable.
     environment = []
+    world = record.get("world")
     if workspace:
         namespace = workspaces.ensure_process_namespace(sys.modules[__name__], record)
         runtime_directory = namespace["runtime"]
+        if world:
+            world_binds, world_socket = worlds.register(sys.modules[__name__], record, namespace)
         namespace_fds = [os.open(f"/proc/{namespace['pid']}/ns/{name}", os.O_RDONLY)
                          for name in ["user", "pid_for_children"]]
     args = [
@@ -333,6 +346,9 @@ def launch(record, cwd, command, *, project=None):
             "/etc/static/nix",
             "/etc/hosts",
             "/etc/localtime",
+            # Claude's managed settings and Codex's system config point at the fleet's key pool.
+            "/etc/claude-code/managed-settings.json",
+            "/etc/codex/config.toml",
         ]:
             bind(args, path)
         write_text(
@@ -352,7 +368,8 @@ def launch(record, cwd, command, *, project=None):
         tools.mkdir(exist_ok=True)
         bind(args, tools, writable=True)
         bind(args, tools, host_home / ".local/state/agent-environment", writable=True)
-        tool_project = record.get("projectId") or workspace["sourceRoot"]
+        # A world's threads share one pnpm store, so their checkouts clone from the same files.
+        tool_project = ("world:" + world["name"]) if world else record.get("projectId") or workspace["sourceRoot"]
         shared_tools = STATE / "tool-environments" / identity(tool_project)
         shared_tools.mkdir(parents=True, exist_ok=True)
         bind(args, shared_tools, writable=True)
@@ -384,7 +401,9 @@ def launch(record, cwd, command, *, project=None):
         host_home / ".local/state/agent-bitwarden/attachments",
         writable=True,
     )
-    if workspace:
+    if world:
+        args += worlds.bind_arguments(world_binds)
+    elif workspace:
         bind(args, record["root"], visible_root, writable=True)
     else:
         bind(args, record["root"], writable=True)
@@ -407,6 +426,8 @@ def launch(record, cwd, command, *, project=None):
             bind(args, notify, writable=True)
         environment += ["--setenv", "PROJECT_WORKSPACE_ENTERED", "1"]
     bind(args, host_home / ".cache/ms-playwright")
+    # Claude's managed apiKeyHelper reads it on hosts that use the fleet's key pool.
+    bind(args, "/run/secrets/pool-client-key")
     profile = host_home / ".nix-profile"
     if not workspace:
         bind(args, profile)
@@ -462,8 +483,9 @@ def launch(record, cwd, command, *, project=None):
     write_text(
         private_codex / "AGENTS.md",
         original + "\n\n# Separate project environment\n"
-        "You are in a separate filesystem environment for a fresh project. Other repositories are not mounted. "
-        "Network and the tools selected for this environment are available. Use agent-service for project previews; "
+        + (world_instructions(world) if world else
+           "You are in a separate filesystem environment for a fresh project. Other repositories are not mounted. ")
+        + "Network and the tools selected for this environment are available. Use agent-service for project previews; "
         'it runs services in this same environment. For infrastructure or tooling problems, start a T3 thread in the infra project '
         "with the problem and evidence, then watch that thread so its answer wakes you. "
         "Account commands (gog, himalaya, bw-personal, bw-work, slackcli, gh, tea) run through the host bridge with native authentication and standard input/output. Use project paths or /tmp for file exchange. "
@@ -490,7 +512,11 @@ def launch(record, cwd, command, *, project=None):
             if claude_instructions.exists() and not minimal
             else ""
         )
-        + '\n\n# Separate project environment\nUse agent-service for project previews. For infrastructure or tooling problems, start a T3 thread in the infra project with the problem and evidence, then watch that thread so its answer wakes you. Other project directories are not mounted. Use agent-service verify NAME to check a published preview from the host; local curl checks use the internal port.\n'
+        + "\n\n# Separate project environment\n"
+        + (world_instructions(world) + "\n" if world else "")
+        + "Use agent-service for project previews. For infrastructure or tooling problems, start a T3 thread in the infra project with the problem and evidence, then watch that thread so its answer wakes you. "
+        + ("" if world else "Other project directories are not mounted. ")
+        + "Use agent-service verify NAME to check a published preview from the host; local curl checks use the internal port.\n"
         + "Project tools come from the nearest devenv.nix, or flake.nix when there is none; every command activates it automatically. To add project tools, write devenv.nix and commit the devenv.lock it creates; do not hard-code /nix/store paths. The first activation can take a few minutes.\n"
         + "Account tools use native host authentication through the bridge. Use project paths or /tmp for file exchange. agent-browser starts a project browser; agent-browser-personal and agent-browser-buildlinx explicitly use existing account contexts, with bitwarden-browser-ui-personal and bitwarden-browser-ui-work for their passkey popups. play-console-browser drives the persistent Google Play Console browser signed in to the Urbs developer account. asc (App Store Connect) and gplay (Google Play Console) use the Urbs UG store credentials; the app-stores skill covers them.\n"
         + (
@@ -715,6 +741,9 @@ def launch(record, cwd, command, *, project=None):
         ]
         if not project:
             command = [LAUNCHER, "activate", "--", *command]
+        if world:
+            command = [LAUNCHER, "world-sync", "--", *command]
+            environment += ["--setenv", "AGENT_EXEC_WORLD_SOCKET", world_socket]
     environment += [
         "--setenv",
         "AGENT_EXEC_WORKSPACE_LAYOUT",
@@ -1019,6 +1048,9 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == "activate":
         command = sys.argv[2:]
         return workspaces.activate(command[1:] if command[:1] == ["--"] else command)
+    if len(sys.argv) > 2 and sys.argv[1] == "world-sync":
+        command = sys.argv[2:]
+        return worlds.sync_and_exec(command[1:] if command[:1] == ["--"] else command)
     if len(sys.argv) > 2 and sys.argv[1] == "capability":
         return capabilities.call(sys.argv[2], sys.argv[3:])
     if len(sys.argv) > 2 and sys.argv[1] == "request":
@@ -1038,6 +1070,14 @@ def main():
     fork.add_argument("--profile", choices=["minimal", "familiar"], default="minimal")
     fork.add_argument("--workspace-id", help="T3 workspace identity; enables safe creation retries")
     fork.add_argument("--project-id", help="Owning T3 project")
+    world = sub.add_parser("world", help="Create a thread world served by the worldfs daemon")
+    world.add_argument("root")
+    world.add_argument("--thread", required=True, help="T3's thread key; the worldfs thread id")
+    world.add_argument("--world", required=True)
+    world.add_argument("--path", required=True, help="Where the thread sees the world")
+    world.add_argument("--layout", help='worldfs layout, a JSON array of {"prefix", "dir"}')
+    world.add_argument("--profile", choices=["minimal", "familiar"], default="familiar")
+    world.add_argument("--project-id", help="Owning T3 project")
     collect = sub.add_parser(
         "collect",
         help="Import a selected jj change without editing the destination working copy",
@@ -1108,6 +1148,11 @@ def main():
                 )
             )
         )
+    elif args.operation == "world":
+        print(json.dumps(worlds.create(
+            runtime, args.root, thread=args.thread, world=args.world, path=args.path,
+            layout=worlds.parse_layout(args.layout), profile=args.profile, project_id=args.project_id,
+        )))
     elif args.operation == "collect":
         print(
             json.dumps(workspaces.collect(args.source, args.destination, args.revision))
@@ -1159,7 +1204,9 @@ def main():
             stop_unit("agent-exec-" + identity(record["root"]))
             if record.get("workspace"):
                 stop_unit("agent-env-" + identity(record["root"]) + ".slice")
-            if args.remove_checkout:
+            if args.remove_checkout and record.get("world"):
+                worlds.teardown(runtime, record)
+            elif args.remove_checkout:
                 project_files.remove_checkout(runtime, record)
             print(json.dumps({"root": record["root"], "retained": not args.remove_checkout}))
     elif args.operation == "create":

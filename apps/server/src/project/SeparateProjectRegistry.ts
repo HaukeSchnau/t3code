@@ -32,7 +32,7 @@ const SeparateWorkspaceMetadata = Schema.Struct({
   id: Schema.optional(Schema.NullOr(Schema.String)),
   sourceRevision: Schema.optional(Schema.NullOr(Schema.String)),
   profile: Schema.optional(Schema.Literals(["familiar", "minimal"])),
-  layout: Schema.optional(Schema.Literals(["repository", "directory"])),
+  layout: Schema.optional(Schema.Literals(["repository", "directory", "world"])),
   ready: Schema.optional(Schema.Boolean),
   repositories: Schema.optional(
     Schema.Array(

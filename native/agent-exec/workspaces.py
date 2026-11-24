@@ -228,6 +228,16 @@ def prepare_fork(runtime, source, destination, name, revision, profile, *, works
             ],
         },
     }
+    prepare_private_state(runtime, record, profile, baseline)
+    runtime.record_path(destination).parent.mkdir(parents=True, exist_ok=True)
+    runtime.write_text(runtime.record_path(destination), json.dumps(record) + "\n")
+    if not is_repository:
+        return finish_directory_fork(runtime, record)
+    finish_legacy_configuration(runtime, record)
+    return record
+
+
+def prepare_private_state(runtime, record, profile, baseline):
     state = runtime.project_state(record)
     state.mkdir(parents=True, exist_ok=True)
     profile_dir = state / "profile"
@@ -245,12 +255,6 @@ def prepare_fork(runtime, source, destination, name, revision, profile, *, works
     if not (state / "base-profile").is_symlink():
         (state / "base-profile").symlink_to(baseline)
     pin_profile(state, baseline)
-    runtime.record_path(destination).parent.mkdir(parents=True, exist_ok=True)
-    runtime.write_text(runtime.record_path(destination), json.dumps(record) + "\n")
-    if not is_repository:
-        return finish_directory_fork(runtime, record)
-    finish_legacy_configuration(runtime, record)
-    return record
 
 
 def finish_legacy_configuration(runtime, record):
