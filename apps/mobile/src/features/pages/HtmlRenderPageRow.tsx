@@ -1,4 +1,5 @@
 import type { HtmlRenderPage } from "@t3tools/contracts";
+import { useGT, useMessages } from "gt-react-native";
 import { Platform, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -21,30 +22,42 @@ export function HtmlRenderPageRow(props: {
   /** Set for lists across threads. */
   readonly onOpenThread?: () => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const { page, onOpenThread } = props;
   const nowMs = useNowMinuteMs();
   const rippleStyle = useResolveClassNames("bg-subtle-strong");
   const markNew = onOpenThread !== undefined && page.seenAt === null;
-  const threadTitle = page.threadTitle.trim() || "Untitled thread";
+  const threadTitle = page.threadTitle.trim() || gt("Untitled thread");
   const facts = [
     onOpenThread === undefined ? null : threadTitle,
-    page.versionCount > 1 ? `${page.versionCount} versions` : null,
+    page.versionCount > 1
+      ? gt("{count, plural, one {{count} version} other {{count} versions}}", {
+          count: page.versionCount,
+        })
+      : null,
   ]
     .filter((fact) => fact !== null)
     .join(" · ");
-  const time = relativeTime(page.latestPublishedAt, nowMs);
+  const time = relativeTime(page.latestPublishedAt, nowMs, messages);
   return (
     <RowPressable
       accessibilityRole="button"
-      accessibilityLabel={[page.title, page.ask?.text, markNew ? "New" : null, facts, time]
+      accessibilityLabel={[
+        page.title,
+        page.ask?.text,
+        markNew ? gt("New", { $context: "page not seen yet" }) : null,
+        facts,
+        time,
+      ]
         .filter(Boolean)
         .join(", ")}
-      accessibilityHint="Opens the page."
+      accessibilityHint={gt("Opens the page.")}
       // VoiceOver cannot focus the thread button inside the row, so the row offers it as an action.
       accessibilityActions={
         onOpenThread === undefined
           ? undefined
-          : [{ name: "openThread", label: `Open thread ${threadTitle}` }]
+          : [{ name: "openThread", label: gt("Open thread {thread}", { thread: threadTitle }) }]
       }
       onAccessibilityAction={({ nativeEvent }) => {
         if (nativeEvent.actionName === "openThread") onOpenThread?.();
@@ -72,7 +85,7 @@ export function HtmlRenderPageRow(props: {
             <View className="flex-row items-center gap-1.5">
               {markNew ? (
                 <Text textRole="footnote" className="font-t3-bold text-primary-text">
-                  New
+                  {gt("New", { $context: "page not seen yet" })}
                 </Text>
               ) : null}
               {facts !== "" ? (
@@ -99,7 +112,7 @@ export function HtmlRenderPageRow(props: {
             />
           ) : (
             <IconButton
-              accessibilityLabel={`Open thread ${threadTitle}`}
+              accessibilityLabel={gt("Open thread {thread}", { thread: threadTitle })}
               icon="text.bubble"
               tintColorClassName="accent-icon"
               onPress={onOpenThread}

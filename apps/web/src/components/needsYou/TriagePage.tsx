@@ -13,6 +13,7 @@ import {
 import { selectProjectGroupingSettings } from "@t3tools/client-runtime/state/project-grouping";
 import { ChevronLeftIcon, ChevronRightIcon, InboxIcon } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
+import { T, useGT, Var } from "gt-react";
 
 import { durableCommandOutbox } from "~/durableCommandOutbox";
 import { useNowMinute } from "~/hooks/useNowMinute";
@@ -77,6 +78,7 @@ function useNeedsYouDeckThreads() {
 
 /** The threads that need you, one card at a time, oldest first. */
 export function TriagePage() {
+  const gt = useGT();
   const cards = useNeedsYouDeckThreads();
   const session = useSyncExternalStore(triageDrafts.subscribe, triageDrafts.getSnapshot);
   const keys = cards.map(needsYouDeckKey);
@@ -94,28 +96,34 @@ export function TriagePage() {
 
   return (
     <AppRouteModal
-      label="Triage"
+      label={gt("Triage", { $context: "noun, the screen that goes through threads that need you" })}
       escapeCloses={(event) => triageEscapeCloses(event, triageKeyTarget(event.target))}
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex min-h-12 shrink-0 items-center gap-1 border-b ps-5 pe-2">
-          <h1 className="min-w-0 truncate font-medium text-sm">Needs you</h1>
+          <h1 className="min-w-0 truncate font-medium text-sm">
+            <T>Needs you</T>
+          </h1>
           {thread !== null ? (
             <span className="ms-1 text-muted-foreground text-sm tabular-nums">
-              {index + 1} of {cards.length}
+              <T>
+                <Var>{index + 1}</Var> of <Var>{cards.length}</Var>
+              </T>
             </span>
           ) : null}
           <div className="min-w-0 flex-1" />
           {thread !== null ? (
             <>
               <DeckStepButton
-                label="Previous"
+                direction="previous"
+                label={gt("Previous")}
                 hotkey="K"
                 disabled={index === 0}
                 onClick={() => step(-1)}
               />
               <DeckStepButton
-                label="Next"
+                direction="next"
+                label={gt("Next")}
                 hotkey="J"
                 disabled={index === cards.length - 1}
                 onClick={() => step(1)}
@@ -130,13 +138,15 @@ export function TriagePage() {
               <EmptyMedia variant="icon">
                 <InboxIcon />
               </EmptyMedia>
-              <EmptyTitle>Nothing needs you</EmptyTitle>
+              <EmptyTitle>
+                <T>Nothing needs you</T>
+              </EmptyTitle>
               <EmptyDescription>
-                Threads that wait for an answer, a decision or a review show up here.
+                <T>Threads that wait for an answer, a decision or a review show up here.</T>
               </EmptyDescription>
             </EmptyHeader>
             <DialogPrimitive.Close render={<Button variant="outline" />}>
-              Close
+              <T>Close</T>
             </DialogPrimitive.Close>
           </Empty>
         ) : (
@@ -159,12 +169,13 @@ export function TriagePage() {
 }
 
 function DeckStepButton(props: {
+  readonly direction: "previous" | "next";
   readonly label: string;
   readonly hotkey: string;
   readonly disabled: boolean;
   readonly onClick: () => void;
 }) {
-  const Icon = props.label === "Previous" ? ChevronLeftIcon : ChevronRightIcon;
+  const Icon = props.direction === "previous" ? ChevronLeftIcon : ChevronRightIcon;
   return (
     <Tooltip>
       <TooltipTrigger

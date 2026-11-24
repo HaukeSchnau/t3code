@@ -1,5 +1,6 @@
 import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentId, HtmlRenderPage, HtmlRenderPageFilter } from "@t3tools/contracts";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,20 +22,23 @@ import { htmlRenderPageRoute } from "./threadPages";
 const PAGE_SIZE = 50;
 
 const FILTERS = [
-  { value: "asks", label: "Waiting for you" },
-  { value: "unseen", label: "New" },
-  { value: "all", label: "All" },
+  { value: "asks", label: msg("Waiting for you", { $context: "tab, pages that ask for input" }) },
+  { value: "unseen", label: msg("New", { $context: "tab, pages not seen yet" }) },
+  { value: "all", label: msg("All", { $context: "tab, all pages" }) },
 ] as const satisfies ReadonlyArray<{ value: HtmlRenderPageFilter; label: string }>;
 
 const EMPTY = {
   asks: {
-    title: "Nothing is waiting for you",
-    detail: "Pages that ask for your input show up here.",
+    title: msg("Nothing is waiting for you"),
+    detail: msg("Pages that ask for your input show up here."),
   },
-  unseen: { title: "No new pages", detail: "You have seen every page agents showed you." },
+  unseen: {
+    title: msg("No new pages"),
+    detail: msg("You have seen every page agents showed you."),
+  },
   all: {
-    title: "No pages yet",
-    detail: "Pages agents show you in threads collect here, newest first.",
+    title: msg("No pages yet"),
+    detail: msg("Pages agents show you in threads collect here, newest first."),
   },
 } as const satisfies Record<HtmlRenderPageFilter, { title: string; detail: string }>;
 
@@ -45,6 +49,8 @@ interface PageActions {
 
 /** Pages from every connected environment, newest first. */
 export function PagesScreen() {
+  const gt = useGT();
+  const m = useMessages();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const openDetail = useOpenWorkspaceDetail();
@@ -63,7 +69,7 @@ export function PagesScreen() {
   };
 
   return (
-    <SettingsScreen title="Pages">
+    <SettingsScreen title={gt("Pages")}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -72,7 +78,7 @@ export function PagesScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <SegmentedControl
-          options={FILTERS}
+          options={FILTERS.map((option) => ({ ...option, label: m(option.label) }))}
           selected={filter}
           onSelect={setFilter}
           role="tab"
@@ -81,8 +87,8 @@ export function PagesScreen() {
         {environments.length === 0 ? (
           <EmptyState
             variant="plain"
-            title="No environment connected"
-            detail="Connect to an environment to see the pages its agents showed you."
+            title={gt("No environment connected")}
+            detail={gt("Connect to an environment to see the pages its agents showed you.")}
           />
         ) : (
           environments.map((environment) => (
@@ -115,6 +121,8 @@ function EnvironmentPages(props: {
   readonly filter: HtmlRenderPageFilter;
   readonly actions: PageActions;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const query = useEnvironmentQuery(pagesAtom(props.environmentId, props.filter));
   const [morePages, setMorePages] = useState(0);
   const empty = EMPTY[props.filter];
@@ -128,10 +136,10 @@ function EnvironmentPages(props: {
       ) : null}
       {query.data === null ? (
         <Text className="px-2 text-base text-foreground-muted">
-          {query.error ?? "Loading pages…"}
+          {query.error ?? gt("Loading pages…")}
         </Text>
       ) : query.data.pages.length === 0 ? (
-        <EmptyState variant="plain" title={empty.title} detail={empty.detail} />
+        <EmptyState variant="plain" title={m(empty.title)} detail={m(empty.detail)} />
       ) : (
         <ListSection>
           <PageRows
@@ -169,17 +177,18 @@ function MorePages(props: {
   readonly onLoadMore: () => void;
   readonly actions: PageActions;
 }) {
+  const gt = useGT();
   const query = useEnvironmentQuery(
     props.remaining > 0 ? pagesAtom(props.environmentId, props.filter, props.cursor) : null,
   );
   if (props.remaining === 0) {
-    return <LoadMoreRow label="Load more" onPress={props.onLoadMore} />;
+    return <LoadMoreRow label={gt("Load more")} onPress={props.onLoadMore} />;
   }
   if (query.data === null) {
     return query.error === null ? (
-      <LoadMoreRow label="Load more" loading onPress={props.onLoadMore} />
+      <LoadMoreRow label={gt("Load more")} loading onPress={props.onLoadMore} />
     ) : (
-      <LoadMoreRow label="Could not load more pages. Try again" onPress={query.refresh} />
+      <LoadMoreRow label={gt("Could not load more pages. Try again")} onPress={query.refresh} />
     );
   }
   return (

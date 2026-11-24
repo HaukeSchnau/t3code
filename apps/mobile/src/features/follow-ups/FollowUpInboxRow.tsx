@@ -1,3 +1,4 @@
+import { T, useGT, Var } from "gt-react-native";
 import { memo } from "react";
 import { Platform, View } from "react-native";
 
@@ -22,6 +23,7 @@ export const FollowUpInboxRow = memo(function FollowUpInboxRow(props: {
   readonly showTrailingDivider: boolean;
   readonly onOpen: (entry: InboxFollowUp) => void;
 }) {
+  const gt = useGT();
   const sidebarPane = props.pane === "sidebar";
   // Android draws every row as a card; iOS only in the sidebar.
   const card = sidebarPane || Platform.OS === "android";
@@ -50,7 +52,9 @@ export const FollowUpInboxRow = memo(function FollowUpInboxRow(props: {
           sidebarPane ? "text-drawer-foreground-muted" : "text-foreground-tertiary",
         )}
       >
-        back since {props.timeLabel}
+        <T>
+          back since <Var>{props.timeLabel}</Var>
+        </T>
       </Text>
     </View>
   );
@@ -61,8 +65,11 @@ export const FollowUpInboxRow = memo(function FollowUpInboxRow(props: {
     >
       <RowPressable
         accessibilityRole="button"
-        accessibilityLabel={`Follow-up: ${followUp.title}, back since ${props.timeLabel}`}
-        accessibilityHint="Opens the follow-up."
+        accessibilityLabel={gt("Follow-up: {title}, back since {time}", {
+          title: followUp.title,
+          time: props.timeLabel,
+        })}
+        accessibilityHint={gt("Opens the follow-up.")}
         interactionClassName={sidebarPane ? "bg-thread-hover" : "bg-row-hover"}
         onPress={() => props.onOpen(props.entry)}
         style={sidebarPane ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : undefined}

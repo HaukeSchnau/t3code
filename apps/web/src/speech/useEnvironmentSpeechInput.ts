@@ -129,12 +129,17 @@ function commandBlocker(environment: {
   readonly reachable: boolean;
   readonly label: string | undefined;
 }): string | null {
-  const name = environment.label ?? "This environment";
+  const name = environment.label;
   if (!readCleanupGrant())
-    return "Spoken commands use transcript cleanup. Turn it on in Voice settings.";
+    return m(msg("Spoken commands use transcript cleanup. Turn it on in Voice settings."));
   if (!environment.supported)
-    return `${name} runs a T3 server without spoken commands. Update it to use them.`;
-  if (!environment.reachable) return `${name} isn't available for transcript cleanup right now.`;
+    return name === undefined
+      ? m(msg("This environment runs a T3 server without spoken commands. Update it to use them."))
+      : m(msg("{name} runs a T3 server without spoken commands. Update it to use them.", { name }));
+  if (!environment.reachable)
+    return name === undefined
+      ? m(msg("This environment isn't available for transcript cleanup right now."))
+      : m(msg("{name} isn't available for transcript cleanup right now.", { name }));
   return null;
 }
 
@@ -185,7 +190,7 @@ export function useVoiceTranscriptionDestination() {
 }
 
 function reportCommandFailure(message: string) {
-  toastManager.add({ type: "warning", title: "Spoken command", description: message });
+  toastManager.add({ type: "warning", title: m(msg("Spoken command")), description: message });
 }
 
 export function useEnvironmentSpeechInput(input: HookInput) {

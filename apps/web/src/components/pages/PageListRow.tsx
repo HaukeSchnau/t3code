@@ -1,5 +1,6 @@
 import type { HtmlRenderPage } from "@t3tools/contracts";
 import { MessageCircleQuestionIcon, MessagesSquareIcon } from "lucide-react";
+import { T, useGT, useMessages } from "gt-react";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -17,8 +18,14 @@ export function PageListRow(props: {
   readonly onOpenThread?: (page: HtmlRenderPage) => void;
 }) {
   const { page, onOpenThread } = props;
+  const gt = useGT();
+  const m = useMessages();
   const nowMinute = useNowMinute();
-  const when = formatRelativeTimeLabel(page.latestPublishedAt, Date.parse(`${nowMinute}:00.000Z`));
+  const when = formatRelativeTimeLabel(
+    page.latestPublishedAt,
+    Date.parse(`${nowMinute}:00.000Z`),
+    m,
+  );
   const details = [
     props.showThread ? page.threadTitle : null,
     when,
@@ -35,7 +42,7 @@ export function PageListRow(props: {
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{page.title}</span>
           {page.ask === null && page.seenAt === null ? (
             <Badge variant="info" size="sm">
-              New
+              <T context="badge, a page not seen yet">New</T>
             </Badge>
           ) : null}
         </span>
@@ -58,7 +65,7 @@ export function PageListRow(props: {
             <TooltipTrigger
               render={
                 <Button
-                  aria-label={`Open the thread ${page.threadTitle}`}
+                  aria-label={gt("Open the thread {title}", { title: page.threadTitle })}
                   size="icon-xs"
                   variant="ghost-muted"
                   onClick={() => onOpenThread(page)}
@@ -67,7 +74,9 @@ export function PageListRow(props: {
             >
               <MessagesSquareIcon />
             </TooltipTrigger>
-            <TooltipPopup side="left">Open thread</TooltipPopup>
+            <TooltipPopup side="left">
+              <T>Open thread</T>
+            </TooltipPopup>
           </Tooltip>
         </div>
       ) : null}

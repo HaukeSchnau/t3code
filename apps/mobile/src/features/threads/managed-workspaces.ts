@@ -6,7 +6,9 @@
 import { workspaceLabel } from "@t3tools/client-runtime/state/workspaces";
 import type { ManagedWorkspacesCapability, WorkspaceProfile } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
+import { msg } from "gt-react-native";
 
+import { m, type MessageResolver } from "../../i18n/messages";
 import { appAtomRegistry } from "../../state/atom-registry";
 
 /** Setup for isolated workspaces; Familiar until changed on this device. */
@@ -34,13 +36,18 @@ export function managedWorkspaceCreation(capability: ManagedWorkspacesCapability
   };
 }
 
-export function managedWorkspaceDisplayLabel(input: {
-  readonly workspaceMode: "local" | "worktree";
-  readonly worktreePath: string | null;
-  readonly isolated?: boolean;
-}): string {
+export function managedWorkspaceDisplayLabel(
+  input: {
+    readonly workspaceMode: "local" | "worktree";
+    readonly worktreePath: string | null;
+    readonly isolated?: boolean;
+  },
+  resolve: MessageResolver = m,
+): string {
   if (input.workspaceMode === "worktree") {
-    return input.isolated ? "New isolated workspace" : "New workspace";
+    return resolve(input.isolated ? msg("New isolated workspace") : msg("New workspace"));
   }
-  return input.worktreePath === null ? "Project checkout" : workspaceLabel(input.worktreePath);
+  return input.worktreePath === null
+    ? resolve(msg("Project checkout"))
+    : workspaceLabel(input.worktreePath);
 }

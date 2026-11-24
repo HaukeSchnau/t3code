@@ -114,7 +114,7 @@ export function buildShortcutActions(
     },
     {
       id: NEW_FOLLOW_UP_SHORTCUT_ID,
-      title: "New follow-up",
+      title: m(msg("New follow-up")),
       icon: icon("tray.and.arrow.down"),
       params: { href: NEW_FOLLOW_UP_SHORTCUT_HREF },
     },

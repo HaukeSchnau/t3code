@@ -1327,7 +1327,7 @@ export function resolveThreadStatusPill(input: {
 
   if (need === "turn_end" || need === "page") {
     return {
-      label: "Awaiting Input",
+      label: msg("Awaiting Input"),
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
       pulse: false,

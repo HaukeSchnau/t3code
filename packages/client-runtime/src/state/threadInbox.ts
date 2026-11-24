@@ -1,5 +1,7 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
 import * as DateTime from "effect/DateTime";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
@@ -103,18 +105,18 @@ export function oldestOpenAsk(thread: Pick<ThreadNeedsYouInput, "openAsks">) {
 }
 
 const NEED_LABELS: Record<ThreadNeedKind, string> = {
-  approval: "Approval",
-  question: "Question",
-  request: "Request",
-  subagent: "Subagent waiting",
-  guest: "Guest message",
-  turn_end: "Question",
-  page: "Page",
+  approval: msg("Approval", { $context: "what a thread waits on the user for" }),
+  question: msg("Question", { $context: "what a thread waits on the user for" }),
+  request: msg("Request", { $context: "what a thread waits on the user for" }),
+  subagent: msg("Subagent waiting"),
+  guest: msg("Guest message"),
+  turn_end: msg("Question", { $context: "what a thread waits on the user for" }),
+  page: msg("Page", { $context: "what a thread waits on the user for" }),
 };
 
 /** One line for a list row: the ask's text, or what kind of request waits. */
-export function threadNeedLabel(need: ThreadNeed): string {
-  return need.text ?? NEED_LABELS[need.kind];
+export function threadNeedLabel(need: ThreadNeed, resolve: MFunctionType = mFallback): string {
+  return need.text ?? resolve(NEED_LABELS[need.kind]);
 }
 
 /**

@@ -1,7 +1,9 @@
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import type { FollowUp, FollowUpActor, FollowUpStatus } from "@t3tools/contracts";
+import { msg } from "gt-react-native";
 
 import type { AppSymbolName } from "../../components/ui/AppSymbol";
+import { m, type MessageResolver } from "../../i18n/messages";
 
 export const FOLLOW_UP_ICON = "tray.and.arrow.down" satisfies AppSymbolName;
 
@@ -12,12 +14,13 @@ export const FOLLOW_UP_LATER_PRESETS: ReadonlyArray<SnoozePresetSetting> = [
   { kind: "after", minutes: 30 * 24 * 60 },
 ];
 
+/** `msg()` labels, plain English until resolved with `useMessages()` where they render. */
 export const FOLLOW_UP_STATUS_LABELS: Readonly<Record<FollowUpStatus, string>> = {
-  open: "Open",
-  picked_up: "Picked up",
-  done: "Done",
-  dropped: "Dropped",
-  merged: "Merged",
+  open: msg("Open"),
+  picked_up: msg("Picked up"),
+  done: msg("Done"),
+  dropped: msg("Dropped"),
+  merged: msg("Merged"),
 };
 
 export function formatFollowUpDate(iso: string): string {
@@ -38,20 +41,26 @@ function followUpWhenLabel(followUp: FollowUp): string | null {
   return followUp.condition;
 }
 
-export function followUpActorLabel(actor: FollowUpActor): string {
-  return actor.kind === "user" ? "You" : actor.kind === "gardener" ? "Gardener" : "Agent";
+export function followUpActorLabel(actor: FollowUpActor, resolve: MessageResolver = m): string {
+  return actor.kind === "user"
+    ? resolve(msg("You", { $context: "who changed a follow-up" }))
+    : actor.kind === "gardener"
+      ? resolve(msg("Gardener", { $context: "who changed a follow-up" }))
+      : resolve(msg("Agent", { $context: "who changed a follow-up" }));
 }
 
 /** The row's second line: type, tags, date or condition, and where it came from. */
-export function followUpRowDescription(followUp: FollowUp): string {
+export function followUpRowDescription(followUp: FollowUp, resolve: MessageResolver = m): string {
   const origin =
     followUp.origin !== null
-      ? `From ${followUp.origin.threadTitle ?? "a thread"}`
+      ? followUp.origin.threadTitle !== null
+        ? resolve(msg("From {title}", { title: followUp.origin.threadTitle }))
+        : resolve(msg("From a thread"))
       : followUp.createdBy.kind === "user"
-        ? "Added by you"
+        ? resolve(msg("Added by you"))
         : followUp.createdBy.kind === "gardener"
-          ? "Added by the gardener"
-          : "Added by an agent";
+          ? resolve(msg("Added by the gardener"))
+          : resolve(msg("Added by an agent"));
   return [
     followUp.type,
     followUp.tags.length > 0 ? followUp.tags.map((tag) => `#${tag}`).join(" ") : null,

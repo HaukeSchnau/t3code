@@ -37,7 +37,7 @@ export function ThreadListFilters(props: {
       {modeMenu.visible ? (
         <ListFilterMenu
           label={modeMenu.label}
-          accessibilityLabel="Environment mode"
+          accessibilityLabel={gt("Environment mode")}
           actions={modeMenu.actions}
           onSelect={modeMenu.select}
         />

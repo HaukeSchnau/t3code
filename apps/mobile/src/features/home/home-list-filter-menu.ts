@@ -49,7 +49,7 @@ export function buildHomeListFilterMenuItems(
   if (modeMenu?.visible) {
     items.push({
       id: "mode",
-      title: `Mode: ${modeMenu.label}`,
+      title: resolve(msg("Mode: {mode}", { mode: modeMenu.label })),
       items: modeMenu.actions.map((action) => ({
         id: `mode:${action.id}`,
         title: action.title,

@@ -243,7 +243,7 @@ export function useThreadActionMenu(input: {
           await reportFailure(m(msg("Failed to wake thread")), () => unsnoozeThread(threadRef));
           return;
         case "dismiss-asks":
-          await reportFailure("Failed to end the ask", () => dismissThreadAsks(threadRef));
+          await reportFailure(m(msg("Failed to end the ask")), () => dismissThreadAsks(threadRef));
           return;
         case "pin":
           await reportFailure(m(msg("Failed to pin thread")), () => pinThread(threadRef));

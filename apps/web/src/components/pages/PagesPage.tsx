@@ -12,6 +12,7 @@ import type {
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { AppWindowIcon } from "lucide-react";
 import { useState } from "react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { isElectron } from "~/env";
 import { newMessageId } from "~/lib/utils";
@@ -40,9 +41,9 @@ export interface PagesSearch {
 }
 
 const FILTERS = [
-  { value: "all", label: "All" },
-  { value: "asks", label: "Waiting for you" },
-  { value: "unseen", label: "New" },
+  { value: "all", label: msg("All", { $context: "filter, every page" }) },
+  { value: "asks", label: msg("Waiting for you") },
+  { value: "unseen", label: msg("New", { $context: "filter, pages not seen yet" }) },
 ] as const satisfies ReadonlyArray<{ value: HtmlRenderPageFilter; label: string }>;
 
 const PAGE_SIZE = 50;
@@ -60,6 +61,8 @@ interface OpenPage {
 
 /** Every page agents showed, newest first, across the connected environments. */
 export function PagesPage() {
+  const gt = useGT();
+  const m = useMessages();
   const search = useSearch({ from: "/_chat/pages" });
   const navigate = useNavigate({ from: "/pages" });
   const filter: HtmlRenderPageFilter = search.filter ?? "all";
@@ -100,15 +103,17 @@ export function PagesPage() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="bg-background">
-          <WorkspaceBreadcrumb ariaLabel="Pages breadcrumb">
+          <WorkspaceBreadcrumb ariaLabel={gt("Pages breadcrumb")}>
             <WorkspaceBreadcrumbItem current>
-              <h1 className="truncate">Pages</h1>
+              <h1 className="truncate">
+                <T>Pages</T>
+              </h1>
             </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
           <div className="min-w-0 flex-1" />
           <div className="shrink-0 [-webkit-app-region:no-drag]">
             <ToggleGroup
-              aria-label="Show pages"
+              aria-label={gt("Show pages")}
               size="segmented"
               variant="segmented"
               value={[filter]}
@@ -120,7 +125,7 @@ export function PagesPage() {
             >
               {FILTERS.map((option) => (
                 <Toggle key={option.value} value={option.value}>
-                  {option.label}
+                  {m(option.label)}
                 </Toggle>
               ))}
             </ToggleGroup>
@@ -134,8 +139,12 @@ export function PagesPage() {
                   <EmptyMedia variant="icon">
                     <AppWindowIcon />
                   </EmptyMedia>
-                  <EmptyTitle>No environment connected</EmptyTitle>
-                  <EmptyDescription>Connect an environment to see its pages.</EmptyDescription>
+                  <EmptyTitle>
+                    <T>No environment connected</T>
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    <T>Connect an environment to see its pages.</T>
+                  </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
@@ -224,7 +233,11 @@ function PagesChunk(props: {
   );
   if (query.data === null) {
     return query.error !== null ? (
-      <p className="px-3 text-sm text-muted-foreground">Could not load pages: {query.error}</p>
+      <p className="px-3 text-sm text-muted-foreground">
+        <T>
+          Could not load pages: <Var>{query.error}</Var>
+        </T>
+      </p>
     ) : (
       <div className="flex flex-col gap-2 px-3">
         <Skeleton className="h-12 w-full" />
@@ -252,7 +265,7 @@ function PagesChunk(props: {
       ) : (
         <div className="px-3 pt-2">
           <Button size="sm" variant="outline" onClick={props.onMore}>
-            Load more
+            <T>Load more</T>
           </Button>
         </div>
       )}

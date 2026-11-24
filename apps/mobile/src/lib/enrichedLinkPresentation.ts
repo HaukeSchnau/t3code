@@ -24,6 +24,7 @@ import {
 import { hasThreadLinks, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import type { LinkedFollowUp } from "@t3tools/client-runtime/state/follow-ups";
 import { FOLLOW_UP_STATUS_LABELS } from "../features/follow-ups/followUpPresentation";
+import { m, type MessageResolver } from "../i18n/messages";
 
 export function enrichedContextLinkPresentation(
   href: string,
@@ -61,12 +62,13 @@ export function enrichedThreadLinkPresentation(
  */
 export function enrichedFollowUpLinkPresentation(
   linked: LinkedFollowUp | undefined,
+  resolve: MessageResolver = m,
 ): { accent?: string; icon: ContextChipIconRef; label?: string } | undefined {
   if (linked === undefined || linked.state === "missing") return undefined;
   const presentation = contextChipPresentation("follow-up");
   const label =
     linked.state === "found"
-      ? `${linked.title.trim()}${linked.status === "open" ? "" : ` · ${FOLLOW_UP_STATUS_LABELS[linked.status]}`}`
+      ? `${linked.title.trim()}${linked.status === "open" ? "" : ` · ${resolve(FOLLOW_UP_STATUS_LABELS[linked.status])}`}`
       : "";
   return {
     ...(presentation.accent ? { accent: presentation.accent } : {}),

@@ -3,6 +3,7 @@ import {
   pickableProjectGroups,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
+import { T, useGT } from "gt-react";
 import { MessageSquarePlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -38,6 +39,7 @@ export function FollowUpProjectPicker(props: {
   readonly disabled: boolean;
   readonly onPick: (project: EnvironmentProject) => void;
 }) {
+  const gt = useGT();
   const projects = useProjects();
   const threads = useVisibleThreadShells();
   const { environments } = useEnvironments();
@@ -104,16 +106,18 @@ export function FollowUpProjectPicker(props: {
         render={<Button size="sm" disabled={props.disabled || entries.length === 0} />}
       >
         <MessageSquarePlusIcon />
-        Start a thread
+        <T>Start a thread</T>
       </ComboboxTrigger>
       <ComboboxPopup align="start" className="w-72 overflow-hidden">
         <ComboboxSearchInput
-          aria-label="Search projects"
-          placeholder="Start it in which project?"
+          aria-label={gt("Search projects")}
+          placeholder={gt("Start it in which project?")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <ComboboxEmpty>No matching projects.</ComboboxEmpty>
+        <ComboboxEmpty>
+          <T>No matching projects.</T>
+        </ComboboxEmpty>
         <ComboboxList>
           {(item: PickerItem) => {
             const entry = entryByKey.get(item.value);

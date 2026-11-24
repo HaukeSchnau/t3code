@@ -235,27 +235,34 @@ export function useTextGeneratorModels(
 }
 
 /** The server sends these as the Responses API's `reasoning.effort` and `service_tier`. */
-const RESPONSES_MODEL_CAPABILITIES: ModelCapabilities = {
+const responsesModelCapabilities = (resolve: MessageResolver): ModelCapabilities => ({
   optionDescriptors: [
     {
       id: "reasoningEffort",
-      label: "Reasoning",
+      label: resolve(msg("Reasoning", { $context: "model option: reasoning effort" })),
       type: "select",
       options: [
-        { id: "low", label: "Low", isDefault: true },
-        { id: "medium", label: "Medium" },
-        { id: "high", label: "High" },
+        {
+          id: "low",
+          label: resolve(msg("Low", { $context: "reasoning effort" })),
+          isDefault: true,
+        },
+        { id: "medium", label: resolve(msg("Medium", { $context: "reasoning effort" })) },
+        { id: "high", label: resolve(msg("High", { $context: "reasoning effort" })) },
       ],
     },
     {
       id: "fastMode",
-      label: "Fast Mode",
+      label: resolve(msg("Fast Mode")),
       type: "boolean",
-      description:
-        "Priority processing. Costs more per token on an API key, or uses more of a plan's limits.",
+      description: resolve(
+        msg(
+          "Priority processing. Costs more per token on an API key, or uses more of a plan's limits.",
+        ),
+      ),
     },
   ],
-};
+});
 
 /** Picker stand-in for a text generator. It never leaves the settings pickers. */
 function textGeneratorSnapshot(
@@ -265,7 +272,7 @@ function textGeneratorSnapshot(
   selectedModels: ReadonlyArray<string>,
   resolve: MessageResolver,
 ): ServerProvider {
-  const capabilities = config.responsesApi === true ? RESPONSES_MODEL_CAPABILITIES : null;
+  const capabilities = config.responsesApi === true ? responsesModelCapabilities(resolve) : null;
   const discovered = AsyncResult.isSuccess(result)
     ? result.value.map((model): ServerProviderModel => ({
         slug: model.id,

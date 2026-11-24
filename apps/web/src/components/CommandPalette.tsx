@@ -1776,7 +1776,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:follow-ups",
     searchTerms: ["follow-ups", "follow up", "later", "todo", "reminders", "back now"],
-    title: "Open follow-ups",
+    title: gt("Open follow-ups"),
     icon: <ListTodoIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/follow-ups" });
@@ -1787,7 +1787,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:needs-you-triage",
     searchTerms: ["needs you", "triage", "waiting", "asks", "questions", "reply", "inbox"],
-    title: "Triage what needs you",
+    title: gt("Triage what needs you"),
     icon: <InboxIcon className={ITEM_ICON_CLASS} />,
     shortcutCommand: "needsYou.triage",
     run: async () => {
@@ -1799,7 +1799,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:pages",
     searchTerms: ["pages", "page", "html", "renders", "visuals", "mockups", "waiting"],
-    title: "Open pages",
+    title: gt("Open pages"),
     icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/pages" });

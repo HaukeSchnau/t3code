@@ -217,6 +217,7 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   NewTaskEnvironment: msg("Environment"),
   NewTaskBranch: msg("Branch"),
   NewTaskRepositories: msg("Repositories"),
+  NewTaskWorkspace: msg("Workspace"),
   AddProject: msg("Add project"),
   ThreadFiles: msg("Files"),
   WorkflowRun: msg("Run", { $context: "noun, page title for one workflow run" }),
@@ -709,7 +710,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     NewTaskWorkspace: createNativeStackScreen({
       linking: "new/draft/workspace",
       screen: NewTaskWorkspacePickerRouteScreen,
-      options: pageRoute({ title: "Workspace" }),
+      options: pageRoute(),
     }),
     AddProject: createNativeStackScreen({
       linking: "new/add-project",

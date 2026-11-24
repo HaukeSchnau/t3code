@@ -220,7 +220,7 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
 
 const DISMISS_ASKS_MENU_ACTION: MenuAction = {
   id: "dismiss-asks",
-  title: "No reply needed",
+  title: msg("No reply needed"),
   image: "checkmark.bubble",
 };
 
@@ -395,14 +395,15 @@ export const ThreadListV2NeedsYouHeader = memo(function ThreadListV2NeedsYouHead
   readonly count: number;
   readonly pane?: "screen" | "sidebar";
 }) {
+  const gt = useGT();
   const navigation = useNavigation();
   return (
     <ThreadListV2Section
-      label={`Needs you (${props.count})`}
+      label={gt("Needs you ({count})", { count: props.count })}
       pane={props.pane}
       action={{
-        label: "Triage",
-        accessibilityLabel: "Triage what needs you, one thread at a time",
+        label: gt("Triage", { $context: "verb, goes through what needs you" }),
+        accessibilityLabel: gt("Triage what needs you, one thread at a time"),
         onPress: () => navigation.navigate("Triage"),
       }}
     />
@@ -1237,7 +1238,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         direct: [
           ...direct,
           localized(CARD_MENU_ACTIONS[0]!),
-          ...(hasOpenAsks ? [DISMISS_ASKS_MENU_ACTION] : []),
+          ...(hasOpenAsks ? [localized(DISMISS_ASKS_MENU_ACTION)] : []),
           ...(swipeActions.secondary === "snooze"
             ? [
                 {
@@ -1389,12 +1390,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     }
     if (swipeActions.primary === "dismiss-asks") {
       return {
-        accessibilityLabel: `No reply needed for ${thread.title}`,
+        accessibilityLabel: gt("No reply needed for {title}", { title: thread.title }),
         icon: "checkmark.bubble" as const,
         // The swipe button fits about eight characters.
-        label: "No reply",
-        swipeHint: "Opens the thread. Swipe left for No reply needed.",
-        swipeSnoozeHint: "Opens the thread. Swipe left for No reply needed and snooze actions.",
+        label: gt("No reply", {
+          $context: "swipe action, marks a thread's asks as needing no reply",
+        }),
+        swipeHint: gt("Opens the thread. Swipe left for No reply needed."),
+        swipeSnoozeHint: gt("Opens the thread. Swipe left for No reply needed and snooze actions."),
         onPress: handleDismissAsks,
       };
     }

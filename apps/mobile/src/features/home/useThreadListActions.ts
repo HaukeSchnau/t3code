@@ -475,10 +475,10 @@ export function useThreadListActions(): {
     if (result._tag === "Failure") {
       const error = Cause.squash(result.cause);
       Dialog.alert(
-        "Could not end the ask",
+        m(msg("Could not end the ask")),
         error instanceof Error && error.message.trim().length > 0
           ? error.message
-          : "The ask could not be ended.",
+          : m(msg("The ask could not be ended.")),
       );
       return false;
     }

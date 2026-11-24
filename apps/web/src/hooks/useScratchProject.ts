@@ -93,7 +93,7 @@ export function createScratchProjectActions(input: {
 
   /** Saves `prompt` as a new no-project draft without opening it. */
   const saveScratchDraft = async (environmentId: EnvironmentId, prompt: string) => {
-    const project = await openScratchProject(environmentId, "Could not save the draft");
+    const project = await openScratchProject(environmentId, m(msg("Could not save the draft")));
     if (!project) return null;
     return input
       .handleNewThread(scopeProjectRef(project.environmentId, project.id), {
@@ -101,7 +101,7 @@ export function createScratchProjectActions(input: {
         background: true,
       })
       .catch((error: unknown) => {
-        reportScratchFailure("Could not save the draft", error);
+        reportScratchFailure(m(msg("Could not save the draft")), error);
         return null;
       });
   };

@@ -3,6 +3,9 @@ import { useCallback, useMemo } from "react";
 import type { JjAction, JjRunActionResult } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
+import { msg } from "gt-react-native";
+
+import { m } from "../i18n/messages";
 
 import { appAtomRegistry } from "./atom-registry";
 import { useAtomCommand } from "./use-atom-command";
@@ -40,11 +43,11 @@ export function useSelectedThreadJjActions() {
       );
       if (AsyncResult.isFailure(result)) {
         const error = Cause.squash(result.cause);
-        const message = error instanceof Error ? error.message : "jj action failed.";
+        const message = error instanceof Error ? error.message : m(msg("jj action failed."));
         setPendingConnectionError(message);
         showGitActionResult({
           type: "error",
-          title: "jj action failed",
+          title: m(msg("jj action failed")),
           description: message,
           threadRef,
         });
@@ -56,7 +59,14 @@ export function useSelectedThreadJjActions() {
         title: result.value.summary,
         threadRef,
         ...(conflicts > 0
-          ? { description: `${conflicts} change${conflicts === 1 ? " has" : "s have"} conflicts` }
+          ? {
+              description: m(
+                msg(
+                  "{count, plural, one {{count} change has conflicts} other {{count} changes have conflicts}}",
+                  { count: conflicts },
+                ),
+              ),
+            }
           : {}),
         ...(result.value.pullRequestUrl ? { prUrl: result.value.pullRequestUrl } : {}),
       });

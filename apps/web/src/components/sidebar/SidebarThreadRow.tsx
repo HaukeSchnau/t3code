@@ -1733,7 +1733,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           <TooltipTrigger
                             render={
                               <Button
-                                aria-label="No reply needed"
+                                aria-label={gt("No reply needed")}
                                 size="icon-micro"
                                 variant="ghost-muted"
                                 className="self-center"
@@ -1744,7 +1744,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           >
                             <MessageCircleOffIcon className="size-3" />
                           </TooltipTrigger>
-                          <TooltipPopup side="top">No reply needed</TooltipPopup>
+                          <TooltipPopup side="top">
+                            <T>No reply needed</T>
+                          </TooltipPopup>
                         </Tooltip>
                       ) : null}
                       {showSnoozeButton ? (

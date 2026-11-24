@@ -441,11 +441,16 @@ function TextGeneratorWizard({
                 {kind === "openaiCompatible" ? (
                   <div className="flex items-start justify-between gap-4">
                     <div className="grid gap-0.5">
-                      <Label htmlFor="text-generator-responses">Responses API</Label>
+                      <Label htmlFor="text-generator-responses">
+                        {/* oxlint-disable-next-line t3code/no-untranslated-copy -- OpenAI's API name */}
+                        Responses API
+                      </Label>
                       <span className="text-xs text-muted-foreground">
-                        For reasoning models behind the Responses API, such as a ChatGPT
-                        subscription proxy. Set reasoning effort and fast mode next to the model in
-                        each task&apos;s settings.
+                        <T>
+                          For reasoning models behind the Responses API, such as a ChatGPT
+                          subscription proxy. Set reasoning effort and fast mode next to the model
+                          in each task&apos;s settings.
+                        </T>
                       </span>
                     </div>
                     <Switch

@@ -30,6 +30,7 @@ import {
   enrichedThreadLinkPresentation,
 } from "../lib/enrichedLinkPresentation";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
+import { m, type MessageResolver } from "../i18n/messages";
 
 function chipCustomization(
   chip: ReturnType<typeof enrichedContextLinkPresentation>,
@@ -53,8 +54,11 @@ export function enrichedThreadLinkCustomization(href: string) {
   return chipCustomization(enrichedThreadLinkPresentation(href));
 }
 
-export function enrichedFollowUpLinkCustomization(linked: LinkedFollowUp | undefined) {
-  return chipCustomization(enrichedFollowUpLinkPresentation(linked));
+export function enrichedFollowUpLinkCustomization(
+  linked: LinkedFollowUp | undefined,
+  resolve: MessageResolver = m,
+) {
+  return chipCustomization(enrichedFollowUpLinkPresentation(linked, resolve));
 }
 
 export function withChipIcon(

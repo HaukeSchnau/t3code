@@ -139,7 +139,9 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const statusTitle = jjStack
     ? jjBreadcrumb(jjStack)
     : compactMenuBranchLabel(gitStatus?.refName ?? props.currentBranch ?? gt("Detached HEAD"));
-  const statusSubtitle = jjStack ? jjPushState(jjStack) : compactMenuStatus(gitStatus, messages);
+  const statusSubtitle = jjStack
+    ? jjPushState(jjStack, messages)
+    : compactMenuStatus(gitStatus, messages);
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -370,7 +372,7 @@ function worldMenu(world: WorldThreadStatus, resolve: MessageResolver): AppBarMe
         title: world.path,
         icon: "globe",
         disabled: true,
-        subtitle: worldSummary(world),
+        subtitle: worldSummary(world, resolve),
         onPress: () => {},
       },
       ...world.repos.map((repo) => ({
@@ -379,7 +381,7 @@ function worldMenu(world: WorldThreadStatus, resolve: MessageResolver): AppBarMe
         icon: repo.checkedOut ? "folder.fill" : "folder",
         disabled: true,
         subtitle:
-          worldRepoWork(repo) ??
+          worldRepoWork(repo, resolve) ??
           (repo.checkedOut
             ? resolve(msg("Checked out, every remote has it"))
             : resolve(msg("Read only"))),
@@ -390,7 +392,7 @@ function worldMenu(world: WorldThreadStatus, resolve: MessageResolver): AppBarMe
         title: resolve(msg("Checkout refused")),
         icon: "exclamationmark.triangle",
         disabled: true,
-        subtitle: worldRefusalLabel(refusal),
+        subtitle: worldRefusalLabel(refusal, resolve),
         onPress: () => {},
       })),
     ],

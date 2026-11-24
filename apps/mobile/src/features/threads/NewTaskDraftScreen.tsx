@@ -575,11 +575,14 @@ export function NewTaskDraftScreen(props: {
           },
           m,
         )
-      : managedWorkspaceDisplayLabel({
-          workspaceMode: flow.workspaceMode,
-          worktreePath: flow.selectedWorktreePath,
-          isolated: managedWorkspaces.isolated && isolatedWorkspace,
-        });
+      : managedWorkspaceDisplayLabel(
+          {
+            workspaceMode: flow.workspaceMode,
+            worktreePath: flow.selectedWorktreePath,
+            isolated: managedWorkspaces.isolated && isolatedWorkspace,
+          },
+          m,
+        );
   const showBranchLoading =
     environmentConnected && flow.branchesLoading && flow.availableBranches.length === 0;
 

@@ -2196,12 +2196,14 @@ export function ThreadsSettingsPanel() {
           serverScoped
           settingKeys={["refreshGeneratedThreadTitles"]}
           {...setting("automatic-thread-titles")}
-          description="Refresh generated titles as the conversation's goal becomes clearer or changes. Renamed and older threads stay unchanged."
+          description={gt(
+            "Refresh generated titles as the conversation's goal becomes clearer or changes. Renamed and older threads stay unchanged.",
+          )}
           resetAction={
             settings.refreshGeneratedThreadTitles !==
             DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles ? (
               <SettingResetButton
-                ariaLabel="Reset automatic thread titles to default"
+                ariaLabel={gt("Reset automatic thread titles to default")}
                 onClick={() =>
                   updateSettings({
                     refreshGeneratedThreadTitles:
@@ -2218,7 +2220,7 @@ export function ThreadsSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ refreshGeneratedThreadTitles: Boolean(checked) })
               }
-              aria-label="Refresh generated thread titles"
+              aria-label={gt("Refresh generated thread titles")}
             />
           }
         />

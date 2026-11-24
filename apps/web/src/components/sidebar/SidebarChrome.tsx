@@ -318,10 +318,14 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ) : null}
           <SidebarUtilityItem
             icon={<ListTodoIcon />}
-            label="Follow-ups"
+            label={gt("Follow-ups")}
             onClick={handleFollowUpsClick}
           />
-          <SidebarUtilityItem icon={<AppWindowIcon />} label="Pages" onClick={handlePagesClick} />
+          <SidebarUtilityItem
+            icon={<AppWindowIcon />}
+            label={gt("Pages", { $context: "sidebar link to the list of pages agents published" })}
+            onClick={handlePagesClick}
+          />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label={gt("Usage")}

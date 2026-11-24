@@ -1367,6 +1367,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly onQuoteToFollowUp?: QuoteToFollowUp | undefined;
 }) {
   const gt = useGT();
+  const messages = useMessages();
   const liveMarkdown = useLiveThreadLinkLabels(
     props.markdown,
     props.environmentId,
@@ -1403,7 +1404,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
     onFileContextMenuAction: (href, actionId) =>
       props.linkHandlers.onFileContextMenuAction(href, actionId, props.reply),
     linkCustomization: (href) =>
-      enrichedFollowUpLinkCustomization(linkedFollowUps.get(href)) ??
+      enrichedFollowUpLinkCustomization(linkedFollowUps.get(href), messages) ??
       withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
   };
   const { messageId, onQuoteToFollowUp } = props;
@@ -2863,6 +2864,7 @@ type UserMessageContentProps = {
 
 function UserMessageContent(props: UserMessageContentProps) {
   const gt = useGT();
+  const messages = useMessages();
   const [selected, setSelected] = useState<{ contextId: string; label: string } | null>(null);
   const navigation = useNavigation();
   const openThreadLink = useOpenThreadLink(props.environmentId);
@@ -2961,7 +2963,7 @@ function UserMessageContent(props: UserMessageContentProps) {
             }
           },
           linkCustomization: (href) =>
-            enrichedFollowUpLinkCustomization(linkedFollowUps.get(href)) ??
+            enrichedFollowUpLinkCustomization(linkedFollowUps.get(href), messages) ??
             withChipIcon(
               enrichedContextLinkCustomization(href, props.context?.records ?? []) ??
                 props.linkHandlers.linkCustomization?.(href),

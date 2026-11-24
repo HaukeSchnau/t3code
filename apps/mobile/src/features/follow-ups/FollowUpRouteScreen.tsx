@@ -18,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import { parseFollowUpLinkHref } from "@t3tools/shared/followUpLinks";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
+import { useGT, useMessages } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -90,6 +91,7 @@ function FollowUpScreen(props: {
   readonly followUpId: FollowUpId;
 }) {
   const home = props.homeEnvironmentId;
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const open = useEnvironmentQuery(openFollowUpsAtom(home));
   const openMatch = open.data?.followUps.find((followUp) => followUp.id === props.followUpId);
@@ -106,7 +108,7 @@ function FollowUpScreen(props: {
   const error = open.error ?? all.error;
 
   return (
-    <SettingsScreen title="Follow-up">
+    <SettingsScreen title={gt("Follow-up")}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -125,8 +127,8 @@ function FollowUpScreen(props: {
           <Text className="px-2 text-base text-foreground-muted">
             {error ??
               (open.data !== null && all.data !== null
-                ? "This follow-up is not in its environment's list."
-                : "Loading follow-up…")}
+                ? gt("This follow-up is not in its environment's list.")
+                : gt("Loading follow-up…"))}
           </Text>
         )}
       </ScrollView>
@@ -142,6 +144,8 @@ function FollowUpDetail(props: {
   readonly onSaved: (followUp: FollowUp) => void;
 }) {
   const { followUp, homeEnvironmentId: home } = props;
+  const gt = useGT();
+  const messages = useMessages();
   const navigation = useNavigation();
   const openThread = useOpenThread();
   const history = useEnvironmentQuery(
@@ -224,27 +228,27 @@ function FollowUpDetail(props: {
   const closed = isFollowUpClosed(followUp);
   const markDone = () =>
     Dialog.prompt({
-      title: "Mark as done",
-      message: "Add the result, if there is one.",
-      placeholder: "Result",
+      title: gt("Mark as done"),
+      message: gt("Add the result, if there is one."),
+      placeholder: gt("Result"),
       initialValue: "",
-      confirmText: "Done",
+      confirmText: gt("Done", { $context: "button that marks a follow-up done" }),
       onConfirm: (result) =>
-        void save("Could not mark it done", {
+        void save(gt("Could not mark it done"), {
           status: "done",
           ...(result.trim() === "" ? {} : { result: result.trim() }),
         }),
     });
   const drop = () =>
     Dialog.confirm({
-      title: "Drop this follow-up?",
+      title: gt("Drop this follow-up?"),
       message: followUp.title,
-      confirmText: "Drop",
+      confirmText: gt("Drop", { $context: "button that drops a follow-up" }),
       destructive: true,
-      onConfirm: () => void save("Could not drop it", { status: "dropped" }),
+      onConfirm: () => void save(gt("Could not drop it"), { status: "dropped" }),
     });
   const reopen = () =>
-    void save("Could not reopen it", {
+    void save(gt("Could not reopen it"), {
       status: "open",
       ...(followUp.status === "picked_up" ? { pickedUpThread: null } : {}),
       ...(followUp.status === "merged" ? { mergedInto: null } : {}),
@@ -271,9 +275,9 @@ function FollowUpDetail(props: {
         </Text>
         <Text textRole="footnote" className="text-foreground-muted">
           {[
-            FOLLOW_UP_STATUS_LABELS[followUp.status],
+            messages(FOLLOW_UP_STATUS_LABELS[followUp.status]),
             followUp.returnedAt !== null && followUp.status === "open"
-              ? `back since ${formatFollowUpDate(followUp.returnedAt)}`
+              ? gt("back since {time}", { time: formatFollowUpDate(followUp.returnedAt) })
               : null,
             followUp.type,
             ...followUp.tags.map((tag) => `#${tag}`),
@@ -286,7 +290,7 @@ function FollowUpDetail(props: {
       {closed ? (
         <View className="flex-row flex-wrap gap-2 px-2">
           <Button
-            label="Reopen"
+            label={gt("Reopen")}
             icon="arrow.uturn.backward"
             disabled={!canSave}
             loading={saving}
@@ -305,7 +309,7 @@ function FollowUpDetail(props: {
             />
           ) : null}
           <Button
-            label="Done"
+            label={gt("Done", { $context: "button that marks a follow-up done" })}
             icon="checkmark"
             disabled={!canSave || starting}
             loading={saving}
@@ -315,18 +319,18 @@ function FollowUpDetail(props: {
             <LaterButton
               followUp={followUp}
               disabled={!canSave || saving || starting}
-              onReschedule={(dueAt) => void save("Could not move its date", { dueAt })}
+              onReschedule={(dueAt) => void save(gt("Could not move its date"), { dueAt })}
             />
           ) : (
             <Button
-              label="Reopen"
+              label={gt("Reopen")}
               icon="arrow.uturn.backward"
               disabled={!canSave || saving}
               onPress={reopen}
             />
           )}
           <Button
-            label="Drop"
+            label={gt("Drop", { $context: "button that drops a follow-up" })}
             icon="xmark"
             tone="danger"
             disabled={!canSave || saving || starting}
@@ -346,25 +350,27 @@ function FollowUpDetail(props: {
       ) : null}
 
       {followUp.result !== null ? (
-        <SettingsSection title="Result">
+        <SettingsSection title={gt("Result")}>
           <Text textRole="body" selectable className="px-4 py-3 text-foreground">
             {followUp.result}
           </Text>
         </SettingsSection>
       ) : null}
 
-      <SettingsSection title="Came from">
+      <SettingsSection title={gt("Came from")}>
         {origin === null ? (
           <Text textRole="body" className="px-4 py-3 text-foreground-muted">
             {followUp.createdBy.kind === "user"
-              ? "You added it."
-              : `${followUpActorLabel(followUp.createdBy)} added it outside a thread.`}
+              ? gt("You added it.")
+              : gt("{actor} added it outside a thread.", {
+                  actor: followUpActorLabel(followUp.createdBy, messages),
+                })}
           </Text>
         ) : (
           <>
             <ListRow
               icon="text.bubble"
-              label={origin.threadTitle ?? originShell?.title ?? "Thread"}
+              label={origin.threadTitle ?? originShell?.title ?? gt("Thread")}
               description={formatFollowUpDate(followUp.createdAt)}
               onPress={() => openThread(origin)}
             />
@@ -381,34 +387,40 @@ function FollowUpDetail(props: {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Details">
+      <SettingsSection title={gt("Details")}>
         <DetailRow
           first
-          label={followUp.dueAt !== null ? "Comes back" : "Comes back when"}
+          label={followUp.dueAt !== null ? gt("Comes back") : gt("Comes back when")}
           value={
             followUp.dueAt !== null
               ? formatFollowUpDate(followUp.dueAt)
-              : (followUp.condition ?? "No date")
+              : (followUp.condition ?? gt("No date"))
           }
         />
-        <DetailRow label="Type" value={followUp.type ?? "None"} />
+        <DetailRow
+          label={gt("Type", { $context: "a follow-up's kind" })}
+          value={followUp.type ?? gt("None")}
+        />
         {fieldRows.map(([name, value]) => (
           <DetailRow key={name} label={name} value={followUpFieldValue(value)} />
         ))}
         <DetailRow
-          label="Tags"
-          value={followUp.tags.length > 0 ? followUp.tags.join(", ") : "None"}
+          label={gt("Tags")}
+          value={followUp.tags.length > 0 ? followUp.tags.join(", ") : gt("None")}
         />
         {followUp.closedAt !== null ? (
-          <DetailRow label="Closed" value={formatFollowUpDate(followUp.closedAt)} />
+          <DetailRow
+            label={gt("Closed", { $context: "when a follow-up was closed" })}
+            value={formatFollowUpDate(followUp.closedAt)}
+          />
         ) : null}
       </SettingsSection>
 
       {followUp.pickedUpThread !== null ? (
-        <SettingsSection title="Picked up by">
+        <SettingsSection title={gt("Picked up by")}>
           <ListRow
             icon="text.bubble"
-            label={pickedUpShell?.title ?? "Thread"}
+            label={pickedUpShell?.title ?? gt("Thread")}
             onPress={() => {
               if (followUp.pickedUpThread !== null) openThread(followUp.pickedUpThread);
             }}
@@ -417,7 +429,7 @@ function FollowUpDetail(props: {
       ) : null}
 
       {links.length > 0 ? (
-        <SettingsSection title="Links">
+        <SettingsSection title={gt("Links")}>
           {links.map((link, index) => (
             <View
               key={`${link.kind}:${linkTargetKey(link)}`}
@@ -434,10 +446,10 @@ function FollowUpDetail(props: {
         </SettingsSection>
       ) : null}
 
-      <SettingsSection title="History">
+      <SettingsSection title={gt("History")}>
         {history.data === null ? (
           <Text className="px-4 py-3 text-base text-foreground-muted">
-            {history.error ?? "Loading history…"}
+            {history.error ?? gt("Loading history…")}
           </Text>
         ) : (
           history.data.changes.map((change, index) => (
@@ -451,7 +463,7 @@ function FollowUpDetail(props: {
                 {change.summary}
               </Text>
               <Text textRole="footnote" className="text-foreground-muted">
-                {followUpActorLabel(change.actor)} · {formatFollowUpDate(change.at)}
+                {followUpActorLabel(change.actor, messages)} · {formatFollowUpDate(change.at)}
               </Text>
             </View>
           ))
@@ -497,6 +509,7 @@ function FollowUpLinkRow(props: {
   readonly onOpenThread: (ref: ThreadRef) => void;
 }) {
   const { target } = props.link;
+  const gt = useGT();
   const shell = useThreadShell(
     target.type === "thread"
       ? { environmentId: target.environmentId, threadId: target.threadId }
@@ -518,7 +531,7 @@ function FollowUpLinkRow(props: {
   return (
     <ListRow
       icon="text.bubble"
-      label={shell?.title ?? "Thread"}
+      label={shell?.title ?? gt("Thread")}
       description={props.link.kind}
       onPress={() => props.onOpenThread(target)}
     />
@@ -532,6 +545,7 @@ function StartThreadButton(props: {
   readonly starting: boolean;
   readonly onStart: (project: EnvironmentProject) => void;
 }) {
+  const gt = useGT();
   const projects = useProjects();
   const connected = useAtomValue(connectedEnvironmentIdsAtom);
   const environments = useWorkspaceEnvironments();
@@ -539,7 +553,7 @@ function StartThreadButton(props: {
   if (originProject !== null) {
     return (
       <Button
-        label="Start a thread"
+        label={gt("Start a thread")}
         icon="plus.bubble"
         tone="primary"
         disabled={props.disabled}
@@ -583,7 +597,7 @@ function StartThreadButton(props: {
   if (choices.length === 0 || props.disabled || props.starting) {
     return (
       <Button
-        label="Start a thread"
+        label={gt("Start a thread")}
         icon="plus.bubble"
         tone="primary"
         disabled
@@ -594,7 +608,7 @@ function StartThreadButton(props: {
   }
   return (
     <Menu
-      title="Start the thread in"
+      title={gt("Start the thread in")}
       actions={actions}
       onPressAction={({ nativeEvent }) => {
         const project = choices.find(
@@ -603,7 +617,7 @@ function StartThreadButton(props: {
         if (project) props.onStart(project);
       }}
     >
-      <Button label="Start a thread" icon="plus.bubble" tone="primary" onPress={noop} />
+      <Button label={gt("Start a thread")} icon="plus.bubble" tone="primary" onPress={noop} />
     </Menu>
   );
 }
@@ -615,18 +629,24 @@ function LaterButton(props: {
   readonly disabled: boolean;
   readonly onReschedule: (dueAt: string | null) => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const [picking, setPicking] = useState<Date | null>(null);
   const nowMs = useNowMinuteMs();
-  const presets = resolveSnoozePresets(new Date(nowMs), { presets: FOLLOW_UP_LATER_PRESETS });
+  const presets = resolveSnoozePresets(
+    new Date(nowMs),
+    { presets: FOLLOW_UP_LATER_PRESETS },
+    messages,
+  );
   const actions: MenuAction[] = [
     ...presets.map((preset) => ({
       id: `preset:${preset.id}`,
       title: preset.label,
       subtitle: preset.whenLabel,
     })),
-    { id: "pick", title: "Pick a date…" },
+    { id: "pick", title: gt("Pick a date…") },
     ...(props.followUp.dueAt !== null
-      ? [{ id: "clear", title: "Clear the date", attributes: { destructive: true } }]
+      ? [{ id: "clear", title: gt("Clear the date"), attributes: { destructive: true } }]
       : []),
   ];
   const pickDefault = () => {
@@ -642,10 +662,15 @@ function LaterButton(props: {
   return (
     <>
       {props.disabled ? (
-        <Button label="Later" icon="clock" disabled onPress={noop} />
+        <Button
+          label={gt("Later", { $context: "button that snoozes a follow-up" })}
+          icon="clock"
+          disabled
+          onPress={noop}
+        />
       ) : (
         <Menu
-          title="Bring it back"
+          title={gt("Bring it back")}
           actions={actions}
           onPressAction={({ nativeEvent }) => {
             const id = nativeEvent.event;
@@ -662,7 +687,11 @@ function LaterButton(props: {
             }
           }}
         >
-          <Button label="Later" icon="clock" onPress={noop} />
+          <Button
+            label={gt("Later", { $context: "button that snoozes a follow-up" })}
+            icon="clock"
+            onPress={noop}
+          />
         </Menu>
       )}
       {picking !== null ? (
@@ -699,12 +728,13 @@ function DatePickerCard(props: {
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }) {
+  const gt = useGT();
   return (
     <View className="w-full gap-3 rounded-[24px] border-continuous bg-grouped-card p-3">
       {props.children}
       <View className="flex-row justify-end gap-2">
-        <Button label="Cancel" tone="text" onPress={props.onCancel} />
-        <Button label="Set date" tone="primary" onPress={props.onConfirm} />
+        <Button label={gt("Cancel")} tone="text" onPress={props.onCancel} />
+        <Button label={gt("Set date")} tone="primary" onPress={props.onConfirm} />
       </View>
     </View>
   );

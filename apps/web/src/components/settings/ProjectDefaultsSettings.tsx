@@ -571,8 +571,12 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             {...searchableSetting("jj-commit-trailers")}
             description={
               isProjectScope
-                ? "Commits that agents or T3 make in this jj repository get T3-Thread and T3-Turn trailers that link them to the thread and turn."
-                : "Commits that agents or T3 make in jj repositories get T3-Thread and T3-Turn trailers that link them to the thread and turn. Projects can override it."
+                ? gt(
+                    "Commits that agents or T3 make in this jj repository get T3-Thread and T3-Turn trailers that link them to the thread and turn.",
+                  )
+                : gt(
+                    "Commits that agents or T3 make in jj repositories get T3-Thread and T3-Turn trailers that link them to the thread and turn. Projects can override it.",
+                  )
             }
             resetAction={
               settings.jjCommitTrailers !== DEFAULT_SERVER_SETTINGS.jjCommitTrailers ? (
@@ -586,7 +590,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             }
             control={
               <Switch
-                aria-label="Add T3 trailers to jj commits"
+                aria-label={gt("Add T3 trailers to jj commits")}
                 mixed={mixedJjTrailers}
                 checked={mixedJjTrailers ? false : settings.jjCommitTrailers}
                 onCheckedChange={(enabled) => updateSettings({ jjCommitTrailers: enabled })}
@@ -600,8 +604,12 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             {...searchableSetting("jj-strip-trailers-remotes")}
             description={
               isProjectScope
-                ? "Pushes from this project to these remotes drop the T3 trailers first. Separate remote names with commas."
-                : "Pushes to these remotes drop the T3 trailers first. Separate remote names with commas. Projects can override it."
+                ? gt(
+                    "Pushes from this project to these remotes drop the T3 trailers first. Separate remote names with commas.",
+                  )
+                : gt(
+                    "Pushes to these remotes drop the T3 trailers first. Separate remote names with commas. Projects can override it.",
+                  )
             }
             resetAction={
               settings.jjStripTrailersRemotes.length > 0 ? (
@@ -614,10 +622,14 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             control={
               <Input
                 key={`${scopeKey}:${mixedJjStripRemotes}:${settings.jjStripTrailersRemotes.join(",")}`}
-                aria-label="Strip T3 trailers when pushing to"
+                aria-label={gt("Strip T3 trailers when pushing to")}
                 autoCapitalize="none"
                 spellCheck={false}
-                placeholder={mixedJjStripRemotes ? "Mixed" : "No remotes"}
+                placeholder={
+                  mixedJjStripRemotes
+                    ? gt("Mixed", { $context: "projects have different values" })
+                    : gt("No remotes")
+                }
                 defaultValue={mixedJjStripRemotes ? "" : settings.jjStripTrailersRemotes.join(", ")}
                 onChange={() => {
                   jjStripRemotesEdited.current = true;

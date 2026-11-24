@@ -24,7 +24,7 @@ import {
   MessageSquarePlusIcon,
 } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
-import { msg } from "gt-react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useClientSettings } from "~/hooks/useSettings";
@@ -83,23 +83,38 @@ function Fact(props: { readonly label: string; readonly children: ReactNode }) {
   );
 }
 
-function threadChip(ref: FollowUpThreadRef) {
+function ThreadChip(props: { readonly threadRef: FollowUpThreadRef }) {
+  const gt = useGT();
+  const { threadRef } = props;
   return (
     <ThreadContextChip
-      record={{ environmentId: ref.environmentId, threadId: ref.threadId, title: "Thread" }}
+      record={{
+        environmentId: threadRef.environmentId,
+        threadId: threadRef.threadId,
+        title: gt("Thread", { $context: "noun" }),
+      }}
     />
   );
 }
 
 function ActorLabel(props: { readonly actor: FollowUpActor }) {
   const { actor } = props;
-  if (actor.kind === "user") return <>You</>;
-  const name = actor.kind === "gardener" ? "The nightly pass" : "An agent";
-  return actor.thread === null ? (
-    <>{name}</>
-  ) : (
+  if (actor.kind === "user") return <T>You</T>;
+  if (actor.thread === null) {
+    return actor.kind === "gardener" ? <T>The nightly pass</T> : <T>An agent</T>;
+  }
+  const chip = <ThreadChip threadRef={actor.thread} />;
+  return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      {name} in {threadChip(actor.thread)}
+      {actor.kind === "gardener" ? (
+        <T>
+          The nightly pass in <Var>{chip}</Var>
+        </T>
+      ) : (
+        <T>
+          An agent in <Var>{chip}</Var>
+        </T>
+      )}
     </span>
   );
 }
@@ -128,12 +143,18 @@ function FollowUpHistory(props: {
   const changes = history.data?.changes ?? [];
   if (changes.length === 0) {
     return history.error ? (
-      <p className="text-sm text-muted-foreground">Could not load the history: {history.error}</p>
+      <p className="text-sm text-muted-foreground">
+        <T>
+          Could not load the history: <Var>{history.error}</Var>
+        </T>
+      </p>
     ) : null;
   }
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="text-sm font-medium">History</h3>
+      <h3 className="text-sm font-medium">
+        <T>History</T>
+      </h3>
       <ol className="flex flex-col gap-1.5 text-sm">
         {changes.toReversed().map((change) => (
           <li
@@ -169,7 +190,7 @@ function LaterMenu(props: {
     <Menu open={open} onOpenChange={setOpen}>
       <MenuTrigger render={<Button size="sm" variant="outline" disabled={props.disabled} />}>
         <CalendarClockIcon />
-        Later
+        <T>Later</T>
         <ChevronDownIcon />
       </MenuTrigger>
       <MenuPopup align="start">
@@ -186,10 +207,12 @@ function LaterMenu(props: {
             if (choice) props.onMove(choice.snoozedUntil);
           }}
         >
-          Pick a date…
+          <T>Pick a date…</T>
         </MenuItem>
         {props.hasDate ? (
-          <MenuItem onClick={() => props.onMove(null)}>Clear the date</MenuItem>
+          <MenuItem onClick={() => props.onMove(null)}>
+            <T>Clear the date</T>
+          </MenuItem>
         ) : null}
       </MenuPopup>
     </Menu>
@@ -213,7 +236,7 @@ function DonePopover(props: {
     >
       <PopoverTrigger render={<Button size="sm" variant="outline" disabled={props.disabled} />}>
         <CheckIcon />
-        Done
+        <T context="verb, marks the follow-up done">Done</T>
       </PopoverTrigger>
       <PopoverPopup align="start" width="md">
         <form
@@ -229,7 +252,7 @@ function DonePopover(props: {
           }}
         >
           <label className="flex flex-col gap-1.5 text-sm font-medium">
-            What came of it? (optional)
+            <T>What came of it? (optional)</T>
             <Textarea
               rows={3}
               value={result}
@@ -243,7 +266,7 @@ function DonePopover(props: {
           </label>
           <div className="flex justify-end">
             <Button type="submit" size="sm" disabled={props.disabled}>
-              Mark done
+              <T>Mark done</T>
             </Button>
           </div>
         </form>
@@ -257,6 +280,7 @@ function FollowUpActions(props: {
   readonly followUp: FollowUp;
 }) {
   const { homeEnvironmentId, followUp } = props;
+  const gt = useGT();
   const canSave = useAtomValue(followUpEnvironment.save.permissionAtom(homeEnvironmentId));
   const save = useAtomCommand(followUpEnvironment.save, { reportFailure: false });
   const startThread = useStartFollowUpThread();
@@ -282,8 +306,8 @@ function FollowUpActions(props: {
       const failure = squashAtomCommandFailure(result);
       toastManager.add({
         type: "error",
-        title: "Could not update the follow-up",
-        description: failure instanceof Error ? failure.message : "An error occurred.",
+        title: gt("Could not update the follow-up"),
+        description: failure instanceof Error ? failure.message : gt("An error occurred."),
       });
     }
     return result._tag === "Success";
@@ -304,7 +328,7 @@ function FollowUpActions(props: {
           onClick={() => void apply({ status: "open" })}
         >
           <RotateCcwIcon />
-          Reopen
+          <T>Reopen</T>
         </Button>
       </div>
     );
@@ -314,7 +338,7 @@ function FollowUpActions(props: {
       {originProject !== null ? (
         <Button size="sm" disabled={disabled} onClick={() => void start(originProject)}>
           <MessageSquarePlusIcon />
-          Start a thread
+          <T>Start a thread</T>
         </Button>
       ) : (
         <FollowUpProjectPicker disabled={disabled} onPick={(project) => void start(project)} />
@@ -339,7 +363,7 @@ function FollowUpActions(props: {
         onClick={() => void apply({ status: "dropped" })}
       >
         <Trash2Icon />
-        Drop
+        <T context="verb, drops the follow-up">Drop</T>
       </Button>
     </div>
   );
@@ -354,9 +378,11 @@ export function FollowUpDetail(props: {
   readonly onOpenFollowUp: (id: FollowUpId) => void;
 }) {
   const { followUp, homeEnvironmentId } = props;
+  const gt = useGT();
+  const m = useMessages();
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const nowMinute = useNowMinute();
-  const when = followUpWhenLabel(followUp, timestampFormat, Date.parse(`${nowMinute}:00.000Z`));
+  const when = followUpWhenLabel(followUp, timestampFormat, Date.parse(`${nowMinute}:00.000Z`), m);
   const type = props.types.find((candidate) => candidate.name === followUp.type) ?? null;
   const fields = Object.entries(followUp.fields);
   const fieldDescription = (name: string) =>
@@ -368,8 +394,8 @@ export function FollowUpDetail(props: {
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant={statusBadgeVariant(followUp)}>
             {followUp.status === "open" && followUp.returnedAt !== null
-              ? "Back now"
-              : followUpStatusLabel(followUp.status)}
+              ? gt("Back now")
+              : followUpStatusLabel(followUp.status, m)}
           </Badge>
           {followUp.type !== null ? <Badge variant="outline">{followUp.type}</Badge> : null}
           {followUp.tags.map((tag) => (
@@ -389,13 +415,13 @@ export function FollowUpDetail(props: {
 
       <dl className="flex flex-col gap-3 text-sm">
         {followUp.origin !== null ? (
-          <Fact label="Came from">
+          <Fact label={gt("Came from")}>
             <div className="flex flex-col items-start gap-2">
               <ThreadContextChip
                 record={{
                   environmentId: followUp.origin.environmentId,
                   threadId: followUp.origin.threadId,
-                  title: followUp.origin.threadTitle ?? "Thread",
+                  title: followUp.origin.threadTitle ?? gt("Thread", { $context: "noun" }),
                 }}
               />
               {followUp.origin.quote !== null ? (
@@ -407,16 +433,22 @@ export function FollowUpDetail(props: {
           </Fact>
         ) : null}
         {followUp.dueAt !== null ? (
-          <Fact label="Date">{formatChatTimestampTooltip(followUp.dueAt, timestampFormat)}</Fact>
+          <Fact label={gt("Date")}>
+            {formatChatTimestampTooltip(followUp.dueAt, timestampFormat)}
+          </Fact>
         ) : null}
         {followUp.condition !== null && when !== followUp.condition ? (
-          <Fact label="When">{followUp.condition}</Fact>
+          <Fact label={gt("When", { $context: "the condition a follow-up waits for" })}>
+            {followUp.condition}
+          </Fact>
         ) : null}
         {followUp.pickedUpThread !== null ? (
-          <Fact label="Picked up in">{threadChip(followUp.pickedUpThread)}</Fact>
+          <Fact label={gt("Picked up in")}>
+            <ThreadChip threadRef={followUp.pickedUpThread} />
+          </Fact>
         ) : null}
         {followUp.result !== null && followUp.result.trim() !== "" ? (
-          <Fact label="Result">
+          <Fact label={gt("Result")}>
             <ChatMarkdown
               text={followUp.result}
               cwd={undefined}
@@ -425,7 +457,7 @@ export function FollowUpDetail(props: {
           </Fact>
         ) : null}
         {followUp.mergedInto !== null ? (
-          <Fact label="Merged into">
+          <Fact label={gt("Merged into")}>
             <FollowUpLinkButton
               id={followUp.mergedInto}
               title={props.titleOf(followUp.mergedInto)}
@@ -434,7 +466,7 @@ export function FollowUpDetail(props: {
           </Fact>
         ) : null}
         {followUp.links.length > 0 ? (
-          <Fact label="Links">
+          <Fact label={gt("Links")}>
             <ul className="flex flex-col gap-1.5">
               {followUp.links.map((link) => (
                 <li key={linkKey(link)} className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -446,10 +478,12 @@ export function FollowUpDetail(props: {
                       onOpen={props.onOpenFollowUp}
                     />
                   ) : (
-                    threadChip({
-                      environmentId: link.target.environmentId,
-                      threadId: link.target.threadId,
-                    })
+                    <ThreadChip
+                      threadRef={{
+                        environmentId: link.target.environmentId,
+                        threadId: link.target.threadId,
+                      }}
+                    />
                   )}
                 </li>
               ))}
@@ -465,7 +499,7 @@ export function FollowUpDetail(props: {
             </Fact>
           );
         })}
-        <Fact label="Written by">
+        <Fact label={gt("Written by")}>
           <span className="inline-flex flex-wrap items-center gap-1">
             <ActorLabel actor={followUp.createdBy} />,{" "}
             {formatDayAwareTimestamp(followUp.createdAt, timestampFormat)}

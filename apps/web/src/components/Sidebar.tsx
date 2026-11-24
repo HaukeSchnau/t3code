@@ -1782,8 +1782,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to end the ask",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: gt("Failed to end the ask"),
+            description: error instanceof Error ? error.message : gt("An error occurred."),
           }),
         );
       }
@@ -3787,7 +3787,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarSectionHeader
                                 key="needs-you-shelf-header"
                                 marker="needs-you-header"
-                                label="Needs you"
+                                label={gt("Needs you")}
                                 count={needsYouThreads.length}
                                 toggle={{
                                   expanded: needsYouShelfExpanded,

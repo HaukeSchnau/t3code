@@ -867,9 +867,11 @@ function ScheduledTaskRow({
           ) : null}
           {task.declared === true ? (
             <Tooltip>
-              <TooltipTrigger render={<Badge variant="outline" />}>Host config</TooltipTrigger>
+              <TooltipTrigger render={<Badge variant="outline" />}>
+                <T>Host config</T>
+              </TooltipTrigger>
               <TooltipPopup>
-                This host's configuration declares this task. Change or remove it there.
+                <T>This host's configuration declares this task. Change or remove it there.</T>
               </TooltipPopup>
             </Tooltip>
           ) : null}
@@ -2267,7 +2269,10 @@ function ScheduledTaskEditorForm({
                   }
                 />
                 <span className="text-xs text-muted-foreground">
-                  Your time zone ({new Intl.DateTimeFormat().resolvedOptions().timeZone})
+                  <T>
+                    Your time zone (
+                    <Var>{new Intl.DateTimeFormat().resolvedOptions().timeZone}</Var>)
+                  </T>
                 </span>
               </div>
             ) : draft.scheduleMode === "fixed" ? (

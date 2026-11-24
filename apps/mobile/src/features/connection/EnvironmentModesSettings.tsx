@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentMode } from "@t3tools/client-runtime/connection";
+import { msg, T, useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -12,9 +13,14 @@ import { uuidv4 } from "../../lib/uuid";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "../settings/components/SettingsSection";
 
-const SUGGESTED_NAMES = ["Work", "Personal"];
+const SUGGESTED_NAMES = [
+  msg("Work", { $context: "suggested environment mode name" }),
+  msg("Personal", { $context: "suggested environment mode name" }),
+];
 
 export function EnvironmentModesSettings() {
+  const gt = useGT();
+  const messages = useMessages();
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const modes = useAtomValue(environmentCatalog.modesValueAtom);
   const setModes = useAtomCommand(environmentCatalog.setModes, { reportFailure: false });
@@ -25,14 +31,20 @@ export function EnvironmentModesSettings() {
     transform: (current: ReadonlyArray<EnvironmentMode>) => ReadonlyArray<EnvironmentMode>,
   ) =>
     void setModes(transform).then((result) => {
-      if (result._tag === "Failure") Dialog.alert("Could not save environment modes");
+      if (result._tag === "Failure") Dialog.alert(gt("Could not save environment modes"));
     });
   const update = (id: string, change: (mode: EnvironmentMode) => EnvironmentMode) =>
     save((current) => current.map((mode) => (mode.id === id ? change(mode) : mode)));
   const addMode = () => {
     const mode = {
       id: uuidv4(),
-      name: SUGGESTED_NAMES[modes.length] ?? `Mode ${modes.length + 1}`,
+      name: messages(
+        SUGGESTED_NAMES[modes.length] ??
+          msg("Mode {number}", {
+            number: modes.length + 1,
+            $context: "default environment mode name",
+          }),
+      ),
       environmentIds: [],
     };
     save((current) => [...current, mode]);
@@ -41,14 +53,14 @@ export function EnvironmentModesSettings() {
 
   return (
     <View className="mt-5 gap-3">
-      <SettingsSection title="Modes">
+      <SettingsSection title={gt("Modes", { $context: "environment modes" })}>
         {modes.map((mode) => {
           const memberCount = mode.environmentIds.filter((id) => catalog.entries.has(id)).length;
           return (
             <View key={mode.id}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`${mode.name} mode`}
+                accessibilityLabel={gt("{mode} mode", { mode: mode.name })}
                 accessibilityState={{ expanded: expanded === mode.id }}
                 className="flex-row items-center gap-3 p-4"
                 onPress={() => setExpanded(expanded === mode.id ? null : mode.id)}
@@ -57,7 +69,9 @@ export function EnvironmentModesSettings() {
                   {mode.name}
                 </Text>
                 <Text className="text-sm text-foreground-muted">
-                  {memberCount} {memberCount === 1 ? "environment" : "environments"}
+                  {gt("{count, plural, one {{count} environment} other {{count} environments}}", {
+                    count: memberCount,
+                  })}
                 </Text>
                 <SymbolView
                   name={expanded === mode.id ? "chevron.up" : "chevron.down"}
@@ -91,9 +105,9 @@ export function EnvironmentModesSettings() {
                       accessibilityRole="button"
                       onPress={() =>
                         Dialog.prompt({
-                          title: "Rename mode",
+                          title: gt("Rename mode"),
                           initialValue: mode.name,
-                          confirmText: "Save",
+                          confirmText: gt("Save"),
                           onConfirm: (value) => {
                             const name = value.trim();
                             if (name.length > 0)
@@ -102,7 +116,9 @@ export function EnvironmentModesSettings() {
                         })
                       }
                     >
-                      <Text className="text-sm font-t3-bold text-foreground">Rename</Text>
+                      <Text className="text-sm font-t3-bold text-foreground">
+                        {gt("Rename", { $context: "verb, renames an environment mode" })}
+                      </Text>
                     </Pressable>
                     <Pressable
                       accessibilityRole="button"
@@ -110,7 +126,9 @@ export function EnvironmentModesSettings() {
                         save((current) => current.filter((candidate) => candidate.id !== mode.id))
                       }
                     >
-                      <Text className="text-sm font-t3-bold text-danger-foreground">Remove</Text>
+                      <Text className="text-sm font-t3-bold text-danger-foreground">
+                        {gt("Remove", { $context: "verb, removes an environment mode" })}
+                      </Text>
                     </Pressable>
                   </View>
                 </>
@@ -119,12 +137,16 @@ export function EnvironmentModesSettings() {
           );
         })}
         <Pressable accessibilityRole="button" className="p-4" onPress={addMode}>
-          <Text className="text-base text-foreground">Add mode</Text>
+          <Text className="text-base text-foreground">
+            <T>Add mode</T>
+          </Text>
         </Pressable>
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">
-        A mode turns its environments on and turns off environments that only other modes include.
-        Switch modes from the thread list. Modes apply only to this device.
+        <T>
+          A mode turns its environments on and turns off environments that only other modes include.
+          Switch modes from the thread list. Modes apply only to this device.
+        </T>
       </Text>
     </View>
   );

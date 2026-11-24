@@ -1,6 +1,6 @@
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
 import { markdownProseDirection, textDirection } from "~/textDirection";
-import { useGT } from "gt-react";
+import { T, useGT } from "gt-react";
 import { memo, use, useEffect, useEffectEvent, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -231,7 +231,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           </span>
           {optional ? (
             <span className="shrink-0 text-3xs font-medium uppercase tracking-wide text-secondary-label">
-              Optional
+              <T context="a question the agent marked as not required">Optional</T>
             </span>
           ) : null}
           {isCollapsed ? (
@@ -366,7 +366,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   onClick={onSkip}
                   className="rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Skip
+                  <T context="verb, skip this question">Skip</T>
                 </button>
               </div>
             ) : null}
