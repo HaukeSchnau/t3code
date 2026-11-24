@@ -29,10 +29,23 @@ function tokenize(command: string): Token[] {
     } else if (char === '"') {
       let text = "";
       for (i++; i < command.length && command[i] !== '"'; i++) {
-        if (command[i] === "\\" && i + 1 < command.length) i++;
+        const next = command[i + 1];
+        // Bash drops the backslash only before these, and joins lines at an escaped newline.
+        if (command[i] === "\\" && next !== undefined && '$`"\\\n'.includes(next)) {
+          i++;
+          if (next === "\n") continue;
+        } else if (command[i] === "$" && next === "(") {
+          tokens.push({ op: "$(" });
+        } else if (command[i] === "`") {
+          tokens.push({ op: "`" });
+        }
         text += command[i];
       }
       word = (word ?? "") + text;
+    } else if ((char === "$" && command[i + 1] === "(") || char === "`") {
+      flush();
+      tokens.push({ op: char === "`" ? "`" : "$(" });
+      if (char === "$") i++;
     } else if (char === "\\" && i + 1 < command.length) {
       word = (word ?? "") + command[++i];
     } else if (char === " " || char === "\t") {
@@ -67,7 +80,7 @@ const PREFIXES: ReadonlySet<string> = new Set([
 ]);
 
 /** Operators after which the shell's directory depends on what ran: the hook stops predicting. */
-const AMBIGUOUS: ReadonlySet<string> = new Set(["||", "|", "&", "(", ")"]);
+const AMBIGUOUS: ReadonlySet<string> = new Set(["||", "|", "&", "(", ")", "$(", "`"]);
 
 /**
  * The directories `command` runs in: the session's cwd, then each `cd` or `pushd` target in

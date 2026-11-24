@@ -50,6 +50,7 @@ export const removeEmptyTree = (root: string) =>
         }
         NodeFS.rmdirSync(directory);
       };
+      if (NodeFS.lstatSync(root).isSymbolicLink()) throw new Error("a symbolic link");
       remove(root);
     },
     catch: (cause) =>
