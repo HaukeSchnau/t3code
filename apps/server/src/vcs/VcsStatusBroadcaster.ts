@@ -31,6 +31,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as JjStatusReader from "../jj/JjStatusReader.ts";
+import { WorldThreadHooks } from "../world/WorldThreadHooks.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
@@ -252,8 +253,19 @@ export const make = Effect.gen(function* () {
   const autoPullPolicy = yield* VcsAutoPullPolicy;
   const workflow = yield* GitWorkflowService.GitWorkflowService;
   const jjStatus = yield* JjStatusReader.JjStatusReader;
+  const worlds = yield* WorldThreadHooks;
   // jj working copies add their jj block; one without a Git worktree has no remote status.
-  const localStatusFor = (cwd: string) => jjStatus.localStatus(cwd, workflow.localStatus({ cwd }));
+  // A thread world adds its world block (patches/worlds.md).
+  const localStatusFor = (cwd: string) =>
+    jjStatus
+      .localStatus(cwd, workflow.localStatus({ cwd }))
+      .pipe(
+        Effect.flatMap((local) =>
+          Effect.map(worlds.status(cwd), (world) =>
+            world === undefined ? local : { ...local, world },
+          ),
+        ),
+      );
   const remoteStatusFor = (cwd: string, options?: Parameters<typeof workflow.remoteStatus>[1]) =>
     Effect.flatMap(jjStatus.isJjWithoutGit(cwd), (jjWithoutGit) =>
       jjWithoutGit ? Effect.succeed(null) : workflow.remoteStatus({ cwd }, options),

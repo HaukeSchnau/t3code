@@ -23,12 +23,14 @@ export function useManagedWorkspaces(
   projectRoot: string | null | undefined,
   vcsKind: VcsDriverKind | undefined,
   isRepo: boolean | undefined,
+  world?: string | null,
 ): ManagedWorkspacesCapability | null {
   return managedWorkspacesForProject({
     config: useAtomValue(serverEnvironment.configValueAtom(environmentId)),
     projectRoot,
     vcsKind,
     isRepo,
+    world,
   });
 }
 

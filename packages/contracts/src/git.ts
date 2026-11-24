@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { WorldThreadStatus } from "./world.ts";
 import {
   ForwardCompatibleOptional,
   NonNegativeInt,
@@ -223,6 +224,8 @@ const VcsStatusLocalShape = {
   kind: Schema.optional(VcsDriverKind),
   /** Present when the repository is a jj repository. */
   jj: Schema.optional(JjStatus),
+  /** Present when the directory is a thread's world (patches/worlds.md). */
+  world: Schema.optional(WorldThreadStatus),
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
   hasPrimaryRemote: Schema.Boolean,
   isDefaultRef: Schema.Boolean,

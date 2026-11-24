@@ -941,6 +941,20 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const isWorldProject = (projectId: ProjectId) =>
+    projects.getById(projectId).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(false),
+          // A project added at a world's root by hand has no `world` field, but is one.
+          onSome: (project) =>
+            project.world != null
+              ? Effect.succeed(true)
+              : managedWorkspaces.isWorldProject(project.workspaceRoot),
+        }),
+      ),
+    );
+
   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
     function* (request) {
       // Scratch has no Git repository. Normalize before folder allocation so
@@ -949,7 +963,13 @@ const make = Effect.gen(function* () {
         request.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(request.projectId))
           ? { ...request, workspaceStrategy: { type: "root" } }
-          : request;
+          : request.workspaceStrategy.type !== "workspace" &&
+              (yield* isWorldProject(request.projectId).pipe(
+                Effect.mapError(mapError(request, "resolve-project")),
+              ))
+            ? // Every thread in a world gets its own thread world (patches/worlds.md).
+              { ...request, workspaceStrategy: { type: "workspace" } }
+            : request;
       yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
         type: "thread.create",
         projectId: input.projectId,

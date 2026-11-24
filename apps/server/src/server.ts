@@ -83,6 +83,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
+import * as ThreadWorlds from "./world/ThreadWorlds.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as Librarian from "./librarian/Librarian.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
@@ -526,6 +527,7 @@ const layerVcs = Layer.empty.pipe(
       Layer.provide(
         VcsStatusBroadcaster.layerAutoPullPolicy.pipe(Layer.provide(ProjectStore.layer)),
       ),
+      Layer.provide(ThreadWorlds.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
     ),
   ),
 );
@@ -749,6 +751,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ProviderInstallation.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  ThreadWorlds.layerBackground.pipe(Layer.provide(ProjectionStoreV2.layer)),
 ).pipe(
   Layer.provideMerge(
     Layer.merge(
@@ -762,7 +765,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // References read by request fibers too (revert admission, session opens),
   // so they join the runtime context rather than one layer's construction.
   Layer.provideMerge(
-    Layer.mergeAll(JjTurnHooks.layer, ProviderThreadEnvironment.layer, FollowUpHints.layer),
+    Layer.mergeAll(
+      JjTurnHooks.layer,
+      ProviderThreadEnvironment.layer,
+      FollowUpHints.layer,
+      ThreadWorlds.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+    ),
   ),
   Layer.provideMerge(layerJj),
   Layer.provideMerge(ManagedWorkspaces.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),

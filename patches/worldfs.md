@@ -26,6 +26,7 @@ control socket and the rules. In short:
 - The Linux Release ships the binary (`nix/worldfs.nix`, a payload in `flake.nix`). Infra runs it
   as the `worldfs` user unit and owns the machine cache.
 
++++++++ zrxrmyyr 3bdc0f7e "Merge pull request 'feat(agent-exec): each thread's agent runs inside its world' (#207) from feat/agent-exec-worlds into main" (rebase destination)
 agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.py`):
 
 - `agent-exec world ROOT --thread KEY --world W --path P [--layout JSON]` registers a thread
@@ -43,8 +44,8 @@ agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.
   accepted it for this ROOT. It keeps the private home, so a thread resumed in the same ROOT
   keeps its provider sessions.
 
-T3 creates thread worlds, calls `status` and the hook's `checkout` on the socket, and shows
-unpushed work (PR 4).
+T3's side, world projects, thread worlds, Claude's checkout hook and the thread's world state,
+is in [Worlds](worlds.md).
 
 ## Upstream touch points
 

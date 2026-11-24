@@ -40,6 +40,14 @@ import {
   isRegistered,
 } from "./IsolatedWorkspaces.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
+import { removeEmptyTree } from "../world/looseFiles.ts";
+import { registerThreadWorld } from "../world/ThreadWorldLauncher.ts";
+import {
+  isWorldProjectRoot,
+  threadWorldOf,
+  worldOfProjectRoot,
+  worldThreadKey,
+} from "../world/threadWorldPaths.ts";
 import { createJjWorkspace, deleteJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
 import { ManagedWorkspaceError, removeWorkspaceDirectory } from "./WorkspaceCommand.ts";
 import {
@@ -49,7 +57,7 @@ import {
   type WorkspaceNameError,
 } from "./WorkspaceNaming.ts";
 
-type WorkspaceBackend = "git" | "jj" | "directory" | "isolated";
+type WorkspaceBackend = "git" | "jj" | "directory" | "isolated" | "world";
 
 /** The launch strategy for a new managed workspace, inside `ThreadLaunchService`. */
 export type ManagedWorkspaceStrategy = ManagedWorkspaceLaunchStrategy & {
@@ -94,6 +102,8 @@ export class ManagedWorkspaces extends Context.Service<
       projectRoot: string,
       options?: { readonly isolated?: boolean | undefined },
     ) => Effect.Effect<WorkspaceBackend>;
+    /** Whether threads in the project at `projectRoot` each get their own thread world. */
+    readonly isWorldProject: (projectRoot: string) => Effect.Effect<boolean>;
     /** Whether `path` lies inside an agent-exec registration (isolated workspace or separate project). */
     readonly isIsolated: (path: string) => Effect.Effect<boolean, ManagedWorkspaceError>;
     /**
@@ -141,7 +151,7 @@ function isInside(candidate: string, parent: string): boolean {
 }
 
 /** Settlement and archiving hide a workspace; neither releases files a running turn uses. */
-function keepsWorkspace(thread: OrchestrationV2ThreadShell): boolean {
+export function keepsWorkspace(thread: OrchestrationV2ThreadShell): boolean {
   return (
     (thread.archivedAt === null && thread.settledOverride !== "settled") ||
     ACTIVE_RUN_STATUSES.has(thread.activityRunStatus ?? "")
@@ -168,9 +178,22 @@ const make = Effect.gen(function* () {
   const isIsolated: ManagedWorkspaces["Service"]["isIsolated"] = (path) =>
     isRegistered(path).pipe(Effect.provide(context));
 
+  const worlds = serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.worlds),
+    Effect.orElseSucceed(() => ({})),
+  );
+
+  const worldOf = (projectRoot: string) =>
+    worlds.pipe(Effect.map((all) => worldOfProjectRoot(config.baseDir, all, projectRoot)));
+
+  // By path, not settings: a world removed from settings keeps its threads out of the host root.
+  const isWorldProject: ManagedWorkspaces["Service"]["isWorldProject"] = (projectRoot) =>
+    Effect.succeed(isWorldProjectRoot(config.baseDir, projectRoot));
+
   const backendFor: ManagedWorkspaces["Service"]["backendFor"] = Effect.fn(
     "ManagedWorkspaces.backendFor",
   )(function* (projectRoot, options) {
+    if (yield* isWorldProject(projectRoot)) return "world";
     const kind = findRepositoryMarker(projectRoot)?.kind ?? "directory";
     if (kind === "git") return kind;
     if (options?.isolated === true) return "isolated";
@@ -323,6 +346,25 @@ const make = Effect.gen(function* () {
       if (backend === "git") {
         return yield* fail("ManagedWorkspaces.create", "Git projects use worktrees.");
       }
+      if (backend === "world") {
+        const world = yield* worldOf(input.projectRoot);
+        if (world === undefined) {
+          return yield* fail(
+            "ManagedWorkspaces.create",
+            "This world is not configured on this server. Add it to the server's worlds settings.",
+          );
+        }
+        // Named by the daemon's key, so a retried preparation or a resume finds the same world.
+        const root = NodePath.join(input.projectRoot, worldThreadKey(input.threadId));
+        yield* registerThreadWorld({
+          root,
+          world: world.id,
+          settings: world.settings,
+          threadId: input.threadId,
+          projectId: input.projectId,
+        });
+        return { worktreePath: root, backend };
+      }
       const seed = yield* nameSeed(input);
       const marker = findRepositoryMarker(input.projectRoot);
       const unavailableNames =
@@ -387,6 +429,8 @@ const make = Effect.gen(function* () {
         return NodePath.join(workspacesRoot, project, name);
       }
     }
+    const threadWorld = threadWorldOf(config.baseDir, yield* worlds, resolved);
+    if (threadWorld !== undefined) return threadWorld.root;
     return yield* findIsolatedWorkspace(resolved).pipe(Effect.provide(context));
   });
 
@@ -397,6 +441,17 @@ const make = Effect.gen(function* () {
     const isolatedRoot = yield* findIsolatedWorkspace(root);
     if (isolatedRoot !== null) return yield* deleteIsolatedWorkspace(isolatedRoot);
     if (!NodeFS.existsSync(root)) return;
+    // Without a registration agent-exec can't ask the daemon, so only an empty one goes.
+    if (isWorldProjectRoot(config.baseDir, NodePath.dirname(root))) {
+      return yield* removeEmptyTree(root).pipe(
+        Effect.mapError(() =>
+          fail(
+            "ManagedWorkspaces.delete",
+            "This thread world is not registered and is not an empty folder, so its contents were kept.",
+          ),
+        ),
+      );
+    }
     if (NodeFS.statSync(NodePath.join(root, ".jj"), { throwIfNoEntry: false })?.isDirectory()) {
       return yield* deleteJjWorkspace(root);
     }
@@ -445,6 +500,7 @@ const make = Effect.gen(function* () {
   });
 
   return ManagedWorkspaces.of({
+    isWorldProject,
     backendFor,
     isIsolated,
     resolveLaunchStrategy,

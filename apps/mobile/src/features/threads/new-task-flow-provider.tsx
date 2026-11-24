@@ -384,9 +384,11 @@ export function NewTaskFlowProvider(
     projectRoot: selectedProject?.workspaceRoot,
     vcsKind: projectGitStatus.data?.kind,
     isRepo: knownIsGitRepo ?? undefined,
+    world: selectedProject?.world,
   });
   const projectSettings = projectDefaults.projectSettings;
-  const canChooseWorkspace = !isScratchDraft;
+  // Every thread in a world gets its own thread world (patches/worlds.md).
+  const canChooseWorkspace = !isScratchDraft && selectedProject?.world == null;
   const defaultWorkspaceMode: WorkspaceMode = projectDefaults.defaultWorkspaceMode;
   const branchState = usePaginatedBranches({
     environmentId: selectedProject?.environmentId ?? null,

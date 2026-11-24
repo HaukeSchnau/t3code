@@ -52,10 +52,13 @@ export function managedWorkspacesForProject(input: {
   readonly projectRoot: string | null | undefined;
   readonly vcsKind: VcsDriverKind | undefined;
   readonly isRepo: boolean | undefined;
+  /** A world project gives every thread its own thread world, so there is nothing to choose. */
+  readonly world?: string | null | undefined;
 }): ManagedWorkspacesCapability | null {
   const { config, projectRoot } = input;
   const managedKind = input.vcsKind === "jj" || input.isRepo === false;
   if (
+    input.world != null ||
     config == null ||
     projectRoot == null ||
     !managedKind ||
