@@ -339,6 +339,7 @@ function toLocalStatusPart(status: VcsStatusResult): VcsStatusLocalResult {
     isRepo: status.isRepo,
     ...(status.kind === undefined ? {} : { kind: status.kind }),
     ...(status.jj === undefined ? {} : { jj: status.jj }),
+    ...(status.world === undefined ? {} : { world: status.world }),
     ...(status.sourceControlProvider
       ? { sourceControlProvider: status.sourceControlProvider }
       : {}),

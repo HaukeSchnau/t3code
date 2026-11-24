@@ -283,6 +283,7 @@ describe("applyGitStatusStreamEvent", () => {
         insertions: 1,
         deletions: 0,
       },
+      world: { world: "acme", path: "/home/user/Acme", available: true, repos: [], refusals: [] },
       hasUpstream: false,
       aheadCount: 0,
       behindCount: 0,

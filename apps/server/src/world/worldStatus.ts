@@ -66,7 +66,9 @@ export function toWorldThreadStatus(
       .map((refusal) => ({
         at: refusal.at,
         repo: refusal.repo,
-        tool: refusal.process.endsWith(`[${serverPid}]`) ? "Claude's Bash hook" : refusal.process,
+        tool: refusal.process.endsWith(`[${serverPid}]`)
+          ? "Claude's Bash hook"
+          : refusal.process.replace(/\[\d+\]$/, ""),
         reason: refusal.reason,
       }))
       .toReversed(),

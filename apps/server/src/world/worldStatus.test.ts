@@ -50,7 +50,7 @@ describe("toWorldThreadStatus", () => {
           },
         ],
         refusals: [
-          { at: "2026-11-24T08:00:00Z", repo: "a", process: "pnpm", reason: "first" },
+          { at: "2026-11-24T08:00:00Z", repo: "a", process: "pnpm[7]", reason: "first" },
           {
             at: "2026-11-24T08:01:00Z",
             repo: "b",
