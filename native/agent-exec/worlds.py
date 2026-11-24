@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import sys
 
 import workspaces
@@ -154,8 +155,12 @@ def sync_and_exec(command):
     os.execvp(command[0], command)
 
 
-def loose_files(root, checkouts):
-    """Files outside the thread's checkouts: no remote has them, and the daemon doesn't look."""
+def loose_files(root, checkouts, views=frozenset()):
+    """Files outside the thread's checkouts: no remote has them, and the daemon doesn't look.
+
+    In a repo the thread only viewed, `.git` is the daemon's: registering the thread's admin
+    worktree (`git worktree add --no-checkout`) writes it, and teardown removes it.
+    """
     if "." in checkouts:
         return []
     loose = []
@@ -166,7 +171,9 @@ def loose_files(root, checkouts):
     for directory, children, files in os.walk(root, onerror=unreadable):
         relative = Path(directory).relative_to(root)
         children[:] = [child for child in children if str(relative / child) not in checkouts]
-        loose += [str(relative / name) for name in files]
+        loose += [str(relative / name) for name in files
+                  if not (name == ".git" and str(relative) in views
+                          and stat.S_ISREG(os.lstat(Path(directory) / name).st_mode))]
         loose += [str(relative / child) for child in children if (Path(directory) / child).is_symlink()]
     return sorted(loose)
 
@@ -177,7 +184,7 @@ def teardown(runtime, record):
     The private home stays, so a thread resumed in the same ROOT keeps its provider sessions.
     """
     world, root = record["world"], Path(record["root"])
-    checkouts = set()
+    checkouts, views = set(), set()
     if world.get("registered"):
         try:
             status = call({"method": "status", "thread": world["thread"]})
@@ -185,9 +192,13 @@ def teardown(runtime, record):
             if error.code != "unknown-thread":
                 raise
             status = {"repos": []}
-        checkouts = {os.path.relpath(repo["dir"], world["path"])
-                     for repo in status.get("repos") or [] if repo["state"] == "checked-out"}
-    loose = loose_files(root, checkouts) if root.exists() else []
+        for repo in status.get("repos") or []:
+            directory = os.path.relpath(repo["dir"], world["path"])
+            if repo["state"] == "checked-out":
+                checkouts.add(directory)
+            elif repo["state"] == "view":
+                views.add(directory)
+    loose = loose_files(root, checkouts, views) if root.exists() else []
     if loose:
         shown = ", ".join(loose[:10]) + (f" and {len(loose) - 10} more" if len(loose) > 10 else "")
         raise Refused("work", f"{world['path']} holds files outside its checkouts: {shown}")
