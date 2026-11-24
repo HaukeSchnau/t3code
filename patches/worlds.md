@@ -34,7 +34,8 @@ notion of any of it.
 - **Claude's hook.** Claude sessions in a world get a PreToolUse hook for Bash
   (`world/worldHook.ts`). It runs as an SDK callback in T3's server, which is in the host mount
   namespace, so it calls the daemon's `checkout` as the host with the thread's key. It checks out
-  the session's cwd and every `cd`/`pushd` target inside the world before the shell starts, and
+  the session's cwd and every `cd`/`pushd` target inside the world before the shell starts, up to
+  the first `||`, pipe, `&` or subshell, after which the directory depends on what ran. It
   turns `cap`, `missing-objects`, `failed` and `unknown-repo` into a readable deny. A daemon that
   is down or doesn't know the thread lets the command run; the daemon's check-out on `cd` covers
   it. Codex has no hook and relies on that.
@@ -45,10 +46,12 @@ notion of any of it.
   `agent-exec retire --remove-checkout` only when its threads are settled, archived or deleted and
   quiet for 6 hours (past a provider session's longest pin), the daemon answers and reports no
   repo `lostOnTeardown`, and no file lies outside the repos (`world/worldTeardown.ts`). It reads the
-  threads again just before retiring, in case one resumed meanwhile. agent-exec asks the daemon
-  again and keeps everything on a refusal. Explicit deletion goes through
-  `ManagedWorkspaces.removeWorktree`, which retires the same way; an unregistered thread world is
-  deleted only when it holds no files at all.
+  threads again and retires under the workspace lease turn startup takes, so no thread resumes in
+  between. agent-exec asks the daemon again and keeps everything on a refusal. Explicit deletion
+  goes through `ManagedWorkspaces.removeWorktree`, which retires the same way. An unregistered
+  thread world goes only by removing empty directories, so any file keeps it.
+- **No world, no host.** A provider session whose cwd is a world's project root, as for a thread
+  whose world could not be created, is refused instead of running on the host.
 
 ## Clients
 

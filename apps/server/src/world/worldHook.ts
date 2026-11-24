@@ -21,11 +21,18 @@ function tokenize(command: string): Token[] {
   };
   for (let i = 0; i < command.length; i++) {
     const char = command[i]!;
-    if (char === "'" || char === '"') {
-      const close = command.indexOf(char, i + 1);
+    if (char === "'") {
+      const close = command.indexOf("'", i + 1);
       const end = close === -1 ? command.length : close;
       word = (word ?? "") + command.slice(i + 1, end);
       i = end;
+    } else if (char === '"') {
+      let text = "";
+      for (i++; i < command.length && command[i] !== '"'; i++) {
+        if (command[i] === "\\" && i + 1 < command.length) i++;
+        text += command[i];
+      }
+      word = (word ?? "") + text;
     } else if (char === "\\" && i + 1 < command.length) {
       word = (word ?? "") + command[++i];
     } else if (char === " " || char === "\t") {
@@ -59,27 +66,25 @@ const PREFIXES: ReadonlySet<string> = new Set([
   "builtin",
 ]);
 
+/** Operators after which the shell's directory depends on what ran: the hook stops predicting. */
+const AMBIGUOUS: ReadonlySet<string> = new Set(["||", "|", "&", "(", ")"]);
+
 /**
  * The directories `command` runs in: the session's cwd, then each `cd` or `pushd` target in
- * order, each resolved against the directory it runs in. A subshell's `cd` ends with it, and the
- * right side of `||` runs where the failed left side started. Targets the hook cannot know, such
- * as `cd -`, a bare `cd`, or one built from variables, are skipped; the daemon's check-out on
- * `cd` still covers them.
+ * order, each resolved against the one before. It stops at `||`, a pipe, `&` or a subshell,
+ * and skips targets it cannot know, such as `cd -`, a bare `cd`, or one built from variables;
+ * the daemon's check-out on `cd` covers the rest.
  */
 export function commandDirectories(command: string, cwd: string, home: string): string[] {
   const directories = [cwd];
-  const subshells: string[] = [];
   let current = cwd;
-  let beforeCd = cwd;
   let commandStart = true;
   let cdTarget = false;
   for (const token of tokenize(command)) {
     if ("op" in token) {
+      if (AMBIGUOUS.has(token.op)) break;
       cdTarget = false;
       commandStart = true;
-      if (token.op === "(") subshells.push(current);
-      else if (token.op === ")") current = subshells.pop() ?? current;
-      else if (token.op === "||") current = beforeCd;
       continue;
     }
     const word = token.word;
@@ -88,7 +93,6 @@ export function commandDirectories(command: string, cwd: string, home: string): 
       if (word === "" || word.startsWith("-") || /[$`*?]/.test(word)) continue;
       const expanded =
         word === "~" ? home : word.startsWith("~/") ? NodePath.join(home, word.slice(2)) : word;
-      beforeCd = current;
       current = NodePath.resolve(current, expanded);
       directories.push(current);
     } else if (commandStart) {

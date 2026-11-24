@@ -40,7 +40,7 @@ import {
   isRegistered,
 } from "./IsolatedWorkspaces.ts";
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
-import { looseFiles } from "../world/looseFiles.ts";
+import { removeEmptyTree } from "../world/looseFiles.ts";
 import { registerThreadWorld } from "../world/ThreadWorldLauncher.ts";
 import {
   isWorldProjectRoot,
@@ -442,14 +442,15 @@ const make = Effect.gen(function* () {
     if (isolatedRoot !== null) return yield* deleteIsolatedWorkspace(isolatedRoot);
     if (!NodeFS.existsSync(root)) return;
     // Without a registration agent-exec can't ask the daemon, so only an empty one goes.
-    if (threadWorldOf(config.baseDir, yield* worlds, root) !== undefined) {
-      const files = looseFiles(root, { includeRepos: true, limit: 1 });
-      if (files.length > 0) {
-        return yield* fail(
-          "ManagedWorkspaces.delete",
-          `This thread world is not registered and still holds files, such as ${files[0]}. Nothing was deleted.`,
-        );
-      }
+    if (isWorldProjectRoot(config.baseDir, NodePath.dirname(root))) {
+      return yield* removeEmptyTree(root).pipe(
+        Effect.mapError(() =>
+          fail(
+            "ManagedWorkspaces.delete",
+            "This thread world is not registered and still holds files. Nothing was deleted.",
+          ),
+        ),
+      );
     }
     if (NodeFS.statSync(NodePath.join(root, ".jj"), { throwIfNoEntry: false })?.isDirectory()) {
       return yield* deleteJjWorkspace(root);

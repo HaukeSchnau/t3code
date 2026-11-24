@@ -35,10 +35,10 @@ import {
   isolatedWorkspacesAvailable,
 } from "../workspace/IsolatedWorkspaces.ts";
 import { keepsWorkspace } from "../workspace/ManagedWorkspaces.ts";
-import { removeWorkspaceDirectory } from "../workspace/WorkspaceCommand.ts";
-import { looseFiles } from "./looseFiles.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { looseFiles, removeEmptyTree } from "./looseFiles.ts";
 import { registeredThreadKey, registerThreadWorld } from "./ThreadWorldLauncher.ts";
-import { threadWorldOf, worldProjectRoot } from "./threadWorldPaths.ts";
+import { isWorldProjectRoot, threadWorldOf, worldProjectRoot } from "./threadWorldPaths.ts";
 import {
   type CheckoutOutcome,
   commandDirectories,
@@ -117,6 +117,11 @@ const make = Effect.gen(function* () {
     readonly cwd: string | null;
   }) {
     if (input.cwd === null) return;
+    if (isWorldProjectRoot(config.baseDir, input.cwd)) {
+      return yield* Effect.fail(
+        "This thread has no world of its own, so it would run on the host. Start a new thread in this world.",
+      );
+    }
     const world = yield* threadWorld(input.cwd);
     if (world === undefined || world.thread !== undefined) return;
     const shell = yield* threads
@@ -249,14 +254,9 @@ export const layerBackground = Layer.effectDiscard(
       ),
     });
 
-    const allThreads = Effect.all([
-      threads.getShellSnapshot(),
-      threads.getShellSnapshot({ location: "archive" }),
-    ]).pipe(
-      Effect.map((snapshots) =>
-        snapshots.flatMap((snapshot) => [...snapshot.threads, ...snapshot.archivedThreads]),
-      ),
-    );
+    const allThreads = threads
+      .getShellSnapshot()
+      .pipe(Effect.map((snapshot) => [...snapshot.threads, ...snapshot.archivedThreads]));
 
     const sweep = Effect.gen(function* () {
       const current = yield* settingsService.getSettings;
@@ -296,20 +296,24 @@ export const layerBackground = Layer.effectDiscard(
             yield* Effect.logDebug("Keeping a thread world", { root, reason: decision.reason });
             continue;
           }
-          // A thread may have resumed while the daemon and the files were read.
-          const fresh = yield* Effect.forEach(users, (user) => threads.getThreadShell(user.id));
-          const busyNow = busyReason({
-            nowMs: DateTime.toEpochMillis(yield* DateTime.now),
-            createdMs,
-            threads: fresh.flatMap((shell) => (shell === null ? [] : [threadUse(shell)])),
-          });
-          if (busyNow !== undefined) continue;
-          yield* (
-            world.thread === undefined
-              ? removeWorkspaceDirectory(root)
-              : deleteIsolatedWorkspace(root).pipe(Effect.provide(context))
+          // Turn startup holds the same lease, so no thread resumes between this check and retire.
+          yield* withWorkspaceLease(
+            root,
+            Effect.gen(function* () {
+              const fresh = yield* Effect.forEach(users, (user) => threads.getThreadShell(user.id));
+              const busyNow = busyReason({
+                nowMs: DateTime.toEpochMillis(yield* DateTime.now),
+                createdMs,
+                threads: fresh.flatMap((shell) => (shell === null ? [] : [threadUse(shell)])),
+              });
+              if (busyNow !== undefined) return;
+              // An unregistered world goes only while empty, so a file written meanwhile keeps it.
+              yield* world.thread === undefined
+                ? removeEmptyTree(root)
+                : deleteIsolatedWorkspace(root).pipe(Effect.provide(context));
+              yield* Effect.logInfo("Tore down a thread world", { root });
+            }),
           ).pipe(
-            Effect.tap(() => Effect.logInfo("Tore down a thread world", { root })),
             Effect.catch((error) =>
               Effect.logWarning("A thread world stays", { root, reason: error.message }),
             ),

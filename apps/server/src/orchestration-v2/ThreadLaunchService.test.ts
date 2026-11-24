@@ -241,6 +241,7 @@ function makeHarness(options: HarnessOptions = {}) {
     ProviderRegistryMock.layer(options.providers),
     Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({
       resolveLaunchStrategy: (input) => Effect.succeed(input.strategy),
+      isWorldProject: () => Effect.succeed(false),
       checkCopy: () => Effect.void,
       ...options.managedWorkspaces,
     }),

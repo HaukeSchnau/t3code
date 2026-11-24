@@ -943,7 +943,16 @@ const make = Effect.gen(function* () {
 
   const isWorldProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
-      Effect.map((project) => Option.isSome(project) && project.value.world != null),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(false),
+          // A project added at a world's root by hand has no `world` field, but is one.
+          onSome: (project) =>
+            project.world != null
+              ? Effect.succeed(true)
+              : managedWorkspaces.isWorldProject(project.workspaceRoot),
+        }),
+      ),
       Effect.orElseSucceed(() => false),
     );
 

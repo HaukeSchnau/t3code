@@ -2,6 +2,10 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import * as Effect from "effect/Effect";
+
+import { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
+
 /**
  * Files in a thread world that belong to no repo, as the host sees it: repos the thread never
  * checked out are empty mount points there, and a checked-out repo has a `.git` file the daemon
@@ -32,3 +36,26 @@ export function looseFiles(
   }
   return found.slice(0, limit);
 }
+
+/**
+ * Removes `root` and the empty directories below it, and fails as soon as one holds anything,
+ * so a file written while the caller decided is never deleted.
+ */
+export const removeEmptyTree = (root: string) =>
+  Effect.try({
+    try: () => {
+      const remove = (directory: string) => {
+        for (const entry of NodeFS.readdirSync(directory, { withFileTypes: true })) {
+          if (entry.isDirectory()) remove(NodePath.join(directory, entry.name));
+        }
+        NodeFS.rmdirSync(directory);
+      };
+      remove(root);
+    },
+    catch: (cause) =>
+      new ManagedWorkspaceError({
+        operation: "removeEmptyTree",
+        detail: `${root} is not empty`,
+        cause,
+      }),
+  });
