@@ -17,6 +17,11 @@ export const WorldThreadHooks = Context.Reference<{
   readonly inWorld: (cwd: string) => Effect.Effect<boolean>;
   /** The state of the thread world containing `cwd`, or undefined outside worlds. */
   readonly status: (cwd: string) => Effect.Effect<WorldThreadStatus | undefined>;
+  /** A turn in `cwd` ended: push the thread world's notes in the background. */
+  readonly turnEnded: (input: {
+    readonly threadId: ThreadId;
+    readonly cwd: string;
+  }) => Effect.Effect<void>;
   /** Claude's PreToolUse hook for Bash, for a session whose host cwd is `cwd`. */
   readonly claudePreToolUse: (cwd: string | null) => Effect.Effect<HookCallback | undefined>;
 }>("t3/world/WorldThreadHooks", {
@@ -24,6 +29,7 @@ export const WorldThreadHooks = Context.Reference<{
     ensure: () => Effect.void,
     inWorld: () => Effect.succeed(false),
     status: () => Effect.undefined,
+    turnEnded: () => Effect.void,
     claudePreToolUse: () => Effect.undefined,
   }),
 });

@@ -402,7 +402,11 @@ def launch(record, cwd, command, *, project=None):
         writable=True,
     )
     if world:
-        args += worlds.bind_arguments(world_binds)
+        args += worlds.bind_arguments(world_binds, world.get("mounts", []))
+        if world.get("repo"):
+            # T3 runs git on the host in this repo with the host's keys, so the thread may not
+            # change its hooks, config or filters.
+            args += ["--ro-bind", str(Path(record["root"]) / ".git"), str(Path(world["path"]) / ".git")]
     elif workspace:
         bind(args, record["root"], visible_root, writable=True)
     else:
@@ -454,7 +458,9 @@ def launch(record, cwd, command, *, project=None):
         bind(
             args,
             host_home / name,
-            writable=name.startswith(".config/"),
+            # T3 runs git on the host in a world's repo, so a world's thread may not change git's
+            # global config.
+            writable=name.startswith(".config/") and not world,
         )
     # jj stores writable per-repository trust/config metadata next to user
     # settings. Keep that state private, while sharing familiar user settings.
@@ -1078,6 +1084,10 @@ def main():
     world.add_argument("--layout", help='worldfs layout, a JSON array of {"prefix", "dir"}')
     world.add_argument("--profile", choices=["minimal", "familiar"], default="familiar")
     world.add_argument("--project-id", help="Owning T3 project")
+    world.add_argument("--repo", help="The world repo to clone as the thread world's root; its world.json gives the layout")
+    world.add_argument("--mount", action="append", default=[], help="A host path every launch reads at the same path, read-only")
+    notes = sub.add_parser("world-notes", help="Commit, merge and push a thread world's notes")
+    notes.add_argument("root")
     collect = sub.add_parser(
         "collect",
         help="Import a selected jj change without editing the destination working copy",
@@ -1152,7 +1162,13 @@ def main():
         print(json.dumps(worlds.create(
             runtime, args.root, thread=args.thread, world=args.world, path=args.path,
             layout=worlds.parse_layout(args.layout), profile=args.profile, project_id=args.project_id,
+            repo=args.repo, mounts=args.mount,
         )))
+    elif args.operation == "world-notes":
+        record = lookup(args.root)
+        if not record or not record.get("world") or record["root"] != str(Path(args.root).resolve()):
+            raise ValueError("No thread world registered here")
+        print(json.dumps(worlds.push_notes(runtime, record)))
     elif args.operation == "collect":
         print(
             json.dumps(workspaces.collect(args.source, args.destination, args.revision))

@@ -9,11 +9,16 @@ import { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
 /**
  * Files in a thread world that belong to no repo, as the host sees it: repos the thread never
  * checked out are empty mount points there, and a checked-out repo has a `.git` file the daemon
- * accounts for. With `includeRepos`, files inside repos count too.
+ * accounts for. With `includeRepos`, files inside repos count too. `tracked` are the files of the
+ * world repo at the root, whose own state the notes entry reports.
  */
 export function looseFiles(
   root: string,
-  options: { readonly includeRepos?: boolean; readonly limit?: number } = {},
+  options: {
+    readonly includeRepos?: boolean;
+    readonly limit?: number;
+    readonly tracked?: ReadonlySet<string>;
+  } = {},
 ): string[] {
   const limit = options.limit ?? 10;
   const found: string[] = [];
@@ -27,11 +32,17 @@ export function looseFiles(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    if (!options.includeRepos && entries.some((entry) => entry.name === ".git")) continue;
+    const worldRepo = options.tracked !== undefined && directory === root;
+    if (!options.includeRepos && !worldRepo && entries.some((entry) => entry.name === ".git")) {
+      continue;
+    }
     for (const entry of entries) {
+      if (worldRepo && entry.name === ".git") continue;
       const path = NodePath.join(directory, entry.name);
       if (entry.isDirectory()) stack.push(path);
-      else found.push(NodePath.relative(root, path));
+      else if (!options.tracked?.has(NodePath.relative(root, path))) {
+        found.push(NodePath.relative(root, path));
+      }
     }
   }
   return found.slice(0, limit);

@@ -26,10 +26,9 @@ control socket and the rules. In short:
 - The Linux Release ships the binary (`nix/worldfs.nix`, a payload in `flake.nix`). Infra runs it
   as the `worldfs` user unit and owns the machine cache.
 
-+++++++ zrxrmyyr 3bdc0f7e "Merge pull request 'feat(agent-exec): each thread's agent runs inside its world' (#207) from feat/agent-exec-worlds into main" (rebase destination)
 agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.py`):
 
-- `agent-exec world ROOT --thread KEY --world W --path P [--layout JSON]` registers a thread
+- `agent-exec world ROOT --thread KEY --world W --path P [--repo URL] [--mount PATH]... [--layout JSON]` registers a thread
   world. It is an isolated workspace whose files come from worldfs: same private home, network and
   process namespace, one holder per thread. The holder's pid registers the thread with the daemon,
   so the holder's user namespace is the thread key.
@@ -38,9 +37,17 @@ agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.
   command in the new namespace, which calls `sync` before it execs the real command.
 - The world's threads share one pnpm store and keep agent-exec's `clone-or-copy` import, so
   `node_modules` in a checkout are reflinks that an edit can't push into the store.
+- With `--repo`, the world repo is cloned as ROOT and its `world.json` gives the layout unless
+  `--layout` names one.
+  `world-notes ROOT` commits its changes, merges the remote's (git's union driver for notes, from
+  the repo's `.gitattributes`) and pushes, after checking every file the push would send against
+  `world.json`'s `neverCommit`, a 1 MiB limit and private keys. `--mount` binds a host path
+  read-only at the same path in every launch; a path missing on the host is left out, so a store
+  that is absent in a world means the host hasn't mounted it.
 - `retire ROOT --remove-checkout` stops the thread's processes and calls `teardown`. It refuses,
   and keeps everything, while the daemon reports work no remote has or ROOT holds files outside
-  the thread's checkouts (the daemon's `status`). A key is torn down only once the daemon has
+  the thread's checkouts (the daemon's `status`), or the world repo's notes have changes or
+  commits its remote lacks. A key is torn down only once the daemon has
   accepted it for this ROOT. It keeps the private home, so a thread resumed in the same ROOT
   keeps its provider sessions.
 

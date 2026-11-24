@@ -20,6 +20,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { VcsTurnHooks } from "./VcsTurnHooks.ts";
+import { WorldThreadHooks } from "../world/WorldThreadHooks.ts";
 
 export class CheckpointCaptureExecutionError extends Schema.TaggedError<CheckpointCaptureExecutionError>()(
   "CheckpointCaptureExecutionError",
@@ -117,6 +118,8 @@ export const layer: Layer.Layer<
           cwd: scope.cwd,
           failed: run.status === "failed",
         });
+        // A thread world pushes its notes at every turn's end (patches/worlds.md).
+        yield* (yield* WorldThreadHooks).turnEnded({ threadId: input.threadId, cwd: scope.cwd });
       }
       const capturedAt = yield* DateTime.now;
       const baselineOrdinalWithinScope = Math.max(0, run.ordinal - 1);

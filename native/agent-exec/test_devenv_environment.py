@@ -148,7 +148,8 @@ class DevenvEnvironmentTests(unittest.TestCase):
         while True:
             try:
                 state = status.read_text()
-            except FileNotFoundError:
+            # Reaped between open and read: the kernel answers ESRCH instead of ENOENT.
+            except (FileNotFoundError, ProcessLookupError):
                 break
             if "Z (zombie)" in state:
                 break

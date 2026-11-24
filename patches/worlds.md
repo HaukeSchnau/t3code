@@ -12,7 +12,7 @@ notion of any of it.
 
 ## Behavior
 
-- **Settings.** `worlds` maps a world's cache name to `{title, path, layout}`. Nothing is
+- **Settings.** `worlds` maps a world's cache name to `{title, path, repo, mounts}`. Nothing is
   hardcoded, so infra declares the worlds per host. The daemon's socket is `WORLDFS_SOCKET` or
   agent-exec's default, the same rule agent-exec follows, so T3 and agent-exec reach one daemon.
 - **World projects.** On a Linux host with the launcher, the server keeps one project per
@@ -29,6 +29,19 @@ notion of any of it.
   #191 comment 5686). From then on the thread world is an agent-exec registration with
   `workspace.visibleRoot` = the world's path, so the existing separate-project routing runs every
   process inside it and shows agents the canonical path.
+- **World repo (4d).** A world's `repo` is cloned as each thread world's root, so its
+  `AGENTS.md`, `agent-notes/` and `world.json` (the layout) sit at the top of the world and travel
+  between machines. Its `.gitignore` keeps everything else out, so git never walks the repos below. Launches bind
+  its `.git` and `~/.config/git` read-only: T3 runs git there on the host with the host's keys, so the thread must not
+  plant hooks, config or filters.
+  At the end of every turn (`CheckpointCaptureService`, after the jj seal) T3 runs `agent-exec
+  world-notes` in the background, one at a time per thread world: commit, merge the remote's with
+  git's union driver for notes, check every file the push would send, push that exact commit. A refused or failed push keeps
+  the commits; the thread's world state lists the world repo with its changes, unpushed commits and
+  the last error, and teardown waits for them. Notes need no T3 UI of their own.
+- **Mounts (4d).** Each of a world's `mounts` is bound read-only at the same path in every launch,
+  such as BuildlinX's store of material that must never enter git (infra's
+  `modules/features/worlds/store.nix`).
 - **Resume.** Opening a provider session re-runs `agent-exec world` when the thread world has no
   registration, so a thread whose world was torn down gets a fresh one at the same path.
 - **Claude's hook.** Claude sessions in a world get a PreToolUse hook for Bash
@@ -65,7 +78,8 @@ notion of any of it.
 
 - contracts: `world.ts` (fork-only), `world` on project shells, `project.created` and VCS local
   status, `worlds` in settings and the patch, `world` on `WorktreeMcpStatusResult`.
-- server: `orchestration-v2/ThreadLaunchService.ts` (one normalization), `ProviderSessionManager.ts`
+- server: `orchestration-v2/ThreadLaunchService.ts` (one normalization),
+  `orchestration-v2/CheckpointCaptureService.ts` (one `turnEnded` after the jj seal), `ProviderSessionManager.ts`
   (one `ensure` before the workspace check), `Adapters/ClaudeAdapterV2.ts` (the PreToolUse
   matcher), `vcs/VcsStatusBroadcaster.ts`, `ProjectStore.ts`, `ProjectCommands.ts`,
   `ProjectService.ts`, `mcp/WorktreeMcpService.ts`, `server.ts`.
