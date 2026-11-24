@@ -2,7 +2,7 @@
  * `t3_worktree_handoff` for projects whose new workspaces are not Git
  * worktrees: jj repositories, plain directories, and hosts with isolated
  * runtimes. Mirrors the Git handoff in WorktreeMcpService: create, bind with
- * a recheck, queue the continuation, then run setup. See patches/workspaces.md.
+ * a recheck and the continuation, then run setup. See patches/workspaces.md.
  */
 import {
   type CommandId,
@@ -43,7 +43,6 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
     readonly startFromOrigin: boolean;
     readonly ids: {
       readonly commandId: CommandId;
-      readonly continuationCommandId: CommandId;
       readonly continuationMessageId: MessageId;
     };
   },
@@ -76,7 +75,7 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
 
       // Like the Git handoff: anything that fails before the binding commits
       // removes the new workspace; an interrupt may have committed, so it keeps it.
-      yield* Effect.gen(function* () {
+      const bound = yield* Effect.gen(function* () {
         const recheck = yield* services.threads
           .getThreadRecords(threadId, [])
           .pipe(Effect.mapError(() => failure("thread_not_found", "The thread was not found.")));
@@ -92,7 +91,7 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
             `Thread '${threadId}' was archived while the workspace was being created.`,
           );
         }
-        yield* services.threads
+        return yield* services.threads
           .dispatch({
             type: "thread.metadata.update",
             commandId: input.ids.commandId,
@@ -100,6 +99,15 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
             branch: null,
             worktreePath,
             expectedWorktreePath: null,
+            // Binding detaches the session and ends the caller; a later send could lose the race.
+            ...(handoff.continuationPrompt === undefined
+              ? {}
+              : {
+                  continuation: {
+                    messageId: input.ids.continuationMessageId,
+                    text: handoff.continuationPrompt,
+                  },
+                }),
           })
           .pipe(
             Effect.catchCause((cause) =>
@@ -124,30 +132,14 @@ export const managedWorkspaceHandoff = Effect.fn("ManagedWorkspaceHandoff.handof
       const continuation: WorktreeMcpContinuationStatus =
         handoff.continuationPrompt === undefined
           ? { status: "skipped" }
-          : yield* services.threads
-              .sendToThread({
-                projectId: project.id,
-                commandId: input.ids.continuationCommandId,
-                threadId,
-                messageId: input.ids.continuationMessageId,
-                text: handoff.continuationPrompt,
-                attachments: [],
-                mode: "queue",
-                createdBy: "agent",
-                creationSource: "mcp",
-              })
-              .pipe(
-                Effect.map((sent): WorktreeMcpContinuationStatus => ({
-                  status: "scheduled",
-                  delivery: sent.delivery,
-                })),
-                Effect.catchCause((cause) =>
-                  Effect.succeed<WorktreeMcpContinuationStatus>({
-                    status: "failed",
-                    detail: detail(cause),
-                  }),
-                ),
-              );
+          : {
+              status: "scheduled",
+              delivery: bound.storedEvents.some(
+                ({ event }) => event.type === "run.created" && event.payload.status !== "queued",
+              )
+                ? "started"
+                : "queued",
+            };
 
       const setupScript: WorktreeMcpSetupScriptStatus =
         handoff.runSetupScript === false

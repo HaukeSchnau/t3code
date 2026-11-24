@@ -7,8 +7,8 @@ silently. A retro of his Claude threads from August to November 2026 found three
 
 - A Claude background-wake run started, the provider never answered, and the run stayed `running`
   for 4.8 hours. A pull request watch's "checks passed" wake queued behind it the whole time.
-- A watched pull request merged and the watch ended without a wake (fixed by
-  [pull-request-watch-merge-wake](pull-request-watch-merge-wake.md)).
+- A watched pull request merged and the watch ended without a wake (upstream wakes on merge since
+  #26271).
 - A server restart stopped a Claude Monitor the agent had not marked with `t3_background_wait`, and
   nothing woke the thread.
 

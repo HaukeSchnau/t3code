@@ -6,7 +6,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { ComposerSurface } from "./ThreadComposer";
+import { ComposerSurface } from "../../components/ComposerSurface";
 import type { ThreadFindSession } from "./use-thread-find";
 
 function FindIconButton(props: {

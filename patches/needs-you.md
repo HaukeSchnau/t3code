@@ -107,8 +107,8 @@ prose asks waited over two hours or never got a reply.
   project that has not loaded yet scopes to no thread, not to all) and a snooze
   only once the environment's config has loaded; on mobile the list's environment and project
   filters, read from the list's own layout (`buildThreadListV2Items`) under the scope the lists
-  resolve (`resolveHomeProjectScope`, which reads a legacy per-environment scratch key as "No
-  project"). A search hides the section on both, so no search applies. A card shows the project, the thread's title, how long it waited,
+  resolve (upstream's `resolveHomeProjectFilterScope`, which reads a legacy per-environment scratch
+  key as "No project"). A search hides the section on both, so no search applies. A card shows the project, the thread's title, how long it waited,
   the need's text, the agent's newest message as Markdown, the page inline for a page ask (newest
   version, answering through the page bridge; looked up in the page index by thread and render id
   and mounted under that id when the loaded timeline does not hold it), and a single question's
@@ -484,10 +484,7 @@ Upstream-owned hooks:
   that `Sidebar.tsx` fills with the Triage button; `oldestOpenAsk` in client-runtime
   `threadInbox.ts`. Mobile: the `Triage` route in `Stack.tsx`, the palette entry in
   `features/keyboard/CommandPalette.tsx`, the header action in
-  `features/threads/thread-list-v2-items.tsx`, `resolveHomeProjectScope` in
-  `features/home/homeThreadList.ts` (the lists' project scope, shared by `HomeRouteScreen.tsx`,
-  `ThreadNavigationSidebar.tsx` and triage), Back from a thread over Triage popping in
-  `lib/android-workspace-navigation.ts`, and a `triage` flag on `ThreadHtmlRender`
+  `features/threads/thread-list-v2-items.tsx`, and a `triage` flag on `ThreadHtmlRender`
   (`features/threads/HtmlRenderWebView.tsx`) that sends a card's page through triage and carries
   over to its full-screen route (`triage` on `AttachmentFileScreen.tsx`'s params, read by
   `htmlRenderRouteBridge` in `features/pages/threadPages.ts`). Web replies queue through

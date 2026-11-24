@@ -102,7 +102,6 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
     ownerKey: `follow-up-capture:${routeKey}`,
     label: "New follow-up",
     readDraftMessage: () => appAtomRegistry.get(textAtom),
-    subscribeToDraftChanges: (onChange) => appAtomRegistry.subscribe(textAtom, onChange),
     selection,
     onChangeDraftMessage: setText,
     onChangeSelection: setSelection,

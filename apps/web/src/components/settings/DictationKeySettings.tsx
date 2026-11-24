@@ -11,7 +11,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 const KEY_LABELS: Record<DictationKey, string> = {
   off: "Off",
@@ -31,6 +31,7 @@ export function DictationKeySettings() {
 }
 
 function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationBridge }) {
+  const searchableSetting = useSearchableSetting();
   const key = useClientSettings((settings) => settings.dictationKey);
   const inOtherApps = useClientSettings((settings) => settings.dictationInOtherApps);
   const readsField = useClientSettings((settings) => settings.dictationReadsField);

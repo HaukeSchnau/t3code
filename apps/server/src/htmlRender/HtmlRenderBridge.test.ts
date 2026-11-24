@@ -226,6 +226,7 @@ it.effect("runs a page's call through the handlers /mcp registered, with their a
                 McpToolAccessTestkit.idleThreadProjection(McpToolAccessTestkit.liveThreadShell(id)),
               ),
             dispatch: () => Effect.succeed({ sequence: 1 } as never),
+            listActiveShellIndex: () => Effect.succeed([]),
           }),
         ),
         Layer.provide(database),

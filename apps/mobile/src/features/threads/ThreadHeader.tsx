@@ -1,3 +1,5 @@
+import { useGT, useMessages } from "gt-react-native";
+
 import { AppBar } from "../../components/ui/AppBar";
 import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
 import {
@@ -23,23 +25,25 @@ export function ThreadHeader(props: {
   readonly onOpenFilesInspector: () => void;
   readonly onOpenFind?: () => void;
 }) {
-  const goBack = useWorkspaceBackNavigation("threads");
+  const gt = useGT();
+  const m = useMessages();
+  const goBack = useWorkspaceBackNavigation();
   const { toggleAuxiliaryPane, startNewTask } = useAdaptiveWorkspaceLayout();
   const { panes } = useWorkspacePaneState();
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
-  const terminalMenu = threadTerminalMenu(props.gitControls);
+  const terminalMenu = threadTerminalMenu(props.gitControls, m);
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
   const actions: AppBarAction[] = [];
   if (props.onOpenFind) {
     actions.push({
-      accessibilityLabel: "Find in thread",
+      accessibilityLabel: gt("Find in thread"),
       icon: "magnifyingglass",
       onPress: props.onOpenFind,
     });
   }
   if (props.hasThreadCwd) {
     actions.push({
-      accessibilityLabel: filesVisible ? "Close files" : "Open files",
+      accessibilityLabel: filesVisible ? gt("Close files") : gt("Open files"),
       icon: "folder",
       selected: filesVisible,
       disabled: !props.gitControls.canOpenFiles,
@@ -58,7 +62,7 @@ export function ThreadHeader(props: {
       backInSplitView={
         props.onReturnToThread
           ? {
-              accessibilityLabel: "Return to chat",
+              accessibilityLabel: gt("Return to chat"),
               icon: "chevron.left",
               onPress: props.onReturnToThread,
             }

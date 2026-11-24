@@ -11,9 +11,19 @@ drops accounts it cannot draw without a notice.
 ## Design
 
 - `UsageLimitSources` keeps an account's last good snapshot when its read fails, using
-  `resolveUsageLimitsAfterProbe`, the rule native provider probes already follow.
+  `resolveUsageLimitsAfterProbe`, the rule native provider probes already follow. Upstream's
+  `keepLastGoodReadings` (#38397) lends a refused account its last reading too, but it reads
+  throttled accounts again. The fork keeps its own lending, which throttling and rejected logins
+  depend on, with upstream's conditions (`lastReadingOf`): the same hub endpoint and the same login
+  the hub lists for the auth file, and the model list of the current read. A hub can reuse an auth
+  file name for another login, so an account that lists no login, or whose last reading carries an
+  Antigravity credential fingerprint instead of a login, is never lent a reading and is read even
+  while the last reading is throttled.
 - An account the hub has never read successfully adds a notice to the hub's row with a count of
   such accounts. The notice does not name them, because the pooled views never print an email.
+  Upstream names each failed hub account in its own notice (`collectLimitNotices` in
+  `packages/shared/src/usageLimitsCopy.ts`); the fork keeps the count and takes upstream's rule
+  that an account another report shows as a row needs no notice (`unshownFailedHubAccounts`).
   A throttled account is counted in the rate-limit notice instead (see
   [Usage limits refresh](usage-limits-refresh.md)).
 - A read the provider answers with HTTP 401 means the hub's login for that account is dead,

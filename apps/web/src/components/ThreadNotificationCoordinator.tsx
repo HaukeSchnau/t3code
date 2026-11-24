@@ -1,8 +1,10 @@
+import { msg } from "gt-react";
+import { m } from "../i18n/messages";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import { threadsNeedingYou } from "@t3tools/client-runtime/state/thread-inbox";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { AnyRouter } from "@tanstack/react-router";
-import { threadKey } from "@t3tools/client-runtime/state/entities";
+import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entities";
 import type { EnvironmentId, NeedsYouSubject, ThreadId } from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as Option from "effect/Option";
@@ -94,12 +96,30 @@ export function startThreadNotifications(
     { readonly unsubscribe: () => void; readonly retry: () => void }
   >();
 
-  // Toasts by thread key, so hiding a thread can close its open toasts.
+  // Toasts by thread key, so hiding or opening a thread, or removing its environment, closes them.
   const openToasts = new Map<string, Array<{ readonly id: ToastId; readonly tag: string }>>();
   const forgetToast = (key: string, toastId: ToastId) => {
     const remaining = (openToasts.get(key) ?? []).filter((toast) => toast.id !== toastId);
     if (remaining.length === 0) openToasts.delete(key);
     else openToasts.set(key, remaining);
+  };
+  const closeToasts = (shouldClose: (key: string) => boolean) => {
+    for (const [key, toasts] of openToasts) {
+      if (!shouldClose(key)) continue;
+      for (const toast of toasts) toastManager.close(toast.id);
+      openToasts.delete(key);
+    }
+  };
+  const activeThread = () =>
+    (router.state.matches.at(-1)?.params ?? {}) as {
+      environmentId?: EnvironmentId;
+      threadId?: ThreadId;
+    };
+  const closeOpenedThreadToasts = () => {
+    const { environmentId, threadId } = activeThread();
+    if (environmentId === undefined || threadId === undefined) return;
+    const opened = threadKey({ environmentId, threadId });
+    closeToasts((key) => key === opened);
   };
   // A notification shown before the tag filter turned on must not stay on screen. While hiding,
   // one whose thread left the live list (archived) cannot be judged, so it closes too.
@@ -109,11 +129,7 @@ export function startThreadNotifications(
       ? new Set(registry.get(environmentThreadShells.threadRefsAtom).map(threadKey))
       : null;
     const shouldClose = (key: string) => hidden.has(key) || (live !== null && !live.has(key));
-    for (const [key, toasts] of openToasts) {
-      if (!shouldClose(key)) continue;
-      for (const toast of toasts) toastManager.close(toast.id);
-      openToasts.delete(key);
-    }
+    closeToasts(shouldClose);
     for (const [tag, entry] of pending) {
       if (!shouldClose(threadKey(entry))) continue;
       entry.notification.close();
@@ -208,23 +224,23 @@ export function startThreadNotifications(
     const completion = subject.source === "run" && subject.kind === "completed";
     const title =
       subject.source === "digest"
-        ? (subject.text ?? "Threads need you")
+        ? (subject.text ?? m(msg("Threads need you")))
         : subject.source === "reminder"
-          ? "Still waiting for you"
+          ? m(msg("Still waiting for you"))
           : completion
-            ? "Thread completed"
+            ? m(msg("Thread completed"))
             : subject.source === "run"
               ? status === "limited"
-                ? "Usage limit reached"
-                : "Thread failed"
+                ? m(msg("Usage limit reached"))
+                : m(msg("Thread failed"))
               : subject.source === "guest"
-                ? "Guest request"
+                ? m(msg("Guest request"))
                 : subject.kind === "approval"
-                  ? "Approval needed"
-                  : "Input needed";
+                  ? m(msg("Approval needed"))
+                  : m(msg("Input needed"));
     const body =
       subject.source === "digest"
-        ? `Waiting longest: ${thread.title}`
+        ? m(msg("Waiting longest: {title}", { title: thread.title }))
         : subject.source === "reminder"
           ? `${thread.title}: ${subject.text ?? ""}`
           : thread.title;
@@ -266,7 +282,7 @@ export function startThreadNotifications(
           ),
         },
         actionProps: {
-          children: "Open thread",
+          children: m(msg("Open thread")),
           onClick: () => {
             toastManager.close(toastId);
             open();
@@ -324,10 +340,7 @@ export function startThreadNotifications(
     withClaimsLock(() => {
       const storage = needsYouStorage();
       const nowMs = Date.now();
-      const active = (router.state.matches.at(-1)?.params ?? {}) as {
-        environmentId?: string;
-        threadId?: string;
-      };
+      const active = activeThread();
       for (const subject of subjects()) {
         // A newer version, such as its resolution, waits behind this lock and decides it.
         if (subject.version < (newest.get(subject.id) ?? 0)) continue;
@@ -523,6 +536,7 @@ export function startThreadNotifications(
   const syncEnvironments = () => {
     const { notificationMode, inAppNotificationsEnabled } = getClientSettings();
     const enabled = notificationMode !== "off" || inAppNotificationsEnabled;
+    if (!enabled) closeToasts(() => true);
     const environmentIds = enabled ? registry.get(environmentSummaries.environmentIdsAtom) : [];
     const activeIds = new Set(environmentIds);
     for (const [environmentId, { unsubscribe }] of watched) {
@@ -537,6 +551,7 @@ export function startThreadNotifications(
 
   const pruneRemovedEnvironments = () => {
     const activeIds = new Set(registry.get(environmentSummaries.environmentIdsAtom));
+    closeToasts((key) => !activeIds.has(parseThreadKey(key).environmentId));
     for (const [tag, entry] of pending) {
       if (activeIds.has(entry.environmentId)) continue;
       entry.notification.close();
@@ -562,6 +577,8 @@ export function startThreadNotifications(
       });
     }
     if (hasNotificationSound(nextMode)) {
+      // Electron's default autoplay policy needs no gesture, unlike browsers.
+      if (window.desktopBridge) unlockNotificationAudio();
       document.addEventListener("pointerdown", unlockNotificationAudio);
       document.addEventListener("keydown", unlockNotificationAudio);
       stops.push(() => {
@@ -616,12 +633,14 @@ export function startThreadNotifications(
     registry.subscribe(environmentThreadShells.anyEnvironmentHidingAtom, closeHiddenPending),
     registry.subscribe(environmentThreadShells.threadRefsAtom, closeHiddenPending),
   ];
+  const unsubscribeRoute = router.subscribe("onResolved", closeOpenedThreadToasts);
   onSettings();
 
   return () => {
     unsubscribeSettings();
     unsubscribeEnvironmentIds();
     for (const unsubscribe of unsubscribeHidden) unsubscribe();
+    unsubscribeRoute();
     for (const unsubscribe of unsubscribeNeedsYou) unsubscribe();
     clearInterval(countInterval);
     window.removeEventListener("focus", retryDeferred);
@@ -629,5 +648,6 @@ export function startThreadNotifications(
     for (const { unsubscribe } of watched.values()) unsubscribe();
     watched.clear();
     stopModeListeners();
+    closeToasts(() => true);
   };
 }

@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react-native";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import type { SearchBarCommands } from "react-native-screens";
 
@@ -19,6 +20,8 @@ function SidebarColumnHeader(
     readonly sidebar: NonNullable<WorkspaceListHeaderProps["sidebar"]>;
   },
 ) {
+  const gt = useGT();
+  const m = useMessages();
   const { search, sidebar } = props;
   const searchBarRef = useRef<SearchBarCommands>(null);
   // Registered once: the newest handler takes Cmd+F first, and re-registering on
@@ -42,12 +45,13 @@ function SidebarColumnHeader(
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const items = createWorkspaceListHeaderItems({
     filter: {
-      accessibilityLabel: "Filter threads",
+      accessibilityLabel: gt("Filter threads"),
       icon: workspaceListFilterIcon(props.filter.customized),
-      title: "Thread list options",
+      title: gt("Thread list options"),
       items: props.filter.items,
     },
     onOpenSettings: props.onOpenSettings,
+    resolve: m,
   });
 
   return (
@@ -59,6 +63,7 @@ function SidebarColumnHeader(
           trailingItemCount: items.length,
           onOpenEnvironments: props.onOpenEnvironments,
           fallbackTitleStyle: { fontSize: 18, fontWeight: "800" },
+          resolve: m,
         }),
         headerSearchBarOptions: {
           ref: searchBarRef,

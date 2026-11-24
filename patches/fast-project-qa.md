@@ -105,10 +105,10 @@ plus the fork lockfile checks.
   or leak worker state are listed in `apps/web/vitest.config.ts` and run in a process each
   (`unit-isolated`). On srv-2 the whole web suite went from 1167 to 551 CPU seconds with a warm
   cache, and a 40-file sample of small server files from 102 to 15. Upstream isolates every file;
-  when an upstream test fails only in a shared project, add it to the config's list. The server's
-  `shared` project has its own `sequence.groupOrder`: Vitest rejects a repo-root run (as in
-  `check:changed`) whose projects share a group but not a worker count, and `fileParallelism: false`
-  gives it one worker.
+  when an upstream test fails only in a shared project, or leaves state that fails files after it
+  there, add it to the config's list. The server's `shared` project has its own
+  `sequence.groupOrder`: Vitest rejects a repo-root run (as in `check:changed`) whose projects share
+  a group but not a worker count, and `fileParallelism: false` gives it one worker.
 - A test that reads repository files its imports don't show has a `// calder: always` comment line and
   runs every time: `apps/server/src/triage/triagePrompt.test.ts` reads the triage playbook,
   `apps/mobile/src/dependency-graph.test.ts` the whole source tree, and the web and mobile

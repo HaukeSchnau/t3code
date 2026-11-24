@@ -13,7 +13,7 @@ import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
 import { Toggle } from "../ui/toggle";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 const SUGGESTED_NAMES = ["Work", "Personal"];
 
@@ -22,6 +22,7 @@ export function EnvironmentModesSettings({
 }: {
   readonly environments: ReadonlyArray<EnvironmentPresentation>;
 }) {
+  const searchableSetting = useSearchableSetting();
   const modes = useAtomValue(environmentCatalog.modesValueAtom);
   const setModes = useAtomCommand(environmentCatalog.setModes, { reportFailure: false });
   const shortcutLabel = shortcutLabelForCommand(

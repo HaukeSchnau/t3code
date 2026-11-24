@@ -6,7 +6,7 @@ import {
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as JjStatusReader from "../../../jj/JjStatusReader.ts";
 import * as JjThreadWork from "../../../jj/JjThreadWork.ts";
@@ -32,7 +32,8 @@ const JjStatusTool = Tool.make("t3_jj_status", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const JjActionTool = Tool.make("t3_jj_action", {
   description:
@@ -52,7 +53,8 @@ const JjActionTool = Tool.make("t3_jj_action", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const JjThreadWorkTool = Tool.make("t3_jj_thread_work", {
   description:
@@ -70,6 +72,7 @@ const JjThreadWorkTool = Tool.make("t3_jj_thread_work", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const JjToolkit = Toolkit.make(JjStatusTool, JjActionTool, JjThreadWorkTool);

@@ -20,9 +20,10 @@ import viteConfig from "./vite.config";
 const include = ["src/**/*.test.{ts,tsx}"];
 // Anything that renders React or touches the DOM runs in headless Chromium instead.
 const browserInclude = ["src/**/*.browser.test.{ts,tsx}"];
-const isolated = isolatedTestFiles(import.meta.dirname, include, []).filter(
-  (file) => !file.includes(".browser.test."),
-);
+const isolated = isolatedTestFiles(import.meta.dirname, include, [
+  // Leaves a Shiki shared highlighter alive, so later files in the worker can't get Highlights.
+  "src/components/pullRequest/guide/GuideExcerpt.logic.test.ts",
+]).filter((file) => !file.includes(".browser.test."));
 const vmIncompatible = vmIncompatibleTestFiles(isolated, [
   // Expects the error Node's URL throws to be this context's TypeError.
   "src/environments/primary/bootstrap.test.ts",
@@ -37,18 +38,22 @@ const timeouts = { hookTimeout: 15_000, testTimeout: 15_000 };
 const unitSetupFiles = [
   "../../packages/shared/src/testing/longTempDir.ts",
   "../../packages/shared/src/testing/providerEnv.ts",
+  "../../packages/shared/src/testing/gitEnv.ts",
 ];
 // Heavy diff and pull request views used a whole 15 s budget waiting on clicks on loaded Calder
 // workers, and Playwright's click waits share that budget.
 const browserTimeouts = { hookTimeout: 30_000, testTimeout: 30_000 };
 
 // Vitest's fixed browser API port (63315) collides when two checkouts run browser tests at once.
-// Hash the checkout path like scripts/dev-runner.ts does, into 61000-64999 (above Linux's
-// ephemeral range).
-const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
+// Hash the checkout path like scripts/dev-runner.ts does, into 20000-23999. Stay below ephemeral
+// ranges: Windows reserves Hyper-V/WSL blocks there and EACCES is not skipped.
+const browserTestApiPort = 20_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
 // Playwright's downloaded browsers do not run on NixOS, so CI and NixOS hosts point this at a Nix
 // build of Playwright's headless shell (flake.nix). Unset, Playwright launches its own build.
 const chromiumExecutablePath = process.env.T3CODE_BROWSER_TEST_CHROMIUM?.trim() || undefined;
+// Hosts resolve generic families differently (srv-2 has DejaVu, tower a CJK monospace with
+// half-width Latin), so layout tests pass or fail by host. CI pins upstream CI's fonts (flake.nix).
+const chromiumFontconfig = process.env.T3CODE_BROWSER_TEST_FONTCONFIG?.trim() || undefined;
 
 const browserTestProject = {
   extends: true,
@@ -57,6 +62,9 @@ const browserTestProject = {
     include: [
       "vite-plus/test/browser",
       "@base-ui/react/autocomplete",
+      "@effect/vitest",
+      "@pierre/diffs/ssr",
+      "effect/testing",
       "saxes",
       "@betteroffice/docx/editor",
       "@betteroffice/docx/layout",
@@ -69,7 +77,7 @@ const browserTestProject = {
       "fast-xml-parser",
       "entities",
       "dompurify",
-      "heic-to/next",
+      "heic-to/csp",
       "jszip",
       "pdfjs-dist",
       "sql.js",
@@ -85,15 +93,18 @@ const browserTestProject = {
     browser: {
       enabled: true,
       headless: true,
-      provider: playwright(
-        chromiumExecutablePath === undefined
-          ? {}
-          : {
-              launchOptions: { executablePath: chromiumExecutablePath },
-              // The headless shell follows the host's locale; tests expect English number formats.
-              contextOptions: { locale: "en-US" },
-            },
-      ),
+      provider: playwright({
+        launchOptions: {
+          ...(chromiumExecutablePath === undefined
+            ? {}
+            : { executablePath: chromiumExecutablePath }),
+          ...(chromiumFontconfig === undefined
+            ? {}
+            : { env: { ...process.env, FONTCONFIG_FILE: chromiumFontconfig } }),
+        },
+        // The headless shell follows the host's locale; tests expect English number formats.
+        ...(chromiumExecutablePath === undefined ? {} : { contextOptions: { locale: "en-US" } }),
+      }),
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,
       // Sessions connect once dependency optimization finishes, which took over a minute

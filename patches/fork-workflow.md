@@ -37,13 +37,13 @@ merge conflicts easier to reason about.
   `apps/server/src/persistence/Migrations.ts` is authoritative. Append each new upstream migration at
   the next free fork id instead of adopting upstream's numbering. Every upstream migration from 033
   onward therefore runs under a different id (upstream 054, 055 and 056 run as 77, 78 and 79;
-  upstream 057 to 066 run as 82 to 91, 067 to 069 as 92 to 94, 070 to 072 as 96 to 98, and 073
-  to 081 as 100 to 108; fork-only migrations such as 95, 99 and 109 take the ids around them), and
-  some source filenames share a numeric prefix with a fork migration. Keep upstream's filenames and
-  point the fork's registry ids at them, so a sync never sees a rename as a delete. Upstream
-  migration tests and `apps/server/scripts/migrate-dev-db.test.ts` hardcode upstream ids; rewrite
-  them to the fork ids. `migrate-dev-db.ts` itself reads the registry, so its slot collision check
-  uses fork ids.
+  upstream 057 to 066 run as 82 to 91, 067 to 069 as 92 to 94, 070 to 072 as 96 to 98, 073 to
+  081 as 100 to 108, and 082 to 111 as 117 to 146, after fork 115 and 116; fork-only migrations
+  such as 95, 99 and 109 to 116 take the ids around them), and some source filenames share a
+  numeric prefix with a fork migration. Keep upstream's filenames and point the fork's registry
+  ids at them, so a sync never sees a rename as a delete. Upstream migration tests and
+  `apps/server/scripts/migrate-dev-db.test.ts` hardcode upstream ids; rewrite them to the fork
+  ids. `migrate-dev-db.ts` itself reads the registry, so its slot collision check uses fork ids.
 - `ORCHESTRATION_V2_MIGRATION_ID` in `Migrations.ts` holds the fork id of upstream's
   `OrchestrationV2` migration (78). `runMigrations` uses it where upstream uses
   `FIRST_V2_MIGRATION_ID` (55): it decides when to call `reconcileV2PreviewMigration` and
@@ -53,8 +53,8 @@ merge conflicts easier to reason about.
   did, so it does nothing on fork databases. Its upstream tests seed such preview ledgers, so the
   fork replaces them with one test that proves the reconcile is a no-op on a fork ledger. Move the
   constant with the migration if its id changes.
-- Upstream's `docs/internals/legacy-orchestration-migration.md` warns that the migrator compares
-  ids only, so a fork migration at an id upstream later assigns masks upstream's migration forever.
+- The migrator compares ids only, so a fork migration at an id upstream later assigns masks
+  upstream's migration forever: the ledger already records that id, and upstream's never runs.
   The fork's mapping avoids that by owning the whole id sequence. Fork databases only run fork
   builds, and each upstream migration takes the next free fork id, so the fork never reassigns an
   id to a different migration. The divergence warning in `runMigrations` compares the ledger with

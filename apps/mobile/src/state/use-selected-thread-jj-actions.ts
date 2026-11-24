@@ -26,6 +26,7 @@ export function useSelectedThreadJjActions() {
       }
       const environmentId = selectedThread.environmentId;
       const cwd = selectedThreadCwd;
+      const threadRef = { environmentId, threadId: selectedThread.id };
       setPendingConnectionError(null);
       const result = await vcsActionManager.track(
         appAtomRegistry,
@@ -41,13 +42,19 @@ export function useSelectedThreadJjActions() {
         const error = Cause.squash(result.cause);
         const message = error instanceof Error ? error.message : "jj action failed.";
         setPendingConnectionError(message);
-        showGitActionResult({ type: "error", title: "jj action failed", description: message });
+        showGitActionResult({
+          type: "error",
+          title: "jj action failed",
+          description: message,
+          threadRef,
+        });
         return null;
       }
       const conflicts = result.value.conflictedChanges.length;
       showGitActionResult({
         type: "success",
         title: result.value.summary,
+        threadRef,
         ...(conflicts > 0
           ? { description: `${conflicts} change${conflicts === 1 ? " has" : "s have"} conflicts` }
           : {}),

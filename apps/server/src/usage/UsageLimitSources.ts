@@ -2,12 +2,15 @@ import {
   UsageLimitSourceError,
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
+  type ProviderDriverKind,
   type ServerSettings,
   UsageLimitSourceConfig,
   settingsSecretLiteral,
+  type UsageLimitSourceAccount,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
+import { antigravityWindowLimitsModel, hubRoutes } from "@t3tools/shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -32,7 +35,8 @@ import * as ServerConfig from "../config.ts";
 import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
-import { makeCliproxyApi } from "./cliproxyApi.ts";
+import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
+import { makeCliproxyApi, type ListedAccount } from "./cliproxyApi.ts";
 import {
   measuredSpend,
   recordSpendSample,
@@ -70,6 +74,26 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
   return typeof config.managementKey === "string"
     ? "No management key configured."
     : "Could not read the management key from its secret provider.";
+}
+
+/** The account's last reading, when the same hub read it for the same login. */
+function lastReadingOf(
+  published: UsageLimitSourceSnapshot | undefined,
+  endpoint: string | undefined,
+  account: ListedAccount,
+): UsageLimitSourceAccount | undefined {
+  if (!published || published.endpoint !== endpoint) return undefined;
+  // Auth file names can be reused, so without a listed login the next one cannot be told apart.
+  if (account.email === undefined && account.workspaceId === undefined) return undefined;
+  return published.accounts.find(
+    (candidate) =>
+      candidate.id === account.id &&
+      candidate.driver === account.driver &&
+      // Fingerprinted Antigravity readings omit the listed identity, so they are never lent.
+      candidate.usageLimits.credentialFingerprint === undefined &&
+      candidate.email === account.email &&
+      candidate.workspaceId === account.workspaceId,
+  );
 }
 
 // Readings of each hub account window, kept across restarts so the measured pace survives deploys.
@@ -118,7 +142,19 @@ export const make = Effect.gen(function* () {
   ) {
     const now = yield* DateTime.now;
     const checkedAt = DateTime.formatIso(now);
-    const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
+    const url = URL.parse(config.url);
+    const base = {
+      id,
+      kind: config.kind,
+      label: sourceLabel(id, config),
+      ...(url && /^https?:$/.test(url.protocol)
+        ? {
+            origin: url.origin,
+            endpoint: `${url.origin}${url.pathname.replace(/(\/management\.html)?\/*$/i, "")}`,
+          }
+        : {}),
+      checkedAt,
+    } as const;
     const managementKey = yield* readManagementKey(config);
     if (managementKey.length === 0) {
       return { ...base, accounts: [], error: missingManagementKey(config) };
@@ -126,14 +162,16 @@ export const make = Effect.gen(function* () {
     // A failed account read keeps its last good reading, because the providers rate-limit
     // their quota endpoints (patches/hub-account-last-reading.md). A throttled account is
     // not read again before the time the provider named (patches/usage-limits-refresh.md).
-    const published = (yield* Ref.get(stateRef)).find((source) => source.id === id)?.accounts;
+    const published = (yield* Ref.get(stateRef)).find((source) => source.id === id);
     const nowMs = DateTime.toEpochMillis(now);
     const accounts = yield* api
-      .readAccounts({ url: config.url, managementKey }, (accountId) => {
-        const last = published?.find((candidate) => candidate.id === accountId);
-        return last && accountId !== fresh && isUsageLimitsThrottled(last.usageLimits, nowMs)
-          ? last
-          : undefined;
+      .readAccounts({ url: config.url, managementKey }, (account) => {
+        const last = lastReadingOf(published, base.endpoint, account);
+        if (!last || account.id === fresh || !isUsageLimitsThrottled(last.usageLimits, nowMs)) {
+          return undefined;
+        }
+        const { models: _, ...reading } = last;
+        return reading;
       })
       .pipe(Effect.result);
     if (accounts._tag === "Failure") {
@@ -143,17 +181,19 @@ export const make = Effect.gen(function* () {
     return {
       ...base,
       accounts: accounts.success.map((account) => {
-        const last = published?.find((candidate) => candidate.id === account.id);
         // An account that cannot sign in contributes no usable quota, so its last reading goes.
-        if (!last || account.signInRequired) return account;
+        if (account.signInRequired) return account;
+        const last = lastReadingOf(published, base.endpoint, account);
+        if (!last) return account;
         const usageLimits = resolveUsageLimitsAfterProbe({
           published: last.usageLimits,
           probed: account.usageLimits,
         });
-        // The whole account, since a failed read also loses the plan.
+        // The whole account, since a failed read also loses the plan; an unread model list
+        // stays unknown.
         return !usageLimits || usageLimits === account.usageLimits
           ? account
-          : { ...last, usageLimits };
+          : { ...last, usageLimits, models: account.models };
       }),
     };
   });
@@ -312,4 +352,66 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(UsageLimitSources, make).pipe(
   Layer.provide(SecretResolverLayer.layer),
+);
+
+/** A hub returns a usage limit only when every account it routes the model to is spent. */
+export function hubPoolResetAt(
+  sources: ReadonlyArray<UsageLimitSourceSnapshot>,
+  driver: ProviderDriverKind,
+  model: string | null,
+  now: number,
+): string | null {
+  let earliest: number | null = null;
+  const routes = hubRoutes(sources, driver, model);
+  for (const account of sources.flatMap((source) => source.accounts).filter(routes)) {
+    // An unread account may be the one still blocked, so its refill is unknown.
+    if (account.usageLimits.unavailable) return null;
+    const spent = account.usageLimits.windows.filter(
+      (window) =>
+        window.usedPercent >= 100 &&
+        windowLimitsModel(window, model) &&
+        (account.driver !== "antigravity" || antigravityWindowLimitsModel(window, model)),
+    );
+    if (spent.length === 0) return null;
+    const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
+    if (resets.some((reset) => !Number.isFinite(reset))) return null;
+    const recoversAt = Math.max(...resets);
+    if (recoversAt <= now) return null;
+    earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+  }
+  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
+}
+
+export class UsageLimitResetFallback extends Context.Reference<{
+  readonly resetAt: (
+    driver: ProviderDriverKind,
+    endpoint: string,
+    model: string | null,
+  ) => Effect.Effect<string | null>;
+}>("t3/usage/UsageLimitResetFallback", {
+  defaultValue: () => ({ resetAt: () => Effect.succeed(null) }),
+}) {}
+
+export const layerResetFallback = Layer.effect(
+  UsageLimitResetFallback,
+  Effect.gen(function* () {
+    const sources = yield* UsageLimitSources;
+    return {
+      resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (driver, endpoint, model) {
+        // Only the hub at the instance's endpoint serves its turns.
+        const atEndpoint = Effect.map(sources.current, (current) =>
+          current.filter((source) => source.origin === endpoint),
+        );
+        if ((yield* atEndpoint).length === 0) return null;
+        // The pool usually ran out after the last poll, so the cached accounts still show room.
+        yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
+        return hubPoolResetAt(
+          yield* atEndpoint,
+          driver,
+          model,
+          DateTime.toEpochMillis(yield* DateTime.now),
+        );
+      }),
+    };
+  }),
 );

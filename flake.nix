@@ -66,9 +66,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-PA2dT6NSgXbmm78skdmyoiN++w3OQUaVzdgJfIC5fm0=";
-            server = "sha256-dTnxfqNu2FlZ18Lifp+KUX7ujcLzgUZF+5gb5dbZB6o=";
-            runtime = "sha256-dTnxfqNu2FlZ18Lifp+KUX7ujcLzgUZF+5gb5dbZB6o=";
+            web = "sha256-DEjIhloNqX/EPlCigCy9WicGmcShNv4N6BCc/PjZcnY=";
+            server = "sha256-sSClpUaSIi/onexcfNXvC+5zv1Qft0sTfp6ueGSS3ws=";
+            runtime = "sha256-sSClpUaSIi/onexcfNXvC+5zv1Qft0sTfp6ueGSS3ws=";
           },
         }:
         let
@@ -84,6 +84,8 @@
             (lib.fileset.fileFilter (file: lib.hasSuffix ".patch" file.name) ./patches)
             ./apps/server/package.json
             ./apps/web/package.json
+            # Upstream installs patched packages such as @pierre/words from vendored tarballs.
+            (lib.fileset.fileFilter (file: lib.hasSuffix ".tgz" file.name) ./apps/web/deps)
             (lib.fileset.fileFilter (file: file.name == "package.json") ./packages)
           ];
           productionFiles =
@@ -97,8 +99,8 @@
                 && !lib.hasSuffix ".test.tsx" file.name
               )
             ) path;
-          # The web and server builds import every provider, secret-provider and source-control
-          # package except the test kits, and upstream keeps adding them.
+          # The web and server builds import every provider, secret-provider, source-control and
+          # issue-tracker package except the test kits, and upstream keeps adding them.
           integrationPackages = lib.fileset.unions (
             map (name: productionFiles (./packages + "/${name}")) (
               lib.filter (
@@ -107,6 +109,7 @@
                   lib.hasPrefix "provider-" name
                   || lib.hasPrefix "secret-provider-" name
                   || lib.hasPrefix "source-control-" name
+                  || lib.hasPrefix "issue-tracker-" name
                 )
                 && !lib.hasSuffix "-testing" name
               ) (lib.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./packages)))
@@ -129,6 +132,7 @@
               (productionFiles ./packages/shared)
               integrationPackages
               ./scripts/lib/public-config.ts
+              ./scripts/lib/tagged-source-version.ts
               ./scripts/lib/third-party-licenses.ts
               ./third-party-licenses.config.json
               ./third-party-licenses
@@ -157,6 +161,7 @@
               integrationPackages
               ./scripts/lib/cli-external-packages.ts
               ./scripts/lib/public-config.ts
+              ./scripts/lib/tagged-source-version.ts
             ];
           };
 
@@ -553,6 +558,16 @@
             in
             ''
               export T3CODE_BROWSER_TEST_CHROMIUM="$(echo ${browsers}/chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell)"
+              # Upstream CI's DejaVu first, so generic families resolve the same on every Calder host.
+              export T3CODE_BROWSER_TEST_FONTCONFIG="${
+                pkgs.makeFontsConf {
+                  fontDirectories = [
+                    pkgs.dejavu_fonts
+                    pkgs.noto-fonts-cjk-sans
+                    pkgs.noto-fonts-color-emoji
+                  ];
+                }
+              }"
             ''
           );
         in

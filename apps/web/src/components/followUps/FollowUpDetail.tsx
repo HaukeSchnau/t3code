@@ -24,6 +24,7 @@ import {
   MessageSquarePlusIcon,
 } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
+import { msg } from "gt-react";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useClientSettings } from "~/hooks/useSettings";
@@ -48,10 +49,10 @@ import { FollowUpProjectPicker } from "./FollowUpProjectPicker";
 import { useStartFollowUpThread } from "./useStartFollowUpThread";
 
 const LATER_COPY = {
-  title: "Move follow-up",
-  description: "Choose when this follow-up comes back to your inbox.",
-  durationLabel: "Back in",
-  submitLabel: "Move",
+  title: msg("Move follow-up"),
+  description: msg("Choose when this follow-up comes back to your inbox."),
+  durationLabel: msg("Back in"),
+  submitLabel: msg("Move", { $context: "verb" }),
 };
 
 function statusBadgeVariant(followUp: FollowUp) {

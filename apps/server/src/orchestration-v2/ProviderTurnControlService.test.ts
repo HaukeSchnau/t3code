@@ -1,8 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import {
+  EventId,
+  MessageId,
   type ModelSelection,
   NodeId,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
   ProjectId,
   ProviderDriverKind,
@@ -25,6 +29,8 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -187,6 +193,106 @@ function makeRuntime(input: {
   };
 }
 
+function layerProjectionStore(
+  getProviderControlContext: ProjectionStore.ProjectionStoreV2["Service"]["getProviderControlContext"],
+) {
+  return Layer.succeed(
+    ProjectionStore.ProjectionStoreV2,
+    ProjectionStore.ProjectionStoreV2.of({
+      apply: () => Effect.void,
+      getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
+      getLimitRecoveryWakeAt: () => Effect.die("unused getLimitRecoveryWakeAt"),
+      getOpenRemoteDelegatedTasks: Effect.die("unused getOpenRemoteDelegatedTasks"),
+      getAgentAwarenessSnapshot: () => Effect.die("unused awareness snapshot"),
+      getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
+      listActiveSubagentThreadIds: () => Effect.die("unused listActiveSubagentThreadIds"),
+      countThreads: () => Effect.die("unused countThreads"),
+      listActiveShellIndex: () => Effect.die("unused listActiveShellIndex"),
+      listActiveThreads: () => Effect.die("unused listActiveThreads"),
+      listOlderSettledThreads: () => Effect.die("unused listOlderSettledThreads"),
+      readShellSnapshot: () => Effect.die("unused readShellSnapshot"),
+      getThreadShell: () => Effect.die("unused getThreadShell"),
+      getThreadTitles: () => Effect.die("unused getThreadTitles"),
+      getThreadLinkMetadata: () => Effect.die("unused getThreadLinkMetadata"),
+      findGuestShareThreadId: () => Effect.die("unused findGuestShareThreadId"),
+      getThread: () => Effect.die("unused getThread"),
+      findThread: () => Effect.die("unused findThread"),
+      getSettlementCandidates: () => Effect.die("unused getSettlementCandidates"),
+      getThreadsWithPullRequests: () => Effect.die("unused getThreadsWithPullRequests"),
+      getThreadWorktreePaths: () => Effect.die("unused getThreadWorktreePaths"),
+      getThreadProjection: () => Effect.die("control effects must not load transcript"),
+      getTurnStartContext: () => Effect.die("unused"),
+      getTurnStartHistory: () => Effect.die("unused"),
+      getRuntimeRecoveryProjection: () => Effect.die("unused getRuntimeRecoveryProjection"),
+      getPlan: () => Effect.die("unused"),
+      hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
+      hasRunInterruptRequest: () => Effect.die("unused stop read"),
+      getRunProviderRecords: () => Effect.die("unused run provider read"),
+      getRunCardRecords: () => Effect.die("unused run card read"),
+      getThreadAttachmentIds: () => Effect.die("Unused attachment lookup"),
+      searchThread: () => Effect.die("unused"),
+      searchThreadStream: () => Stream.empty,
+      getThreadHistoryPage: () => Effect.die("unused"),
+      getTimelinePage: () => Effect.die("Unused timeline read"),
+      getMessageCount: () => Effect.die("unused message count"),
+      getTranscriptByteFloor: () => Effect.die("unused transcript byte floor"),
+      hasPendingDelegatedCompletion: () => Effect.die("unused hasPendingDelegatedCompletion"),
+      getSubagentCount: () => Effect.die("unused subagent count"),
+      getRunCount: () => Effect.die("unused run count"),
+      listAppOwnedChildThreadIds: () => Effect.die("unused listAppOwnedChildThreadIds"),
+      getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
+      getTurnItem: () => Effect.die("unused turn item read"),
+      getMessagesById: () => Effect.die("unused getMessagesById"),
+      getThreadRecords: () => Effect.die("unused record read"),
+      getRuntimeRequest: () => Effect.die("unused getRuntimeRequest"),
+      getRunningTurnContext: () => Effect.die("unused getRunningTurnContext"),
+      getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),
+      getRuntimeResponseContext: () => Effect.die("unused getRuntimeResponseContext"),
+      getPendingNativeUserInputs: () => Effect.die("unused getPendingNativeUserInputs"),
+      getProviderControlContext,
+      getCheckpointContext: () => Effect.die("not used"),
+      getCheckpointRollbackContext: () => Effect.die("unused rollback context"),
+      getCheckpointCaptureContext: () => Effect.die("not used"),
+      getRunMessage: () => Effect.die("not used"),
+      getDelegatedChildControls: () => Effect.die("not used"),
+      getRun: () => Effect.die("not used"),
+      getLatestUserReply: () => Effect.die("not used"),
+      isNodeStored: () => Effect.die("not used"),
+      canStartQueuedRun: () => Effect.die("not used"),
+      getHeldQueuedRuns: () => Effect.die("not used"),
+      getRecoveryThreadIds: () => Effect.die("unused getRecoveryThreadIds"),
+      getUnreadableThreadIds: () => Effect.die("unused getUnreadableThreadIds"),
+      getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+      getThreadSnapshotWindow: () => Effect.die("unused getThreadSnapshotWindow"),
+      getPullRequestSnapshot: () => Effect.die("unused getPullRequestSnapshot"),
+    }),
+  );
+}
+
+function layerSessions(
+  liveSessionId: ProviderSessionId,
+  runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
+) {
+  return Layer.succeed(
+    ProviderSessionManager.ProviderSessionManagerV2,
+    ProviderSessionManager.ProviderSessionManagerV2.of({
+      shutdown: Effect.void,
+      open: () => Effect.die("unused open"),
+      get: (providerSessionId) =>
+        Effect.succeed(providerSessionId === liveSessionId ? Option.some(runtime) : Option.none()),
+      isLive: (providerSessionId) => Effect.succeed(providerSessionId === liveSessionId),
+      close: () => Effect.void,
+      closeInstance: () => Effect.void,
+      release: () => Effect.void,
+      detach: () => Effect.void,
+      otherWorkingThreads: () => Effect.succeed([]),
+      releaseUnlessBusy: () => Effect.succeed(true),
+      forgetLoadedProviderThread: () => Effect.void,
+      subscribePromptSuggestion: () => Stream.empty,
+    }),
+  );
+}
+
 it.effect(
   "interrupts the historical session only for the exact committed restart replacement",
   () =>
@@ -232,102 +338,29 @@ it.effect(
             { discard: true },
           ),
       });
-      const layerProjection = Layer.succeed(
-        ProjectionStore.ProjectionStoreV2,
-        ProjectionStore.ProjectionStoreV2.of({
-          apply: () => Effect.void,
-          getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
-          getLimitRecoveryWakeAt: () => Effect.die("unused getLimitRecoveryWakeAt"),
-          getOpenRemoteDelegatedTasks: Effect.die("unused getOpenRemoteDelegatedTasks"),
-          getAgentAwarenessSnapshot: () => Effect.die("unused awareness snapshot"),
-          getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
-          listActiveSubagentThreadIds: () => Effect.die("unused listActiveSubagentThreadIds"),
-          countThreads: () => Effect.die("unused countThreads"),
-          listActiveShellIndex: () => Effect.die("unused listActiveShellIndex"),
-          listOlderSettledThreads: () => Effect.die("unused listOlderSettledThreads"),
-          readShellSnapshot: () => Effect.die("unused readShellSnapshot"),
-          getThreadShell: () => Effect.die("unused getThreadShell"),
-          getThreadTitles: () => Effect.die("unused getThreadTitles"),
-          getThreadLinkMetadata: () => Effect.die("unused getThreadLinkMetadata"),
-          findGuestShareThreadId: () => Effect.die("unused findGuestShareThreadId"),
-          getThread: () => Ref.get(projection).pipe(Effect.map((state) => state.thread)),
-          getSettlementCandidates: () => Effect.die("unused getSettlementCandidates"),
-          getThreadsWithPullRequests: () => Effect.die("unused getThreadsWithPullRequests"),
-          getThreadWorktreePaths: () => Effect.die("unused getThreadWorktreePaths"),
-          getThreadProjection: () => Effect.die("control effects must not load transcript"),
-          getTurnStartContext: () => Effect.die("unused"),
-          getTurnStartHistory: () => Effect.die("unused"),
-          getRuntimeRecoveryProjection: () => Effect.die("unused getRuntimeRecoveryProjection"),
-          getPlan: () => Effect.die("unused"),
-          hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
-          getThreadAttachmentIds: () => Effect.die("Unused attachment lookup"),
-          searchThread: () => Effect.die("unused"),
-          searchThreadStream: () => Stream.empty,
-          getThreadHistoryPage: () => Effect.die("unused"),
-          getTimelinePage: () => Effect.die("Unused timeline read"),
-          getMessageCount: () => Effect.die("unused message count"),
-          getSubagentCount: () => Effect.die("unused subagent count"),
-          listAppOwnedChildThreadIds: () => Effect.die("unused listAppOwnedChildThreadIds"),
-          getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
-          getTurnItem: () => Effect.die("unused turn item read"),
-          getMessagesById: () => Effect.die("unused getMessagesById"),
-          getThreadRecords: () => Effect.die("unused record read"),
-          getRuntimeRequest: () => Effect.die("unused getRuntimeRequest"),
-          getRunningTurnContext: () => Effect.die("unused getRunningTurnContext"),
-          getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),
-          getRuntimeResponseContext: () => Effect.die("unused getRuntimeResponseContext"),
-          getPendingNativeUserInputs: () => Effect.die("unused getPendingNativeUserInputs"),
-          getProviderControlContext: (_threadId, target) =>
-            Ref.get(projection).pipe(
-              Effect.map((current) => ({
-                providerThread: current.providerThreads.find(
-                  (thread) => thread.id === target.providerThreadId,
-                ),
-                providerTurn: current.providerTurns.find(
-                  (turn) => turn.id === target.providerTurnId,
-                ),
-                attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
-                message: undefined,
-                run: undefined,
-              })),
+      const layerProjection = layerProjectionStore((_threadId, target) =>
+        Ref.get(projection).pipe(
+          Effect.map((current) => ({
+            providerThread: current.providerThreads.find(
+              (thread) => thread.id === target.providerThreadId,
             ),
-          getCheckpointContext: () => Effect.die("not used"),
-          getCheckpointRollbackContext: () => Effect.die("unused rollback context"),
-          getCheckpointCaptureContext: () => Effect.die("not used"),
-          getRunMessage: () => Effect.die("not used"),
-          getRun: () => Effect.die("not used"),
-          getLatestUserReply: () => Effect.die("not used"),
-          isNodeStored: () => Effect.die("not used"),
-          canStartQueuedRun: () => Effect.die("not used"),
-          getHeldQueuedRuns: () => Effect.die("not used"),
-          getRecoveryThreadIds: () => Effect.die("unused getRecoveryThreadIds"),
-          getUnreadableThreadIds: () => Effect.die("unused getUnreadableThreadIds"),
-          getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
-          getThreadSnapshotWindow: () => Effect.die("unused getThreadSnapshotWindow"),
-          getPullRequestSnapshot: () => Effect.die("unused getPullRequestSnapshot"),
-        }),
+            providerTurn: current.providerTurns.find((turn) => turn.id === target.providerTurnId),
+            attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
+            message: undefined,
+            run: undefined,
+          })),
+        ),
       );
-      const layerSessionManager = Layer.succeed(
-        ProviderSessionManager.ProviderSessionManagerV2,
-        ProviderSessionManager.ProviderSessionManagerV2.of({
-          shutdown: Effect.void,
-          open: () => Effect.die("unused open"),
-          get: (providerSessionId) =>
-            Effect.succeed(
-              providerSessionId === oldSessionId ? Option.some(runtime) : Option.none(),
-            ),
-          isLive: (providerSessionId) => Effect.succeed(providerSessionId === oldSessionId),
-          close: () => Effect.void,
-          closeInstance: () => Effect.void,
-          release: () => Effect.void,
-          detach: () => Effect.void,
-          otherWorkingThreads: () => Effect.succeed([]),
-          releaseUnlessBusy: () => Effect.succeed(true),
-          subscribePromptSuggestion: () => Stream.empty,
-        }),
-      );
+      const layerSessionManager = layerSessions(oldSessionId, runtime);
       const layerControl = ProviderTurnControlService.layer.pipe(
-        Layer.provide(Layer.merge(layerProjection, layerSessionManager)),
+        Layer.provide(
+          Layer.mergeAll(
+            layerProjection,
+            layerSessionManager,
+            Layer.mock(EventSink.EventSinkV2)({}),
+            McpAppModelContext.layerEmpty,
+          ),
+        ),
       );
 
       const [ordinaryInterrupt, unrelatedRestart] = yield* Effect.gen(function* () {
@@ -377,10 +410,7 @@ it.effect(
     }),
 );
 
-it.effect.each([
-  { turnAtStop: "running", when: "after the provider reports its turn's end" },
-  { turnAtStop: "completed", when: "when its turn ended before Stop loaded it" },
-] as const)("Stop waits for the run's terminal $when", ({ turnAtStop }) =>
+it.effect("Stop waits for the run's terminal when its turn ended before Stop loaded it", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
     const threadId = ThreadId.make("thread:interrupt-terminal");
@@ -397,53 +427,46 @@ it.effect.each([
     });
     const projection = yield* Ref.make<OrchestrationV2ThreadProjection>({
       ...initial,
-      providerTurns: initial.providerTurns.map((turn) =>
-        turnAtStop === "running" ? turn : { ...turn, status: turnAtStop, completedAt: now },
-      ),
+      providerTurns: initial.providerTurns.map((turn) => ({
+        ...turn,
+        status: "completed" as const,
+        completedAt: now,
+      })),
       attempts: initial.attempts.map((attempt) => ({
         ...attempt,
         status: "running" as const,
         completedAt: null,
       })),
     });
-    const readsAfterTurnEnded = yield* Queue.unbounded<void>();
-    // The provider's update to its turn and the run's terminal are separate events.
-    const runtime = makeRuntime({
-      now,
-      providerSessionId,
-      interruptTurn: () =>
-        Ref.update(projection, (current) => ({
-          ...current,
-          providerTurns: current.providerTurns.map((turn) =>
-            turn.status === "running"
-              ? { ...turn, status: "failed" as const, completedAt: now }
-              : turn,
-          ),
-        })),
-    });
+    // Each pull is announced, so a second pull proves Stop judged the first event.
+    const pulls = yield* Queue.unbounded<void>();
+    const committed = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
     const layerControl = ProviderTurnControlService.layer.pipe(
       Layer.provide(
-        Layer.merge(
-          Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getProviderControlContext: (_threadId, target) =>
-              Ref.get(projection).pipe(
-                Effect.tap((current) =>
-                  current.providerTurns[0]?.status === "running"
-                    ? Effect.void
-                    : Queue.offer(readsAfterTurnEnded, undefined),
-                ),
-                Effect.map((current) => ({
-                  providerThread: current.providerThreads[0],
-                  providerTurn: current.providerTurns[0],
-                  attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
-                  message: undefined,
-                  run: undefined,
-                })),
+        Layer.mergeAll(
+          layerProjectionStore((_threadId, target) =>
+            Ref.get(projection).pipe(
+              Effect.map((current) => ({
+                providerThread: current.providerThreads[0],
+                providerTurn: current.providerTurns[0],
+                attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
+                message: undefined,
+                run: undefined,
+              })),
+            ),
+          ),
+          layerSessions(
+            providerSessionId,
+            makeRuntime({ now, providerSessionId, interruptTurn: () => Effect.void }),
+          ),
+          Layer.mock(EventSink.EventSinkV2)({
+            latestSequence: () => Effect.succeed(0),
+            stream: () =>
+              Stream.fromEffectRepeat(
+                Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(committed))),
               ),
           }),
-          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-            get: () => Effect.succeedSome(runtime),
-          }),
+          McpAppModelContext.layerEmpty,
         ),
       ),
     );
@@ -453,21 +476,109 @@ it.effect.each([
       const interrupting = yield* control
         .interrupt({ threadId, providerSessionId, providerThreadId, providerTurnId })
         .pipe(Effect.forkChild);
-      yield* Queue.take(readsAfterTurnEnded);
-      const afterFirstRead = yield* Effect.raceFirst(
-        Queue.take(readsAfterTurnEnded).pipe(Effect.as("still waiting" as const)),
-        Fiber.join(interrupting).pipe(Effect.as("returned" as const)),
-      );
-      assert.equal(afterFirstRead, "still waiting");
-      yield* Ref.update(projection, (current) => ({
-        ...current,
-        attempts: current.attempts.map((attempt) => ({
-          ...attempt,
-          status: "failed" as const,
-          completedAt: now,
-        })),
-      }));
+      yield* Queue.take(pulls);
+      assert.isUndefined(interrupting.pollUnsafe());
+      const [attempt] = (yield* Ref.get(projection)).attempts;
+      const settled = { ...attempt!, status: "failed" as const, completedAt: now };
+      yield* Ref.update(projection, (current) => ({ ...current, attempts: [settled] }));
+      yield* Queue.offer(committed, {
+        sequence: 1,
+        commandId: null,
+        event: {
+          id: EventId.make("event:interrupt-terminal:attempt"),
+          type: "run-attempt.updated",
+          threadId,
+          occurredAt: now,
+          payload: settled,
+        },
+      });
       yield* Fiber.join(interrupting);
     }).pipe(Effect.provide(layerControl));
+  }),
+);
+
+it.effect("steers a running turn with its sender and the thread's MCP app model context", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:steer-app-context");
+    const sessionId = ProviderSessionId.make("provider-session:steer-app-context");
+    const providerTurnId = ProviderTurnId.make("provider-turn:steer-app-context");
+    const attemptId = RunAttemptId.make("run-attempt:steer-app-context");
+    const providerThread = {
+      id: ProviderThreadId.make("provider-thread:steer-app-context"),
+      driver,
+      providerInstanceId,
+      providerSessionId: sessionId,
+    } as OrchestrationV2ProviderThread;
+    const projection = makeProjection({ now, threadId, providerThread, providerTurnId, attemptId });
+    const steered: Array<ProviderAdapter.ProviderAdapterV2SteerInput> = [];
+    const runtime = {
+      instanceId: providerInstanceId,
+      driver,
+      providerSessionId: sessionId,
+      steerTurn: (input: ProviderAdapter.ProviderAdapterV2SteerInput) =>
+        Effect.sync(() => void steered.push(input)),
+    } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
+    const layerControl = ProviderTurnControlService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerProjectionStore(() =>
+            Effect.succeed({
+              providerThread,
+              providerTurn: projection.providerTurns[0],
+              attempt: projection.attempts[0],
+              message: {
+                id: MessageId.make("message:steer-app-context"),
+                text: "What did the app report?",
+                attachments: [],
+                createdBy: "agent",
+                creationSource: "mcp",
+                senderThreadId: ThreadId.make("thread:steer-sender"),
+              } as unknown as NonNullable<
+                ProjectionStore.ProjectionProviderControlContext["message"]
+              >,
+              run: {
+                id: RunId.make("run:steer-app-context"),
+                status: "running",
+                activeAttemptId: attemptId,
+              } as OrchestrationV2Run,
+            }),
+          ),
+          layerSessions(sessionId, runtime),
+          Layer.mock(EventSink.EventSinkV2)({}),
+          Layer.mock(McpAppModelContext.McpAppModelContext)({
+            forThread: () =>
+              Effect.succeed([
+                {
+                  itemId: "turn-item:call-1",
+                  server: "tools",
+                  tool: "picker",
+                  text: "Pressed: blue",
+                },
+              ]),
+          }),
+        ),
+      ),
+    );
+
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      yield* control.steer({
+        threadId,
+        providerSessionId: sessionId,
+        providerThreadId: providerThread.id,
+        providerTurnId,
+        messageId: MessageId.make("message:steer-app-context"),
+      });
+    }).pipe(Effect.provide(layerControl));
+
+    assert.equal(steered.length, 1);
+    assert.equal(
+      steered[0]!.message.text,
+      '[T3 Code: the agent in T3 thread "thread:steer-sender" sent this message, not the user.]\n\nWhat did the app report?',
+    );
+    assert.deepEqual("appContext" in steered[0]! ? steered[0].appContext : undefined, [
+      { key: "mcp_app_turn-item_call-1", text: "Pressed: blue" },
+    ]);
   }),
 );

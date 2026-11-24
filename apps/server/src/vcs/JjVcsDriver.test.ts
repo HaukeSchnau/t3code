@@ -117,6 +117,34 @@ it.layer(DriverLayer)("jj checkpoints", (it) => {
       assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: after }));
     }),
   );
+
+  it.effect("checkpoints a clean working copy from its commit without another snapshot", () =>
+    Effect.gen(function* () {
+      const { checkpoints } = yield* VcsDriver.VcsDriver;
+      const cwd = yield* makeRepo(false);
+      const before = CheckpointRef.make("refs/t3/test/0");
+      const after = CheckpointRef.make("refs/t3/test/1");
+
+      const head = yield* checkpoints.resolveCleanHead(cwd);
+      assert.isNotNull(head);
+      yield* writeFile(cwd, "a.ts", "one\ntwo\n");
+      assert.isNull(yield* checkpoints.resolveCleanHead(cwd));
+      // Recorded after the edit, as a turn's baseline is once it needs one.
+      yield* checkpoints.captureHeadCheckpoint({ cwd, checkpointRef: before, head: head! });
+      yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: after });
+
+      const numstat = yield* checkpoints.diffCheckpoints({
+        cwd,
+        fromCheckpointRef: before,
+        toCheckpointRef: after,
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      assert.deepStrictEqual(parseTurnDiffFilesFromNumstat(numstat), [
+        { path: "a.ts", additions: 1, deletions: 0 },
+      ]);
+    }),
+  );
 });
 
 describe("VcsDriverRegistry with jj", () => {

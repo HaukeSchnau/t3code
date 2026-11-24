@@ -35,6 +35,7 @@ function connectionState(
     generation: 0,
     lastFailure: null,
     retryAt: null,
+    refusedRouteIds: [],
     ...overrides,
   };
 }

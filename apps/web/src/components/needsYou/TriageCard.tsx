@@ -15,7 +15,7 @@ import {
   type OrchestrationMessageContext,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/assistantInsights";
 import { projectScriptCwd } from "@t3tools/shared/projectScripts";
 import { useNavigate } from "@tanstack/react-router";
 import { AlarmClockIcon, ArrowUpRightIcon, MessageCircleOffIcon, SendIcon } from "lucide-react";

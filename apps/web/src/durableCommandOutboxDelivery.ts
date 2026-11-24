@@ -2,6 +2,10 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
+  AttachmentUploadError,
+  attachmentUploadError,
+} from "@t3tools/client-runtime/state/attachment-uploads";
+import {
   deletePendingAttachmentUpload,
   runAttachmentUploadCycle,
 } from "@t3tools/client-runtime/state/attachments";
@@ -24,6 +28,8 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { readFileAsDataUrl } from "./components/ChatView.logic";
 import { fileAttachmentCapabilityBlockReason } from "./components/chat/composerAttachmentFiles";
@@ -36,6 +42,7 @@ import { readPreparedConnection } from "./state/session";
 import { threadEnvironment } from "./state/threads";
 
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
+const isAttachmentUploadError = Schema.is(AttachmentUploadError);
 
 /** Uploads happen before the command is sent, so their failures never make it ambiguous. */
 function uploadFailure(error: unknown): CommandOutboxDeliveryError {
@@ -46,17 +53,19 @@ function uploadFailure(error: unknown): CommandOutboxDeliveryError {
   });
 }
 
-// @effect-diagnostics-next-line extendsNativeError:off - a rejection inside the upload Promise, never an Effect failure.
+// @effect-diagnostics-next-line extendsNativeError:off - a fetch rejection the upload cycle returns as a value.
 class UploadRejectedError extends Error {
   constructor(readonly status: number) {
     super(`The environment refused the upload (${status}).`);
   }
 }
 
-function postBlob(url: string, blob: Blob, mimeType: string) {
+function postBlob(url: string, blob: Blob, mimeType: string, signal: AbortSignal) {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
-  const done = fetch(url, {
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(abort, UPLOAD_TIMEOUT_MS);
+  return fetch(url, {
     method: "POST",
     headers: { "Content-Type": mimeType },
     body: blob,
@@ -65,8 +74,10 @@ function postBlob(url: string, blob: Blob, mimeType: string) {
     .then((response) => {
       if (!response.ok) throw new UploadRejectedError(response.status);
     })
-    .finally(() => window.clearTimeout(timeout));
-  return { done, abort: () => controller.abort() };
+    .finally(() => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+    });
 }
 
 async function uploadAttachment(
@@ -75,23 +86,29 @@ async function uploadAttachment(
   blob: Blob,
 ): Promise<string> {
   const mimeType = attachment.mimeType.toLowerCase();
-  const result = await runAttachmentUploadCycle({
-    registry: appAtomRegistry,
-    createUploadUrl: attachmentEnvironment.createUploadUrl,
-    remove: attachmentEnvironment.remove,
-    environmentId,
-    upload: {
-      ...(attachment.type === "file" ? { type: "file" as const } : {}),
-      name: attachment.name,
-      mimeType,
-      sizeBytes: blob.size,
-    },
-    resolveUploadUrl: (relativeUrl) => {
-      const connection = readPreparedConnection(environmentId);
-      return connection ? resolveAssetUrl(connection.httpBaseUrl, relativeUrl) : null;
-    },
-    transport: (url) => postBlob(url, blob, mimeType),
-  });
+  const result = await Effect.runPromise(
+    runAttachmentUploadCycle({
+      registry: appAtomRegistry,
+      createUploadUrl: attachmentEnvironment.createUploadUrl,
+      remove: attachmentEnvironment.remove,
+      environmentId,
+      upload: {
+        ...(attachment.type === "file" ? { type: "file" as const } : {}),
+        name: attachment.name,
+        mimeType,
+        sizeBytes: blob.size,
+      },
+      resolveUploadUrl: (relativeUrl) => {
+        const connection = readPreparedConnection(environmentId);
+        return connection ? resolveAssetUrl(connection.httpBaseUrl, relativeUrl) : null;
+      },
+      transport: (url) =>
+        Effect.tryPromise({
+          try: (signal) => postBlob(url, blob, mimeType, signal),
+          catch: attachmentUploadError,
+        }),
+    }),
+  );
   if (result.status === "uploaded") return result.attachmentId;
   if (result.attachmentId !== null) {
     deletePendingAttachmentUpload({
@@ -101,15 +118,16 @@ async function uploadAttachment(
       attachmentId: result.attachmentId,
     });
   }
-  if (result.status === "failed" && result.error instanceof UploadRejectedError) {
-    const status = result.error.status;
+  const rejected = isAttachmentUploadError(result.error) ? result.error.cause : null;
+  if (rejected instanceof UploadRejectedError) {
+    const status = rejected.status;
     const retryable = status === 408 || status === 429 || status >= 500;
     throw new CommandOutboxDeliveryError({
       classification: retryable ? "transient" : "permanent",
-      message: `'${attachment.name}' could not upload: ${result.error.message}`,
+      message: `'${attachment.name}' could not upload: ${rejected.message}`,
     });
   }
-  throw uploadFailure(result.status === "failed" ? result.error : "Upload cancelled");
+  throw uploadFailure(result.error);
 }
 
 function throwOnFailure(result: AtomCommandResult<unknown, unknown>): void {
