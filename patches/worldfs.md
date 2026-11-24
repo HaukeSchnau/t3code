@@ -26,13 +26,30 @@ control socket and the rules. In short:
 - The Linux Release ships the binary (`nix/worldfs.nix`, a payload in `flake.nix`). Infra runs it
   as the `worldfs` user unit and owns the machine cache.
 
-This PR ships the daemon alone. agent-exec builds the thread namespaces from `binds` (PR 3), and
-T3 registers thread worlds, installs the checkout hook and shows unpushed work (PR 4).
+agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.py`):
+
+- `agent-exec world ROOT --thread KEY --world W --path P [--layout JSON]` registers a thread
+  world. It is an isolated workspace whose files come from worldfs: same private home, network and
+  process namespace, one holder per thread. The holder's pid registers the thread with the daemon,
+  so the holder's user namespace is the thread key.
+- Every launch registers again (a restarted holder moves the thread), applies the daemon's `binds`
+  in order with bwrap's default slave propagation, and runs `agent-exec world-sync` as the first
+  command in the new namespace, which calls `sync` before it execs the real command.
+- The world's threads share one pnpm store and keep agent-exec's `clone-or-copy` import, so
+  `node_modules` in a checkout are reflinks that an edit can't push into the store.
+- `retire ROOT --remove-checkout` stops the thread's processes and calls `teardown`. It refuses,
+  and keeps everything, while the daemon reports work no remote has or ROOT holds files outside
+  the thread's checkouts (the daemon's `status`). A key is torn down only once the daemon has
+  accepted it for this ROOT. It keeps the private home, so a thread resumed in the same ROOT
+  keeps its provider sessions.
+
+T3 creates thread worlds, calls `status` and the hook's `checkout` on the socket, and shows
+unpushed work (PR 4).
 
 ## Upstream touch points
 
-None in upstream-owned code: `native/worldfs`, `nix/worldfs.nix`, the payload and package in
-`flake.nix`, and the generated package list in `.calder/flake.ts`.
+None in upstream-owned code: `native/worldfs`, `native/agent-exec`, `nix/worldfs.nix`, the payload
+and package in `flake.nix`, and the generated package list in `.calder/flake.ts`.
 
 ## What worlds replace later
 

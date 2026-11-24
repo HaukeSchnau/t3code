@@ -61,7 +61,7 @@ pkgs.stdenvNoCC.mkDerivation {
   checkPhase = "python3 -B -m unittest discover -p 'test_*.py'";
   installPhase = ''
     mkdir -p $out/lib $out/bin
-    cp agent_exec.py capabilities.py workspaces.py project_files.py projects.py tool_environments.py devenv_environment.py $out/lib/
+    cp agent_exec.py capabilities.py workspaces.py worlds.py project_files.py projects.py tool_environments.py devenv_environment.py $out/lib/
     makeWrapper ${python}/bin/python3 $out/bin/agent-exec \
       --add-flags $out/lib/agent_exec.py \
       --set AGENT_EXEC_LAUNCHER $out/bin/agent-exec \
