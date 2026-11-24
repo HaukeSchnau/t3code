@@ -88,7 +88,9 @@ func inoFor(parts ...string) uint64 {
 const adminLinkDir = "/run/worldfs/admin"
 
 func loadTree(world, name, mirror, commit string) (*tree, error) {
-	ct, err := runGit(mirror, nil, "show", "-s", "--format=%ct", commit)
+	// Not `git show -s`: it still detects renames, which reads parent blobs
+	// the blobless mirror lacks.
+	ct, err := runGit(mirror, nil, "log", "-1", "--format=%ct", commit)
 	if err != nil {
 		return nil, err
 	}
