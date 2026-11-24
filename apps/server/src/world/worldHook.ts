@@ -12,7 +12,9 @@ type Token = { readonly word: string } | { readonly op: string };
 const OPERATORS = ["&&", "||", ";", "|", "&", "\n", "(", ")"];
 
 /** Words and control operators, with quotes removed and quoted operators kept as text. */
-function tokenize(command: string): Token[] {
+function tokenize(source: string): Token[] {
+  // Line continuations go first, as in Bash, so `$\<newline>(` still reads as `$(`.
+  const command = source.replaceAll("\\\n", "");
   const tokens: Token[] = [];
   let word: string | null = null;
   const flush = () => {

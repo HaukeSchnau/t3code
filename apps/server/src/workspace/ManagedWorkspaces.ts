@@ -447,7 +447,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(() =>
           fail(
             "ManagedWorkspaces.delete",
-            "This thread world is not registered and still holds files, so they were kept. Only empty folders in it were removed.",
+            "This thread world is not registered and is not an empty folder, so its contents were kept.",
           ),
         ),
       );
