@@ -211,8 +211,8 @@ different permissions.
 ### Balance new threads across machines
 
 Auto balance starts each new thread on whichever linked machine has the most room for another
-agent. A thread in a repository goes only to a machine that has a project for that repository;
-a Scratch thread can go to any of them. It needs
+agent. A thread in a repository goes to a machine that has a project for that repository, or to
+one that can clone it first; a Scratch thread can go to any of them. It needs
 [Linked environments](#link-another-environment) between the machines: a machine places threads on the
 machines it links to.
 
@@ -226,7 +226,12 @@ Placement scores each machine by how many more agents fit, counting free memory,
 to the agents' systemd slice on Linux, idle CPU and the agent limit, and multiplies that by the
 machine's preference. It skips a machine under memory pressure (Linux PSI of 20% or more, or a
 macOS pressure level of warning or worse). A world thread only goes to a Linux machine that
-serves that world, and a project thread prefers a machine that already has the repository.
+serves that world, and a project thread prefers a machine that already has the repository. A
+machine without it clones the repository first, borrowing objects from its worlds cache when it
+has one, and copies the project's git-ignored env files such as `.env` from the machine you
+started on. That takes a link with full access and a launch that may clone: yours from a session
+that may write source control, or an agent's at full access in the default interaction mode. Otherwise Auto uses only machines
+that already have the repository.
 
 Choose **Auto** in the composer's machine picker to see where the thread would start, such as
 **Auto → dev-hauke**. Once sent, the thread header shows where it runs and why; select it to see

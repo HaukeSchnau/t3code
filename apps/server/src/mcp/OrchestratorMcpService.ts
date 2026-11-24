@@ -23,6 +23,7 @@ import {
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpDelegateTaskInput,
   PLACEMENT_AUTO_ENVIRONMENT,
+  PlacementError,
   type OrchestratorMcpDelegateTaskResult,
   type OrchestratorMcpDeleteScheduledTaskInput,
   type OrchestratorMcpRequestSecretInput,
@@ -143,6 +144,7 @@ import { assertTargetWithinLimits, isLiveCallerShell, threadNotFound } from "./t
 import { WITHHELD, withoutWebhookUrlToken } from "../scheduledTasks/webhookUrlToken.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import { assertNotLinked } from "./linkOrigin.ts";
 import * as Placement from "../placement/Placement.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 
@@ -1520,7 +1522,18 @@ const make = Effect.gen(function* () {
     ) {
       return here;
     }
-    const { parent } = yield* loadThreadCaller(callerScope, "delegate_task");
+    const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
+    // Work a fenced link started never uses this environment's links, so it stays here.
+    const fenced = yield* assertNotLinked(
+      { scope, caller: parent.thread },
+      "use this environment's links",
+    ).pipe(Effect.isFailure);
+    if (fenced) return here;
+    // The turn that asked; once it stops, its files stay here.
+    const invokingRun =
+      (yield* threadManagement
+        .getThreadShell(parent.thread.id)
+        .pipe(Effect.orElseSucceed(() => null)))?.activeRunId ?? null;
     const choice = yield* placement.value
       .decide(
         {
@@ -1529,6 +1542,7 @@ const make = Effect.gen(function* () {
           workspaceStrategy: { type: "root" },
           hasAttachments: false,
           hasContext: false,
+          mayClone: Placement.limitsMayClone(parent.thread),
         },
         input.clientRequestId === undefined
           ? undefined
@@ -1536,13 +1550,38 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
     if (choice._tag === "Here") return here;
-    if (!("projectId" in choice.target)) {
-      // A remote task needs a project there; a scratch task stays here.
-      return here;
+    // A host without the repository clones it first.
+    const placedTarget = yield* placement.value
+      .prepareTarget(
+        choice,
+        // The parent's modes as they are when the files would leave this machine.
+        // Only a parent still running the turn that asked may send its files.
+        placement.value.runIsLive(invokingRun).pipe(
+          Effect.flatMap((live) =>
+            live
+              ? threadManagement.getThreadShell(parent.thread.id).pipe(
+                  Effect.mapError(
+                    () => new PlacementError({ message: "Could not read the calling thread." }),
+                  ),
+                  Effect.filterOrFail(
+                    (shell): shell is NonNullable<typeof shell> => shell !== null,
+                    () => new PlacementError({ message: "The calling thread is gone." }),
+                  ),
+                )
+              : Effect.fail(new PlacementError({ message: "The calling thread stopped." })),
+          ),
+        ),
+      )
+      .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
+    // A remote task needs a project there; a scratch task stays here.
+    if (!("projectId" in placedTarget)) return here;
+    // The clone can take minutes; the task belongs to the turn that asked, not a later one.
+    if (!(yield* placement.value.runIsLive(invokingRun))) {
+      return yield* failure("parent_not_active", "The turn that asked for this task stopped.");
     }
     return {
       ...input,
-      target: { ...rest, environmentId: choice.environmentId, projectId: choice.target.projectId },
+      target: { ...rest, environmentId: choice.environmentId, projectId: placedTarget.projectId },
     };
   });
 
