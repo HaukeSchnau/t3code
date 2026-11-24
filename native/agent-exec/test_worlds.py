@@ -161,21 +161,27 @@ class ThreadWorldTests(unittest.TestCase):
         self.daemon.results["status"] = {"repos": [
             {"repo": "example.com/x/a", "dir": str(self.home / "World/example.com/x/a"), "state": "checked-out"},
             {"repo": "example.com/x/b", "dir": str(self.home / "World/example.com/x/b"), "state": "view"},
+            {"repo": "example.com/x/d", "dir": str(self.home / "World/example.com/x/d"), "state": "view"},
         ]}
         for directory in ["example.com/x/a", "example.com/x/b", "Other/c", "empty/nested", "locked"]:
             (root / directory).mkdir(parents=True)
         (root / "example.com/x/a/README.md").write_text("checked out")
         (root / "notes.md").write_text("written at the top of the world")
         (root / "example.com/x/b/stray").write_text("under a repo the thread never checked out")
+        # The daemon's admin worktree registration writes this into a viewed repo's directory.
+        (root / "example.com/x/b/.git").write_text("gitdir: /cache/w/mirrors/example.com/x/b.git/worktrees/b1\n")
+        (root / "Other/c/.git").write_text("gitdir: not the daemon's, c was never touched\n")
+        (root / "example.com/x/d").mkdir()
+        (root / "example.com/x/d/.git").symlink_to(root / "notes.md")
         (root / "locked/file").write_text("x")
         (root / "locked").chmod(0)
         self.addCleanup(os.system, f"chmod -R u+rwx {root} 2>/dev/null")
-        with self.assertRaisesRegex(worlds.Refused, "outside its checkouts: example.com/x/b/stray, locked, notes.md"):
+        with self.assertRaisesRegex(worlds.Refused, "outside its checkouts: Other/c/.git, example.com/x/b/stray, example.com/x/d/.git, locked, notes.md$"):
             worlds.teardown(runtime, record)
         self.assertNotIn("teardown", self.daemon.methods())
 
         (root / "locked").chmod(0o700)
-        for name in ["notes.md", "example.com/x/b/stray", "locked/file"]:
+        for name in ["notes.md", "example.com/x/b/stray", "locked/file", "Other/c/.git", "example.com/x/b/.git", "example.com/x/d/.git"]:
             (root / name).unlink()
         self.daemon.refusals["teardown"] = ("work", "thread t3-a holds work no remote has: example.com/x/a")
         with self.assertRaisesRegex(worlds.Refused, "holds work no remote has"):
