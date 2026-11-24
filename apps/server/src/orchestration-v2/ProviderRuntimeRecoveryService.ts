@@ -214,7 +214,14 @@ export const make = Effect.gen(function* () {
     ) {
       const now = yield* DateTime.now;
       let runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
+      const waitingForRoom = new Set<string>();
       for (const run of nonterminalRuns(projection)) {
+        // A placed thread waiting for room has started nothing yet; it waits again after a
+        // restart (patches/fleet-placement.md), with its workspace preparation still pending.
+        if (run.status === "preparing" && projection.thread.placement?.waitingSince != null) {
+          waitingForRoom.add(run.id);
+          continue;
+        }
         if (run.status === "waiting") {
           const checkpointEffects = yield* outbox
             .listByCommandId(CommandId.make(`command:effect:checkpoint.capture:${run.id}`))
@@ -661,7 +668,10 @@ export const make = Effect.gen(function* () {
       const recoveredNonterminalRunIds = new Set(runs.map((run) => run.id));
       const cancelledStaleNodeIds = new Set<string>();
       for (const item of projection.turnItems ?? []) {
-        if (item.runId !== null && recoveredNonterminalRunIds.has(item.runId)) {
+        if (
+          item.runId !== null &&
+          (recoveredNonterminalRunIds.has(item.runId) || waitingForRoom.has(item.runId))
+        ) {
           continue;
         }
         if (!isBackgroundCapableTurnItemType(item.type)) {

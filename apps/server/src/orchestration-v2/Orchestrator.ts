@@ -3262,6 +3262,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.linkOrigin === undefined || command.delegatedFrom === undefined
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
+      ...(command.placement === undefined ? {} : { placement: command.placement }),
       lineage: {
         parentThreadId: null,
         relationshipToParent: null,
@@ -4254,6 +4255,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            ...(command.placementWaitEnded === true && thread.placement !== undefined
+              ? { placement: { ...thread.placement, waitingSince: null } }
+              : {}),
+            ...(command.placement === undefined ? {} : { placement: command.placement }),
             ...(command.linkedPullRequest === undefined
               ? {}
               : {

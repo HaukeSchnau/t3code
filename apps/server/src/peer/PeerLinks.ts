@@ -93,6 +93,8 @@ export class PeerLinks extends Context.Service<
     readonly enabled: Effect.Effect<boolean>;
     readonly link: (input: PeerLinkCreateInput) => Effect.Effect<PeerLink, PeerLinkError>;
     readonly list: Effect.Effect<ReadonlyArray<PeerLinkSummary>, PeerLinkError>;
+    /** The stored links, without asking any peer whether it answers. */
+    readonly stored: Effect.Effect<ReadonlyArray<PeerLink>, PeerLinkError>;
     /** The stored link, without asking the peer whether it answers. */
     readonly get: (
       environmentId: EnvironmentId,
@@ -589,6 +591,10 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const stored: PeerLinks["Service"]["stored"] = readRows.pipe(
+    Effect.flatMap((rows) => Effect.forEach(rows, toLink)),
+  );
+
   const get: PeerLinks["Service"]["get"] = (environmentId) =>
     readRow(environmentId).pipe(
       Effect.flatMap(
@@ -693,6 +699,7 @@ const make = Effect.gen(function* () {
     enabled,
     link,
     list,
+    stored,
     get,
     unlink,
     resolve,

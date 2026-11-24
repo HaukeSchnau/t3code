@@ -15,6 +15,7 @@ import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
   OmittedWhenNull,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -1361,6 +1362,10 @@ export const ServerSettings = Schema.Struct({
   placementWeight: Schema.NullOr(PlacementWeight).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // The most agents placement starts here at once; null leaves it to memory and CPU.
+  placementAgentLimit: Schema.NullOr(PositiveInt).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1803,6 +1808,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({ provider: ProviderInstanceId, modelOrder: Schema.Array(TrimmedString) }),
   ),
   placementWeight: Schema.optionalKey(Schema.NullOr(PlacementWeight)),
+  placementAgentLimit: Schema.optionalKey(Schema.NullOr(PositiveInt)),
   // Applied under the settings service's write lock, only while still unset.
   migratePlacementWeight: Schema.optionalKey(PlacementWeight),
   favorites: Schema.optionalKey(ModelFavorites),

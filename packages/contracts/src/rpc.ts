@@ -273,6 +273,7 @@ import {
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
+  OrchestrationV2ThreadLaunchInput,
 } from "./orchestrationV2.ts";
 import {
   ProjectCreateNewInput,
@@ -382,6 +383,13 @@ import {
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
+import {
+  PlacementError,
+  PlacementLaunchResult,
+  PlacementPreviewInput,
+  PlacementPreviewResult,
+  PlacementStartNowInput,
+} from "./placement.ts";
 import {
   HostResourcesSnapshot,
   ResourceTelemetryHistory,
@@ -594,6 +602,9 @@ export const WS_METHODS = {
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
+  placementPreview: "placement.preview",
+  placementLaunch: "placement.launch",
+  placementStartNow: "placement.startNow",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1040,6 +1051,28 @@ const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, 
   payload: Schema.Struct({}),
   success: HostResourcesSnapshot,
   error: EnvironmentAuthorizationError,
+});
+
+const WsPlacementPreviewRpc = Rpc.make(WS_METHODS.placementPreview, {
+  payload: PlacementPreviewInput,
+  success: PlacementPreviewResult,
+  error: Schema.Union([PlacementError, EnvironmentAuthorizationError]),
+});
+
+const WsPlacementLaunchRpc = Rpc.make(WS_METHODS.placementLaunch, {
+  payload: OrchestrationV2ThreadLaunchInput,
+  success: PlacementLaunchResult,
+  error: Schema.Union([
+    PlacementError,
+    OrchestrationV2ThreadLaunchError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsPlacementStartNowRpc = Rpc.make(WS_METHODS.placementStartNow, {
+  payload: PlacementStartNowInput,
+  success: Schema.Void,
+  error: Schema.Union([PlacementError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
@@ -2280,6 +2313,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
+  WsPlacementPreviewRpc,
+  WsPlacementLaunchRpc,
+  WsPlacementStartNowRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

@@ -16,6 +16,7 @@ import {
   type ChatAttachment,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
   GitCommandError,
   MessageId,
   ProjectId,
@@ -50,6 +51,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
+import * as LocalPlacement from "../placement/LocalPlacement.ts";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -142,6 +144,7 @@ interface HarnessOptions {
   readonly beforePreparationCheck?: () => Effect.Effect<void>;
   /** Runs before the launch reads whether its run still needs preparation. */
   readonly beforeLaunchCheck?: () => Effect.Effect<void>;
+  readonly localPlacement?: Partial<LocalPlacement.LocalPlacement["Service"]>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -245,6 +248,9 @@ function makeHarness(options: HarnessOptions = {}) {
       checkCopy: () => Effect.void,
       ...options.managedWorkspaces,
     }),
+    options.localPlacement === undefined
+      ? Layer.empty
+      : Layer.mock(LocalPlacement.LocalPlacement)(options.localPlacement),
     options.managedFolders ??
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -997,6 +1003,157 @@ const preparationSettled = (threadId: ThreadId) =>
     );
     return yield* threads.getThreadProjection(threadId);
   });
+
+it.effect("holds a placed launch's workspace until its machine has room", () => {
+  return Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const room = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      localPlacement: {
+        admit: (placement) => Effect.succeed({ placement, release: Effect.void }),
+        awaitRoom: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(room))),
+      },
+    });
+    return yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const decidedAt = "2026-11-24T12:00:00.000Z";
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:waiting",
+          thread: "thread:launch:waiting",
+          message: "Build the feature",
+          workspace: worktreeStrategy,
+        }),
+        placement: {
+          decidedBy: { environmentId: EnvironmentId.make("srv-1"), label: "srv-1" },
+          environmentId: EnvironmentId.make("dev-hauke"),
+          label: "dev-hauke",
+          reason: "no machine has room",
+          candidates: [],
+          decidedAt,
+          waitingSince: decidedAt,
+        },
+      });
+      yield* Deferred.await(entered);
+      const waiting = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(waiting.runs[0]?.status, "preparing");
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      assert.deepEqual(waiting.thread.placement?.waitingSince, decidedAt);
+
+      yield* Deferred.succeed(room, undefined);
+      const started = yield* preparationSettled(launched.threadId);
+      assert.equal(started.runs[0]?.status, "starting");
+      assert.equal(harness.createWorktree.mock.calls.length, 1);
+
+      yield* threads.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("command:launch:waiting:ended"),
+        threadId: launched.threadId,
+        placementWaitEnded: true,
+      });
+      const shell = yield* threads.getThreadShell(launched.threadId);
+      assert.equal(shell?.placement?.waitingSince, null);
+      assert.equal(shell?.placement?.label, "dev-hauke");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+it.effect("waits when a retried launch finds no room that its first attempt had", () => {
+  return Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      localPlacement: {
+        admit: (placement) => Effect.succeed({ placement, release: Effect.void }),
+        awaitRoom: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+      },
+    });
+    return yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const decidedAt = "2026-11-24T12:00:00.000Z";
+      const placement = {
+        decidedBy: { environmentId: EnvironmentId.make("srv-1"), label: "srv-1" },
+        environmentId: EnvironmentId.make("dev-hauke"),
+        label: "dev-hauke",
+        reason: "1 free agent slot",
+        candidates: [],
+        decidedAt,
+        waitingSince: null,
+      };
+      const input = launchInput({
+        command: "command:launch:retried",
+        thread: "thread:launch:retried",
+        message: "Build the feature",
+        workspace: worktreeStrategy,
+      });
+      // The first attempt created the thread with room, then failed before its message.
+      const { initialMessage: _message, ...firstAttempt } = input;
+      yield* launches.launch({ ...firstAttempt, placement });
+      const retried = yield* launches.launch({
+        ...input,
+        placement: { ...placement, waitingSince: decidedAt },
+      });
+      yield* Deferred.await(entered);
+      const shell = yield* threads.getThreadShell(retried.threadId);
+      assert.equal(shell?.placement?.waitingSince, decidedAt);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+it.effect("waits when a launch into an empty draft finds no room", () => {
+  return Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      localPlacement: {
+        admit: (placement) => Effect.succeed({ placement, release: Effect.void }),
+        awaitRoom: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+      },
+    });
+    return yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const decidedAt = "2026-11-24T12:00:00.000Z";
+      const threadId = ThreadId.make("thread:launch:draft-waits");
+      yield* threads.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("command:create:draft-waits"),
+        threadId,
+        projectId,
+        title: "Draft",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:draft-waits",
+          thread: threadId,
+          message: "Build the feature",
+          workspace: worktreeStrategy,
+        }),
+        reuseExistingThread: true,
+        placement: {
+          decidedBy: { environmentId: EnvironmentId.make("srv-1"), label: "srv-1" },
+          environmentId: EnvironmentId.make("dev-hauke"),
+          label: "dev-hauke",
+          reason: "no machine has room",
+          candidates: [],
+          decidedAt,
+          waitingSince: decidedAt,
+        },
+      });
+      yield* Deferred.await(entered);
+      const shell = yield* threads.getThreadShell(threadId);
+      assert.equal(shell?.placement?.waitingSince, decidedAt);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
 
 function scheduledTaskInput(id: string, targetProjectId: ProjectId) {
   return {

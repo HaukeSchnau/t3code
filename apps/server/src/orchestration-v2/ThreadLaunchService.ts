@@ -20,6 +20,7 @@ import {
   type RuntimeMode,
   type ScheduledTaskId,
   ThreadId,
+  type ThreadPlacement,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -45,6 +46,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
+import * as LocalPlacement from "../placement/LocalPlacement.ts";
 import type { ManagedWorkspaceError } from "../workspace/WorkspaceCommand.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -107,11 +109,18 @@ export interface ThreadLaunchInput {
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
+  /** Where placement put the thread; one that waits for room starts once there is some. */
+  readonly placement?: ThreadPlacement;
   /**
    * Completed when the launch's background workspace preparation ends: fails with its error or
    * its cancellation, and succeeds at once when nothing is left to prepare.
    */
   readonly preparation?: Deferred.Deferred<void, string>;
+}
+
+/** One worker's hold on preparing a run, or a launch without one; only it releases the hold. */
+interface PreparationOwner {
+  readonly key: string;
 }
 
 type PreparationInput = Pick<
@@ -229,8 +238,12 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
   const managedWorkspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
+  // Optional so launch tests build without placement; there nothing is placed to wait.
+  const localPlacement = yield* Effect.serviceOption(LocalPlacement.LocalPlacement);
   const preparationScope = yield* Scope.make("sequential");
-  const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
+  // Keyed by run where there is one, so a replayed launch and a restart's resume share it.
+  // Each reservation names its worker, so a finished worker never frees a retry's reservation.
+  const scheduledLaunches = yield* Ref.make<ReadonlyMap<string, PreparationOwner>>(new Map());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
 
   const mapError =
@@ -858,18 +871,24 @@ const make = Effect.gen(function* () {
             ),
           );
 
-  const reservePreparation = (commandId: CommandId) =>
-    Ref.modify(scheduledLaunches, (scheduled) => {
-      if (scheduled.has(commandId)) return [false, scheduled] as const;
-      const next = new Set(scheduled);
-      next.add(commandId);
-      return [true, next] as const;
-    });
+  const reservePreparation = (commandId: CommandId, runId: RunId | null) =>
+    Ref.modify(
+      scheduledLaunches,
+      (
+        scheduled: ReadonlyMap<string, PreparationOwner>,
+      ): readonly [PreparationOwner | undefined, ReadonlyMap<string, PreparationOwner>] => {
+        const key = runId ?? commandId;
+        if (scheduled.has(key)) return [undefined, scheduled];
+        const owner: PreparationOwner = { key };
+        return [owner, new Map(scheduled).set(key, owner)];
+      },
+    );
 
-  const releasePreparation = (commandId: CommandId) =>
+  const releasePreparation = (owner: PreparationOwner) =>
     Ref.update(scheduledLaunches, (scheduled) => {
-      const next = new Set(scheduled);
-      next.delete(commandId);
+      if (scheduled.get(owner.key) !== owner) return scheduled;
+      const next = new Map(scheduled);
+      next.delete(owner.key);
       return next;
     });
 
@@ -877,12 +896,46 @@ const make = Effect.gen(function* () {
     input: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
+    owner: PreparationOwner,
   ) {
+    // A shutdown that interrupts a wait for room leaves the run waiting, to resume after it.
+    const waitingForRoom = yield* Ref.make(false);
+    const endWait = threads
+      .dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`${input.commandId}:wait-ended`),
+        threadId,
+        placementWaitEnded: true,
+      })
+      .pipe(Effect.ignoreCause({ log: true }));
     const preparation = Effect.gen(function* () {
-      const prepare = prepareInBackground(input, threadId, runId);
+      const stampedWait =
+        runId === null
+          ? null
+          : ((yield* threads.getThreadShell(threadId))?.placement?.waitingSince ?? null);
+      // Only the launch's own first run waits; a stale stamp never holds a later message.
+      const waitingSince =
+        stampedWait === null || runId === null
+          ? null
+          : (yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] })).runs.find(
+                (run) => run.id === runId,
+              )?.ordinal === 1
+            ? stampedWait
+            : null;
+      if (stampedWait !== null && waitingSince === null) yield* endWait;
+      // A placed thread that waits for room prepares its workspace once it may start.
+      const prepare =
+        waitingSince === null || Option.isNone(localPlacement)
+          ? prepareInBackground(input, threadId, runId)
+          : Ref.set(waitingForRoom, true).pipe(
+              Effect.andThen(localPlacement.value.awaitRoom(threadId, Date.parse(waitingSince))),
+              Effect.andThen(Ref.set(waitingForRoom, false)),
+              Effect.andThen(prepareInBackground(input, threadId, runId)),
+            );
       if (
         runId === null ||
-        (input.workspaceStrategy.type !== "worktree" &&
+        (waitingSince === null &&
+          input.workspaceStrategy.type !== "worktree" &&
           input.workspaceStrategy.type !== "workspace" &&
           input.reusedWorktree === undefined)
       ) {
@@ -892,6 +945,7 @@ const make = Effect.gen(function* () {
       const projection = yield* threads.getThreadRecords(threadId, ["runs"]);
       const status = projection.runs.find((run) => run.id === runId)?.status;
       if (status === "interrupted" || status === "cancelled") {
+        if (waitingSince !== null) yield* endWait;
         // The run is terminal, so skip prepared-run.fail; the Deferred keeps this first result.
         if (input.preparation !== undefined) {
           yield* Deferred.fail(input.preparation, "Worktree setup cancelled.");
@@ -910,18 +964,31 @@ const make = Effect.gen(function* () {
                 stored.event.payload.status === "cancelled"),
           ),
           Stream.runHead,
-          Effect.flatMap((event) => (Option.isSome(event) ? Effect.interrupt : Effect.never)),
+          Effect.flatMap((event) =>
+            Option.isNone(event)
+              ? Effect.never
+              : Effect.gen(function* () {
+                  // A stopped or archived launch no longer waits; a later message starts at once.
+                  if (yield* Ref.get(waitingForRoom)) yield* endWait;
+                  return yield* Effect.interrupt;
+                }),
+          ),
         );
       yield* Effect.raceFirst(prepare, interruption);
     });
     yield* preparation.pipe(
       Effect.onError((cause) =>
-        failPreparedRun(
-          input,
-          threadId,
-          runId,
-          Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
-        ),
+        Effect.gen(function* () {
+          if (Cause.hasInterruptsOnly(cause) && (yield* Ref.get(waitingForRoom))) return;
+          // Free the run before it reads as failed, so a retry accepted at once gets a worker.
+          yield* releasePreparation(owner);
+          yield* failPreparedRun(
+            input,
+            threadId,
+            runId,
+            Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
+          );
+        }),
       ),
       Effect.onExit((exit) =>
         input.preparation === undefined
@@ -936,7 +1003,7 @@ const make = Effect.gen(function* () {
               ),
       ),
       Effect.ignoreCause,
-      Effect.ensuring(releasePreparation(input.commandId)),
+      Effect.ensuring(releasePreparation(owner)),
       Effect.forkIn(preparationScope),
     );
   });
@@ -955,272 +1022,313 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
-    function* (request) {
-      // Scratch has no Git repository. Normalize before folder allocation so
-      // durable preparation and retries use the thread's own Scratch folder.
-      const input: ThreadLaunchInput =
-        request.workspaceStrategy.type === "worktree" &&
-        (yield* managedFolders.isScratchProject(request.projectId))
-          ? { ...request, workspaceStrategy: { type: "root" } }
-          : request.workspaceStrategy.type !== "workspace" &&
-              (yield* isWorldProject(request.projectId).pipe(
-                Effect.mapError(mapError(request, "resolve-project")),
-              ))
-            ? // Every thread in a world gets its own thread world (patches/worlds.md).
-              { ...request, workspaceStrategy: { type: "workspace" } }
-            : request;
-      yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
-        type: "thread.create",
-        projectId: input.projectId,
-      }).pipe(Effect.mapError(mapError(input, "resolve-project")));
-      const project = yield* projects.getById(input.projectId).pipe(
-        Effect.mapError(mapError(input, "resolve-project")),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(mapError(input, "resolve-project")("Project not found.")),
-            onSome: Effect.succeed,
-          }),
-        ),
-      );
-      if (input.reuseExistingThread === true && input.threadId === undefined) {
-        return yield* mapError(
-          input,
-          "update-thread",
-        )("Reusing an existing thread requires a thread id.");
+  const launchAdmitted = Effect.fn("ThreadLaunchService.launchAdmitted")(function* (
+    request: ThreadLaunchInput,
+  ) {
+    // Scratch has no Git repository. Normalize before folder allocation so
+    // durable preparation and retries use the thread's own Scratch folder.
+    const input: ThreadLaunchInput =
+      request.workspaceStrategy.type === "worktree" &&
+      (yield* managedFolders.isScratchProject(request.projectId))
+        ? { ...request, workspaceStrategy: { type: "root" } }
+        : request.workspaceStrategy.type !== "workspace" &&
+            (yield* isWorldProject(request.projectId).pipe(
+              Effect.mapError(mapError(request, "resolve-project")),
+            ))
+          ? // Every thread in a world gets its own thread world (patches/worlds.md).
+            { ...request, workspaceStrategy: { type: "workspace" } }
+          : request;
+    yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
+      type: "thread.create",
+      projectId: input.projectId,
+    }).pipe(Effect.mapError(mapError(input, "resolve-project")));
+    const project = yield* projects.getById(input.projectId).pipe(
+      Effect.mapError(mapError(input, "resolve-project")),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(mapError(input, "resolve-project")("Project not found.")),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+    if (input.reuseExistingThread === true && input.threadId === undefined) {
+      return yield* mapError(
+        input,
+        "update-thread",
+      )("Reusing an existing thread requires a thread id.");
+    }
+
+    const launchReceipt = yield* readReceipt(input, input.commandId);
+    yield* threads.assertProviderInstanceEnabled({
+      projectId: input.projectId,
+      commandId: input.commandId,
+      instanceId: input.modelSelection.instanceId,
+    });
+    return yield* Effect.gen(function* () {
+      // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
+      const reusableLaunchReceipt =
+        input.threadId === undefined &&
+        Option.isSome(launchReceipt) &&
+        launchReceipt.value.status === "accepted" &&
+        launchReceipt.value.commandType === "thread.create"
+          ? launchReceipt.value
+          : undefined;
+      const candidateThreadId =
+        input.threadId ??
+        reusableLaunchReceipt?.threadId ??
+        (yield* ids.allocate
+          .thread({ projectId: input.projectId })
+          .pipe(Effect.mapError(mapError(input, "create-thread"))));
+
+      if (reusableLaunchReceipt !== undefined) {
+        const shell = yield* threads
+          .getThreadShell(candidateThreadId)
+          .pipe(Effect.mapError(mapError(input, "create-thread", candidateThreadId)));
+        if (shell === null) {
+          return yield* mapError(input, "create-thread", candidateThreadId)("Thread not found.");
+        }
+        if (shell.projectId !== input.projectId) {
+          return yield* mapError(
+            input,
+            "resolve-project",
+            candidateThreadId,
+          )("Project identity changed.");
+        }
       }
 
-      const launchReceipt = yield* readReceipt(input, input.commandId);
-      yield* threads.assertProviderInstanceEnabled({
-        projectId: input.projectId,
-        commandId: input.commandId,
-        instanceId: input.modelSelection.instanceId,
-      });
-      return yield* Effect.gen(function* () {
-        // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
-        const reusableLaunchReceipt =
-          input.threadId === undefined &&
-          Option.isSome(launchReceipt) &&
-          launchReceipt.value.status === "accepted" &&
-          launchReceipt.value.commandType === "thread.create"
-            ? launchReceipt.value
-            : undefined;
-        const candidateThreadId =
-          input.threadId ??
-          reusableLaunchReceipt?.threadId ??
-          (yield* ids.allocate
-            .thread({ projectId: input.projectId })
-            .pipe(Effect.mapError(mapError(input, "create-thread"))));
+      if (input.reuseExistingThread === true && Option.isNone(launchReceipt)) {
+        yield* validateReusableThread(input, candidateThreadId);
+      }
 
-        if (reusableLaunchReceipt !== undefined) {
-          const shell = yield* threads
-            .getThreadShell(candidateThreadId)
-            .pipe(Effect.mapError(mapError(input, "create-thread", candidateThreadId)));
-          if (shell === null) {
-            return yield* mapError(input, "create-thread", candidateThreadId)("Thread not found.");
-          }
-          if (shell.projectId !== input.projectId) {
-            return yield* mapError(
-              input,
-              "resolve-project",
-              candidateThreadId,
-            )("Project identity changed.");
-          }
-        }
-
-        if (input.reuseExistingThread === true && Option.isNone(launchReceipt)) {
-          yield* validateReusableThread(input, candidateThreadId);
-        }
-
-        const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
-          input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
-            ? Option.match(
-                yield* managedFolders
-                  .folderForThread({
-                    projectId: input.projectId,
-                    threadId: candidateThreadId,
-                    text: input.initialMessage?.text ?? input.title,
-                  })
-                  .pipe(Effect.mapError(mapError(input, "provision-worktree", candidateThreadId))),
-                {
-                  onNone: () => input.workspaceStrategy,
-                  onSome: (worktreePath) => ({ type: "existing_worktree", worktreePath }),
-                },
-              )
-            : input.workspaceStrategy;
-        const initialBranch = workspaceStrategy.branch ?? null;
-        const initialWorktreePath =
-          workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
-        const claimDispatch =
-          input.reuseExistingThread === true
-            ? threads.dispatch({
-                type: "thread.metadata.update",
-                commandId: input.commandId,
-                threadId: candidateThreadId,
-                expectedEmpty: true,
-              })
-            : threads.dispatch({
-                type: "thread.create",
-                commandId: input.commandId,
-                threadId: candidateThreadId,
-                projectId: input.projectId,
-                title: input.title,
-                modelSelection: input.modelSelection,
-                runtimeMode: input.runtimeMode,
-                interactionMode: input.interactionMode,
-                branch: initialBranch,
-                worktreePath: initialWorktreePath,
-                ...(input.importedNativeThread === undefined
-                  ? {}
-                  : { importedNativeThread: input.importedNativeThread }),
-                ...(input.linkOrigin === undefined ? {} : { linkOrigin: input.linkOrigin }),
-                ...(input.delegatedFrom === undefined
-                  ? {}
-                  : { delegatedFrom: input.delegatedFrom }),
-                createdBy: input.createdBy,
-                creationSource: input.creationSource,
-              });
-        const claimed = yield* claimDispatch.pipe(
-          Effect.mapError(
-            mapError(
-              input,
-              input.reuseExistingThread === true ? "update-thread" : "create-thread",
-              candidateThreadId,
-            ),
-          ),
-        );
-        const threadId =
-          claimed.storedEvents.find((stored) => stored.event.type.startsWith("thread."))?.event
-            .threadId ?? candidateThreadId;
-        if (project.id !== input.projectId) {
-          return yield* mapError(input, "resolve-project", threadId)("Project identity changed.");
-        }
-        let runId: RunId | null = null;
-        let messageSequence: number | undefined;
-        let messageWasAlreadyAccepted = false;
-        if (input.initialMessage !== undefined) {
-          const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
-          const messageReceipt = yield* readReceipt(input, messageCommandId);
-          messageWasAlreadyAccepted = Option.isSome(messageReceipt);
-          const messageId =
-            input.initialMessage.messageId ??
-            (yield* ids.allocate
-              .message({ threadId, ordinal: 1 })
-              .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
-          const dispatched = yield* threads
-            .dispatch({
-              type: "message.dispatch",
-              commandId: messageCommandId,
-              threadId,
-              messageId,
-              text: input.initialMessage.text,
-              ...(input.initialMessage.scheduledTaskId === undefined
-                ? {}
-                : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
-              ...(input.initialMessage.senderThreadId === undefined
-                ? {}
-                : { senderThreadId: input.initialMessage.senderThreadId }),
-              attachments: input.initialMessage.attachments,
-              ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
-              ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
+      const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
+        input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
+          ? Option.match(
+              yield* managedFolders
+                .folderForThread({
+                  projectId: input.projectId,
+                  threadId: candidateThreadId,
+                  text: input.initialMessage?.text ?? input.title,
+                })
+                .pipe(Effect.mapError(mapError(input, "provision-worktree", candidateThreadId))),
+              {
+                onNone: () => input.workspaceStrategy,
+                onSome: (worktreePath) => ({ type: "existing_worktree", worktreePath }),
+              },
+            )
+          : input.workspaceStrategy;
+      const initialBranch = workspaceStrategy.branch ?? null;
+      const initialWorktreePath =
+        workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
+      const claimDispatch =
+        input.reuseExistingThread === true
+          ? threads.dispatch({
+              type: "thread.metadata.update",
+              commandId: input.commandId,
+              threadId: candidateThreadId,
+              expectedEmpty: true,
+              ...(input.placement === undefined ? {} : { placement: input.placement }),
+            })
+          : threads.dispatch({
+              type: "thread.create",
+              commandId: input.commandId,
+              threadId: candidateThreadId,
+              projectId: input.projectId,
+              title: input.title,
               modelSelection: input.modelSelection,
-              dispatchMode: { type: "defer_start", workspaceStrategy },
+              runtimeMode: input.runtimeMode,
+              interactionMode: input.interactionMode,
+              branch: initialBranch,
+              worktreePath: initialWorktreePath,
+              ...(input.importedNativeThread === undefined
+                ? {}
+                : { importedNativeThread: input.importedNativeThread }),
+              ...(input.linkOrigin === undefined ? {} : { linkOrigin: input.linkOrigin }),
+              ...(input.delegatedFrom === undefined ? {} : { delegatedFrom: input.delegatedFrom }),
+              ...(input.placement === undefined ? {} : { placement: input.placement }),
               createdBy: input.createdBy,
               creationSource: input.creationSource,
-            })
-            .pipe(
-              // An agent's launch can land on a thread that a replay, or a concurrent
-              // launch with the same key, created with broader modes. The orchestrator
-              // refuses the message under the thread's lock; the user's own clients
-              // launch into their own drafts, whatever modes those hold.
-              input.createdBy === "agent"
-                ? Effect.provideService(DispatchModeLimit, {
-                    runtimeMode: input.runtimeMode,
-                    interactionMode: input.interactionMode,
-                  })
-                : (effect) => effect,
-              Effect.mapError(mapError(input, "dispatch-message", threadId)),
-            );
-          // A concurrent retry can read no receipt and still replay the dispatch.
-          messageWasAlreadyAccepted ||= dispatched.replayed === true;
-          messageSequence = dispatched.sequence;
-          const runCreated = dispatched.storedEvents.find(
-            (stored) => stored.event.type === "run.created",
-          );
-          runId = runCreated?.event.type === "run.created" ? runCreated.event.payload.id : null;
-          if (runId === null) {
-            return yield* mapError(
-              input,
-              "dispatch-message",
+            });
+      const claimed = yield* claimDispatch.pipe(
+        Effect.mapError(
+          mapError(
+            input,
+            input.reuseExistingThread === true ? "update-thread" : "create-thread",
+            candidateThreadId,
+          ),
+        ),
+      );
+      const threadId =
+        claimed.storedEvents.find((stored) => stored.event.type.startsWith("thread."))?.event
+          .threadId ?? candidateThreadId;
+      if (project.id !== input.projectId) {
+        return yield* mapError(input, "resolve-project", threadId)("Project identity changed.");
+      }
+      let runId: RunId | null = null;
+      let messageSequence: number | undefined;
+      let messageWasAlreadyAccepted = false;
+      if (input.initialMessage !== undefined) {
+        const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
+        const messageReceipt = yield* readReceipt(input, messageCommandId);
+        messageWasAlreadyAccepted = Option.isSome(messageReceipt);
+        // A retry whose admission found no room waits, even where its first attempt did not.
+        if (
+          !messageWasAlreadyAccepted &&
+          input.placement?.waitingSince != null &&
+          (claimed.replayed === true || Option.isSome(launchReceipt)) &&
+          (yield* threads
+            .getThreadShell(threadId)
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId))))?.placement
+            ?.waitingSince === null
+        ) {
+          yield* threads
+            .dispatch({
+              type: "thread.metadata.update",
+              commandId: CommandId.make(`${input.commandId}:placement-wait`),
               threadId,
-            )("Initial message was accepted without a durable run.");
-          }
+              placement: input.placement,
+            })
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
         }
+        const messageId =
+          input.initialMessage.messageId ??
+          (yield* ids.allocate
+            .message({ threadId, ordinal: 1 })
+            .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
+        const dispatched = yield* threads
+          .dispatch({
+            type: "message.dispatch",
+            commandId: messageCommandId,
+            threadId,
+            messageId,
+            text: input.initialMessage.text,
+            ...(input.initialMessage.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
+            ...(input.initialMessage.senderThreadId === undefined
+              ? {}
+              : { senderThreadId: input.initialMessage.senderThreadId }),
+            attachments: input.initialMessage.attachments,
+            ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
+            ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
+            modelSelection: input.modelSelection,
+            dispatchMode: { type: "defer_start", workspaceStrategy },
+            createdBy: input.createdBy,
+            creationSource: input.creationSource,
+          })
+          .pipe(
+            // An agent's launch can land on a thread that a replay, or a concurrent
+            // launch with the same key, created with broader modes. The orchestrator
+            // refuses the message under the thread's lock; the user's own clients
+            // launch into their own drafts, whatever modes those hold.
+            input.createdBy === "agent"
+              ? Effect.provideService(DispatchModeLimit, {
+                  runtimeMode: input.runtimeMode,
+                  interactionMode: input.interactionMode,
+                })
+              : (effect) => effect,
+            Effect.mapError(mapError(input, "dispatch-message", threadId)),
+          );
+        // A concurrent retry can read no receipt and still replay the dispatch.
+        messageWasAlreadyAccepted ||= dispatched.replayed === true;
+        messageSequence = dispatched.sequence;
+        const runCreated = dispatched.storedEvents.find(
+          (stored) => stored.event.type === "run.created",
+        );
+        runId = runCreated?.event.type === "run.created" ? runCreated.event.payload.id : null;
+        if (runId === null) {
+          return yield* mapError(
+            input,
+            "dispatch-message",
+            threadId,
+          )("Initial message was accepted without a durable run.");
+        }
+      }
 
-        const projection = yield* threads
-          .getThreadProjection(threadId)
-          .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
-        let runStatus = projection.runs.find((run) => run.id === runId)?.status;
-        const runIsPreparing = runId !== null && runStatus === "preparing";
-        const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
-        const boundWorktreePath = projection.thread.worktreePath;
-        const preparationStrategy: ThreadLaunchWorkspaceStrategy =
-          Option.isSome(launchReceipt) &&
-          workspaceStrategy.type === "root" &&
-          boundWorktreePath !== null
-            ? {
-                type: "existing_worktree",
-                worktreePath: boundWorktreePath,
-                branch: workspaceStrategy.branch,
-              }
-            : workspaceStrategy;
-        let preparationScheduled = false;
-        if (shouldSchedule) {
-          const ownsPreparation = yield* reservePreparation(input.commandId);
-          if (ownsPreparation) {
-            yield* Effect.gen(function* () {
-              const preparationStillRequired =
-                runId === null
-                  ? true
-                  : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
-                      Effect.map((current) => {
-                        runStatus = current.runs.find((run) => run.id === runId)?.status;
-                        return runStatus === "preparing";
-                      }),
-                      Effect.mapError(mapError(input, "update-thread", threadId)),
-                    );
-              if (preparationStillRequired) {
-                preparationScheduled = true;
-                yield* schedulePreparation(
-                  { ...input, workspaceStrategy: preparationStrategy },
-                  threadId,
-                  runId,
-                );
-              } else {
-                yield* releasePreparation(input.commandId);
-              }
-            }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
-          }
+      const projection = yield* threads
+        .getThreadProjection(threadId)
+        .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
+      let runStatus = projection.runs.find((run) => run.id === runId)?.status;
+      const runIsPreparing = runId !== null && runStatus === "preparing";
+      const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
+      const boundWorktreePath = projection.thread.worktreePath;
+      const preparationStrategy: ThreadLaunchWorkspaceStrategy =
+        Option.isSome(launchReceipt) &&
+        workspaceStrategy.type === "root" &&
+        boundWorktreePath !== null
+          ? {
+              type: "existing_worktree",
+              worktreePath: boundWorktreePath,
+              branch: workspaceStrategy.branch,
+            }
+          : workspaceStrategy;
+      let preparationScheduled = false;
+      if (shouldSchedule) {
+        const owner = yield* reservePreparation(input.commandId, runId);
+        if (owner !== undefined) {
+          yield* Effect.gen(function* () {
+            const preparationStillRequired =
+              runId === null
+                ? true
+                : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
+                    Effect.map((current) => {
+                      runStatus = current.runs.find((run) => run.id === runId)?.status;
+                      return runStatus === "preparing";
+                    }),
+                    Effect.mapError(mapError(input, "update-thread", threadId)),
+                  );
+            if (preparationStillRequired) {
+              preparationScheduled = true;
+              yield* schedulePreparation(
+                { ...input, workspaceStrategy: preparationStrategy },
+                threadId,
+                runId,
+                owner,
+              );
+            } else {
+              yield* releasePreparation(owner);
+            }
+          }).pipe(Effect.onError(() => releasePreparation(owner)));
         }
+      }
 
-        if (!preparationScheduled && input.preparation !== undefined) {
-          yield* !messageWasAlreadyAccepted &&
-          (runStatus === "interrupted" || runStatus === "cancelled")
-            ? Deferred.fail(input.preparation, "Worktree setup cancelled.")
-            : Deferred.succeed(input.preparation, undefined);
-        }
-        return {
-          threadId,
-          projection,
-          // An attempt that failed after claiming the thread recorded nothing, so
-          // only a repeat of the final write counts as resumed.
-          resumed:
-            input.initialMessage === undefined
-              ? Option.isSome(launchReceipt) || claimed.replayed === true
-              : messageWasAlreadyAccepted,
-          ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
-        };
-      });
+      if (!preparationScheduled && input.preparation !== undefined) {
+        yield* !messageWasAlreadyAccepted &&
+        (runStatus === "interrupted" || runStatus === "cancelled")
+          ? Deferred.fail(input.preparation, "Worktree setup cancelled.")
+          : Deferred.succeed(input.preparation, undefined);
+      }
+      return {
+        threadId,
+        projection,
+        // An attempt that failed after claiming the thread recorded nothing, so
+        // only a repeat of the final write counts as resumed.
+        resumed:
+          input.initialMessage === undefined
+            ? Option.isSome(launchReceipt) || claimed.replayed === true
+            : messageWasAlreadyAccepted,
+        ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
+      };
+    });
+  });
+
+  /**
+   * A placed launch takes its slot as it is created here, so two deciders that saw the same last
+   * slot do not both start; one without a first message has no run to hold, so never waits.
+   */
+  const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
+    function* (request) {
+      const placement = request.placement;
+      if (placement === undefined) return yield* launchAdmitted(request);
+      if (request.initialMessage === undefined || Option.isNone(localPlacement)) {
+        return yield* launchAdmitted({
+          ...request,
+          placement: { ...placement, waitingSince: null },
+        });
+      }
+      const admitted = yield* localPlacement.value.admit(placement);
+      return yield* launchAdmitted({ ...request, placement: admitted.placement }).pipe(
+        Effect.ensuring(admitted.release),
+      );
     },
   );
 
@@ -1234,9 +1342,10 @@ const make = Effect.gen(function* () {
       const run = runs.find((candidate) => candidate.id === input.runId);
       const workspacePreparation = run?.workspacePreparation;
       if (run?.status !== "preparing" || workspacePreparation === undefined) return;
-      if (!(yield* reservePreparation(input.commandId))) return;
-      yield* scheduleRunPreparation(input, thread, run, workspacePreparation).pipe(
-        Effect.onError(() => releasePreparation(input.commandId)),
+      const owner = yield* reservePreparation(input.commandId, input.runId);
+      if (owner === undefined) return;
+      yield* scheduleRunPreparation(input, thread, run, workspacePreparation, owner).pipe(
+        Effect.onError(() => releasePreparation(owner)),
       );
     }).pipe(Effect.exit);
     if (Exit.isFailure(scheduled)) {
@@ -1262,6 +1371,7 @@ const make = Effect.gen(function* () {
     thread: OrchestrationV2ThreadProjection["thread"],
     run: OrchestrationV2ThreadProjection["runs"][number],
     workspacePreparation: ThreadLaunchWorkspaceStrategy,
+    owner: PreparationOwner,
   ) {
     const { messages } = yield* threads.getThreadRecords(input.threadId, ["messages"], {
       messageIds: [run.userMessageId],
@@ -1299,6 +1409,7 @@ const make = Effect.gen(function* () {
       },
       input.threadId,
       run.id,
+      owner,
     );
   });
 

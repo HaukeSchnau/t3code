@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { OrchestratorRuntimeModeAboveCeilingError } from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
+import * as LocalPlacement from "../../../placement/LocalPlacement.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
@@ -225,6 +226,8 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             )?.supportedRuntimeModes,
           });
         }
+        const stamp = yield* LocalPlacement.PlacementStamp;
+        const placement = stamp?.placement;
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -245,10 +248,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 },
               }),
           createdBy: "agent",
-          creationSource: "mcp",
+          // A launch another environment placed here records where it started there.
+          creationSource: stamp?.origin?.creationSource ?? "mcp",
+          ...(stamp?.origin?.generateTitle === undefined
+            ? {}
+            : { generateTitle: stamp.origin.generateTitle }),
           ...(linkOrigin === undefined ? {} : { linkOrigin }),
           // Kept only alongside linkOrigin: thread.create drops it otherwise.
           ...(input.delegatedFrom === undefined ? {} : { delegatedFrom: input.delegatedFrom }),
+          ...(placement === undefined ? {} : { placement }),
         }).pipe(
           Effect.mapError((error) => {
             if (error._tag === "AttachmentClaimError") {
@@ -282,6 +290,19 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           modelSelection: thread.modelSelection,
           runId: run?.id ?? null,
           status: run?.status ?? null,
+          // As stored: admission here may have made it wait.
+          ...(thread.placement === undefined
+            ? {}
+            : {
+                placement: {
+                  environmentId: thread.placement.environmentId,
+                  label: thread.placement.label,
+                  reason: thread.placement.reason,
+                  // A stamp outlives a stop that beat preparation; only a preparing run waits.
+                  waitingForRoom:
+                    thread.placement.waitingSince !== null && run?.status === "preparing",
+                },
+              }),
         };
       }),
     // The launched thread carries the caller's link, if it has one.

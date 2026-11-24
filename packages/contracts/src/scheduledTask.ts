@@ -240,6 +240,10 @@ export function scheduledTaskThreadMode(
   return task.threadMode ?? (task.threadId === null ? "new_thread" : "continue");
 }
 
+/** "auto": each new thread starts where placement picks. "here": on this environment. */
+export const ScheduledTaskPlacement = Schema.Literals(["here", "auto"]);
+export type ScheduledTaskPlacement = typeof ScheduledTaskPlacement.Type;
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,
@@ -249,6 +253,8 @@ export const ScheduledTask = Schema.Struct({
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
   threadMode: Schema.optional(ScheduledTaskThreadMode),
+  /** Fork (patches/fleet-placement.md). Older servers omit it: here. */
+  placement: Schema.optional(ScheduledTaskPlacement),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -302,6 +308,8 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   /** Omitted: keep the stored mode, or derive it from `threadId` for a new or rebound task. */
   threadMode: Schema.optional(ScheduledTaskThreadMode),
+  /** Omitted: keep the stored placement. */
+  placement: Schema.optional(ScheduledTaskPlacement),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

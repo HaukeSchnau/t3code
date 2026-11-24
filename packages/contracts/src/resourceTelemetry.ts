@@ -20,6 +20,8 @@ export const HostResourcesSnapshot = Schema.Struct({
       someAvg60: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
     }),
   ),
+  /** The 1-minute load average; a 200 ms CPU sample alone swings with every short burst. */
+  loadAverage: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   /** macOS kern.memorystatus_vm_pressure_level. */
   memoryPressureLevel: Schema.optionalKey(Schema.Literals(["normal", "warning", "critical"])),
   swapFreeBytes: Schema.optionalKey(NonNegativeInt),

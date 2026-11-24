@@ -204,7 +204,11 @@ const linkedEnvironmentsOff = HttpServerResponse.jsonUnsafe(
   { status: 403, headers: { "cache-control": "no-store" } },
 );
 
-const makeMcpAuthMiddleware = Effect.gen(function* () {
+/**
+ * Admits a request the way `/mcp` does: its invocation scope, or the response that refuses it.
+ * Placement's peer routes share it, so a link reaches them with the same credential and limits.
+ */
+export const makeRequestAuthenticator = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -247,6 +251,11 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     if (limited.client?.linked === true && !linkedEnvironments) return linkedEnvironmentsOff;
     return { ...limited, linkedEnvironments };
   });
+  return authenticateRequest;
+});
+
+const makeMcpAuthMiddleware = Effect.gen(function* () {
+  const authenticateRequest = yield* makeRequestAuthenticator;
   // Untraced: a span here would wrap the tool call; the HTTP server span already covers it.
   return Effect.fnUntraced(function* (httpEffect) {
     const admitted = yield* authenticateRequest(yield* HttpServerRequest.HttpServerRequest);
