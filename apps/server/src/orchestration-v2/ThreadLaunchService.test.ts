@@ -234,6 +234,7 @@ function makeHarness(options: HarnessOptions = {}) {
     ProviderRegistryMock.layer(options.providers),
     Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({
       resolveLaunchStrategy: (input) => Effect.succeed(input.strategy),
+      isWorldProject: () => Effect.succeed(false),
       checkCopy: () => Effect.void,
       ...options.managedWorkspaces,
     }),
@@ -1128,6 +1129,33 @@ it.effect("binds a managed workspace instead of creating a Git worktree", () =>
         baseRef: "main",
         message: { text: "Build the feature", attachments: [] },
       });
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+// patches/worlds.md: no thread in a world runs at the project root.
+it.effect("gives a local launch in a world project its own thread world", () =>
+  Effect.gen(function* () {
+    const create = vi.fn((_input: ManagedWorkspaces.CreateManagedWorkspaceInput) =>
+      Effect.succeed({ worktreePath: "/t3/worlds/buildlinx/fix-it", backend: "world" as const }),
+    );
+    const harness = makeHarness({
+      managedWorkspaces: { isWorldProject: () => Effect.succeed(true), create },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:world",
+          thread: "thread:launch:world",
+          message: "Fix it",
+          workspace: { type: "root" },
+        }),
+      );
+      const projection = yield* preparationSettled(launched.threadId);
+      assert.equal(projection.thread.worktreePath, "/t3/worlds/buildlinx/fix-it");
+      assert.equal(create.mock.calls.length, 1);
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
     }).pipe(Effect.provide(harness.layer));
   }),
 );

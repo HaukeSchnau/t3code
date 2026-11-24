@@ -25,6 +25,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadWorldPanel } from "./ThreadWorldPanel";
 import {
   ThreadDetailsContext,
   ThreadDetailsUsage,
@@ -41,6 +42,10 @@ import {
   THREAD_DETAILS_PANEL_LABEL_CLASS,
 } from "./threadDetailsPanelStyles";
 import { Menu, MenuPopup } from "../ui/menu";
+import { useEnvironmentQuery } from "../../state/query";
+import { useProject } from "../../state/entities";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { vcsEnvironment } from "../../state/vcs";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -91,6 +96,15 @@ interface ThreadDetailsPanelProps extends Pick<
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
+  // A world and its thread worlds are no repository; their repos show in the World section.
+  const worldProject =
+    useProject(scopeProjectRef(props.environmentId, props.projectId))?.world != null;
+  const worldStatus = useEnvironmentQuery(
+    props.gitCwd === null
+      ? null
+      : vcsEnvironment.status({ environmentId: props.environmentId, input: { cwd: props.gitCwd } }),
+  ).data?.world;
+  const inWorld = worldProject || worldStatus !== undefined;
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
@@ -158,6 +172,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           scripts: visible.scripts && props.activeProjectScripts !== undefined,
           branch: props.gitCwd !== null && props.isGitRepo && visible.branch,
           git:
+            !inWorld &&
             props.gitCwd !== null &&
             props.activeProjectName !== undefined &&
             (visible.gitActions || (visible.changes && props.isGitRepo)),
@@ -259,6 +274,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     )}
                   </div>
                 </ThreadDetailsSection>
+              ) : null}
+
+              {props.gitCwd !== null ? (
+                <ThreadWorldPanel environmentId={props.environmentId} cwd={props.gitCwd} />
               ) : null}
 
               {density === "full" && !props.draftId && visible.servers ? (

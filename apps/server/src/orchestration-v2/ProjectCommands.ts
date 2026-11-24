@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   SCRIPT_RUN_COMMAND_PATTERN,
   type ThreadEnvMode,
+  type WorldId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
@@ -23,6 +24,7 @@ export interface ProjectCreateCommand {
   readonly title: string;
   readonly workspaceRoot: string;
   readonly scripts?: ReadonlyArray<ProjectScript>;
+  readonly world?: WorldId;
 }
 
 export interface ProjectMetaUpdateCommand {
@@ -163,6 +165,7 @@ export function planProjectCommand(input: {
           faviconPath: null,
           projectIcon: null,
           scripts: command.scripts ?? [],
+          ...(command.world === undefined ? {} : { world: command.world }),
           createdAt: occurredAt,
           updatedAt: occurredAt,
         },

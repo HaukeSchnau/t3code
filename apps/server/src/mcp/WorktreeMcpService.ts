@@ -31,6 +31,7 @@ import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
 import { managedWorkspaceHandoff } from "./ManagedWorkspaceHandoff.ts";
 import type { McpInvocationScope, McpThreadInvocationScope } from "./McpInvocationContext.ts";
+import { WorldThreadHooks } from "../world/WorldThreadHooks.ts";
 
 export class WorktreeMcpService extends Context.Service<
   WorktreeMcpService,
@@ -455,6 +456,10 @@ const make = Effect.gen(function* () {
       const project = yield* loadProject(scope, projection.thread.projectId);
 
       const defaultStartFromOrigin = yield* readDefaultStartFromOrigin(project.id);
+      const world =
+        projection.thread.worktreePath === null
+          ? undefined
+          : yield* (yield* WorldThreadHooks).status(projection.thread.worktreePath);
 
       const result: WorktreeMcpStatusResult = {
         attached: projection.thread.worktreePath !== null,
@@ -462,6 +467,7 @@ const make = Effect.gen(function* () {
         branch: projection.thread.branch,
         projectWorkspaceRoot: project.workspaceRoot,
         defaultStartFromOrigin,
+        ...(world === undefined ? {} : { world }),
       };
       return result;
     },

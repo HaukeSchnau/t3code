@@ -7,6 +7,7 @@ import {
   type ProjectUpdatePayload,
   type ProjectSnapshot,
   type ThreadId,
+  type WorldId,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
@@ -41,6 +42,8 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 export interface ProjectCreateInput extends ProjectCreatePayload {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
+  /** Only the server creates world projects, from its `worlds` settings. */
+  readonly world?: WorldId;
 }
 
 export interface ProjectUpdateInput extends ProjectUpdatePayload {
@@ -201,6 +204,7 @@ export const make = Effect.gen(function* () {
     autoPull: row.autoPull,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
+    world: row.world ?? null,
     pinnedAt: row.pinnedAt,
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
@@ -392,6 +396,7 @@ export const make = Effect.gen(function* () {
         title: input.title,
         workspaceRoot,
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+        ...(input.world === undefined ? {} : { world: input.world }),
       });
       yield* projectEnrichment.invalidate([workspaceRoot]);
       return yield* readCommitted(input.projectId);

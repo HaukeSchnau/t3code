@@ -1818,8 +1818,11 @@ export default function ChatView(props: ChatViewProps) {
     activeProject?.workspaceRoot,
     vcsKind,
     liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd),
+    activeProject?.world,
   );
-  const canChooseWorkspace = isGitRepo || managedWorkspaces !== null;
+  // Every thread in a world gets its own thread world (patches/worlds.md).
+  const canChooseWorkspace =
+    activeProject?.world == null && (isGitRepo || managedWorkspaces !== null);
   // Provider-native subagents cannot take messages; approvals and questions go to the top-level parent.
   const showProviderSubagentBar = isProviderSubagent;
   const composerMounted = !showProviderSubagentBar;

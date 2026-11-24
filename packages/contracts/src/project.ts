@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { WorldId } from "./world.ts";
 import {
   CommandId,
   ForwardCompatibleUnion,
@@ -162,6 +163,8 @@ export const Project = Schema.Struct({
   // Opt-in because background sync performs network I/O and may move the checkout.
   autoPull: Schema.optional(Schema.Boolean),
   scripts: Schema.Array(ProjectScript),
+  /** Set for a fleet world's project: every thread in it gets its own thread world. */
+  world: Schema.optional(Schema.NullOr(WorldId)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,

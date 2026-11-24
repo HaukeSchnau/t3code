@@ -42,7 +42,7 @@ const WorktreeHandoffTool = Tool.make("t3_worktree_handoff", {
 
 const WorktreeStatusTool = Tool.make("t3_worktree_status", {
   description:
-    "Report this thread's worktree: attached or not, path, branch, project root, and the `startFromOrigin` default. Check before `t3_worktree_handoff`.",
+    "Report this thread's worktree: attached or not, path, branch, project root, and the `startFromOrigin` default. In a world, also the repos this thread checked out, their work no remote has, and checkouts the cap refused. Check before `t3_worktree_handoff`.",
   // No `parameters`: Tool.make defaults to Tool.EmptyParams, which serializes
   // to a top-level `type: "object"` JSON Schema. An explicit empty
   // Schema.Struct({}) serializes to `anyOf: [object, array]`, which is not a

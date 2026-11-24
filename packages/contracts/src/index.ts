@@ -76,6 +76,7 @@ export * from "./followUps.ts";
 export * from "./needsYou.ts";
 export * from "./worktreeMcp.ts";
 export * from "./workspace.ts";
+export * from "./world.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";

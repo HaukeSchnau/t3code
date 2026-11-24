@@ -75,6 +75,18 @@ describe("managedWorkspacesForProject", () => {
     expect(forProject("/code/notes", { isRepo: false })).toBe(capability);
   });
 
+  it("offers none in a world, where every thread gets its own thread world", () => {
+    expect(
+      managedWorkspacesForProject({
+        config,
+        projectRoot: "/home/me/.t3/worlds/buildlinx",
+        vcsKind: undefined,
+        isRepo: false,
+        world: "buildlinx",
+      }),
+    ).toBeNull();
+  });
+
   // Upstream's flow applies its base-branch guard until the status says otherwise.
   it("offers none while the project's status is unknown", () => {
     expect(forProject("/code/app", undefined)).toBeNull();

@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { WorldThreadStatus } from "./world.ts";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -82,6 +83,12 @@ export const WorktreeMcpStatusResult = Schema.Struct({
   defaultStartFromOrigin: Schema.Boolean.annotate({
     description: "`startFromOrigin` default for `t3_worktree_handoff`.",
   }),
+  world: Schema.optional(
+    WorldThreadStatus.annotate({
+      description:
+        "In a world: repos this thread checked out, work in them no remote has, and checkouts the cap refused.",
+    }),
+  ),
 });
 export type WorktreeMcpStatusResult = typeof WorktreeMcpStatusResult.Type;
 

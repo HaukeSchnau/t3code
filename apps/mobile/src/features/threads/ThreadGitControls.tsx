@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   ThreadId,
   type VcsStatusResult,
+  type WorldThreadStatus,
 } from "@t3tools/contracts";
 import {
   type GitActionRequestInput,
@@ -27,6 +28,12 @@ import {
 } from "../terminal/terminalMenu";
 import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
 import { jjBreadcrumb, jjPushState, jjStackViewFromStatus } from "./git/jj-stack-presentation";
+import {
+  worldRefusalLabel,
+  worldRepoName,
+  worldRepoWork,
+  worldSummary,
+} from "@t3tools/client-runtime/state/worlds";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -317,9 +324,47 @@ export function threadTerminalMenu(props: ThreadGitControlsProps): AppBarMenu | 
   };
 }
 
+/** A thread world's repos, their unpushed work and refused checkouts (patches/worlds.md). */
+function worldMenu(world: WorldThreadStatus): AppBarMenu {
+  return {
+    title: "World",
+    icon: "globe",
+    separateBackground: false,
+    items: [
+      {
+        id: "world-status",
+        title: world.path,
+        icon: "globe",
+        disabled: true,
+        subtitle: worldSummary(world),
+        onPress: () => {},
+      },
+      ...world.repos.map((repo) => ({
+        id: `world-repo:${repo.repo}`,
+        title: worldRepoName(repo),
+        icon: repo.checkedOut ? "folder.fill" : "folder",
+        disabled: true,
+        subtitle:
+          worldRepoWork(repo) ??
+          (repo.checkedOut ? "Checked out, every remote has it" : "Read only"),
+        onPress: () => {},
+      })),
+      ...world.refusals.slice(0, 3).map((refusal) => ({
+        id: `world-refusal:${refusal.at}:${refusal.repo}`,
+        title: "Checkout refused",
+        icon: "exclamationmark.triangle",
+        disabled: true,
+        subtitle: worldRefusalLabel(refusal),
+        onPress: () => {},
+      })),
+    ],
+  };
+}
+
 /** The thread's git menu, shared by the thread bar and Review. */
 export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMenu | null {
   const model = useThreadGitControlModel(props);
+  if (props.gitStatus?.world !== undefined) return worldMenu(props.gitStatus.world);
   return {
     title: "Git controls",
     icon: "point.topleft.down.curvedto.point.bottomright.up",

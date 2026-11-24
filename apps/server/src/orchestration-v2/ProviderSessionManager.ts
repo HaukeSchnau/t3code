@@ -45,6 +45,7 @@ import {
 } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import { assertSeparateProjectDriver } from "../project/ProjectExecution.ts";
+import { WorldThreadHooks } from "../world/WorldThreadHooks.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
@@ -2409,6 +2410,17 @@ export const layerWithOptions = (
             input.providerSessionId,
             Effect.gen(function* () {
               const cwd = input.runtimePolicy.cwd;
+              // A settled thread's world may have been torn down; it returns before the agent does.
+              yield* (yield* WorldThreadHooks).ensure({ threadId: input.threadId, cwd }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderSessionOpenError({
+                      instanceId: input.modelSelection.instanceId,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
+                ),
+              );
               if (cwd !== null) {
                 const workspaceIsDirectory = yield* fileSystem.stat(cwd).pipe(
                   Effect.map((stat) => stat.type === "Directory"),
