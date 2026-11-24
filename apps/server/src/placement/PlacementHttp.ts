@@ -2,7 +2,16 @@
  * The routes a linked peer's placement calls here (patches/fleet-placement.md). They admit a
  * request exactly as `/mcp` does, so a link reaches them with its own credential and limits.
  */
-import { PlacementReport, PlacementReportRequest, ThreadPlacement } from "@t3tools/contracts";
+import {
+  type PlacementError,
+  PlacementHydrateRequest,
+  type PlacementHydrateResult,
+  PlacementReport,
+  PlacementReportRequest,
+  ThreadPlacement,
+} from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -15,9 +24,15 @@ import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolDirectory from "../mcp/McpToolDirectory.ts";
 import * as LocalPlacement from "./LocalPlacement.ts";
-import { PLACEMENT_LAUNCH_PATH, PLACEMENT_REPORT_PATH } from "./Placement.ts";
+import {
+  HYDRATE_TIMEOUT_MS,
+  PLACEMENT_HYDRATE_PATH,
+  PLACEMENT_LAUNCH_PATH,
+  PLACEMENT_REPORT_PATH,
+} from "./Placement.ts";
 
 const decodeReportRequest = Schema.decodeUnknownEffect(PlacementReportRequest);
+const decodeHydrateRequest = Schema.decodeUnknownEffect(PlacementHydrateRequest);
 const encodeReport = Schema.encodeEffect(PlacementReport);
 const decodeLaunchRequest = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -28,6 +43,10 @@ const decodeLaunchRequest = Schema.decodeUnknownEffect(
 );
 
 const noStore = { "cache-control": "no-store" };
+// Well inside a relay's idle limit and the sender's per-request timeout.
+const HYDRATE_ANSWER_WITHIN = "20 seconds";
+// A sender polls until its own deadline, so an outcome outlives it.
+const HYDRATE_OUTCOME_KEPT_MS = HYDRATE_TIMEOUT_MS;
 const badRequest = HttpServerResponse.jsonUnsafe(
   { error: "invalid_request" },
   { status: 400, headers: noStore },
@@ -52,6 +71,16 @@ export const layer = Layer.unwrap(
     const authenticate = yield* McpHttpServer.makeRequestAuthenticator;
     const local = yield* LocalPlacement.LocalPlacement;
     const directory = yield* McpToolDirectory.McpToolDirectory;
+    // A clone outlives the request that started it; the sender asks again until it is done.
+    const scope = yield* Effect.scope;
+    // Each clone's outcome stays a while after it ends, so a sender asking again hears it.
+    const cloning = new Map<
+      string,
+      {
+        readonly done: Deferred.Deferred<PlacementHydrateResult, PlacementError>;
+        endedAt: number | undefined;
+      }
+    >();
 
     const report = HttpRouter.add(
       "POST",
@@ -109,6 +138,87 @@ export const layer = Layer.unwrap(
       }).pipe(Effect.orDie),
     );
 
-    return Layer.mergeAll(report, launch);
+    const hydrate = HttpRouter.add(
+      "POST",
+      PLACEMENT_HYDRATE_PATH,
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const admitted = yield* authenticate(request);
+        if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
+        // A clone writes a project here, which only a full-access link may ask for.
+        // The link's effective modes, after an administrator's ceiling and the request's own limit.
+        const modes = McpInvocationContext.clientModeCeiling(admitted.client);
+        if (
+          admitted.client?.linked !== true ||
+          modes.runtimeMode !== "full-access" ||
+          modes.interactionMode !== "default"
+        ) {
+          return HttpServerResponse.jsonUnsafe(
+            { error: "Only a link with full access may clone a repository here." },
+            { status: 403, headers: noStore },
+          );
+        }
+        const input = yield* request.json.pipe(Effect.flatMap(decodeHydrateRequest), Effect.option);
+        if (Option.isNone(input)) return badRequest;
+        // An older sender names no request; its clones are told apart by repository folder.
+        const key =
+          input.value.requestId === undefined
+            ? `${input.value.repository}\n${input.value.path}`
+            : `id:${input.value.requestId}`;
+        const now = yield* Clock.currentTimeMillis;
+        for (const [known, entry] of cloning) {
+          if (entry.endedAt !== undefined && now - entry.endedAt > HYDRATE_OUTCOME_KEPT_MS) {
+            cloning.delete(known);
+          }
+        }
+        // Looked up, published and started in one step: a second request finds this clone, and
+        // an interrupted request cannot leave it unstarted.
+        const clone = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.suspend(() => {
+            const known = cloning.get(key);
+            // A poll never starts a clone: without its files it would be a different one.
+            if (known !== undefined || input.value.poll === true) return Effect.succeed(known);
+            const entry = {
+              done: Deferred.makeUnsafe<PlacementHydrateResult, PlacementError>(),
+              endedAt: undefined as number | undefined,
+            };
+            cloning.set(key, entry);
+            return restore(local.hydrate(input.value)).pipe(
+              Effect.exit,
+              Effect.flatMap((exit) => Deferred.done(entry.done, exit)),
+              Effect.ensuring(
+                Clock.currentTimeMillis.pipe(
+                  Effect.map((endedAt) => {
+                    entry.endedAt = endedAt;
+                  }),
+                ),
+              ),
+              Effect.forkIn(scope, { uninterruptible: true }),
+              Effect.as(entry),
+            );
+          }),
+        );
+        if (clone === undefined) {
+          return HttpServerResponse.jsonUnsafe(
+            { error: "This machine has no clone for that request." },
+            { headers: noStore },
+          );
+        }
+        const outcome = yield* Deferred.await(clone.done).pipe(
+          Effect.result,
+          Effect.timeoutOption(HYDRATE_ANSWER_WITHIN),
+        );
+        return HttpServerResponse.jsonUnsafe(
+          Option.isNone(outcome)
+            ? { pending: true }
+            : outcome.value._tag === "Success"
+              ? { result: outcome.value.success }
+              : { error: outcome.value.failure.message },
+          { headers: noStore },
+        );
+      }).pipe(Effect.orDie),
+    );
+
+    return Layer.mergeAll(report, launch, hydrate);
   }),
 );

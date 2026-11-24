@@ -36,6 +36,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
   AuthProvidersManageScope,
+  AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
   ProviderDriverKind,
   type ScheduledTaskListResult,
@@ -1719,6 +1720,8 @@ export const layerWsRpc = (
       const projectCommands =
         currentSession.scopes.includes(AuthOrchestrationOperateScope) ||
         currentSession.scopes.includes(AuthTerminalOperateScope);
+      // A cold clone adds a project on a peer and sends it env files, as cloning does here.
+      const sessionMayClone = currentSession.scopes.includes(AuthSourceControlWriteScope);
       const authorizeEffect = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
@@ -2938,43 +2941,47 @@ export const layerWsRpc = (
               workspaceStrategy: { type: "root" },
               hasAttachments: false,
               hasContext: false,
+              mayClone: sessionMayClone,
             })
             .pipe(Effect.map((preview) => ({ preview }))),
         [WS_METHODS.placementLaunch]: (input) =>
           startup
             .enqueueCommand(
-              placement.launch({
-                commandId: input.commandId,
-                projectId: input.projectId,
-                title: input.title,
-                ...(input.generateTitle === undefined
-                  ? {}
-                  : { generateTitle: input.generateTitle }),
-                modelSelection: input.modelSelection,
-                runtimeMode: input.runtimeMode,
-                interactionMode: input.interactionMode,
-                workspaceStrategy: input.workspaceStrategy,
-                ...(input.initialMessage === undefined
-                  ? {}
-                  : {
-                      initialMessage: {
-                        ...(input.initialMessage.messageId === undefined
-                          ? {}
-                          : { messageId: input.initialMessage.messageId }),
-                        text: input.initialMessage.text,
-                        attachments: input.initialMessage.attachments,
-                        ...(input.initialMessage.context === undefined
-                          ? {}
-                          : { context: input.initialMessage.context }),
-                      },
-                    }),
-                ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
-                ...(input.reuseExistingThread === undefined
-                  ? {}
-                  : { reuseExistingThread: input.reuseExistingThread }),
-                createdBy: "user",
-                creationSource: input.creationSource ?? "web",
-              }),
+              placement.launch(
+                {
+                  commandId: input.commandId,
+                  projectId: input.projectId,
+                  title: input.title,
+                  ...(input.generateTitle === undefined
+                    ? {}
+                    : { generateTitle: input.generateTitle }),
+                  modelSelection: input.modelSelection,
+                  runtimeMode: input.runtimeMode,
+                  interactionMode: input.interactionMode,
+                  workspaceStrategy: input.workspaceStrategy,
+                  ...(input.initialMessage === undefined
+                    ? {}
+                    : {
+                        initialMessage: {
+                          ...(input.initialMessage.messageId === undefined
+                            ? {}
+                            : { messageId: input.initialMessage.messageId }),
+                          text: input.initialMessage.text,
+                          attachments: input.initialMessage.attachments,
+                          ...(input.initialMessage.context === undefined
+                            ? {}
+                            : { context: input.initialMessage.context }),
+                        },
+                      }),
+                  ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                  ...(input.reuseExistingThread === undefined
+                    ? {}
+                    : { reuseExistingThread: input.reuseExistingThread }),
+                  createdBy: "user",
+                  creationSource: input.creationSource ?? "web",
+                },
+                { mayClone: sessionMayClone },
+              ),
             )
             .pipe(
               Effect.map((launched) => ({

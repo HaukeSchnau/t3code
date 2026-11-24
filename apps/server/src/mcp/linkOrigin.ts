@@ -8,6 +8,12 @@ import * as Effect from "effect/Effect";
 
 import { assertFullAccess, type Caller } from "./threadAccess.ts";
 
+/** What the fence reads: the caller's scope and the `linkOrigin` of its thread. */
+type FencedCaller = {
+  readonly scope: Caller["scope"];
+  readonly caller: Pick<OrchestrationV2ThreadShell, "linkOrigin"> | undefined;
+};
+
 /**
  * Below full access, work a link starts here (all of it carries that session in `linkOrigin`)
  * may change only work from the same link: not the user's threads, projects or settings, nor
@@ -16,9 +22,7 @@ import { assertFullAccess, type Caller } from "./threadAccess.ts";
  */
 
 /** The link a caller acts for: its own session, or the link that started its thread. */
-export const callerLinkOrigin = (
-  caller: Pick<Caller, "scope" | "caller">,
-): OrchestrationV2LinkOrigin | undefined =>
+export const callerLinkOrigin = (caller: FencedCaller): OrchestrationV2LinkOrigin | undefined =>
   caller.caller?.linkOrigin ??
   (caller.scope.client?.linked === true
     ? {
@@ -29,7 +33,7 @@ export const callerLinkOrigin = (
     : undefined);
 
 /** The link that fences a caller, if any: one paired below full access. */
-export const fencingLinkOrigin = (caller: Pick<Caller, "scope" | "caller">) => {
+export const fencingLinkOrigin = (caller: FencedCaller) => {
   const origin = callerLinkOrigin(caller);
   return origin !== undefined && linkOriginIsFenced(origin) ? origin : undefined;
 };
@@ -55,7 +59,7 @@ export const assertSameLink = (
 };
 
 /** Fenced work never changes what the environment already has: projects, settings, scheduled runs. */
-export const assertNotLinked = (caller: Pick<Caller, "scope" | "caller">, what: string) => {
+export const assertNotLinked = (caller: FencedCaller, what: string) => {
   const origin = fencingLinkOrigin(caller);
   return origin === undefined
     ? Effect.void

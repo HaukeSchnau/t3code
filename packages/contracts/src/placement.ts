@@ -24,6 +24,8 @@ export const PlacementMatch = Schema.Union([
     repository: TrimmedNonEmptyString,
     /** The project's folder below the repository root, "" for the root. */
     path: Schema.optional(Schema.String),
+    /** Where a host without the repository clones it from. */
+    remoteUrl: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({ kind: Schema.Literal("scratch") }),
 ]);
@@ -57,6 +59,8 @@ export const PlacementReport = Schema.Struct({
   providers: Schema.Array(ProviderInstanceId),
   /** The project there for the request's `match`; absent when the request had none. */
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  /** Clones a repository it lacks into a project of its own. Older servers omit it. */
+  canClone: Schema.optional(Schema.Boolean),
 });
 export type PlacementReport = typeof PlacementReport.Type;
 
@@ -126,3 +130,30 @@ export type PlacementStartNowInput = typeof PlacementStartNowInput.Type;
 export class PlacementError extends Schema.TaggedError<PlacementError>()("PlacementError", {
   message: Schema.String,
 }) {}
+
+/** A git-ignored file copied to a fresh clone, such as `.env`. */
+export const PlacementCopiedFile = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  /** Base64. */
+  contents: Schema.String,
+});
+export type PlacementCopiedFile = typeof PlacementCopiedFile.Type;
+
+/** Asks a host to clone a repository it lacks, as a project placement can start threads in. */
+export const PlacementHydrateRequest = Schema.Struct({
+  repository: TrimmedNonEmptyString,
+  path: Schema.String,
+  remoteUrl: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  files: Schema.Array(PlacementCopiedFile),
+  /** Names one clone, so the sender can ask again for its outcome. */
+  requestId: Schema.optional(TrimmedNonEmptyString),
+  /** Only asks after the clone `requestId` started; it carries no files and starts nothing. */
+  poll: Schema.optional(Schema.Boolean),
+});
+export type PlacementHydrateRequest = typeof PlacementHydrateRequest.Type;
+
+export const PlacementHydrateResult = Schema.Struct({
+  projectId: ProjectId,
+});
+export type PlacementHydrateResult = typeof PlacementHydrateResult.Type;
