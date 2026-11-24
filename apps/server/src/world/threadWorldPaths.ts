@@ -31,6 +31,11 @@ function segments(baseDir: string, path: string): ReadonlyArray<string> | undefi
   return relative.split(NodePath.sep);
 }
 
+/** Whether `path` is a world's project root or lies below one, configured or not. */
+export function isInWorlds(baseDir: string, path: string): boolean {
+  return segments(baseDir, path) !== undefined;
+}
+
 /** Whether `projectRoot` is a world's project root, configured or not. */
 export function isWorldProjectRoot(baseDir: string, projectRoot: string): boolean {
   return segments(baseDir, projectRoot)?.length === 1;
@@ -45,7 +50,7 @@ export function worldOfProjectRoot(
   const parts = segments(baseDir, projectRoot);
   if (parts?.length !== 1) return undefined;
   const id = parts[0] as WorldId;
-  const settings = worlds[id];
+  const settings = Object.hasOwn(worlds, id) ? worlds[id] : undefined;
   return settings === undefined ? undefined : { id, settings };
 }
 
@@ -58,7 +63,7 @@ export function threadWorldOf(
   const parts = segments(baseDir, path);
   if (parts === undefined || parts.length < 2) return undefined;
   const id = parts[0] as WorldId;
-  const settings = worlds[id];
+  const settings = Object.hasOwn(worlds, id) ? worlds[id] : undefined;
   if (settings === undefined) return undefined;
   return { id, settings, root: NodePath.join(worldsRoot(baseDir), id, parts[1]!) };
 }

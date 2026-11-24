@@ -13,6 +13,8 @@ export const WorldThreadHooks = Context.Reference<{
     readonly threadId: ThreadId;
     readonly cwd: string | null;
   }) => Effect.Effect<void, string>;
+  /** Whether `cwd` is a world's project or lies in one, configured or not. */
+  readonly inWorld: (cwd: string) => Effect.Effect<boolean>;
   /** The state of the thread world containing `cwd`, or undefined outside worlds. */
   readonly status: (cwd: string) => Effect.Effect<WorldThreadStatus | undefined>;
   /** Claude's PreToolUse hook for Bash, for a session whose host cwd is `cwd`. */
@@ -20,6 +22,7 @@ export const WorldThreadHooks = Context.Reference<{
 }>("t3/world/WorldThreadHooks", {
   defaultValue: () => ({
     ensure: () => Effect.void,
+    inWorld: () => Effect.succeed(false),
     status: () => Effect.undefined,
     claudePreToolUse: () => Effect.undefined,
   }),

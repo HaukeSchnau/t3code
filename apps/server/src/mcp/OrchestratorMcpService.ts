@@ -107,6 +107,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import { WorldThreadHooks } from "../world/WorldThreadHooks.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -2803,7 +2804,11 @@ const make = Effect.gen(function* () {
       function* (callerScope, input) {
         const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
         // New threads here share the parent's checkout, which a world never shares (patches/worlds.md).
-        if ((yield* requireProject(parent.thread.projectId)).world != null) {
+        const worlds = yield* WorldThreadHooks;
+        if (
+          parent.thread.worktreePath !== null &&
+          (yield* worlds.inWorld(parent.thread.worktreePath))
+        ) {
           return yield* failure(
             "invalid_request",
             "Threads in a world each need their own world. Start them with t3_thread_launch instead.",

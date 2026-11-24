@@ -21,6 +21,7 @@ describe("world hook directories", () => {
     ['echo "a\\" ; cd Repos/x" && ls', []],
     ['printf \'%s\\n\' "$(printf "x; cd Repos/a; ")"', []],
     ["echo $(cd Repos/a && pwd)", []],
+    ["cat <<'EOF'\ncd Repos/private\nEOF", []],
     ['printf "%s" "$\\\n(printf "x; cd Repos/a; ")"', []],
     ['cd "Repos/a\\b"', [`${WORLD}/Repos/a\\b`]],
     ["printf '%s\\n' 'example; cd Repos/full && make'", []],

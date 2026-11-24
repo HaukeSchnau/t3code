@@ -953,7 +953,6 @@ const make = Effect.gen(function* () {
               : managedWorkspaces.isWorldProject(project.workspaceRoot),
         }),
       ),
-      Effect.orElseSucceed(() => false),
     );
 
   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
@@ -965,7 +964,9 @@ const make = Effect.gen(function* () {
         (yield* managedFolders.isScratchProject(request.projectId))
           ? { ...request, workspaceStrategy: { type: "root" } }
           : request.workspaceStrategy.type !== "workspace" &&
-              (yield* isWorldProject(request.projectId))
+              (yield* isWorldProject(request.projectId).pipe(
+                Effect.mapError(mapError(request, "resolve-project")),
+              ))
             ? // Every thread in a world gets its own thread world (patches/worlds.md).
               { ...request, workspaceStrategy: { type: "workspace" } }
             : request;

@@ -14,6 +14,8 @@ import {
   CommandId,
   type OrchestrationV2ThreadShell,
   ProjectId,
+  type WorldId,
+  type WorldSettings,
   type WorldThreadStatus,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -38,7 +40,12 @@ import { keepsWorkspace } from "../workspace/ManagedWorkspaces.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { looseFiles, removeEmptyTree } from "./looseFiles.ts";
 import { registeredThreadKey, registerThreadWorld } from "./ThreadWorldLauncher.ts";
-import { isWorldProjectRoot, threadWorldOf, worldProjectRoot } from "./threadWorldPaths.ts";
+import {
+  isInWorlds,
+  isWorldProjectRoot,
+  threadWorldOf,
+  worldProjectRoot,
+} from "./threadWorldPaths.ts";
 import {
   type CheckoutOutcome,
   commandDirectories,
@@ -92,16 +99,14 @@ const make = Effect.gen(function* () {
     ).pipe(
       Effect.flatMap(decodeDaemonThreadStatus),
       Effect.map((status) => toWorldThreadStatus(status, process.pid)),
+      // agent-exec registers a thread world with the daemon when it creates it, so a registered
+      // world the daemon doesn't know (`unknown-thread`) is unknown state, never a clean one.
       Effect.catch((error) =>
-        Effect.succeed(
-          error._tag === "WorldfsError" && error.code === "unknown-thread"
-            ? emptyWorldThreadStatus(world.id, world.settings.path)
-            : {
-                ...emptyWorldThreadStatus(world.id, world.settings.path),
-                available: false,
-                message: error.message,
-              },
-        ),
+        Effect.succeed({
+          ...emptyWorldThreadStatus(world.id, world.settings.path),
+          available: false,
+          message: error.message,
+        }),
       ),
     );
   });
@@ -163,7 +168,7 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
-        const hook: HookCallback = (input) => {
+        const hook: HookCallback = (input, _toolUseId, options) => {
           if (input.hook_event_name !== "PreToolUse" || input.tool_name !== "Bash") {
             return Promise.resolve({});
           }
@@ -177,6 +182,7 @@ const make = Effect.gen(function* () {
             Effect.forEach(directories, checkout).pipe(
               Effect.map((outcomes) => hookDecision(outcomes) ?? {}),
             ),
+            { signal: options.signal },
           );
         };
         return hook;
@@ -184,7 +190,9 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
 
-  return { available, status, ensure, claudePreToolUse, readStatus, threadWorld };
+  const inWorld = (cwd: string) => Effect.succeed(isInWorlds(config.baseDir, cwd));
+
+  return { available, status, ensure, inWorld, claudePreToolUse, readStatus, threadWorld };
 });
 
 /** Provides `WorldThreadHooks` to provider adapters, VCS status and the MCP tools. */
@@ -193,6 +201,7 @@ export const layer = Layer.effect(
   make.pipe(
     Effect.map((worlds) => ({
       ensure: worlds.ensure,
+      inWorld: worlds.inWorld,
       status: worlds.status,
       claudePreToolUse: worlds.claudePreToolUse,
     })),
@@ -218,32 +227,39 @@ export const layerBackground = Layer.effectDiscard(
     const reconcileProjects = Effect.gen(function* () {
       const current = yield* settingsService.getSettings;
       for (const [id, world] of Object.entries(current.worlds)) {
-        const root = worldProjectRoot(config.baseDir, id);
-        NodeFS.mkdirSync(root, { recursive: true });
-        const existing = yield* projects.getByWorkspaceRoot(root);
-        if (Option.isNone(existing)) {
-          yield* projects.create({
-            commandId: CommandId.make(`world:${NodeCrypto.randomUUID()}`),
-            projectId: ProjectId.make(NodeCrypto.randomUUID()),
-            title: world.title,
-            workspaceRoot: root,
-            createWorkspaceRootIfMissing: true,
-            world: id,
-          });
-          yield* Effect.logInfo("Created the project for a world", { world: id });
-        } else if (existing.value.title !== world.title) {
-          yield* projects.update({
-            commandId: CommandId.make(`world:${NodeCrypto.randomUUID()}`),
-            projectId: existing.value.id,
-            title: world.title,
-          });
-        }
+        yield* reconcileWorld(id, world).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not reconcile a world's project", { world: id, cause }),
+          ),
+        );
       }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not reconcile world projects", { cause }),
-      ),
-    );
+    });
+
+    const reconcileWorld = Effect.fn("ThreadWorlds.reconcileWorld")(function* (
+      id: WorldId,
+      world: WorldSettings,
+    ) {
+      const root = worldProjectRoot(config.baseDir, id);
+      NodeFS.mkdirSync(root, { recursive: true });
+      const existing = yield* projects.getByWorkspaceRoot(root);
+      if (Option.isNone(existing)) {
+        yield* projects.create({
+          commandId: CommandId.make(`world:${NodeCrypto.randomUUID()}`),
+          projectId: ProjectId.make(NodeCrypto.randomUUID()),
+          title: world.title,
+          workspaceRoot: root,
+          createWorkspaceRootIfMissing: true,
+          world: id,
+        });
+        yield* Effect.logInfo("Created the project for a world", { world: id });
+      } else if (existing.value.title !== world.title) {
+        yield* projects.update({
+          commandId: CommandId.make(`world:${NodeCrypto.randomUUID()}`),
+          projectId: existing.value.id,
+          title: world.title,
+        });
+      }
+    });
 
     const threadUse = (shell: OrchestrationV2ThreadShell) => ({
       active: keepsWorkspace(shell),

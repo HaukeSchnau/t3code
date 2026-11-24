@@ -9,7 +9,7 @@ import * as NodePath from "node:path";
 
 type Token = { readonly word: string } | { readonly op: string };
 
-const OPERATORS = ["&&", "||", ";", "|", "&", "\n", "(", ")"];
+const OPERATORS = ["<<", "&&", "||", ";", "|", "&", "\n", "(", ")"];
 
 /** Words and control operators, with quotes removed and quoted operators kept as text. */
 function tokenize(source: string): Token[] {
@@ -82,11 +82,11 @@ const PREFIXES: ReadonlySet<string> = new Set([
 ]);
 
 /** Operators after which the shell's directory depends on what ran: the hook stops predicting. */
-const AMBIGUOUS: ReadonlySet<string> = new Set(["||", "|", "&", "(", ")", "$(", "`"]);
+const AMBIGUOUS: ReadonlySet<string> = new Set(["<<", "||", "|", "&", "(", ")", "$(", "`"]);
 
 /**
  * The directories `command` runs in: the session's cwd, then each `cd` or `pushd` target in
- * order, each resolved against the one before. It stops at `||`, a pipe, `&` or a subshell,
+ * order, each resolved against the one before. It stops at `||`, a pipe, `&`, a subshell or a here-doc,
  * and skips targets it cannot know, such as `cd -`, a bare `cd`, or one built from variables;
  * the daemon's check-out on `cd` covers the rest.
  */
