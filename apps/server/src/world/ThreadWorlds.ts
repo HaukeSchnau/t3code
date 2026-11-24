@@ -51,7 +51,7 @@ import {
   emptyWorldThreadStatus,
   toWorldThreadStatus,
 } from "./worldStatus.ts";
-import { teardownDecision } from "./worldTeardown.ts";
+import { busyReason, teardownDecision } from "./worldTeardown.ts";
 import { WorldThreadHooks } from "./WorldThreadHooks.ts";
 
 const STATUS_TIMEOUT_MS = 15_000;
@@ -78,7 +78,7 @@ const make = Effect.gen(function* () {
       Effect.provide(context),
       Effect.orElseSucceed(() => undefined),
     );
-    return { ...world, thread, socket: worldfsSocketPath(current.worldfsSocket, environment) };
+    return { ...world, thread, socket: worldfsSocketPath(environment) };
   });
 
   const readStatus = Effect.fn("ThreadWorlds.readStatus")(function* (
@@ -240,6 +240,15 @@ export const layerBackground = Layer.effectDiscard(
       ),
     );
 
+    const threadUse = (shell: OrchestrationV2ThreadShell) => ({
+      active: keepsWorkspace(shell),
+      lastActivityMs: Math.max(
+        ...[shell.updatedAt, shell.settledAt, shell.archivedAt, shell.latestRunCompletedAt]
+          .filter((value) => value != null)
+          .map((value) => DateTime.toEpochMillis(value)),
+      ),
+    });
+
     const allThreads = Effect.all([
       threads.getShellSnapshot(),
       threads.getShellSnapshot({ location: "archive" }),
@@ -269,17 +278,14 @@ export const layerBackground = Layer.effectDiscard(
               shell.worktreePath !== null &&
               threadWorldOf(config.baseDir, current.worlds, shell.worktreePath)?.root === root,
           );
+          const createdMs = NodeFS.statSync(root).ctimeMs;
+          if (busyReason({ nowMs, createdMs, threads: users.map(threadUse) }) !== undefined) {
+            continue;
+          }
           const decision = teardownDecision({
             nowMs,
-            createdMs: NodeFS.statSync(root).ctimeMs,
-            threads: users.map((shell) => ({
-              active: keepsWorkspace(shell),
-              lastActivityMs: Math.max(
-                ...[shell.updatedAt, shell.settledAt, shell.archivedAt, shell.latestRunCompletedAt]
-                  .filter((value) => value != null)
-                  .map((value) => DateTime.toEpochMillis(value)),
-              ),
-            })),
+            createdMs,
+            threads: users.map(threadUse),
             status:
               world.thread === undefined
                 ? emptyWorldThreadStatus(world.id, world.settings.path)
@@ -290,6 +296,14 @@ export const layerBackground = Layer.effectDiscard(
             yield* Effect.logDebug("Keeping a thread world", { root, reason: decision.reason });
             continue;
           }
+          // A thread may have resumed while the daemon and the files were read.
+          const fresh = yield* Effect.forEach(users, (user) => threads.getThreadShell(user.id));
+          const busyNow = busyReason({
+            nowMs: DateTime.toEpochMillis(yield* DateTime.now),
+            createdMs,
+            threads: fresh.flatMap((shell) => (shell === null ? [] : [threadUse(shell)])),
+          });
+          if (busyNow !== undefined) continue;
           yield* (
             world.thread === undefined
               ? removeWorkspaceDirectory(root)

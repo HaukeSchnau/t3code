@@ -42,7 +42,12 @@ import {
 import { findRepositoryMarker } from "../vcs/RepositoryMarker.ts";
 import { looseFiles } from "../world/looseFiles.ts";
 import { registerThreadWorld } from "../world/ThreadWorldLauncher.ts";
-import { threadWorldOf, worldOfProjectRoot } from "../world/threadWorldPaths.ts";
+import {
+  isWorldProjectRoot,
+  threadWorldOf,
+  worldOfProjectRoot,
+  worldThreadKey,
+} from "../world/threadWorldPaths.ts";
 import { createJjWorkspace, deleteJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
 import { ManagedWorkspaceError, removeWorkspaceDirectory } from "./WorkspaceCommand.ts";
 import {
@@ -181,8 +186,9 @@ const make = Effect.gen(function* () {
   const worldOf = (projectRoot: string) =>
     worlds.pipe(Effect.map((all) => worldOfProjectRoot(config.baseDir, all, projectRoot)));
 
+  // By path, not settings: a world removed from settings keeps its threads out of the host root.
   const isWorldProject: ManagedWorkspaces["Service"]["isWorldProject"] = (projectRoot) =>
-    worldOf(projectRoot).pipe(Effect.map((world) => world !== undefined));
+    Effect.succeed(isWorldProjectRoot(config.baseDir, projectRoot));
 
   const backendFor: ManagedWorkspaces["Service"]["backendFor"] = Effect.fn(
     "ManagedWorkspaces.backendFor",
@@ -340,9 +346,24 @@ const make = Effect.gen(function* () {
       if (backend === "git") {
         return yield* fail("ManagedWorkspaces.create", "Git projects use worktrees.");
       }
-      const world = backend === "world" ? yield* worldOf(input.projectRoot) : undefined;
-      if (backend === "world" && world === undefined) {
-        return yield* fail("ManagedWorkspaces.create", "The world is no longer configured.");
+      if (backend === "world") {
+        const world = yield* worldOf(input.projectRoot);
+        if (world === undefined) {
+          return yield* fail(
+            "ManagedWorkspaces.create",
+            "This world is not configured on this server. Add it to the server's worlds settings.",
+          );
+        }
+        // Named by the daemon's key, so a retried preparation or a resume finds the same world.
+        const root = NodePath.join(input.projectRoot, worldThreadKey(input.threadId));
+        yield* registerThreadWorld({
+          root,
+          world: world.id,
+          settings: world.settings,
+          threadId: input.threadId,
+          projectId: input.projectId,
+        });
+        return { worktreePath: root, backend };
       }
       const seed = yield* nameSeed(input);
       const marker = findRepositoryMarker(input.projectRoot);
@@ -352,8 +373,7 @@ const make = Effect.gen(function* () {
           : new Set<string>();
       const worktreePath = yield* withWorkspaceReservation(
         {
-          // A thread world sits below its world's project root.
-          parentPath: world === undefined ? workspaceParent(input.projectRoot) : input.projectRoot,
+          parentPath: workspaceParent(input.projectRoot),
           seed,
           fallbackSeed: fallbackWorkspaceSeed(input.threadId),
           unavailableNames,
@@ -361,39 +381,31 @@ const make = Effect.gen(function* () {
         },
         (reservation) => {
           const created =
-            world !== undefined
-              ? registerThreadWorld({
-                  root: reservation.path,
-                  world: world.id,
-                  settings: world.settings,
-                  threadId: input.threadId,
-                  projectId: input.projectId,
+            backend === "jj"
+              ? createJjWorkspace({
+                  projectRoot: input.projectRoot,
+                  destination: reservation.path,
+                  name: reservation.name,
+                  description: `wip: ${seed || reservation.name}`,
+                  baseRef: input.baseRef,
+                  startFromOrigin: input.startFromOrigin,
                 })
-              : backend === "jj"
-                ? createJjWorkspace({
-                    projectRoot: input.projectRoot,
+              : backend === "isolated"
+                ? createIsolatedWorkspace({
+                    source: input.projectRoot,
                     destination: reservation.path,
-                    name: reservation.name,
-                    description: `wip: ${seed || reservation.name}`,
+                    projectId: input.projectId,
+                    workspaceId: `workspace:${input.threadId}`,
+                    profile: input.profile ?? "familiar",
                     baseRef: input.baseRef,
                     startFromOrigin: input.startFromOrigin,
                   })
-                : backend === "isolated"
-                  ? createIsolatedWorkspace({
-                      source: input.projectRoot,
-                      destination: reservation.path,
-                      projectId: input.projectId,
-                      workspaceId: `workspace:${input.threadId}`,
-                      profile: input.profile ?? "familiar",
-                      baseRef: input.baseRef,
-                      startFromOrigin: input.startFromOrigin,
-                    })
-                  : createDirectoryCopy({
-                      source: input.projectRoot,
-                      destination: reservation.path,
-                      baseDir: config.baseDir,
-                      workspacesRoot,
-                    });
+                : createDirectoryCopy({
+                    source: input.projectRoot,
+                    destination: reservation.path,
+                    baseDir: config.baseDir,
+                    workspacesRoot,
+                  });
           // The reservation means nobody else owns this path, so a failed or
           // cancelled creation can remove whatever it left behind.
           return created.pipe(

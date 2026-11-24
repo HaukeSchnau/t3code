@@ -2802,6 +2802,13 @@ const make = Effect.gen(function* () {
     createThreads: Effect.fn("OrchestratorMcpService.createThreads")(
       function* (callerScope, input) {
         const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
+        // New threads here share the parent's checkout, which a world never shares (patches/worlds.md).
+        if ((yield* requireProject(parent.thread.projectId)).world != null) {
+          return yield* failure(
+            "invalid_request",
+            "Threads in a world each need their own world. Start them with t3_thread_launch instead.",
+          );
+        }
         const parentRun = ThreadManagementService.latestActiveRun(parent);
         if (
           parentRun === undefined ||

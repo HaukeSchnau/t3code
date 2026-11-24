@@ -943,12 +943,7 @@ const make = Effect.gen(function* () {
 
   const isWorldProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.succeed(false),
-          onSome: (project) => managedWorkspaces.isWorldProject(project.workspaceRoot),
-        }),
-      ),
+      Effect.map((project) => Option.isSome(project) && project.value.world != null),
       Effect.orElseSucceed(() => false),
     );
 
@@ -960,8 +955,7 @@ const make = Effect.gen(function* () {
         request.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(request.projectId))
           ? { ...request, workspaceStrategy: { type: "root" } }
-          : (request.workspaceStrategy.type === "root" ||
-                request.workspaceStrategy.type === "worktree") &&
+          : request.workspaceStrategy.type !== "workspace" &&
               (yield* isWorldProject(request.projectId))
             ? // Every thread in a world gets its own thread world (patches/worlds.md).
               { ...request, workspaceStrategy: { type: "workspace" } }

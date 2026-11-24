@@ -31,6 +31,11 @@ function segments(baseDir: string, path: string): ReadonlyArray<string> | undefi
   return relative.split(NodePath.sep);
 }
 
+/** Whether `projectRoot` is a world's project root, configured or not. */
+export function isWorldProjectRoot(baseDir: string, projectRoot: string): boolean {
+  return segments(baseDir, projectRoot)?.length === 1;
+}
+
 /** The world whose project root is `projectRoot`, if it is configured. */
 export function worldOfProjectRoot(
   baseDir: string,

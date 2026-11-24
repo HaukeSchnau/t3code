@@ -29,8 +29,6 @@ Worlds come from the server's settings, so set them once per server, for example
 - `path` is where every thread sees the world.
 - `layout` places repositories by forge path. Without a matching rule a repository sits at its
   forge path, such as `git.schnau.dev/schnau/t3code`.
-- `worldfsSocket` names the daemon's socket when it isn't at
-  `$XDG_RUNTIME_DIR/worldfs/ctl.sock`.
 
 The server then adds a project for each world. Removing a world from the settings leaves its
 project and threads in place.

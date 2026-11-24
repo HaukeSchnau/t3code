@@ -14,6 +14,19 @@ export type TeardownDecision =
   | { readonly teardown: true }
   | { readonly teardown: false; readonly reason: string };
 
+/** Why a thread world must stay before anything is asked of the daemon, or undefined. */
+export function busyReason(input: {
+  readonly nowMs: number;
+  readonly createdMs: number;
+  readonly threads: ReadonlyArray<WorldThreadUse>;
+}): string | undefined {
+  if (input.threads.some((thread) => thread.active)) return "a thread still uses it";
+  const lastMs = Math.max(input.createdMs, ...input.threads.map((t) => t.lastActivityMs));
+  return input.nowMs - lastMs < WORLD_QUIET_MS
+    ? "its threads were active in the last 6 hours"
+    : undefined;
+}
+
 /**
  * Whether a thread world can go. It never goes while the daemon reports
  * work no remote has, or can't be asked, or while files outside the world's repos exist,
@@ -29,13 +42,8 @@ export function teardownDecision(input: {
   readonly status: WorldThreadStatus | undefined;
   readonly looseFiles: ReadonlyArray<string>;
 }): TeardownDecision {
-  if (input.threads.some((thread) => thread.active)) {
-    return { teardown: false, reason: "a thread still uses it" };
-  }
-  const lastMs = Math.max(input.createdMs, ...input.threads.map((t) => t.lastActivityMs));
-  if (input.nowMs - lastMs < WORLD_QUIET_MS) {
-    return { teardown: false, reason: "its threads were active in the last 6 hours" };
-  }
+  const busy = busyReason(input);
+  if (busy !== undefined) return { teardown: false, reason: busy };
   if (input.status === undefined || !input.status.available) {
     return { teardown: false, reason: "the worldfs daemon could not be asked" };
   }

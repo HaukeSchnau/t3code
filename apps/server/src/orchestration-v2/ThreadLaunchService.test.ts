@@ -25,6 +25,7 @@ import {
   ScheduledTaskId,
   type ServerProvider,
   ThreadId,
+  WorldId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -134,6 +135,8 @@ interface HarnessOptions {
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly managedWorkspaces?: Partial<ManagedWorkspaces.ManagedWorkspaces["Service"]>;
+  /** Marks the project as a fleet world's project. */
+  readonly projectWorld?: string;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
   /** Runs before the background preparation reads the run's status. */
   readonly beforePreparationCheck?: () => Effect.Effect<void>;
@@ -198,7 +201,11 @@ function makeHarness(options: HarnessOptions = {}) {
       getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some(project)
+            ? Option.some(
+                options.projectWorld === undefined
+                  ? project
+                  : { ...project, world: WorldId.make(options.projectWorld) },
+              )
             : id === otherProjectId
               ? Option.some(otherProject)
               : Option.none(),
@@ -234,7 +241,6 @@ function makeHarness(options: HarnessOptions = {}) {
     ProviderRegistryMock.layer(options.providers),
     Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({
       resolveLaunchStrategy: (input) => Effect.succeed(input.strategy),
-      isWorldProject: () => Effect.succeed(false),
       checkCopy: () => Effect.void,
       ...options.managedWorkspaces,
     }),
@@ -1139,9 +1145,7 @@ it.effect("gives a local launch in a world project its own thread world", () =>
     const create = vi.fn((_input: ManagedWorkspaces.CreateManagedWorkspaceInput) =>
       Effect.succeed({ worktreePath: "/t3/worlds/buildlinx/fix-it", backend: "world" as const }),
     );
-    const harness = makeHarness({
-      managedWorkspaces: { isWorldProject: () => Effect.succeed(true), create },
-    });
+    const harness = makeHarness({ projectWorld: "buildlinx", managedWorkspaces: { create } });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const launched = yield* launches.launch(

@@ -1565,8 +1565,6 @@ export const ServerSettings = Schema.Struct({
   worlds: Schema.Record(WorldId, WorldSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-  /** The worldfs daemon's control socket. Empty means `$XDG_RUNTIME_DIR/worldfs/ctl.sock`. */
-  worldfsSocket: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // Schema.Unknown preserves unknown-driver configs across versions; see providerInstance.ts.
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1963,7 +1961,6 @@ export const ServerSettingsPatch = Schema.Struct({
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   // Replaced whole, so removing a world or a layout rule is one patch.
   worlds: Schema.optionalKey(Schema.Record(WorldId, WorldSettings)),
-  worldfsSocket: Schema.optionalKey(TrimmedString),
   // Merge per source to avoid racing other edits; null removes an entry.
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),

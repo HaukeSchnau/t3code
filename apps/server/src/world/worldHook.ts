@@ -7,32 +7,95 @@
  */
 import * as NodePath from "node:path";
 
-const CD_TARGET =
-  /(?:^|&&|\|\||;|\||\n|\(|\bthen\b|\bdo\b)\s*(?:builtin\s+)?(?:cd|pushd)\s+("[^"]*"|'[^']*'|[^\s;&|()]+)/g;
+type Token = { readonly word: string } | { readonly op: string };
 
-function unquote(word: string): string {
-  return (word.startsWith('"') && word.endsWith('"')) ||
-    (word.startsWith("'") && word.endsWith("'"))
-    ? word.slice(1, -1)
-    : word;
+const OPERATORS = ["&&", "||", ";", "|", "&", "\n", "(", ")"];
+
+/** Words and control operators, with quotes removed and quoted operators kept as text. */
+function tokenize(command: string): Token[] {
+  const tokens: Token[] = [];
+  let word: string | null = null;
+  const flush = () => {
+    if (word !== null) tokens.push({ word });
+    word = null;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!;
+    if (char === "'" || char === '"') {
+      const close = command.indexOf(char, i + 1);
+      const end = close === -1 ? command.length : close;
+      word = (word ?? "") + command.slice(i + 1, end);
+      i = end;
+    } else if (char === "\\" && i + 1 < command.length) {
+      word = (word ?? "") + command[++i];
+    } else if (char === " " || char === "\t") {
+      flush();
+    } else {
+      const op = OPERATORS.find((candidate) => command.startsWith(candidate, i));
+      if (op === undefined) {
+        word = (word ?? "") + char;
+      } else {
+        flush();
+        tokens.push({ op });
+        i += op.length - 1;
+      }
+    }
+  }
+  flush();
+  return tokens;
 }
+
+/** Words after which the next word is still a command. */
+const PREFIXES: ReadonlySet<string> = new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "do",
+  "while",
+  "until",
+  "{",
+  "!",
+  "builtin",
+]);
 
 /**
  * The directories `command` runs in: the session's cwd, then each `cd` or `pushd` target in
- * order, each resolved against the one before. Targets the hook cannot know, such as `cd -`,
- * a bare `cd`, or one built from variables, are skipped; the daemon's check-out on `cd`
- * still covers them.
+ * order, each resolved against the directory it runs in. A subshell's `cd` ends with it, and the
+ * right side of `||` runs where the failed left side started. Targets the hook cannot know, such
+ * as `cd -`, a bare `cd`, or one built from variables, are skipped; the daemon's check-out on
+ * `cd` still covers them.
  */
 export function commandDirectories(command: string, cwd: string, home: string): string[] {
   const directories = [cwd];
+  const subshells: string[] = [];
   let current = cwd;
-  for (const match of command.matchAll(CD_TARGET)) {
-    const word = unquote(match[1] ?? "");
-    if (word === "" || word === "-" || word.startsWith("-") || /[$`*?]/.test(word)) continue;
-    const expanded =
-      word === "~" ? home : word.startsWith("~/") ? NodePath.join(home, word.slice(2)) : word;
-    current = NodePath.resolve(current, expanded);
-    directories.push(current);
+  let beforeCd = cwd;
+  let commandStart = true;
+  let cdTarget = false;
+  for (const token of tokenize(command)) {
+    if ("op" in token) {
+      cdTarget = false;
+      commandStart = true;
+      if (token.op === "(") subshells.push(current);
+      else if (token.op === ")") current = subshells.pop() ?? current;
+      else if (token.op === "||") current = beforeCd;
+      continue;
+    }
+    const word = token.word;
+    if (cdTarget) {
+      cdTarget = false;
+      if (word === "" || word.startsWith("-") || /[$`*?]/.test(word)) continue;
+      const expanded =
+        word === "~" ? home : word.startsWith("~/") ? NodePath.join(home, word.slice(2)) : word;
+      beforeCd = current;
+      current = NodePath.resolve(current, expanded);
+      directories.push(current);
+    } else if (commandStart) {
+      if (PREFIXES.has(word)) continue;
+      commandStart = false;
+      cdTarget = word === "cd" || word === "pushd";
+    }
   }
   return directories;
 }

@@ -4,7 +4,6 @@
  * host mount namespace, so it calls as the host and names the thread explicitly.
  */
 import * as NodeNet from "node:net";
-import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -15,10 +14,9 @@ export class WorldfsError extends Schema.TaggedError<WorldfsError>()("WorldfsErr
   message: Schema.String,
 }) {}
 
-export function worldfsSocketPath(configured: string, environment: NodeJS.ProcessEnv): string {
-  if (configured !== "") return configured;
-  const runtime = environment.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`;
-  return NodePath.join(runtime, "worldfs", "ctl.sock");
+/** The socket agent-exec uses too (`native/agent-exec/worlds.py`), so both reach one daemon. */
+export function worldfsSocketPath(environment: NodeJS.ProcessEnv): string {
+  return environment.WORLDFS_SOCKET || `/run/user/${process.getuid?.() ?? 0}/worldfs/ctl.sock`;
 }
 
 const Failure = Schema.Struct({
