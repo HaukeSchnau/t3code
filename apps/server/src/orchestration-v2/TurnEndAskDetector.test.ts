@@ -211,6 +211,7 @@ function makeHarness(
       Effect.succeedSome({
         projectId,
         title: "Project",
+        hasCustomTitle: false,
         workspaceRoot: "/repo",
         defaultModelSelection: { instanceId, model: "gpt-5.4" },
         defaultThreadEnvMode: null,
@@ -218,6 +219,7 @@ function makeHarness(
         faviconPath: null,
         projectIcon: null,
         scripts: [],
+        trackedFolders: [],
         createdAt: "2026-11-19T00:00:00.000Z",
         updatedAt: "2026-11-19T00:00:00.000Z",
         pinnedAt: null,

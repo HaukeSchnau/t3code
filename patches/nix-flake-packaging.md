@@ -55,9 +55,11 @@ when pnpm fails.
 The three derivations deliberately have separate source filters. Web-only edits do not invalidate the server
 bundle or runtime dependencies; server-only edits do not invalidate the web bundle; documentation changes do
 not invalidate dependency fetches. Lockfile and manifest changes remain shared inputs because they can change
-any dependency graph. Both bundles import every `packages/provider-*`, `packages/secret-provider-*` and
-`packages/source-control-*` package except the test kits, so `integrationPackages` in `flake.nix` selects
-those by name and picks up packages upstream adds.
+any dependency graph. Vendored package tarballs such as `apps/web/deps/*.tgz` count as manifests, since
+pnpm installs from them. Both bundles import every `packages/provider-*`, `packages/secret-provider-*`,
+`packages/source-control-*` and `packages/issue-tracker-*` package except the test kits, so
+`integrationPackages` in `flake.nix` selects those by name and picks up packages upstream adds. A build
+config that imports a new `scripts/lib` helper needs that file added to its source set.
 
 Production Nix builds disable web and server source maps. Local and development builds retain source maps by
 default; set `T3CODE_WEB_SOURCEMAP=false` or `T3CODE_SERVER_SOURCEMAP=false` to reproduce the production mode.
@@ -121,6 +123,7 @@ running release untouched, and `failureMode = "defer"` keeps the new release que
 retries later. Upstream has no idle check. `t3 status idle` (`cli/status.ts`),
 `GET /api/server/idle` (`status/http.ts`) and the `ServerIdleStatus` contract are fork additions.
 `idle` is a subcommand of upstream's own `t3 status`, so the command line stays the same.
+`apps/server/src/feedback/FeedbackReport.ts` lists it among the `t3` commands a feedback report may name.
 
 The command asks the running server first and falls back to reading the database. It exits 0 when
 idle, 1 when busy and 2 when the state is unknown. `status/IdleStatus.ts` reads the orchestration

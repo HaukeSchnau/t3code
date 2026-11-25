@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import {
   type HtmlRenderReference,
   HTML_RENDER_COLUMN_WIDTH,
+  HTML_RENDER_CONTAIN_SCROLL_FRAGMENT,
   htmlRenderFrameHeight,
   htmlRenderResult,
   htmlRenderThemeFragment,
@@ -44,7 +45,8 @@ export function GuestHtmlRender({
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
   const [contentHeight, setContentHeight] = useState<number>();
-  // The theme and saved state ride in the fragment for the first paint; later theme changes are posted.
+  // The theme and saved state ride in the fragment for the first paint; later theme changes are
+  // posted. The page sits inline among the shared messages, so its scrollIntoView calls are contained.
   const [src, setSrc] = useState<string | null>(null);
   const page = `${GUEST_RENDER_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}&item=${encodeURIComponent(itemId)}`;
   const initialTheme = useRef(theme);
@@ -52,7 +54,11 @@ export function GuestHtmlRender({
   useEffect(() => {
     let current = true;
     const open = (state?: HtmlRenderState) => {
-      if (current) setSrc(`${page}${htmlRenderThemeFragment(initialTheme.current, state)}`);
+      if (current) {
+        setSrc(
+          `${page}${htmlRenderThemeFragment(initialTheme.current, state)}${HTML_RENDER_CONTAIN_SCROLL_FRAGMENT}`,
+        );
+      }
     };
     fetch(
       `${GUEST_RENDER_STATE_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}&item=${encodeURIComponent(itemId)}`,

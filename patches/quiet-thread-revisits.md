@@ -10,8 +10,8 @@ over a slow remote connection.
 
 ## Required behavior
 
-This covers web and desktop. Mobile runs upstream's behavior, a delayed `Syncing messages...` pill
-in `ThreadDetailScreen.tsx`.
+This covers web and desktop. Mobile runs upstream's behavior, a delayed sync status in the thread
+header subtitle (`ThreadRouteScreen.tsx`).
 
 - Show `Loading messages...` only when no conversation content is available. `threadSync.ts` has
   no syncing phase.

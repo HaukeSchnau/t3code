@@ -2,6 +2,7 @@ import { isFollowUpClosed } from "@t3tools/client-runtime/state/follow-ups";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, FollowUp, FollowUpId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { msg, useGT, useMessages } from "gt-react";
 import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { type ReactNode, useId, useLayoutEffect, useRef, useState } from "react";
 
@@ -13,6 +14,13 @@ import { buildThreadRouteParams } from "~/threadRoutes";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { buildFollowUpGraph, type FollowUpGraph, type FollowUpGraphNode } from "./followUps.logic";
+
+// The relations buildFollowUpGraph names; a link's own kind is the user's or agent's text.
+const RELATION_LABELS: Readonly<Record<string, string>> = {
+  "came from": msg("came from"),
+  "picked up in": msg("picked up in"),
+  "merged into": msg("merged into"),
+};
 
 interface View {
   readonly x: number;
@@ -160,6 +168,8 @@ export function FollowUpGraphView(props: {
   readonly selectedKey: string | null;
   readonly onSelectFollowUp: (id: FollowUpId) => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const navigate = useNavigate();
   const graph = buildFollowUpGraph(props.stores, props.showClosed);
   const [laidOut, setLaidOut] = useState(() => ({
@@ -272,8 +282,10 @@ export function FollowUpGraphView(props: {
       <svg
         ref={svgRef}
         role="group"
-        aria-label="Follow-up graph"
-        aria-description="Drag or scroll to pan. Pinch or Ctrl+scroll to zoom. Plus, minus and 0 zoom from the keyboard."
+        aria-label={gt("Follow-up graph")}
+        aria-description={gt(
+          "Drag or scroll to pan. Pinch or Ctrl+scroll to zoom. Plus, minus and 0 zoom from the keyboard.",
+        )}
         tabIndex={0}
         data-zoom="near"
         className="group/graph block size-full cursor-grab touch-none outline-none select-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -376,7 +388,12 @@ export function FollowUpGraphView(props: {
                     labelVisibility,
                   )}
                 >
-                  {edge.labels.join(", ")}
+                  {edge.labels
+                    .map((label) => {
+                      const relation = RELATION_LABELS[label];
+                      return relation === undefined ? label : m(relation);
+                    })
+                    .join(", ")}
                 </text>
               </g>
             );
@@ -403,8 +420,10 @@ export function FollowUpGraphView(props: {
                 tabIndex={0}
                 aria-label={
                   node.kind === "followUp"
-                    ? `Follow-up, ${node.followUp.title}`
-                    : `Thread, ${threadTitles.get(node.key) || node.recordedTitle || "untitled"}`
+                    ? gt("Follow-up, {title}", { title: node.followUp.title })
+                    : gt("Thread, {title}", {
+                        title: threadTitles.get(node.key) || node.recordedTitle || gt("untitled"),
+                      })
                 }
                 aria-current={selected ? "true" : undefined}
                 className="group/node cursor-pointer outline-none"
@@ -466,25 +485,37 @@ export function FollowUpGraphView(props: {
       </svg>
       <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end justify-between gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-background/85 px-2 py-1 text-xs text-muted-foreground">
-          <LegendSwatch className="rounded-full bg-primary" label="Open" />
-          <LegendSwatch className="rounded-full bg-warning" label="Back now" />
-          <LegendSwatch className="rounded-full border-2 border-primary" label="Picked up" />
+          <LegendSwatch
+            className="rounded-full bg-primary"
+            label={gt("Open", { $context: "follow-up status" })}
+          />
+          <LegendSwatch className="rounded-full bg-warning" label={gt("Back now")} />
+          <LegendSwatch className="rounded-full border-2 border-primary" label={gt("Picked up")} />
           {props.showClosed ? (
             <>
-              <LegendSwatch className="rounded-full bg-success/60" label="Done" />
-              <LegendSwatch className="rounded-full bg-muted-foreground/45" label="Dropped" />
+              <LegendSwatch
+                className="rounded-full bg-success/60"
+                label={gt("Done", { $context: "follow-up status" })}
+              />
+              <LegendSwatch
+                className="rounded-full bg-muted-foreground/45"
+                label={gt("Dropped", { $context: "follow-up status" })}
+              />
             </>
           ) : null}
-          <LegendSwatch className="rounded-xs bg-muted-foreground/70" label="Thread" />
+          <LegendSwatch
+            className="rounded-xs bg-muted-foreground/70"
+            label={gt("Thread", { $context: "noun" })}
+          />
         </div>
         <div className="pointer-events-auto flex shrink-0 gap-1">
-          <GraphControl label="Zoom out" onClick={() => zoomBy(1 / 1.4)}>
+          <GraphControl label={gt("Zoom out")} onClick={() => zoomBy(1 / 1.4)}>
             <MinusIcon />
           </GraphControl>
-          <GraphControl label="Zoom in" onClick={() => zoomBy(1.4)}>
+          <GraphControl label={gt("Zoom in")} onClick={() => zoomBy(1.4)}>
             <PlusIcon />
           </GraphControl>
-          <GraphControl label="Fit to view" onClick={fit}>
+          <GraphControl label={gt("Fit to view")} onClick={fit}>
             <MaximizeIcon />
           </GraphControl>
         </div>

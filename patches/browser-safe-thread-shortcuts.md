@@ -30,4 +30,9 @@ default for browsers only when it would take over a browser shortcut for a diffe
 
 ## Maintenance
 
+The expanded defaults change the default count, so `apps/server/src/keybindings.test.ts` sizes its
+binding-limit fillers from a default's position (`fillersHidingDefaultsBefore`) instead of upstream's
+fixed counts. Upstream web browser tests run as a browser on Linux, so tests that press thread
+navigation keys (`ThreadTerminalDrawer.browser.test.tsx`) press them with `alt`.
+
 Retire this patch if upstream adopts client-aware defaults that do not claim browser tab shortcuts.

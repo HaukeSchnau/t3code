@@ -87,6 +87,7 @@ const DurableThreadBootstrap = Schema.Struct({
       baseBranch: Schema.String,
       branch: Schema.optionalKey(Schema.String),
       startFromOrigin: Schema.optionalKey(Schema.Boolean),
+      repositories: Schema.optionalKey(Schema.Array(Schema.Struct({ path: Schema.String }))),
     }),
   ),
   prepareWorkspace: Schema.optionalKey(
@@ -443,6 +444,8 @@ export interface DurableComposerSend {
     readonly projectCwd: string;
     readonly baseBranch: string;
     readonly startFromOrigin: boolean;
+    /** Tracked repositories the worktree takes; absent leaves the choice to the server. */
+    readonly repositories?: ReadonlyArray<{ readonly path: string }>;
   } | null;
   /** Set instead of `prepareWorktree` when the server creates a managed workspace. */
   readonly prepareWorkspace: Omit<ManagedWorkspaceLaunchStrategy, "type"> | null;
@@ -485,6 +488,9 @@ function threadBootstrap(
               projectCwd: send.prepareWorktree.projectCwd,
               baseBranch: send.prepareWorktree.baseBranch,
               ...(send.prepareWorktree.startFromOrigin ? { startFromOrigin: true } : {}),
+              ...(send.prepareWorktree.repositories
+                ? { repositories: send.prepareWorktree.repositories }
+                : {}),
             },
             runSetupScript: true,
           }),

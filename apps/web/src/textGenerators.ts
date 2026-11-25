@@ -1,6 +1,6 @@
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import { providerClients } from "@t3tools/client-runtime/provider-clients";
-import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import {
   type EnvironmentId,
   type ModelCapabilities,
@@ -16,6 +16,7 @@ import {
   type TextGeneratorModel,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import { msg, useMessages } from "gt-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -24,6 +25,7 @@ import {
   type ProviderInstanceEntry,
   providerInstanceEntriesFor,
 } from "./providerInstances";
+import { m, type MessageResolver } from "./i18n/messages";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { formatEnvironmentQueryError } from "./state/query";
 import { serverEnvironment } from "./state/server";
@@ -50,15 +52,23 @@ export const TEXT_GENERATOR_PRESETS: ReadonlyArray<TextGeneratorPreset> = [
     kind: "anthropic",
     baseUrl: "https://api.anthropic.com/v1",
   },
-  { id: "custom", label: "Custom (OpenAI-compatible)", kind: "openaiCompatible", baseUrl: "" },
+  {
+    id: "custom",
+    label: msg("Custom (OpenAI-compatible)"),
+    kind: "openaiCompatible",
+    baseUrl: "",
+  },
 ];
 
-export function textGeneratorDisplayName(config: TextGeneratorConfig): string {
+export function textGeneratorDisplayName(
+  config: TextGeneratorConfig,
+  resolve: MessageResolver = m,
+): string {
   if (config.label) return config.label;
   const preset = TEXT_GENERATOR_PRESETS.find(
     (candidate) => candidate.baseUrl === config.baseUrl && candidate.kind === config.kind,
   );
-  if (preset) return preset.label;
+  if (preset) return resolve(preset.label);
   try {
     return new URL(config.baseUrl).host;
   } catch {
@@ -126,20 +136,12 @@ const textGeneratorModelsAtom = Atom.family((key: string) => {
   return Atom.make((get) => {
     // Read again after a refresh; the server's cache already holds the new list by then.
     get(refreshCountAtom(`${environmentId}:${id}`));
-    return Effect.promise(() =>
-      runAtomCommand(
-        get.registry,
-        serverEnvironment.listTextGeneratorModels,
-        { environmentId, input: { id } },
-        { reportFailure: false },
-      ),
-    ).pipe(
-      Effect.flatMap((result) =>
-        result._tag === "Success"
-          ? Effect.succeed(result.value.models)
-          : Effect.fail(formatEnvironmentQueryError(result.cause)),
-      ),
-    );
+    return serverEnvironment.listTextGeneratorModels
+      .run(get.registry, { environmentId, input: { id } })
+      .pipe(
+        Effect.map((result) => result.models),
+        Effect.catchCause((cause) => Effect.fail(formatEnvironmentQueryError(cause))),
+      );
   }).pipe(Atom.setIdleTTL(5 * 60_000), Atom.withLabel(`text-generator-models:${key}`));
 });
 
@@ -233,27 +235,34 @@ export function useTextGeneratorModels(
 }
 
 /** The server sends these as the Responses API's `reasoning.effort` and `service_tier`. */
-const RESPONSES_MODEL_CAPABILITIES: ModelCapabilities = {
+const responsesModelCapabilities = (resolve: MessageResolver): ModelCapabilities => ({
   optionDescriptors: [
     {
       id: "reasoningEffort",
-      label: "Reasoning",
+      label: resolve(msg("Reasoning", { $context: "model option: reasoning effort" })),
       type: "select",
       options: [
-        { id: "low", label: "Low", isDefault: true },
-        { id: "medium", label: "Medium" },
-        { id: "high", label: "High" },
+        {
+          id: "low",
+          label: resolve(msg("Low", { $context: "reasoning effort" })),
+          isDefault: true,
+        },
+        { id: "medium", label: resolve(msg("Medium", { $context: "reasoning effort" })) },
+        { id: "high", label: resolve(msg("High", { $context: "reasoning effort" })) },
       ],
     },
     {
       id: "fastMode",
-      label: "Fast Mode",
+      label: resolve(msg("Fast Mode")),
       type: "boolean",
-      description:
-        "Priority processing. Costs more per token on an API key, or uses more of a plan's limits.",
+      description: resolve(
+        msg(
+          "Priority processing. Costs more per token on an API key, or uses more of a plan's limits.",
+        ),
+      ),
     },
   ],
-};
+});
 
 /** Picker stand-in for a text generator. It never leaves the settings pickers. */
 function textGeneratorSnapshot(
@@ -261,8 +270,9 @@ function textGeneratorSnapshot(
   config: TextGeneratorConfig,
   result: AsyncResult.AsyncResult<ReadonlyArray<TextGeneratorModel>, string>,
   selectedModels: ReadonlyArray<string>,
+  resolve: MessageResolver,
 ): ServerProvider {
-  const capabilities = config.responsesApi === true ? RESPONSES_MODEL_CAPABILITIES : null;
+  const capabilities = config.responsesApi === true ? responsesModelCapabilities(resolve) : null;
   const discovered = AsyncResult.isSuccess(result)
     ? result.value.map((model): ServerProviderModel => ({
         slug: model.id,
@@ -278,7 +288,7 @@ function textGeneratorSnapshot(
   return {
     instanceId: id,
     driver: textGeneratorBrand(config),
-    displayName: textGeneratorDisplayName(config),
+    displayName: textGeneratorDisplayName(config, resolve),
     supportsTextGeneration: true,
     enabled: config.enabled,
     installed: true,
@@ -312,6 +322,7 @@ export function useTextGenerationTargets(input: {
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
 } {
   const { environmentId, settings } = input;
+  const resolve = useMessages();
   const generators =
     environmentId === null
       ? []
@@ -343,6 +354,7 @@ export function useTextGenerationTargets(input: {
       input.selections.flatMap((selection) =>
         selection?.instanceId === id && selection.model ? [selection.model] : [],
       ),
+      resolve,
     ),
   );
   const providers = input.providers.filter(

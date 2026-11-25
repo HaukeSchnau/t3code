@@ -20,6 +20,7 @@ import type {
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
+import { m, type MessageResolver } from "../../i18n/messages";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
@@ -46,22 +47,28 @@ function getProjectSortTimestamp(
         Number.NEGATIVE_INFINITY);
 }
 
-export function buildHomeProjectScopes(input: {
-  readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly environmentId: EnvironmentId | null;
-  readonly projectGroupingMode: SidebarProjectGroupingMode;
-}): ReadonlyArray<HomeProjectScope> {
+export function buildHomeProjectScopes(
+  input: {
+    readonly projects: ReadonlyArray<EnvironmentProject>;
+    readonly environmentId: EnvironmentId | null;
+    readonly projectGroupingMode: SidebarProjectGroupingMode;
+  },
+  resolve: MessageResolver = m,
+): ReadonlyArray<HomeProjectScope> {
   const projects = input.projects.filter(
     (project) => input.environmentId === null || project.environmentId === input.environmentId,
   );
-  return buildProjectGroups({
-    projects,
-    groupScratchProjects: true,
-    settings: {
-      sidebarProjectGroupingMode: input.projectGroupingMode,
-      sidebarProjectGroupingOverrides: {},
+  return buildProjectGroups(
+    {
+      projects,
+      groupScratchProjects: true,
+      settings: {
+        sidebarProjectGroupingMode: input.projectGroupingMode,
+        sidebarProjectGroupingOverrides: {},
+      },
     },
-  }).map((group) => {
+    resolve,
+  ).map((group) => {
     return {
       key: group.key,
       title: group.label,
@@ -74,22 +81,22 @@ export function buildHomeProjectScopes(input: {
   });
 }
 
-/**
- * The scope a thread list's project filter selects. A legacy per-environment scratch key reads as
- * the shared scratch scope on every read (the stored key changes only when the user picks a
- * filter), and an archived or missing project reads as all projects, matching the filter menu.
- */
-export function resolveHomeProjectScope(input: {
-  readonly scopes: ReadonlyArray<HomeProjectScope>;
-  readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly projectKey: string | null;
-  readonly projectGroupingMode: SidebarProjectGroupingMode;
-}): HomeProjectScope | null {
-  const key = resolveScratchProjectScopeKey(input.projectKey, input.projects, {
-    sidebarProjectGroupingMode: input.projectGroupingMode,
+/** The scope the thread list's project filter shows; an archived or unknown key shows all projects. */
+export function resolveHomeProjectFilterScope(
+  scopes: ReadonlyArray<HomeProjectScope>,
+  projects: ReadonlyArray<EnvironmentProject>,
+  options: {
+    readonly selectedProjectKey: string | null;
+    readonly projectGroupingMode: SidebarProjectGroupingMode;
+  },
+): HomeProjectScope | null {
+  // A legacy per-environment scratch key resolves here; the stored value is only
+  // rewritten when the user picks a filter.
+  const key = resolveScratchProjectScopeKey(options.selectedProjectKey, projects, {
+    sidebarProjectGroupingMode: options.projectGroupingMode,
     sidebarProjectGroupingOverrides: {},
   });
-  return pickableProjectGroups(input.scopes).find((scope) => scope.key === key) ?? null;
+  return pickableProjectGroups(scopes).find((scope) => scope.key === key) ?? null;
 }
 
 export function findHomeProjectScope(

@@ -114,7 +114,8 @@ paired client. It has no settings command and no HTTP route for settings.
   - `stripDefaultServerSettings` and `ATOMIC_SETTINGS_KEYS` are exported.
 - `apps/server/src/ws.ts`: the `server.updateSettings` handler calls `updateSettingsForClient`, so
   the RPC and `t3 settings patch` share the `deviceHosts` filtering.
-- `apps/server/src/binCli.ts` registers the command.
+- `apps/server/src/binCli.ts` registers the command, and `apps/server/src/feedback/FeedbackReport.ts`
+  lists its paths among the `t3` commands an agent feedback report may name.
 - `packages/contracts/src/environmentHttp.ts` adds the routes to the fork's `server` group, typed in
   `packages/contracts/src/settingsCli.ts`.
 

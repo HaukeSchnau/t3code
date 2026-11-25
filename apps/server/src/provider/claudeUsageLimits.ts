@@ -56,8 +56,20 @@ export const makeClaudeScopedLimitNames = Ref.make<ClaudeScopedLimitNames>({
   overageIncluded: undefined,
 });
 
+const SCOPED_WINDOW_PREFIX = "seven_day_";
+const scopeToken = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+
 function scopedWindowId(displayName: string): string {
-  return `seven_day_${displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+  return `${SCOPED_WINDOW_PREFIX}${scopeToken(displayName)}`;
+}
+
+/** A model-scoped weekly allowance blocks only its own model; an unknown model is not blocked. */
+export function windowLimitsModel(
+  window: Pick<ServerProviderUsageWindow, "id">,
+  model: string | null,
+): boolean {
+  if (!window.id.startsWith(SCOPED_WINDOW_PREFIX)) return true;
+  return model !== null && scopeToken(model).includes(window.id.slice(SCOPED_WINDOW_PREFIX.length));
 }
 
 function scopedWindow(
@@ -211,6 +223,7 @@ export function claudeUsageResponseToLimits(input: {
     overageIncluded ??= entry.display_name;
   }
   const spendPercent = readSpendPercent(response.rate_limits);
+  const extra = response.rate_limits.extra_usage;
   if (spendPercent !== undefined) {
     windows.push({
       id: "monthly_spend",
@@ -220,7 +233,10 @@ export function claudeUsageResponseToLimits(input: {
     });
   }
   return {
-    limits: makeUsageLimits({ checkedAt, windows }),
+    limits: {
+      ...makeUsageLimits({ checkedAt, windows }),
+      ...(extra?.is_enabled && extra.monthly_limit === 0 ? { zeroSpendCap: true } : {}),
+    },
     names: { overageIncluded },
   };
 }
@@ -233,8 +249,9 @@ export const recordClaudeUsageResponse = (
   return Ref.set(namesRef, names).pipe(Effect.as(limits));
 };
 
+// The usage endpoint can report a window without a utilization, as the CLI's own schema allows.
 const ClaudeOauthWindow = Schema.Struct({
-  utilization: Schema.Number,
+  utilization: Schema.NullOr(Schema.Number),
   resets_at: Schema.NullOr(Schema.String),
 });
 

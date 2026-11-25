@@ -11,6 +11,7 @@ import {
   type HtmlRenderReference,
   type HtmlRenderVersionEntry,
 } from "@t3tools/shared/htmlRender";
+import { T, useGT, Var } from "gt-react";
 import { ChevronLeftIcon, ChevronRightIcon, Maximize2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -40,6 +41,19 @@ import { observeResize } from "~/lib/observeResize";
 
 const MIN_URL_LIFE_MS = 5 * 60_000;
 const NO_STATE: HtmlRenderState = {};
+const MAX_MEASURED_CONTENT_HEIGHTS = 200;
+
+// The height each render's page last reported, so a remounted frame opens at it before its page loads.
+const measuredContentHeights = new Map<string, number>();
+
+function rememberContentHeight(attachmentId: string, height: number) {
+  measuredContentHeights.delete(attachmentId);
+  measuredContentHeights.set(attachmentId, height);
+  if (measuredContentHeights.size > MAX_MEASURED_CONTENT_HEIGHTS) {
+    const oldest = measuredContentHeights.keys().next().value;
+    if (oldest !== undefined) measuredContentHeights.delete(oldest);
+  }
+}
 
 /**
  * One render and its versions. The reader follows the newest version until they page back;
@@ -56,6 +70,7 @@ export function HtmlRenderFrame(props: {
     | ((text: string, context: OrchestrationMessageContext) => Promise<void>)
     | undefined;
 }) {
+  const gt = useGT();
   const renderId = props.htmlRender.attachmentId;
   const last = props.versions.length - 1;
   const [selected, setSelected] = useState<number | null>(null);
@@ -95,7 +110,7 @@ export function HtmlRenderFrame(props: {
           )}
         >
           <Button
-            aria-label="Previous version"
+            aria-label={gt("Previous version")}
             size="icon-xs"
             variant="glass"
             disabled={index === 0}
@@ -110,7 +125,9 @@ export function HtmlRenderFrame(props: {
             <TooltipTrigger
               render={
                 <Button
-                  aria-label={index < last ? "Next version, a newer one exists" : "Next version"}
+                  aria-label={
+                    index < last ? gt("Next version, a newer one exists") : gt("Next version")
+                  }
                   size="icon-xs"
                   variant="glass"
                   disabled={index === last}
@@ -124,7 +141,7 @@ export function HtmlRenderFrame(props: {
               ) : null}
             </TooltipTrigger>
             <TooltipPopup side="bottom">
-              {index < last ? "A newer version exists" : "Newest version"}
+              {index < last ? gt("A newer version exists") : gt("Newest version")}
             </TooltipPopup>
           </Tooltip>
         </div>
@@ -143,6 +160,7 @@ function HtmlRenderVersionFrame(props: {
   readonly openTarget: HtmlRenderOpenTarget | undefined;
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
 }) {
+  const gt = useGT();
   const { attachmentId, title } = props.htmlRender;
   const { openTarget } = props;
   // Stable, so the frame's callback ref keeps its observers across renders.
@@ -151,9 +169,11 @@ function HtmlRenderVersionFrame(props: {
   });
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
   // Client fonts can exceed the server-measured height and cause nested scrolling.
-  const [contentHeight, setContentHeight] = useState<number>();
+  const [contentHeight, setContentHeight] = useState(() =>
+    measuredContentHeights.get(attachmentId),
+  );
   // The page reports its height once it has loaded; before that the reader sees nothing.
-  const pageShown = contentHeight !== undefined;
+  const [pageShown, setPageShown] = useState(false);
   const observeBox = (box: HTMLDivElement) => {
     setWidth(box.clientWidth);
     const stopResize = observeResize(box, ([entry]) => {
@@ -195,8 +215,8 @@ function HtmlRenderVersionFrame(props: {
     } else
       toastManager.add({
         type: "error",
-        title: "Page unavailable",
-        description: "Reconnect to the environment and try again.",
+        title: gt("Page unavailable"),
+        description: gt("Reconnect to the environment and try again."),
       });
   };
   const openFullScreenStable = useStableCallback(() => void openFullScreen());
@@ -237,7 +257,12 @@ function HtmlRenderVersionFrame(props: {
             className="block size-full"
             bridge={expanded ? undefined : props.bridge}
             state={props.readState()}
-            onContentHeight={setContentHeight}
+            containScroll
+            onContentHeight={(height) => {
+              rememberContentHeight(attachmentId, height);
+              setContentHeight(height);
+              setPageShown(true);
+            }}
             onFullscreenChange={onFullscreenChange}
           />
           <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/html-render:opacity-100 pointer-coarse:opacity-100">
@@ -245,7 +270,7 @@ function HtmlRenderVersionFrame(props: {
               <TooltipTrigger
                 render={
                   <Button
-                    aria-label="Open full screen"
+                    aria-label={gt("Open full screen")}
                     size="icon-xs"
                     variant="glass"
                     onClick={() => void openFullScreen()}
@@ -254,13 +279,17 @@ function HtmlRenderVersionFrame(props: {
               >
                 <Maximize2Icon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="left">Open full screen</TooltipPopup>
+              <TooltipPopup side="left">
+                <T>Open full screen</T>
+              </TooltipPopup>
             </Tooltip>
           </div>
         </>
       ) : failed ? (
         <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
-          Unable to load {title}
+          <T>
+            Unable to load <Var>{title}</Var>
+          </T>
         </p>
       ) : null}
       {expandedSrc !== null ? (

@@ -1,5 +1,7 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
 import * as DateTime from "effect/DateTime";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
@@ -103,18 +105,18 @@ export function oldestOpenAsk(thread: Pick<ThreadNeedsYouInput, "openAsks">) {
 }
 
 const NEED_LABELS: Record<ThreadNeedKind, string> = {
-  approval: "Approval",
-  question: "Question",
-  request: "Request",
-  subagent: "Subagent waiting",
-  guest: "Guest message",
-  turn_end: "Question",
-  page: "Page",
+  approval: msg("Approval", { $context: "what a thread waits on the user for" }),
+  question: msg("Question", { $context: "what a thread waits on the user for" }),
+  request: msg("Request", { $context: "what a thread waits on the user for" }),
+  subagent: msg("Subagent waiting"),
+  guest: msg("Guest message"),
+  turn_end: msg("Question", { $context: "what a thread waits on the user for" }),
+  page: msg("Page", { $context: "what a thread waits on the user for" }),
 };
 
 /** One line for a list row: the ask's text, or what kind of request waits. */
-export function threadNeedLabel(need: ThreadNeed): string {
-  return need.text ?? NEED_LABELS[need.kind];
+export function threadNeedLabel(need: ThreadNeed, resolve: MFunctionType = mFallback): string {
+  return need.text ?? resolve(NEED_LABELS[need.kind]);
 }
 
 /**
@@ -309,6 +311,13 @@ type ThreadKeyInput = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const WORKING_EXIT_GRACE_MS = 2_000;
 
 /**
+ * A run that ended this long ago has no continuation about to start, so its thread gets no
+ * grace. A client sees this for work that ended while it was closed or disconnected; the
+ * margin is wide so a client clock that runs ahead of the server does not cancel the grace.
+ */
+const STALE_EXIT_MS = 60_000;
+
+/**
  * Keep one at module scope so placement survives routes that unmount the list. Call
  * `observe` when the shells or the snapshot version change, or with null while the beta
  * is off. Its result stays fixed, so a list built from it can be cached.
@@ -410,8 +419,10 @@ export function createInboxReturnTracker() {
           thread.settledOverride === "settled" ||
           effectiveSnoozed(thread, { now: observedAt });
         // Only shelf placement is held: execution state and attention requests stay authoritative.
+        const endedAt = toSortableTimestamp(thread.latestRun?.completedAt ?? undefined);
+        const endedLongAgo = endedAt !== null && endedAt <= at - STALE_EXIT_MS;
         const deadline =
-          !actual && previous?.working && !actionable && !moved && !excluded
+          !actual && previous?.working && !actionable && !moved && !excluded && !endedLongAgo
             ? (previous.deadline ?? at + WORKING_EXIT_GRACE_MS)
             : null;
         const working = actual || (deadline !== null && deadline > at);

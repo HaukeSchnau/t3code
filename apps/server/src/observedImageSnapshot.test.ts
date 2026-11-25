@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./assets/AssetAccess.ts";
 import * as AssetSigner from "./assets/AssetSigner.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
+import * as WorkspacePreviewRevisions from "./assets/WorkspacePreviewRevisions.ts";
 import { resolveAttachmentPath } from "./attachmentStore.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
@@ -42,6 +43,7 @@ const testLayer = Layer.mergeAll(
     Layer.provideMerge(ServerSecretStore.layer.pipe(Layer.provide(configLayer))),
   ),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
+  WorkspacePreviewRevisions.layer,
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer)));
 
 const threadId = ThreadId.make("thread-observed-image");

@@ -2,6 +2,7 @@ import { StackActions, useNavigation, type StaticScreenProps } from "@react-navi
 import { groupHtmlRenderPages } from "@t3tools/client-runtime/state/html-render";
 import type { EnvironmentId, HtmlRenderPage, ThreadId } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
+import { T, useGT } from "gt-react-native";
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -16,15 +17,28 @@ type PagesTarget = { readonly environmentId: EnvironmentId; readonly threadId: T
 
 /** A thread's pages: the ones waiting for the reader, the new ones, then the rest. */
 export function ThreadPagesSheet({ route }: StaticScreenProps<PagesTarget>) {
+  const gt = useGT();
   const target = route.params;
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const query = useThreadPages(target);
   const groups = query.data === null ? null : groupHtmlRenderPages(query.data.pages);
   const sections = [
-    { title: "Waiting for you", pages: groups?.asks ?? [] },
-    { title: "New", pages: groups?.unseen ?? [] },
-    { title: "Seen", pages: groups?.seen ?? [] },
+    {
+      key: "asks",
+      title: gt("Waiting for you", { $context: "section, pages that ask for input" }),
+      pages: groups?.asks ?? [],
+    },
+    {
+      key: "unseen",
+      title: gt("New", { $context: "section, pages not seen yet" }),
+      pages: groups?.unseen ?? [],
+    },
+    {
+      key: "seen",
+      title: gt("Seen", { $context: "section, pages already seen" }),
+      pages: groups?.seen ?? [],
+    },
   ].filter((section) => section.pages.length > 0);
   const open = (page: HtmlRenderPage) => {
     void Haptics.selectionAsync();
@@ -36,7 +50,7 @@ export function ThreadPagesSheet({ route }: StaticScreenProps<PagesTarget>) {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <SheetHeader title="Pages" onClose={() => navigation.goBack()} />
+      <SheetHeader title={gt("Pages")} onClose={() => navigation.goBack()} />
       <ScreenContent>
         <ScrollView
           nestedScrollEnabled
@@ -47,15 +61,15 @@ export function ThreadPagesSheet({ route }: StaticScreenProps<PagesTarget>) {
         >
           {query.data === null ? (
             <Text className="pt-6 text-center text-sm text-foreground-muted">
-              {query.error ?? "Loading pages…"}
+              {query.error ?? gt("Loading pages…")}
             </Text>
           ) : sections.length === 0 ? (
             <Text className="pt-6 text-center text-sm text-foreground-muted">
-              No pages in this thread yet.
+              <T>No pages in this thread yet.</T>
             </Text>
           ) : (
             sections.map((section) => (
-              <ListSection key={section.title} title={section.title}>
+              <ListSection key={section.key} title={section.title}>
                 {section.pages.map((page, index) => (
                   <View
                     key={page.renderId}

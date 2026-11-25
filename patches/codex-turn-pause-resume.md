@@ -19,9 +19,10 @@ fork's retry now only covers overloads upstream does not retry, such as a `/comp
 - `packages/shared/src/codexTurnContinuation.ts` holds the rules the server, web and mobile share:
   which run Codex can resume, whether Codex is working, the retry state, and the banner text.
 - Resume uses upstream's `message.dispatch` with `manualContinuationOfRunId` and an empty message.
-  `Orchestrator.ts` also accepts overload failures as a source, rejects an empty continuation unless
-  the source run is Codex on the thread's current instance, and emits no user turn item for it. The
-  run keeps an empty conversation message because every v2 run points at one.
+  `Orchestrator.ts` also accepts overload failures as a source and emits no user turn item for an
+  empty continuation. The run keeps an empty conversation message because every v2 run points at
+  one. Upstream's native resume (#36526) now empties every manual continuation's text and resumes
+  through each adapter's `resumeTurn`, so the server no longer limits empty continuations to Codex.
 - `CodexAdapterV2.ts` sends `turn/start` with `input: []` for an empty message, the same request
   upstream uses for restart continuations.
 - `CodexOverloadRetryWorker.ts` runs on upstream's shared scheduler. Nothing about the sequence is
@@ -29,8 +30,8 @@ fork's retry now only covers overloads upstream does not retry, such as a `/comp
   run it continues and makes the dispatch idempotent. The attempt number is the length of that chain
   of overloaded runs, and the wait counts from the failed run's `completedAt`. A retry with agent
   output, or any continuation the user started, begins a new sequence. Other errors never match.
-- Web and desktop: `ChatView.tsx` prefers the Codex resumable run, `chat/useComposerResume.ts`
-  sends the empty message, `canPauseTurn` goes through `ChatComposer.tsx` and
+- Web and desktop: `ChatView.tsx` prefers the Codex resumable run, upstream's
+  `chat/useComposerResume.ts` sends the empty message, `canPauseTurn` goes through `ChatComposer.tsx` and
   `ComposerFooterPrimaryActions` (`chat/ComposerFooterControls.tsx`) to
   `ComposerPrimaryActions.tsx`, and `chat/ChatBannerLane.tsx` gives `ThreadErrorBanner.tsx` the
   retry line. Mobile: `useCodexTurnContinuation.ts` feeds
@@ -38,27 +39,30 @@ fork's retry now only covers overloads upstream does not retry, such as a `/comp
   `ThreadComposer.tsx`. `AppSymbol.android.tsx` maps the pause and filled play icons for Android.
 - Codex usage-limit stops resume without a message too. The automatic resume at reset
   (`UsageLimitRecoveryWorker.ts`) is upstream's and still sends its visible message.
-- Other providers keep Stop and upstream's Resume message. Mobile shows Resume only for Codex.
+- Other providers keep Stop. Upstream's web Resume (#36526) now sends no message for any provider.
+  Mobile shows Resume only for Codex.
 - Upstream's "Resume queue" (#21473) uses the same composer slot. While the thread's queue is held,
   Resume releases the queue as upstream does; otherwise it continues the paused Codex run without a
   message. Web and mobile follow the same rule.
 
 ## Upstream hooks
 
-- `Orchestrator.ts`: the overload clause and the Codex check in manual-continuation validation; the
-  skipped user turn item in the immediate-start path.
+- `Orchestrator.ts`: the overload clause in manual-continuation validation; the skipped user turn
+  item in the immediate-start path.
 - `CodexAdapterV2.ts`: the empty-input condition in `startTurn`.
 - `runtimeLayer.ts`: the worker beside `UsageLimitRecoveryWorker`.
 - `packages/shared/package.json`: the subpath export.
-- Web: `ChatView.tsx`, `useComposerResume.ts`, `ChatComposer.tsx`, `ComposerFooterControls.tsx`,
-  `ComposerPrimaryActions.tsx`, `ChatBannerLane.tsx`, `ThreadErrorBanner.tsx`.
+- Web: `ChatView.tsx`, `ChatComposer.tsx`, `ComposerFooterControls.tsx`,
+  `ComposerPrimaryActions.tsx` (`StopGenerationButton`), `ChatBannerLane.tsx`,
+  `ThreadErrorBanner.tsx`.
 - Mobile: `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx`, `ThreadComposer.tsx`,
   `AppSymbol.android.tsx`.
 
 ## Removal
 
 Drop the empty-message branches, the Orchestrator user-item skip, and the Pause controls when
-upstream resumes Codex without a message on every client. Upstream's in-process retry now covers
+upstream resumes Codex without a message on every client. Since upstream's native resume (#36526),
+web and mobile send an empty Resume for every provider, which may already meet this condition. Upstream's in-process retry now covers
 root overloads, so the worker, the overload clause and the retry notices in
 `packages/shared/src/codexTurnContinuation.ts`, web `ChatView.tsx` and mobile
 `CodexOverloadRetryCard.tsx` are due for removal together; the 2026-10-28 sync kept them because
@@ -70,8 +74,7 @@ accepting an empty `turn/start` input.
 - `packages/shared/src/codexTurnContinuation.test.ts`: resumable runs per provider and stop reason,
   the backoff schedule, exhaustion, and resets after progress or a manual Resume.
 - `CodexTurnContinuation.test.ts`: an empty continuation of an interrupted or overloaded Codex run
-  starts a run without a user turn item; a non-Codex thread rejects it and keeps the visible
-  message.
+  starts a run without a user turn item.
 - `CodexOverloadRetryWorker.test.ts`: the retry fires on schedule and after a restart, and other
   provider errors are left alone.
 - `CodexAdapterV2.test.ts`: `turn/start` with `input: []` for a message-free turn. Upstream's

@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
+import { T, Var } from "gt-react";
 
 import { shortcutLabelForCommand } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
@@ -24,10 +25,16 @@ export function NeedsYouTriageButton() {
           />
         }
       >
-        Triage
+        <T>Triage</T>
       </TooltipTrigger>
       <TooltipPopup side="bottom">
-        Go through them one by one{shortcutLabel ? ` (${shortcutLabel})` : ""}
+        {shortcutLabel ? (
+          <T>
+            Go through them one by one (<Var>{shortcutLabel}</Var>)
+          </T>
+        ) : (
+          <T>Go through them one by one</T>
+        )}
       </TooltipPopup>
     </Tooltip>
   );

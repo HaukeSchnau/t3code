@@ -180,6 +180,64 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
     }),
   );
 
+  it.effect("drops Cursor streaming deltas while keeping its lifecycle updates", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
+      const filePath = NodePath.join(tempDir, "events.log");
+      const threadId = ThreadId.make("cursor-deltas");
+      const cursorUpdate = (update: object) => ({
+        provider: "cursor",
+        kind: "protocol",
+        event: {
+          direction: "incoming",
+          stage: "decoded",
+          payload: { type: "interaction.update", runId: "run-1", update },
+        },
+      });
+      const toolCall = { type: "shell", args: { command: "ls" } };
+      const transient = [
+        { type: "text-delta", text: "Hel" },
+        { type: "thinking-delta", text: "Hmm" },
+        { type: "token-delta", tokens: 3 },
+        { type: "shell-output-delta", event: { stdout: "a.ts\n" } },
+        { type: "partial-tool-call", callId: "call-1", modelCallId: "m-1", toolCall },
+        {
+          type: "tool-call-delta",
+          callId: "call-1",
+          modelCallId: "m-1",
+          taskUpdate: { type: "text-delta", text: "Sub" },
+        },
+      ].map(cursorUpdate);
+      const retained = [
+        { type: "tool-call-started", callId: "call-1", modelCallId: "m-1", toolCall },
+        {
+          type: "tool-call-delta",
+          callId: "call-1",
+          modelCallId: "m-1",
+          taskUpdate: { type: "tool-call-completed", callId: "call-2", toolCall },
+        },
+        { type: "tool-call-completed", callId: "call-1", modelCallId: "m-1", toolCall },
+        { type: "turn-ended" },
+      ].map(cursorUpdate);
+
+      try {
+        const store = yield* makeEventNdjsonLogStore(filePath, { batchWindowMs: 0 });
+        const native = store.logger("native");
+        for (const event of [...transient, ...retained]) {
+          yield* native.write(event, threadId);
+        }
+        yield* store.close();
+
+        // Records hold metadata only, so the test counts them instead of comparing payloads.
+        assert.lengthOf(NodeFS.readFileSync(filePath, "utf8").trim().split("\n"), retained.length);
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   it.effect("bounds oversized records while retaining failure details", () =>
     Effect.gen(function* () {
       const tempDir = NodeFS.realpathSync(

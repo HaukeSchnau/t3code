@@ -3,6 +3,8 @@
 // archived shells merged in on demand. Browsing settled workspaces changes no lifecycle state.
 import type { ManagedWorkspacesCapability, ServerConfig, VcsDriverKind } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import type { ArchivedSnapshotEntry } from "./archivedThreads.ts";
 import { type EnvironmentThreadShell, threadRuntimeIsActive } from "./models.ts";
@@ -69,12 +71,12 @@ export function managedWorkspacesForProject(input: {
   return config.environment.capabilities.managedWorkspaces ?? null;
 }
 
-export function workspaceLabel(path: string): string {
+export function workspaceLabel(path: string, resolve: MFunctionType = mFallback): string {
   return (
     path
       .replace(/[\\/]+$/, "")
       .split(/[\\/]/)
-      .at(-1) || "Workspace"
+      .at(-1) || resolve(msg("Workspace"))
   );
 }
 

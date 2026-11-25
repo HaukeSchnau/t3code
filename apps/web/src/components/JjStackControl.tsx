@@ -10,6 +10,7 @@ import {
   type JjStackView,
 } from "@t3tools/client-runtime/state/vcs";
 import type { EnvironmentId, JjAction, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { AlertTriangleIcon, ChevronDownIcon, EllipsisIcon, LayersIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -82,6 +83,7 @@ export function JjStackControl({
   onOpenChanges,
   className,
 }: JjStackControlProps) {
+  const gt = useGT();
   const threadRef = scopeThreadRef(environmentId, threadId);
   // Drafts have no server thread yet, so nothing in the stack belongs to them.
   const serverThreadRef = useThreadShell(threadRef) ? threadRef : null;
@@ -110,11 +112,10 @@ export function JjStackControl({
   const conflictIndicator =
     view.conflictCount > 0 ? (
       <AlertTriangleIcon
-        aria-label={
-          view.conflictCount === 1
-            ? "1 change has conflicts"
-            : `${view.conflictCount} changes have conflicts`
-        }
+        aria-label={gt(
+          "{count, plural, one {{count} change has conflicts} other {{count} changes have conflicts}}",
+          { count: view.conflictCount },
+        )}
         className={cn("shrink-0 text-warning", isPanel ? "size-4" : "size-3")}
       />
     ) : null;
@@ -218,6 +219,7 @@ function useJjActions(input: {
   readonly serverThreadRef: ScopedThreadRef | null;
 }) {
   const { environmentId, cwd, threadId, serverThreadRef } = input;
+  const resolve = useMessages();
   const runAction = useAtomCommand(vcsEnvironment.jjRunAction, { reportFailure: false });
   const assignPaths = useAtomCommand(vcsEnvironment.jjAssignPaths, { reportFailure: false });
   const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
@@ -230,8 +232,8 @@ function useJjActions(input: {
     toastManager.add(
       stackedThreadToast({
         type: "error",
-        title: "jj action failed",
-        description: cause instanceof Error ? cause.message : "An error occurred.",
+        title: resolve(msg("jj action failed")),
+        description: cause instanceof Error ? cause.message : resolve(msg("An error occurred.")),
         timeout: resolveGitActionResultToastTiming("error").timeout,
         ...(toastData ? { data: toastData } : {}),
       }),
@@ -262,7 +264,7 @@ function useJjActions(input: {
       if (!isAtomCommandInterrupted(result)) reportFailure(squashAtomCommandFailure(result));
       return;
     }
-    const toast = jjActionToast(result.value);
+    const toast = jjActionToast(result.value, resolve);
     const pullRequestUrl = result.value.pullRequestUrl;
     if (!pullRequestUrl) {
       toastManager.add({ ...toast, ...successToastOptions() });
@@ -273,7 +275,7 @@ function useJjActions(input: {
         ...toast,
         ...successToastOptions(),
         actionProps: {
-          children: "Open",
+          children: resolve(msg("Open", { $context: "verb, opens the pull request" })),
           onClick: (event) => {
             toastManager.close(toastId);
             openPrLink(event, pullRequestUrl);
@@ -297,8 +299,12 @@ function useJjActions(input: {
     const count = result.value.assigned;
     toastManager.add({
       type: "success",
-      title:
-        count === 1 ? "Assigned 1 file to this thread" : `Assigned ${count} files to this thread`,
+      title: resolve(
+        msg(
+          "{count, plural, one {Assigned {count} file to this thread} other {Assigned {count} files to this thread}}",
+          { count },
+        ),
+      ),
       ...successToastOptions(),
     });
   };
@@ -320,21 +326,31 @@ interface JjStackPopoverBodyProps {
 
 function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
   const { view, pending } = props;
+  const gt = useGT();
+  const messages = useMessages();
   return (
     <div className="flex flex-col gap-2">
       <div className="flex min-h-5 items-center gap-2 px-1">
         <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          Stack on {view.base}
+          <T>
+            Stack on <Var>{view.base}</Var>
+          </T>
         </p>
         {view.conflictCount > 0 ? (
           <Badge variant="warning" size="sm">
-            {view.conflictCount === 1 ? "1 conflict" : `${view.conflictCount} conflicts`}
+            {gt("{count, plural, one {{count} conflict} other {{count} conflicts}}", {
+              count: view.conflictCount,
+            })}
           </Badge>
         ) : null}
         {pending ? <Spinner size="sm" tone="muted" /> : null}
       </div>
       {view.rows.length === 0 ? (
-        <p className="px-1 text-sm text-muted-foreground">No changes above {view.base}.</p>
+        <p className="px-1 text-sm text-muted-foreground">
+          <T>
+            No changes above <Var>{view.base}</Var>.
+          </T>
+        </p>
       ) : (
         <ul className="flex flex-col">
           {view.rows.map((row) => (
@@ -345,15 +361,15 @@ function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
       <div className="flex flex-wrap gap-1 border-t px-1 pt-2">
         {props.onOpenChanges ? (
           <Button size="xs" variant="outline" onClick={props.onOpenChanges}>
-            View changes
+            <T>View changes</T>
           </Button>
         ) : null}
         {props.canAssign ? (
           <Button size="xs" variant="outline" onClick={() => props.onDialog({ kind: "work" })}>
-            Work in other repositories
+            <T>Work in other repositories</T>
           </Button>
         ) : null}
-        {jjStackActions(view, props.hasTrunk).map(({ label, action, disabled }) => (
+        {jjStackActions(view, props.hasTrunk, messages).map(({ label, action, disabled }) => (
           <Button
             key={label}
             size="xs"
@@ -379,6 +395,8 @@ function JjStackRowItem({
   onAssign,
   onDialog,
 }: JjStackPopoverBodyProps & { readonly row: JjStackRow }) {
+  const gt = useGT();
+  const m = useMessages();
   const rowActions = jjRowActions(view, row);
   const showUnattributed = row.workingCopy && view.unattributed.length > 0;
   const hiddenUnattributed = view.unattributed.length - UNATTRIBUTED_PREVIEW_COUNT;
@@ -406,7 +424,11 @@ function JjStackRowItem({
         </p>
         <div className="flex flex-wrap items-center gap-1">
           <code className="text-xs text-muted-foreground">{row.shortChangeId}</code>
-          {row.empty ? <span className="text-xs text-muted-foreground">empty</span> : null}
+          {row.empty ? (
+            <span className="text-xs text-muted-foreground">
+              <T context="a jj change with no file changes">empty</T>
+            </span>
+          ) : null}
           {row.turnLabel ? (
             <Badge variant="secondary" size="sm">
               {row.turnLabel}
@@ -419,27 +441,32 @@ function JjStackRowItem({
               >
                 {row.pushed ? bookmark : `${bookmark} ↑`}
               </TooltipTrigger>
-              <TooltipPopup>{row.pushed ? "Pushed" : "Not pushed yet"}</TooltipPopup>
+              <TooltipPopup>
+                {row.pushed
+                  ? gt("Pushed", { $context: "a bookmark that is on its remote" })
+                  : gt("Not pushed yet")}
+              </TooltipPopup>
             </Tooltip>
           ))}
           {row.conflict ? (
             <Badge variant="error" size="sm">
-              conflict
+              <T context="a jj change with conflicts">conflict</T>
             </Badge>
           ) : null}
           {row.flags.map((flag) => (
             <Tooltip key={flag}>
               <TooltipTrigger render={<Badge variant="warning" size="sm" />}>{flag}</TooltipTrigger>
-              <TooltipPopup>{JJ_FLAG_DESCRIPTIONS[flag]}</TooltipPopup>
+              <TooltipPopup>{m(JJ_FLAG_DESCRIPTIONS[flag])}</TooltipPopup>
             </Tooltip>
           ))}
         </div>
         {showUnattributed ? (
           <div className="flex flex-col gap-1 pt-1">
             <p className="text-xs text-muted-foreground">
-              {view.unattributed.length === 1
-                ? "No turn claimed this file:"
-                : `No turn claimed these ${view.unattributed.length} files:`}
+              {gt(
+                "{count, plural, =1 {No turn claimed this file:} other {No turn claimed these {count} files:}}",
+                { count: view.unattributed.length },
+              )}
             </p>
             <ul className="flex flex-col">
               {view.unattributed.slice(0, UNATTRIBUTED_PREVIEW_COUNT).map((path) => (
@@ -449,7 +476,11 @@ function JjStackRowItem({
               ))}
             </ul>
             {hiddenUnattributed > 0 ? (
-              <p className="text-xs text-muted-foreground">and {hiddenUnattributed} more</p>
+              <p className="text-xs text-muted-foreground">
+                <T>
+                  and <Var>{hiddenUnattributed}</Var> more
+                </T>
+              </p>
             ) : null}
             {canAssign ? (
               <Button
@@ -459,7 +490,7 @@ function JjStackRowItem({
                 disabled={pending}
                 onClick={() => onAssign(view.unattributed)}
               >
-                Assign to this thread
+                <T>Assign to this thread</T>
               </Button>
             ) : null}
           </div>
@@ -472,7 +503,7 @@ function JjStackRowItem({
             disabled={pending}
             onClick={() => onDialog({ kind: "commit" })}
           >
-            Commit…
+            <T context="verb, opens the jj commit dialog">Commit…</T>
           </Button>
         ) : null}
       </div>
@@ -482,7 +513,7 @@ function JjStackRowItem({
             <Button
               size="icon-micro"
               variant="ghost"
-              aria-label={`Actions for ${row.shortChangeId}`}
+              aria-label={gt("Actions for {change}", { change: row.shortChangeId })}
               disabled={pending}
             />
           }
@@ -490,25 +521,29 @@ function JjStackRowItem({
           <EllipsisIcon />
         </MenuTrigger>
         <MenuPopup align="end" {...floatingLayerProps}>
-          <MenuItem onClick={() => onDialog({ kind: "describe", row })}>Describe…</MenuItem>
+          <MenuItem onClick={() => onDialog({ kind: "describe", row })}>
+            <T context="verb, opens the jj describe dialog">Describe…</T>
+          </MenuItem>
           <MenuItem
             disabled={!rowActions.squash}
             onClick={() => onRun({ _tag: "squash", changeId: row.changeId })}
           >
-            Squash into parent
+            <T>Squash into parent</T>
           </MenuItem>
           {rowActions.edit ? (
             <MenuItem onClick={() => onRun({ _tag: "edit", changeId: row.changeId })}>
-              Edit
+              <T context="verb, jj edit">Edit</T>
             </MenuItem>
           ) : null}
-          <MenuItem onClick={() => onDialog({ kind: "bookmark", row })}>Bookmark…</MenuItem>
+          <MenuItem onClick={() => onDialog({ kind: "bookmark", row })}>
+            <T context="verb, opens the jj bookmark dialog">Bookmark…</T>
+          </MenuItem>
           <MenuSeparator />
           <MenuItem
             variant="destructive"
             onClick={() => onRun({ _tag: "abandon", changeId: row.changeId })}
           >
-            Abandon
+            <T context="verb, jj abandon">Abandon</T>
           </MenuItem>
         </MenuPopup>
       </Menu>
@@ -525,6 +560,7 @@ function JjDialogPopup({
   readonly onCancel: () => void;
   readonly onSubmit: (action: JjAction) => void;
 }) {
+  const gt = useGT();
   const [text, setText] = useState("");
   const value = text.trim();
 
@@ -538,17 +574,21 @@ function JjDialogPopup({
     return (
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Bookmark {row.shortChangeId}</DialogTitle>
+          <DialogTitle>
+            <T context="verb, sets a jj bookmark">
+              Bookmark <Var>{row.shortChangeId}</Var>
+            </T>
+          </DialogTitle>
           <DialogDescription>
             {row.bookmarks.length > 0
-              ? "Set a bookmark on this change, or rename or delete one it has."
-              : "Set a bookmark on this change."}
+              ? gt("Set a bookmark on this change, or rename or delete one it has.")
+              : gt("Set a bookmark on this change.")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <Input
-            aria-label="Bookmark name"
-            placeholder="Bookmark name"
+            aria-label={gt("Bookmark name")}
+            placeholder={gt("Bookmark name")}
             autoCapitalize="none"
             spellCheck={false}
             value={text}
@@ -575,7 +615,7 @@ function JjDialogPopup({
                       })
                     }
                   >
-                    Rename
+                    <T context="verb">Rename</T>
                   </Button>
                   <Button
                     size="xs"
@@ -584,7 +624,7 @@ function JjDialogPopup({
                       onSubmit({ _tag: "bookmark", operation: "delete", name: bookmark })
                     }
                   >
-                    Delete
+                    <T context="verb">Delete</T>
                   </Button>
                 </li>
               ))}
@@ -593,10 +633,10 @@ function JjDialogPopup({
         </DialogPanel>
         <DialogFooter variant="bare">
           <Button variant="outline" size="sm" onClick={onCancel}>
-            Cancel
+            <T>Cancel</T>
           </Button>
           <Button size="sm" disabled={value.length === 0} onClick={setBookmark}>
-            Set bookmark
+            <T>Set bookmark</T>
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -607,16 +647,17 @@ function JjDialogPopup({
   const copy =
     dialog.kind === "describe"
       ? {
-          title: `Describe ${dialog.row.shortChangeId}`,
-          description: "Replaces the change's description. Leave it empty and T3 writes one.",
-          submit: "Describe",
+          title: gt("Describe {change}", { change: dialog.row.shortChangeId }),
+          description: gt("Replaces the change's description. Leave it empty and T3 writes one."),
+          submit: gt("Describe", { $context: "verb, jj describe" }),
           action: { _tag: "describe", changeId: dialog.row.changeId, ...message } as const,
         }
       : {
-          title: "Commit the working copy",
-          description:
+          title: gt("Commit the working copy"),
+          description: gt(
             "Seals the working copy and starts a new change on top. Leave the message empty and T3 writes one.",
-          submit: "Commit",
+          ),
+          submit: gt("Commit", { $context: "verb, jj commit" }),
           action: { _tag: "commit", ...message } as const,
         };
   return (
@@ -627,8 +668,8 @@ function JjDialogPopup({
       </DialogHeader>
       <DialogPanel>
         <Textarea
-          aria-label="Message"
-          placeholder="Message (optional)"
+          aria-label={gt("Message", { $context: "commit message" })}
+          placeholder={gt("Message (optional)")}
           size="sm"
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -636,7 +677,7 @@ function JjDialogPopup({
       </DialogPanel>
       <DialogFooter variant="bare">
         <Button variant="outline" size="sm" onClick={onCancel}>
-          Cancel
+          <T>Cancel</T>
         </Button>
         <Button size="sm" onClick={() => onSubmit(copy.action)}>
           {copy.submit}

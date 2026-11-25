@@ -1,4 +1,8 @@
-import type { AgentActivityProps } from "./AgentActivity";
+import { msg } from "gt-react-native";
+
+import { m, type MessageResolver } from "../i18n/messages";
+
+import type { AgentActivityProps, AgentActivityText } from "./AgentActivity";
 
 // The widget only refreshes while the app is open, so after this long it stops
 // claiming an agent is still working. Matches the Live Activity's stale date.
@@ -11,19 +15,73 @@ export type AgentActivityWidgetSource =
   // A server aggregate, or a local seed when agent work starts on this device.
   | { readonly kind: "snapshot"; readonly aggregate: AgentActivityProps | null };
 
-export function agentActivityWidgetTimeline(source: AgentActivityWidgetSource, now: number) {
+function countTable(maxCount: number, format: (count: number) => string) {
+  return Object.fromEntries(
+    Array.from({ length: maxCount }, (_, index) => [String(index + 1), format(index + 1)]),
+  );
+}
+
+/** Translated widget copy, with count tables for counts up to `maxCount`. */
+export function agentActivityText(
+  maxCount: number,
+  resolve: MessageResolver = m,
+): AgentActivityText {
+  return {
+    outOfDate: resolve(msg("Out of date")),
+    failed: resolve(msg("Failed", { $context: "agent work status" })),
+    done: resolve(msg("Done", { $context: "agent work status" })),
+    workFailed: resolve(msg("Agent work failed")),
+    workCompleted: resolve(msg("Agent work completed")),
+    statusOutOfDate: resolve(msg("Agent status out of date")),
+    approval: resolve(msg("Approval", { $context: "agent waits for an approval" })),
+    input: resolve(msg("Input", { $context: "agent waits for user input" })),
+    noActiveAgents: resolve(msg("No active agents")),
+    activeAgents: countTable(maxCount, (count) =>
+      resolve(
+        msg("{count, plural, one {{count} active agent} other {{count} active agents}}", {
+          count,
+        }),
+      ),
+    ),
+    active: countTable(maxCount, (count) =>
+      resolve(
+        msg("{count, plural, one {{count} active} other {{count} active}}", {
+          count,
+          $context: "number of agents working",
+        }),
+      ),
+    ),
+    needAttention: countTable(maxCount, (count) =>
+      resolve(
+        msg("{count, plural, one {{count} needs attention} other {{count} need attention}}", {
+          count,
+        }),
+      ),
+    ),
+    needYou: countTable(maxCount, (count) =>
+      resolve(msg("{count, plural, one {{count} needs you} other {{count} need you}}", { count })),
+    ),
+  };
+}
+
+export function agentActivityWidgetTimeline(
+  source: AgentActivityWidgetSource,
+  now: number,
+  resolve: MessageResolver = m,
+) {
   const updatedAt = new Date(now).toISOString();
   if (source.kind !== "snapshot" || !source.aggregate) {
     const props: AgentActivityProps = {
+      text: agentActivityText(0, resolve),
       title: "T3 Code",
       subtitle:
         source.kind === "signed-out"
-          ? "Sign in to T3 Connect to see agents"
+          ? resolve(msg("Sign in to {product} to see agents", { product: "T3 Connect" }))
           : source.kind === "unavailable"
-            ? "Couldn't reach T3 Connect"
+            ? resolve(msg("Couldn't reach {product}", { product: "T3 Connect" }))
             : source.kind === "loading"
-              ? "Loading agents…"
-              : "No active agents",
+              ? resolve(msg("Loading agents…"))
+              : resolve(msg("No active agents")),
       activeCount: 0,
       updatedAt,
       activities: [],
@@ -33,6 +91,10 @@ export function agentActivityWidgetTimeline(source: AgentActivityWidgetSource, n
 
   const { aggregate } = source;
   const props: AgentActivityProps = {
+    text: agentActivityText(
+      Math.max(aggregate.activeCount, aggregate.activities.length, aggregate.attentionCount ?? 0),
+      resolve,
+    ),
     title: aggregate.title,
     subtitle: aggregate.subtitle,
     activeCount: aggregate.activeCount,
@@ -51,7 +113,7 @@ export function agentActivityWidgetTimeline(source: AgentActivityWidgetSource, n
     activities: props.activities.map((row) =>
       row.phase === "completed" || row.phase === "failed"
         ? row
-        : { ...row, phase: "stale", status: "Out of date" },
+        : { ...row, phase: "stale", status: resolve(msg("Out of date")) },
     ),
   };
   return [

@@ -36,6 +36,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as TaskFolders from "../workspace/TaskFolders.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 
 const environmentId = EnvironmentId.make("environment-worktree-test");
@@ -107,7 +108,6 @@ interface HarnessOptions {
   readonly threadAttachedOnRecheck?: boolean;
   readonly threadArchivedOnRecheck?: boolean;
   readonly threadReadFailsOnRecheck?: boolean;
-  readonly continuation?: "queued" | "fails" | "dies";
   readonly projectMissing?: boolean;
   readonly projectReadFails?: boolean;
   readonly existingBranchWorktreePath?: string | null;
@@ -118,6 +118,7 @@ interface HarnessOptions {
   readonly deleteLocalBranchFails?: boolean;
   readonly createWorktreeGate?: Effect.Effect<void>;
   readonly existsFails?: boolean;
+  readonly workspaceBackend?: "git" | "jj";
 }
 
 const makeHarness = (options: HarnessOptions = {}) => {
@@ -179,22 +180,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
     return id === threadId && thread !== null
       ? Effect.succeed(makeProjection(thread))
       : Effect.fail(new OrchestratorProjectionError({ threadId: id }));
-  });
-  const sendToThread = vi.fn((_: unknown) => {
-    switch (options.continuation ?? "queued") {
-      case "fails":
-        return Effect.fail(
-          new ThreadManagementService.ThreadManagementThreadArchivedError({
-            threadId,
-          }),
-        );
-      case "dies":
-        return Effect.die(new Error("send defect"));
-      default:
-        return Effect.succeed({
-          delivery: "queued",
-        } as ThreadManagementService.ThreadManagementSendResult);
-    }
   });
   const getById = vi.fn((id: ProjectId) =>
     options.projectReadFails
@@ -299,7 +284,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           dispatch,
           getThreadRecords,
-          sendToThread,
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
         Layer.mock(ProjectService.ProjectService)({
           getById,
@@ -329,11 +313,21 @@ const makeHarness = (options: HarnessOptions = {}) => {
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread,
         } satisfies Partial<ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]>),
+        Layer.mock(TaskFolders.TaskFolders)({
+          plan: () => Effect.succeed(null),
+          find: () => Effect.succeed(null),
+        }),
         Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
           refreshStatus,
         } satisfies Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>),
         Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({
-          backendFor: () => Effect.succeed("git"),
+          launchBackendFor: () =>
+            Effect.succeed({ backend: options.workspaceBackend ?? "git", taskPlan: null }),
+          create: (input) =>
+            Effect.succeed({
+              worktreePath: `/workspaces/project/${input.title}`,
+              backend: "jj" as const,
+            }),
         }),
         NodeServices.layer,
         NodeCrypto.layer,
@@ -359,7 +353,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
     scope,
     listRefs,
     dispatch,
-    sendToThread,
     fetchWorktreeBaseCommit,
     createWorktree,
     removeWorktree,
@@ -402,32 +395,32 @@ const runStatus = (harness: ReturnType<typeof makeHarness>) =>
 const decodeHandoffInput = Schema.decodeUnknownEffect(WorktreeMcpHandoffInput);
 
 describe("t3_worktree_handoff", () => {
-  it.effect("reports a continuation failure without failing the handoff", () => {
-    const harness = makeHarness({ continuation: "fails" });
-    return Effect.gen(function* () {
-      const result = yield* runHandoff(harness, {
-        branch: "feature/continue-fails",
-        continuationPrompt: "Keep going.",
-      });
-      expect(result.continuation).toMatchObject({ status: "failed" });
-      expect(result.worktreePath).toBe("/worktrees/project/feature/continue-fails");
-      expect(harness.dispatch).toHaveBeenCalled();
-    });
-  });
-
-  it.effect("does not queue a continuation when the thread update fails", () => {
-    const harness = makeHarness({ dispatchFails: true });
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        runHandoff(harness, {
-          branch: "feature/dispatch-fails-continue",
+  // regression: #22971 a separate send let the detach settle the run before its follow-up existed
+  it.effect.each([
+    { workspaceBackend: "git", worktreePath: "/worktrees/project/feature/continue" },
+    // A jj project gets a managed workspace (patches/workspaces.md).
+    { workspaceBackend: "jj", worktreePath: "/workspaces/project/feature/continue" },
+  ] as const)(
+    "commits the continuation with the $workspaceBackend thread binding",
+    ({ workspaceBackend, worktreePath }) => {
+      const harness = makeHarness({ workspaceBackend });
+      return Effect.gen(function* () {
+        const result = yield* runHandoff(harness, {
+          branch: "feature/continue",
           continuationPrompt: "Keep going.",
-        }),
-      );
-      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
-      expect(harness.sendToThread).not.toHaveBeenCalled();
-    });
-  });
+        });
+        expect(result.continuation).toEqual({ status: "scheduled", delivery: "queued" });
+        expect(harness.dispatch).toHaveBeenCalledTimes(1);
+        expect(harness.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "thread.metadata.update",
+            worktreePath,
+            continuation: expect.objectContaining({ text: "Keep going." }),
+          }),
+        );
+      });
+    },
+  );
 
   it.effect("uses the fetched commit and remote PR base for an explicit local alias", () =>
     Effect.gen(function* () {
@@ -622,7 +615,7 @@ describe("t3_worktree_handoff", () => {
     });
   });
 
-  it.effect("queues the continuation even when interrupted during the binding dispatch", () =>
+  it.effect("runs the setup script even when interrupted during the binding dispatch", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
       const harness = makeHarness({ dispatchGate: Deferred.await(gate) });
@@ -641,7 +634,6 @@ describe("t3_worktree_handoff", () => {
       yield* Fiber.join(interruption);
 
       expect(harness.dispatch).toHaveBeenCalledTimes(1);
-      expect(harness.sendToThread).toHaveBeenCalledTimes(1);
       expect(harness.runForThread).toHaveBeenCalledTimes(1);
     }),
   );

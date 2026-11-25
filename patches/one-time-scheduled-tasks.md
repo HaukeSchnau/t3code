@@ -13,8 +13,8 @@ the agent thread that created a task when its runs fail.
 ## Requirements
 
 - Fork builds stored one-time tasks as `{type: "once", at}`. Fork migration 109 rewrites them to
-  upstream's `runAt`, so they still decode. A finished one-time task stays enabled with no next run,
-  as upstream shows it.
+  upstream's `runAt`, so they still decode. A finished one-time task follows upstream: it stays
+  enabled with no next run until its turn completes, and then upstream removes it.
 - Saving a task whose runs launch into a `worktree` or `workspace` fails when the project is a
   plain directory that is missing or unreadable, too big to copy, or one a workspace may not copy, such as the
   home directory. The MCP `schedule_task` tool hard-codes `worktree` for tasks not

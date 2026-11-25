@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { MessageId, ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { T, useGT } from "gt-react";
 import { useId, useRef, useState } from "react";
 
 import { readThreadShell } from "~/state/entities";
@@ -33,6 +34,7 @@ export function QuoteFollowUpDialog(props: {
   readonly onClose: () => void;
 }) {
   const { threadRef } = props;
+  const gt = useGT();
   const id = useId();
   const titleRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -67,8 +69,8 @@ export function QuoteFollowUpDialog(props: {
         const failure = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: "Could not save the follow-up",
-          description: failure instanceof Error ? failure.message : "An error occurred.",
+          title: gt("Could not save the follow-up"),
+          description: failure instanceof Error ? failure.message : gt("An error occurred."),
         });
       }
       return;
@@ -77,10 +79,10 @@ export function QuoteFollowUpDialog(props: {
     const followUpId = result.value.id;
     const toastId = toastManager.add({
       type: "success",
-      title: "Follow-up saved",
+      title: gt("Follow-up saved"),
       description: trimmed,
       actionProps: {
-        children: "Open",
+        children: gt("Open", { $context: "verb, opens the follow-up" }),
         onClick: () => {
           toastManager.close(toastId);
           void navigate({ to: "/follow-ups", search: { id: followUpId } });
@@ -105,9 +107,11 @@ export function QuoteFollowUpDialog(props: {
           }}
         >
           <DialogHeader>
-            <DialogTitle>New follow-up</DialogTitle>
+            <DialogTitle>
+              <T>New follow-up</T>
+            </DialogTitle>
             <DialogDescription>
-              It keeps this passage and links back to the message.
+              <T>It keeps this passage and links back to the message.</T>
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -116,18 +120,22 @@ export function QuoteFollowUpDialog(props: {
                 {props.quote}
               </blockquote>
               <div className="flex flex-col gap-2">
-                <Label htmlFor={`${id}-title`}>Title</Label>
+                <Label htmlFor={`${id}-title`}>
+                  <T>Title</T>
+                </Label>
                 <Input
                   ref={titleRef}
                   id={`${id}-title`}
                   required
                   value={title}
-                  placeholder="What to come back to"
+                  placeholder={gt("What to come back to")}
                   onChange={(event) => setTitle(event.target.value)}
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor={`${id}-note`}>Note (optional)</Label>
+                <Label htmlFor={`${id}-note`}>
+                  <T>Note (optional)</T>
+                </Label>
                 <Textarea
                   id={`${id}-note`}
                   rows={3}
@@ -145,10 +153,10 @@ export function QuoteFollowUpDialog(props: {
           </DialogPanel>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={props.onClose}>
-              Cancel
+              <T>Cancel</T>
             </Button>
             <Button type="submit" disabled={!canSave || saving || title.trim() === ""}>
-              {saving ? "Saving…" : "Save follow-up"}
+              {saving ? gt("Saving…") : gt("Save follow-up")}
             </Button>
           </DialogFooter>
         </form>

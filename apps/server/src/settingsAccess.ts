@@ -1,4 +1,5 @@
 import {
+  ClientServerSettingsPatch,
   isSecretReference,
   type ProviderInstanceMutation,
   ServerSettings,
@@ -47,8 +48,9 @@ const DERIVED_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "backgroundActivityProfile",
 ]);
+// Only the theme service sets theme defaults, after it validates them.
 const DOCUMENT_KEYS: ReadonlyArray<string> = Object.keys(ServerSettings.fields).filter(
-  (key) => Object.hasOwn(ServerSettingsPatch.fields, key) && !DERIVED_KEYS.has(key),
+  (key) => Object.hasOwn(ClientServerSettingsPatch.fields, key) && !DERIVED_KEYS.has(key),
 );
 // A patch sets or removes (null) one entry of these at a time.
 const ENTRY_PATCH_KEYS: ReadonlySet<string> = new Set([

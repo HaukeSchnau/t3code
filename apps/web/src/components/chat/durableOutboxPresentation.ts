@@ -1,6 +1,8 @@
 import { canDiscardCommandOutboxEntry } from "@t3tools/client-runtime/state/command-outbox";
+import { msg } from "gt-react";
 
 import type { DurableComposerEntry } from "../../durableCommandOutbox";
+import { m, type MessageResolver } from "../../i18n/messages";
 
 export interface DurableOutboxEntryView {
   readonly entry: DurableComposerEntry;
@@ -11,25 +13,29 @@ export interface DurableOutboxEntryView {
   readonly retryAt: number | null;
   /** Edit and discard take the message back; only safe while it cannot have arrived. */
   readonly canTakeBack: boolean;
-  readonly retryLabel: "Retry" | "Retry now" | null;
+  readonly retryLabel: string | null;
 }
 
-function preview(entry: DurableComposerEntry): string {
+function preview(entry: DurableComposerEntry, resolve: MessageResolver): string {
   const firstLine = entry.command.text.trim().split("\n", 1)[0] ?? "";
   if (firstLine.length > 0) return firstLine;
-  const count = entry.command.attachments.length;
-  return count === 1 ? "1 attachment" : `${count} attachments`;
+  return resolve(
+    msg("{count, plural, one {{count} attachment} other {{count} attachments}}", {
+      count: entry.command.attachments.length,
+    }),
+  );
 }
 
 /** One row per waiting message of a thread, oldest first. */
 export function presentDurableOutboxEntries(
   entries: ReadonlyArray<DurableComposerEntry>,
   connected: boolean,
+  resolve: MessageResolver = m,
 ): ReadonlyArray<DurableOutboxEntryView> {
   return entries.map((entry, index) => {
     const base = {
       entry,
-      preview: preview(entry),
+      preview: preview(entry, resolve),
       rejected: false,
       retryAt: null,
       canTakeBack: canDiscardCommandOutboxEntry(entry),
@@ -42,36 +48,46 @@ export function presentDurableOutboxEntries(
           ...base,
           status:
             index > 0
-              ? "Sends after the message above."
+              ? resolve(msg("Sends after the message above."))
               : connected
-                ? "Sending."
-                : "Saved on this device. Sends when the connection is back.",
+                ? resolve(msg("Sending."))
+                : resolve(msg("Saved on this device. Sends when the connection is back.")),
         };
       case "Delivering":
-        return { ...base, status: "Sending." };
+        return { ...base, status: resolve(msg("Sending.")) };
       case "Retrying":
         return {
           ...base,
           status:
             state.failure.classification === "ambiguous"
-              ? "No reply from the environment yet. It is sent again with the same id, so it arrives once."
-              : `Not sent yet: ${state.failure.message}`,
+              ? resolve(
+                  msg(
+                    "No reply from the environment yet. It is sent again with the same id, so it arrives once.",
+                  ),
+                )
+              : resolve(msg("Not sent yet: {reason}", { reason: state.failure.message })),
           retryAt: connected ? state.retryAt : null,
-          retryLabel: connected ? "Retry now" : null,
+          retryLabel: connected ? resolve(msg("Retry now")) : null,
         };
       case "Rejected":
         return {
           ...base,
-          status: `Not delivered: ${state.failure.message}`,
+          status: resolve(msg("Not delivered: {reason}", { reason: state.failure.message })),
           rejected: true,
-          retryLabel: "Retry",
+          retryLabel: resolve(msg("Retry", { $context: "verb" })),
         };
     }
   });
 }
 
-export function retryCountdownText(retryAt: number | null, nowMs: number): string | null {
+export function retryCountdownText(
+  retryAt: number | null,
+  nowMs: number,
+  resolve: MessageResolver = m,
+): string | null {
   if (retryAt === null) return null;
   const seconds = Math.ceil((retryAt - nowMs) / 1_000);
-  return seconds > 0 ? `Retrying in ${seconds}s` : "Retrying";
+  return seconds > 0
+    ? resolve(msg("Retrying in {seconds}s", { seconds }))
+    : resolve(msg("Retrying"));
 }

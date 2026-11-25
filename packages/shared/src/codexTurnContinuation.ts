@@ -62,7 +62,7 @@ export function isCodexOverloadFailure(failure: OrchestrationV2ProviderFailure |
 }
 
 /** Whether the next turn of `run` can continue it without a message: Codex, on the same account. */
-export function isCodexContinuationTarget(
+function isCodexContinuationTarget(
   projection: Pick<ContinuationProjection, "thread" | "providerThreads">,
   run: Pick<OrchestrationV2Run, "providerThreadId" | "providerInstanceId">,
 ): boolean {

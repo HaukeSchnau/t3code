@@ -135,7 +135,6 @@ function Coordinator({ environmentId }: { readonly environmentId: EnvironmentId 
   const speech = useEnvironmentSpeechInput({
     environmentId,
     ownerKey: OWNER_KEY,
-    draftText: "",
     offerSetup: false,
     readDraft: () => EMPTY_DRAFT,
     commitDraft: (text) => void finish(text),

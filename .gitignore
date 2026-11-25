@@ -53,3 +53,5 @@ node_modules/
 
 # pnpm may use a checkout-local store in isolated environments.
 .pnpm-store/
+
+/packages/ssh/.ssh-launcher-test-*/

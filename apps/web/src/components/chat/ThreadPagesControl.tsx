@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { AppWindowIcon } from "lucide-react";
 import { useState } from "react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { useThreadShell } from "~/state/entities";
 import { htmlRenderEnvironment } from "~/state/htmlRender";
@@ -21,9 +22,9 @@ import { Skeleton } from "../ui/skeleton";
 import { HtmlRenderPageDialog } from "./HtmlRenderPageDialog";
 
 const GROUPS = [
-  { key: "asks", label: "Waiting for you" },
-  { key: "unseen", label: "New" },
-  { key: "seen", label: "Seen" },
+  { key: "asks", label: msg("Waiting for you") },
+  { key: "unseen", label: msg("New", { $context: "pages not seen yet" }) },
+  { key: "seen", label: msg("Seen", { $context: "pages already seen" }) },
 ] as const;
 
 /**
@@ -39,13 +40,14 @@ export function ThreadPagesControl(props: {
     | undefined;
 }) {
   const { threadRef } = props;
+  const gt = useGT();
   const count = useAtomValue(htmlRenderEnvironment.threadPageCount(threadRef));
   const asks =
     useThreadShell(threadRef)?.openAsks?.filter((ask) => ask.source.type === "page").length ?? 0;
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<HtmlRenderPage | null>(null);
   if (count === null || count === 0) return null;
-  const label = count === 1 ? "1 page" : `${count} pages`;
+  const label = gt("{count, plural, one {{count} page} other {{count} pages}}", { count });
   const openPage = (page: HtmlRenderPage) => {
     setOpen(false);
     if (props.onRevealPage(page.renderId)) return;
@@ -61,7 +63,9 @@ export function ThreadPagesControl(props: {
               size="xs"
               variant="ghost-muted"
               aria-label={
-                asks > 0 ? `${label}, ${asks} waiting for you` : `${label} in this thread`
+                asks > 0
+                  ? gt("{pages}, {asks} waiting for you", { pages: label, asks })
+                  : gt("{pages} in this thread", { pages: label })
               }
             />
           }
@@ -70,7 +74,9 @@ export function ThreadPagesControl(props: {
           <span className="tabular-nums">{label}</span>
           {asks > 0 ? (
             <Badge variant="warning" size="sm">
-              {asks} waiting
+              <T>
+                <Var>{asks}</Var> waiting
+              </T>
             </Badge>
           ) : null}
         </PopoverTrigger>
@@ -96,6 +102,7 @@ function ThreadPagesList(props: {
   readonly threadRef: ScopedThreadRef;
   readonly onOpen: (page: HtmlRenderPage) => void;
 }) {
+  const m = useMessages();
   const pages = useEnvironmentQuery(
     htmlRenderEnvironment.pages({
       environmentId: props.threadRef.environmentId,
@@ -121,7 +128,7 @@ function ThreadPagesList(props: {
         groups[group.key].length === 0 ? null : (
           <section key={group.key} className="flex flex-col gap-0.5">
             <h3 className="px-3 pb-1 text-xs font-medium text-muted-foreground/70">
-              {group.label}
+              {m(group.label)}
             </h3>
             {groups[group.key].map((page) => (
               <PageListRow key={page.renderId} page={page} onOpen={props.onOpen} />

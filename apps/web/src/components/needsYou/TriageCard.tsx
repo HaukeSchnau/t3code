@@ -15,11 +15,12 @@ import {
   type OrchestrationMessageContext,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/assistantInsights";
 import { projectScriptCwd } from "@t3tools/shared/projectScripts";
 import { useNavigate } from "@tanstack/react-router";
 import { AlarmClockIcon, ArrowUpRightIcon, MessageCircleOffIcon, SendIcon } from "lucide-react";
 import { useEffect, useEffectEvent } from "react";
+import { T, useGT, useMessages } from "gt-react";
 
 import { enqueueComposerSend } from "~/durableCommandOutbox";
 import { useNowMinute } from "~/hooks/useNowMinute";
@@ -59,6 +60,8 @@ export function TriageCard(props: {
   readonly onStep: (delta: 1 | -1) => void;
 }) {
   const { thread, threadRef, sending } = props;
+  const gt = useGT();
+  const m = useMessages();
   const navigate = useNavigate();
   const nowMinute = useNowMinute();
   const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
@@ -190,7 +193,7 @@ export function TriageCard(props: {
 
   if (need === null) return null;
   const kindLabel = threadNeedLabel({ ...need, text: null });
-  const waited = need.since === null ? null : formatRelativeTime(need.since, nowMs);
+  const waited = need.since === null ? null : formatRelativeTime(need.since, nowMs, m);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="triage-card">
@@ -198,14 +201,14 @@ export function TriageCard(props: {
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-6">
           <div className="flex min-w-0 flex-col gap-1">
             <p className="truncate text-muted-foreground text-xs">
-              {project?.isScratch ? "No project" : (project?.title ?? "Project")}
+              {project?.isScratch ? gt("No project") : (project?.title ?? gt("Project"))}
               {" · "}
               {kindLabel}
               {waited === null
                 ? null
                 : waited.suffix === null
-                  ? " · just now"
-                  : ` · waiting ${waited.value}`}
+                  ? ` · ${gt("just now")}`
+                  : ` · ${gt("waiting {duration}", { duration: waited.value })}`}
             </p>
             <h2 className="font-semibold text-lg leading-snug">{thread.title}</h2>
           </div>
@@ -227,14 +230,14 @@ export function TriageCard(props: {
               />
             ) : structure !== null && (indexedPages.isSuccess || indexedPages.error !== null) ? (
               <p className="text-muted-foreground text-sm">
-                The page is further back in the thread. Open the thread to see it.
+                <T>The page is further back in the thread. Open the thread to see it.</T>
               </p>
             ) : (
               <Skeleton className="h-40 w-full" />
             )
           ) : null}
           {question !== null ? (
-            <section className="flex flex-col gap-2" aria-label="Question">
+            <section className="flex flex-col gap-2" aria-label={gt("Question")}>
               <p className="font-medium text-sm">{question.question}</p>
               <div className="flex flex-col gap-1.5">
                 {question.options.map((option) => (
@@ -262,8 +265,10 @@ export function TriageCard(props: {
               ))}
             </ul>
           ) : null}
-          <section className="flex min-w-0 flex-col gap-2" aria-label="Last message">
-            <h3 className="text-muted-foreground text-xs">Last message</h3>
+          <section className="flex min-w-0 flex-col gap-2" aria-label={gt("Last message")}>
+            <h3 className="text-muted-foreground text-xs">
+              <T>Last message</T>
+            </h3>
             {latest !== null ? (
               <div className="min-w-0 rounded-lg border px-4 py-3">
                 <ChatMarkdown
@@ -275,11 +280,15 @@ export function TriageCard(props: {
                 />
               </div>
             ) : structure !== null ? (
-              <p className="text-muted-foreground text-sm">The agent has not written yet.</p>
+              <p className="text-muted-foreground text-sm">
+                <T>The agent has not written yet.</T>
+              </p>
             ) : connected ? (
               <Skeleton className="h-24 w-full" />
             ) : (
-              <p className="text-muted-foreground text-sm">Its environment is not connected.</p>
+              <p className="text-muted-foreground text-sm">
+                <T>Its environment is not connected.</T>
+              </p>
             )}
           </section>
         </div>
@@ -289,9 +298,13 @@ export function TriageCard(props: {
           {replyMode !== null ? (
             <div className="flex items-end gap-2">
               <Textarea
-                aria-label={replyMode === "answer" ? "Your answer" : "Reply"}
+                aria-label={
+                  replyMode === "answer" ? gt("Your answer") : gt("Reply", { $context: "noun" })
+                }
                 className="flex-1"
-                placeholder={replyMode === "answer" ? "Or type your answer" : "Reply to the agent"}
+                placeholder={
+                  replyMode === "answer" ? gt("Or type your answer") : gt("Reply to the agent")
+                }
                 rows={2}
                 value={props.draft}
                 onChange={(event) => props.onDraftChange(event.target.value)}
@@ -304,7 +317,7 @@ export function TriageCard(props: {
                 }}
               />
               <Button
-                aria-label="Send"
+                aria-label={gt("Send", { $context: "verb" })}
                 size="icon"
                 disabled={sending || props.draft.trim().length === 0}
                 onClick={submitReply}
@@ -316,17 +329,18 @@ export function TriageCard(props: {
           <div className="flex flex-wrap items-center gap-1.5">
             <Button size="sm" variant={answersHere ? "ghost" : "default"} onClick={openThread}>
               <ArrowUpRightIcon />
-              {answersHere ? "Open thread" : "Open thread to answer"}
+              {answersHere ? gt("Open thread") : gt("Open thread to answer")}
               <Kbd>O</Kbd>
             </Button>
             <Button size="sm" variant="ghost" disabled={!snoozable} onClick={snooze}>
               <AlarmClockIcon />
-              Snooze 1 h<Kbd>S</Kbd>
+              <T>Snooze 1 h</T>
+              <Kbd>S</Kbd>
             </Button>
             {hasOpenAsks ? (
               <Button size="sm" variant="ghost" onClick={dismiss}>
                 <MessageCircleOffIcon />
-                No reply needed
+                <T>No reply needed</T>
                 <Kbd>X</Kbd>
               </Button>
             ) : null}

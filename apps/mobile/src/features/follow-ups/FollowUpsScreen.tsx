@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { type FollowUpHome, groupFollowUps } from "@t3tools/client-runtime/state/follow-ups";
 import type { EnvironmentId, FollowUp } from "@t3tools/contracts";
+import { T, useGT, useMessages, Var } from "gt-react-native";
 import { useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,6 +21,7 @@ import { useOpenFollowUp } from "./useOpenFollowUp";
 
 /** The Follow-ups workspace tab: each home's follow-ups by where they stand. */
 export function FollowUpsScreen() {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const openFollowUp = useOpenFollowUp();
@@ -33,11 +35,11 @@ export function FollowUpsScreen() {
 
   return (
     <SettingsScreen
-      title="Follow-ups"
+      title={gt("Follow-ups")}
       workspaceRoot
       actions={[
         {
-          accessibilityLabel: "New follow-up",
+          accessibilityLabel: gt("New follow-up"),
           icon: "plus",
           disabled: connectedHomes.length === 0,
           onPress: () => navigation.navigate("FollowUpCapture"),
@@ -45,20 +47,20 @@ export function FollowUpsScreen() {
       ]}
       menus={[
         {
-          title: "Show follow-ups",
+          title: gt("Show follow-ups"),
           icon: showClosed
             ? "line.3.horizontal.decrease.circle.fill"
             : "line.3.horizontal.decrease",
           items: [
             {
               id: "open",
-              title: "Still to do",
+              title: gt("Still to do"),
               selected: !showClosed,
               onPress: () => setShowClosed(false),
             },
             {
               id: "closed",
-              title: "Include closed",
+              title: gt("Include closed"),
               selected: showClosed,
               onPress: () => setShowClosed(true),
             },
@@ -76,16 +78,16 @@ export function FollowUpsScreen() {
         {/* The Android workspace bar shows no actions, and a fifth tab turns on tab customization. */}
         <SettingsSection>
           <ListRow
-            label="Pages"
-            description="Pages agents showed in your threads"
+            label={gt("Pages")}
+            description={gt("Pages agents showed in your threads")}
             onPress={() => navigation.navigate("Pages")}
           />
         </SettingsSection>
         {homes.length === 0 ? (
           <EmptyState
             variant="plain"
-            title="No follow-ups here"
-            detail="None of the connected environments keeps follow-ups."
+            title={gt("No follow-ups here")}
+            detail={gt("None of the connected environments keeps follow-ups.")}
           />
         ) : null}
         {homes.map((home) =>
@@ -101,7 +103,9 @@ export function FollowUpsScreen() {
             />
           ) : (
             <Text key={home.environmentId} className="px-2 text-sm text-foreground-muted">
-              {label(home.environmentId)} keeps more follow-ups but isn't connected.
+              <T>
+                <Var>{label(home.environmentId)}</Var> keeps more follow-ups but isn't connected.
+              </T>
             </Text>
           ),
         )}
@@ -117,6 +121,8 @@ function HomeFollowUps(props: {
   readonly showClosed: boolean;
   readonly onOpen: (followUp: FollowUp) => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const query = useEnvironmentQuery(
     props.showClosed
       ? allFollowUpsAtom(props.home.environmentId)
@@ -124,10 +130,18 @@ function HomeFollowUps(props: {
   );
   const sections = query.data === null ? null : groupFollowUps(query.data.followUps);
   const groups = [
-    { title: "Back now", followUps: sections?.backNow ?? [] },
-    { title: "Open", followUps: sections?.open ?? [] },
-    { title: "Picked up", followUps: sections?.pickedUp ?? [] },
-    { title: "Closed", followUps: props.showClosed ? (sections?.closed ?? []) : [] },
+    { id: "back-now", title: gt("Back now"), followUps: sections?.backNow ?? [] },
+    {
+      id: "open",
+      title: gt("Open", { $context: "follow-ups still to do" }),
+      followUps: sections?.open ?? [],
+    },
+    { id: "picked-up", title: gt("Picked up"), followUps: sections?.pickedUp ?? [] },
+    {
+      id: "closed",
+      title: gt("Closed", { $context: "follow-ups that are done or dropped" }),
+      followUps: props.showClosed ? (sections?.closed ?? []) : [],
+    },
   ].filter((group) => group.followUps.length > 0);
 
   return (
@@ -139,17 +153,17 @@ function HomeFollowUps(props: {
       ) : null}
       {query.data === null ? (
         <Text className="px-2 text-base text-foreground-muted">
-          {query.error ?? "Loading follow-ups…"}
+          {query.error ?? gt("Loading follow-ups…")}
         </Text>
       ) : groups.length === 0 ? (
         <EmptyState
           variant="plain"
-          title="Nothing to follow up"
-          detail="Agents add follow-ups when a thread leaves work for later."
+          title={gt("Nothing to follow up")}
+          detail={gt("Agents add follow-ups when a thread leaves work for later.")}
         />
       ) : (
         groups.map((group) => (
-          <SettingsSection key={group.title} title={group.title}>
+          <SettingsSection key={group.id} title={group.title}>
             {group.followUps.map((followUp, index) => (
               <View
                 key={followUp.id}
@@ -157,7 +171,7 @@ function HomeFollowUps(props: {
               >
                 <ListRow
                   label={followUp.title}
-                  description={followUpRowDescription(followUp)}
+                  description={followUpRowDescription(followUp, messages)}
                   onPress={() => props.onOpen(followUp)}
                 />
               </View>

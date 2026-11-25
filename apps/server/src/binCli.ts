@@ -21,7 +21,9 @@ import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outb
 import { sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { settingsCommand } from "./cli/settings.ts";
+import { feedbackCommand } from "./cli/feedback.ts";
 import { threadCommand } from "./cli/thread.ts";
+import { workflowCommand } from "./cli/workflow.ts";
 import { runDefaultServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { idleStatusCommand } from "./cli/status.ts";
 import { updateCommand } from "./cli/update.ts";
@@ -96,6 +98,8 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       // Fork: `t3 settings` (patches/settings-cli.md).
       settingsCommand,
       threadCommand,
+      feedbackCommand,
+      workflowCommand,
       upCommand,
       // The fork's `t3 status idle` sits under upstream's `t3 status` (patches/nix-flake-packaging.md).
       statusCommand.pipe(Command.withSubcommands([idleStatusCommand])),

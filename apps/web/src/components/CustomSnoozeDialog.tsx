@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { useNavigate } from "@tanstack/react-router";
 import { create } from "zustand";
 import {
@@ -12,6 +13,7 @@ import { CalendarIcon, Settings2Icon } from "lucide-react";
 import { Calendar } from "./ui/calendar";
 import { weekStartsOn } from "../timestampFormat";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { useFormattingLocale } from "../i18n/I18nProvider";
 import { Popover, PopoverTrigger, PopoverPopup } from "./ui/popover";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -35,7 +37,7 @@ import {
 } from "./ui/dialog";
 
 type SnoozeChoice = { readonly snoozedUntil: string };
-/** The dialog's words, for things other than threads that come back to the inbox. */
+/** The dialog's words, as `msg()` descriptors, for things other than threads that come back to the inbox. */
 interface CustomSnoozeCopy {
   readonly title: string;
   readonly description: string;
@@ -43,10 +45,10 @@ interface CustomSnoozeCopy {
   readonly submitLabel: string;
 }
 const THREAD_SNOOZE_COPY: CustomSnoozeCopy = {
-  title: "Custom snooze",
-  description: "Choose when snoozed threads return to your inbox.",
-  durationLabel: "Snooze for",
-  submitLabel: "Snooze",
+  title: msg("Custom snooze"),
+  description: msg("Choose when snoozed threads return to your inbox."),
+  durationLabel: msg("Snooze for"),
+  submitLabel: msg("Snooze", { $context: "verb" }),
 };
 type Request = {
   readonly copy: CustomSnoozeCopy;
@@ -81,6 +83,9 @@ export function CustomSnoozeDialogHost() {
 }
 
 function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useFormattingLocale();
   const id = useId();
   const navigate = useNavigate();
   const [initial] = useState(() => new Date(Date.now() + 3_600_000));
@@ -112,8 +117,8 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
             if (!snoozedUntil) {
               setError(
                 mode === "date"
-                  ? "Choose a valid date and time in the future."
-                  : "Enter a positive duration.",
+                  ? gt("Choose a valid date and time in the future.")
+                  : gt("Enter a positive duration."),
               );
               return;
             }
@@ -121,13 +126,13 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
           }}
         >
           <DialogHeader>
-            <DialogTitle>{copy.title}</DialogTitle>
-            <DialogDescription>{copy.description}</DialogDescription>
+            <DialogTitle>{m(copy.title)}</DialogTitle>
+            <DialogDescription>{m(copy.description)}</DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <div className="flex flex-col gap-4">
               <ToggleGroup
-                aria-label="Schedule type"
+                aria-label={gt("Schedule type")}
                 className="w-full *:flex-1"
                 value={[mode]}
                 onValueChange={(next) => {
@@ -136,14 +141,20 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
                   setError(null);
                 }}
               >
-                <Toggle value="date">Date and time</Toggle>
-                <Toggle value="duration">Duration</Toggle>
+                <Toggle value="date">
+                  <T>Date and time</T>
+                </Toggle>
+                <Toggle value="duration">
+                  <T>Duration</T>
+                </Toggle>
               </ToggleGroup>
               <div className="flex flex-col gap-4">
                 {mode === "date" ? (
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="flex min-w-0 flex-col gap-2">
-                      <Label htmlFor={`${id}-date`}>Date</Label>
+                      <Label htmlFor={`${id}-date`}>
+                        <T context="calendar date">Date</T>
+                      </Label>
                       <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
                         <PopoverTrigger
                           render={
@@ -154,14 +165,14 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
                             />
                           }
                         >
-                          {date.toLocaleDateString(undefined, {
+                          {date.toLocaleDateString(locale, {
                             month: "short",
                             day: "numeric",
                             year: "numeric",
                           })}
                           <CalendarIcon className="size-4 text-muted-foreground" />
                         </PopoverTrigger>
-                        <PopoverPopup align="start" aria-label="Choose date">
+                        <PopoverPopup align="start" aria-label={gt("Choose date")}>
                           <Calendar
                             mode="single"
                             required
@@ -179,7 +190,7 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
                       </Popover>
                     </div>
                     <Label className="flex min-w-0 flex-col items-stretch" htmlFor={`${id}-time`}>
-                      Time
+                      <T context="time of day">Time</T>
                       <Input
                         nativeInput
                         id={`${id}-time`}
@@ -206,18 +217,18 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
                         setError(null);
                       }}
                     >
-                      <Label htmlFor={`${id}-amount`}>{copy.durationLabel}</Label>
+                      <Label htmlFor={`${id}-amount`}>{m(copy.durationLabel)}</Label>
                       <NumberFieldGroup>
-                        <NumberFieldDecrement aria-label="Decrease duration" />
+                        <NumberFieldDecrement aria-label={gt("Decrease duration")} />
                         <NumberFieldInput required />
-                        <NumberFieldIncrement aria-label="Increase duration" />
+                        <NumberFieldIncrement aria-label={gt("Increase duration")} />
                       </NumberFieldGroup>
                     </NumberField>
                     <Label className="flex min-w-0 flex-col items-stretch" htmlFor={`${id}-unit`}>
-                      Unit
+                      <T context="unit of time">Unit</T>
                       <Select
                         value={unit}
-                        items={{ minutes: "Minutes", hours: "Hours", days: "Days" }}
+                        items={{ minutes: gt("Minutes"), hours: gt("Hours"), days: gt("Days") }}
                         onValueChange={(value) => {
                           if (value === "minutes" || value === "hours" || value === "days")
                             setUnit(value);
@@ -228,9 +239,15 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectPopup>
-                          <SelectItem value="minutes">Minutes</SelectItem>
-                          <SelectItem value="hours">Hours</SelectItem>
-                          <SelectItem value="days">Days</SelectItem>
+                          <SelectItem value="minutes">
+                            <T>Minutes</T>
+                          </SelectItem>
+                          <SelectItem value="hours">
+                            <T>Hours</T>
+                          </SelectItem>
+                          <SelectItem value="days">
+                            <T>Days</T>
+                          </SelectItem>
                         </SelectPopup>
                       </Select>
                     </Label>
@@ -258,12 +275,12 @@ function CustomSnoozeDialog({ copy }: { readonly copy: CustomSnoozeCopy }) {
               }}
             >
               <Settings2Icon />
-              Edit snooze options
+              <T>Edit snooze options</T>
             </Button>
             <Button type="button" variant="outline" onClick={() => finish(null)}>
-              Cancel
+              <T>Cancel</T>
             </Button>
-            <Button type="submit">{copy.submitLabel}</Button>
+            <Button type="submit">{m(copy.submitLabel)}</Button>
           </DialogFooter>
         </form>
       </DialogPopup>

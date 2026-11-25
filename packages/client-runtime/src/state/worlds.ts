@@ -1,16 +1,36 @@
 import type { WorldRefusal, WorldThreadRepo, WorldThreadStatus } from "@t3tools/contracts";
-
-const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 /** What a repo holds that no remote has, or null when every remote has it. */
-export function worldRepoWork(repo: WorldThreadRepo): string | null {
+export function worldRepoWork(
+  repo: WorldThreadRepo,
+  resolve: MFunctionType = mFallback,
+): string | null {
   const parts = [
-    repo.dirty > 0 ? plural(repo.dirty, "changed file", "changed files") : null,
-    repo.commits > 0 ? plural(repo.commits, "unpushed commit", "unpushed commits") : null,
-    ...repo.branches.map(
-      (branch) => `${branch.name}: ${plural(branch.commits, "commit", "commits")} unpushed`,
+    repo.dirty > 0
+      ? resolve(
+          msg("{count, plural, one {{count} changed file} other {{count} changed files}}", {
+            count: repo.dirty,
+          }),
+        )
+      : null,
+    repo.commits > 0
+      ? resolve(
+          msg("{count, plural, one {{count} unpushed commit} other {{count} unpushed commits}}", {
+            count: repo.commits,
+          }),
+        )
+      : null,
+    ...repo.branches.map((branch) =>
+      resolve(
+        msg(
+          "{count, plural, one {{branch}: {count} commit unpushed} other {{branch}: {count} commits unpushed}}",
+          { branch: branch.name, count: branch.commits },
+        ),
+      ),
     ),
-    repo.error === undefined ? null : `unreadable: ${repo.error}`,
+    repo.error === undefined ? null : resolve(msg("unreadable: {error}", { error: repo.error })),
   ].filter((part) => part !== null);
   return parts.length === 0 ? null : parts.join(" · ");
 }
@@ -20,18 +40,38 @@ export function worldRepoName(repo: WorldThreadRepo): string {
   return repo.dir.split("/").filter(Boolean).at(-1) ?? repo.repo;
 }
 
-export function worldRefusalLabel(refusal: WorldRefusal): string {
-  return `${refusal.tool} in ${refusal.repo.split("/").at(-1) ?? refusal.repo}: ${refusal.reason}`;
+export function worldRefusalLabel(
+  refusal: WorldRefusal,
+  resolve: MFunctionType = mFallback,
+): string {
+  return resolve(
+    msg("{tool} in {repo}: {reason}", {
+      tool: refusal.tool,
+      repo: refusal.repo.split("/").at(-1) ?? refusal.repo,
+      reason: refusal.reason,
+    }),
+  );
 }
 
 /** One line for the world: checkouts and how many of them hold work no remote has. */
-export function worldSummary(status: WorldThreadStatus): string {
-  if (!status.available) return status.message ?? "The worldfs daemon is not answering";
+export function worldSummary(
+  status: WorldThreadStatus,
+  resolve: MFunctionType = mFallback,
+): string {
+  if (!status.available) {
+    return status.message ?? resolve(msg("The worldfs daemon is not answering"));
+  }
   const checkedOut = status.repos.filter((repo) => repo.checkedOut).length;
   const withWork = status.repos.filter((repo) => worldRepoWork(repo) !== null).length;
   return [
-    checkedOut === 0 ? "Nothing checked out" : `${plural(checkedOut, "repo", "repos")} checked out`,
-    withWork === 0 ? null : `${withWork} with unpushed work`,
+    checkedOut === 0
+      ? resolve(msg("Nothing checked out"))
+      : resolve(
+          msg("{count, plural, one {{count} repo checked out} other {{count} repos checked out}}", {
+            count: checkedOut,
+          }),
+        ),
+    withWork === 0 ? null : resolve(msg("{count} with unpushed work", { count: withWork })),
   ]
     .filter((part) => part !== null)
     .join(" · ");

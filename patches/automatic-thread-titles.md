@@ -9,8 +9,9 @@ becomes clearer or changes, using the inexpensive text-generation model.
 
 ## Required behavior
 
-- New and generated titles are automatic. A rename by the user or by an agent through
-  `t3_thread_update` makes the title manual. Regeneration, from the thread menu or
+- New and generated titles are automatic. A title chosen at creation (upstream's `titleRenamed`,
+  as `t3_thread_launch` sets without `generateTitle: true`) starts manual. A rename by the user or
+  by an agent through `t3_thread_update` makes the title manual. Regeneration, from the thread menu or
   `regenerate_title`, makes it automatic again once the request lands, even if the title stays
   the same. Forks and subagent threads inherit the mode of the thread they came from.
 - A manual title also survives the first message. The server skips the title seed and first-message
@@ -54,7 +55,8 @@ Upstream-owned hooks:
   `thread.title.regeneration.complete`.
 - `packages/contracts/src/settings.ts`: `refreshGeneratedThreadTitles` in server settings and the
   patch schema.
-- `apps/server/src/orchestration-v2/Orchestrator.ts`: `titleMode: "automatic"` on `thread.create`;
+- `apps/server/src/orchestration-v2/Orchestrator.ts`: `titleMode` on `thread.create`, manual when
+  it carries `titleRenamed`;
   `titleMode: "manual"` when `thread.metadata.update` carries a title; the completion guard calls
   `acceptsGeneratedTitle` and sets the mode to automatic; the first-message title block skips
   manual titles.

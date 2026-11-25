@@ -6,7 +6,9 @@ import type {
   FollowUpThreadRef,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
+import { msg } from "gt-react";
 
+import { m, type MessageResolver } from "../../i18n/messages";
 import { formatRelativeTimeLabel, formatUpcomingTimestamp } from "../../timestampFormat";
 
 interface FollowUpSection {
@@ -19,27 +21,43 @@ interface FollowUpSection {
 export function followUpSections(
   followUps: ReadonlyArray<FollowUp>,
   showClosed: boolean,
+  resolve: MessageResolver = m,
 ): ReadonlyArray<FollowUpSection> {
   const groups = groupFollowUps(followUps);
   const sections: ReadonlyArray<FollowUpSection> = [
-    { key: "returned", label: "Back now", followUps: groups.backNow },
-    { key: "open", label: "Open", followUps: groups.open },
-    { key: "picked_up", label: "Picked up", followUps: groups.pickedUp },
-    { key: "closed", label: "Closed", followUps: showClosed ? groups.closed : [] },
+    { key: "returned", label: resolve(msg("Back now")), followUps: groups.backNow },
+    {
+      key: "open",
+      label: resolve(msg("Open", { $context: "follow-ups not picked up yet" })),
+      followUps: groups.open,
+    },
+    { key: "picked_up", label: resolve(msg("Picked up")), followUps: groups.pickedUp },
+    {
+      key: "closed",
+      label: resolve(msg("Closed", { $context: "follow-ups that are done, dropped or merged" })),
+      followUps: showClosed ? groups.closed : [],
+    },
   ];
   return sections.filter((section) => section.followUps.length > 0);
 }
 
 const STATUS_LABELS: Record<FollowUpStatus, string> = {
-  open: "Open",
-  picked_up: "Picked up",
-  done: "Done",
-  dropped: "Dropped",
-  merged: "Merged",
+  open: msg("Open", { $context: "follow-up status" }),
+  picked_up: msg("Picked up"),
+  done: msg("Done", { $context: "follow-up status" }),
+  dropped: msg("Dropped", { $context: "follow-up status" }),
+  merged: msg("Merged", { $context: "follow-up status" }),
 };
 
-export function followUpStatusLabel(status: FollowUpStatus): string {
-  return STATUS_LABELS[status];
+// When a follow-up closed, as "Done 2h ago"; `{time}` is a relative time label.
+const CLOSED_AT_LABELS: Partial<Record<FollowUpStatus, string>> = {
+  done: msg("Done {time}"),
+  dropped: msg("Dropped {time}"),
+  merged: msg("Merged {time}"),
+};
+
+export function followUpStatusLabel(status: FollowUpStatus, resolve: MessageResolver = m): string {
+  return resolve(STATUS_LABELS[status]);
 }
 
 /** The one line that says when a follow-up matters: back, due, a condition, or how it closed. */
@@ -47,18 +65,26 @@ export function followUpWhenLabel(
   followUp: FollowUp,
   timestampFormat: TimestampFormat,
   nowMs: number,
+  resolve: MessageResolver = m,
 ): string | null {
   if (isFollowUpClosed(followUp)) {
-    return followUp.closedAt === null
-      ? STATUS_LABELS[followUp.status]
-      : `${STATUS_LABELS[followUp.status]} ${formatRelativeTimeLabel(followUp.closedAt, nowMs)}`;
+    const closedAt = CLOSED_AT_LABELS[followUp.status];
+    return followUp.closedAt === null || closedAt === undefined
+      ? resolve(STATUS_LABELS[followUp.status])
+      : resolve(closedAt, { time: formatRelativeTimeLabel(followUp.closedAt, nowMs, resolve) });
   }
-  if (followUp.status === "picked_up") return STATUS_LABELS.picked_up;
+  if (followUp.status === "picked_up") return resolve(STATUS_LABELS.picked_up);
   if (followUp.returnedAt !== null) {
-    return `Back ${formatRelativeTimeLabel(followUp.returnedAt, nowMs)}`;
+    return resolve(
+      msg("Back {time}", { time: formatRelativeTimeLabel(followUp.returnedAt, nowMs, resolve) }),
+    );
   }
   if (followUp.dueAt !== null) {
-    return `Due ${formatUpcomingTimestamp(followUp.dueAt, timestampFormat, nowMs)}`;
+    return resolve(
+      msg("Due {time}", {
+        time: formatUpcomingTimestamp(followUp.dueAt, timestampFormat, nowMs, undefined, resolve),
+      }),
+    );
   }
   return followUp.condition;
 }

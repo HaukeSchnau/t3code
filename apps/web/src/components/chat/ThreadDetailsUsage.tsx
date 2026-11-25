@@ -1,31 +1,36 @@
 import type {
-  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerProvider,
+  ServerProviderUsageLimits,
   ServerProviderUsageWindow,
   UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import {
-  collectProviderUsageLimits,
-  cursorUsageWindowDetails,
   displayLimitWindows,
-  formatDuration,
   type LimitAccount,
   type LimitPace,
   type LimitPoolWindow,
   type LimitProjection,
-  limitsNotice,
   measuredOverWindow,
   paceOf,
+  paceRemainingPercent,
   projectionPaces,
   projectLimitWindows,
   projectsLimitWindow,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
+import {
+  cursorUsageWindowDetails,
+  formatDuration,
+  limitsNotice,
+} from "@t3tools/shared/usageLimitsCopy";
+import { Link } from "@tanstack/react-router";
+import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
 import { Fragment, type ReactNode } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
+import type { MessageResolver } from "../../i18n/messages";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { formatContextWindowTokens } from "../../lib/contextWindow";
@@ -37,17 +42,22 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { providerClients } from "../settings/providerDriverMeta";
 import { AccountChip } from "../usage/UsageLimitsPooled";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
-import { hubPoolFor, otherDriverPools } from "./ThreadDetailsUsage.logic";
+import {
+  nextPoolReset,
+  otherDriverPools,
+  poolSources,
+  resolveThreadDetailsLimits,
+} from "./ThreadDetailsUsage.logic";
 
 const PACE_LABEL: Record<LimitPace, string> = {
-  ahead: "Ahead of pace",
-  on: "On pace",
-  under: "Under pace",
+  ahead: msg("Ahead of pace"),
+  on: msg("On pace"),
+  under: msg("Under pace"),
 };
 
 export interface ThreadDetailsUsageInput {
-  readonly environmentId: EnvironmentId;
   readonly providerInstanceId: ProviderInstanceId | null;
+  readonly model: string | null;
   readonly providers: readonly ServerProvider[];
   readonly sources: UsageLimitSourceSnapshots;
   readonly contextWindow: ContextWindowSnapshot | null;
@@ -55,68 +65,54 @@ export interface ThreadDetailsUsageInput {
 
 type UsageTone = "error" | "warning" | null;
 
+function limitTone(left: number): UsageTone {
+  if (left <= 10) return "error";
+  if (left <= 20) return "warning";
+  return null;
+}
+
 /**
  * The selected provider's limit windows, then every other provider's on the environment. Each row
- * reads as room left.
+ * reads as room left and opens the usage page.
  */
 export function ThreadDetailsUsage({
-  environmentId,
   providerInstanceId,
+  model,
   providers,
   sources,
 }: Omit<ThreadDetailsUsageInput, "contextWindow">) {
+  const gt = useGT();
+  const m = useMessages();
   const nowMinute = useNowMinute();
   const now = Date.parse(`${nowMinute}:00Z`);
-  const report =
-    providerInstanceId !== null
-      ? collectProviderUsageLimits(providerInstanceId, providers, sources, now)
-      : null;
-  // Only this instance's data: the report keeps one instance per login, and any other entry may be
-  // a different login or workspace, so fall back to the instance's own snapshot.
-  const provider = providers.find((entry) => entry.instanceId === providerInstanceId);
-  const limits =
-    report?.accounts.find((entry) => entry.instanceId === providerInstanceId)?.limits ??
-    provider?.usageLimits;
-  const active = provider && limits ? { driver: provider.driver, limits } : null;
-  const pool = active
-    ? hubPoolFor(environmentId, active.driver, active.limits, sources, now)
+  const resolved = resolveThreadDetailsLimits(providerInstanceId, model, providers, sources, now);
+  const activeDriver = resolved
+    ? (providers.find((provider) => provider.instanceId === providerInstanceId)?.driver ?? null)
     : null;
-  const notice = active && !pool ? limitsNotice(active.limits) : null;
-  const others = otherDriverPools(environmentId, active?.driver ?? null, providers, sources, now);
-  if (!active && others.length === 0) return null;
+  const others = otherDriverPools(activeDriver, providers, sources, now);
+  if (!resolved && others.length === 0) return null;
 
   return (
     <ThreadDetailsSection
       headingId="thread-details-usage-heading"
-      title="Usage limits"
+      title={gt("Usage limits")}
       showHeading={false}
     >
       <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
-        {active ? (
+        {resolved && activeDriver !== null ? (
           <>
-            {others.length > 0 ? <DriverCaption driver={active.driver} /> : null}
-            {pool ? (
-              displayLimitWindows(pool).map((window) => (
+            {others.length > 0 ? <DriverCaption driver={activeDriver} /> : null}
+            {resolved.kind === "pool" ? (
+              resolved.windows.map((window) => (
                 <PoolRow
                   key={`${window.kind}:${window.id}`}
-                  driver={pool.driver}
+                  driver={activeDriver}
                   window={window}
-                  accountCount={pool.accounts.length}
                   now={now}
                 />
               ))
-            ) : notice ? (
-              <UsageRow
-                label="Limits"
-                fill={null}
-                tone={null}
-                value="Unavailable"
-                tooltip={<span className="text-foreground">{notice}</span>}
-              />
             ) : (
-              active.limits.windows.map((window) => (
-                <LimitRow key={window.id} driver={active.driver} window={window} now={now} />
-              ))
+              <InstanceRows driver={activeDriver} limits={resolved.limits} now={now} />
             )}
           </>
         ) : null}
@@ -128,7 +124,11 @@ export function ThreadDetailsUsage({
                 key={`${window.kind}:${window.id}`}
                 driver={other.driver}
                 window={window}
-                accountCount={other.accounts.length}
+                label={
+                  (other.driver === "cursor"
+                    ? cursorUsageWindowDetails(window.id, other, m)?.label
+                    : null) ?? window.label
+                }
                 now={now}
               />
             ))}
@@ -154,6 +154,35 @@ function DriverCaption({ driver }: { readonly driver: ProviderDriverKind }) {
   );
 }
 
+function InstanceRows({
+  driver,
+  limits,
+  now,
+}: {
+  readonly driver: ProviderDriverKind;
+  readonly limits: ServerProviderUsageLimits;
+  readonly now: number;
+}) {
+  const gt = useGT();
+  const m = useMessages();
+  const notice = limitsNotice(limits, m);
+  if (notice) {
+    return (
+      <UsageRow
+        label={gt("Limits", { $context: "usage limits row label" })}
+        fill={null}
+        tone={null}
+        value={gt("Unavailable")}
+        tooltip={<span className="text-foreground">{notice}</span>}
+        opensUsage
+      />
+    );
+  }
+  return limits.windows.map((window) => (
+    <LimitRow key={window.id} driver={driver} window={window} now={now} />
+  ));
+}
+
 /** The thread's context window. The bar fills as context is used; the tick marks auto-compaction. */
 export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowSnapshot }) {
   const maxTokens = usage.maxTokens != null && usage.maxTokens > 0 ? usage.maxTokens : null;
@@ -166,16 +195,19 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
     maxTokens !== null && threshold !== null && threshold > 0 && threshold < maxTokens
       ? (threshold / maxTokens) * 100
       : null;
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useLocale();
   const usedTokens = formatContextWindowTokens(usage.usedTokens);
   return (
     <ThreadDetailsSection
       headingId="thread-details-context-heading"
-      title="Context window"
+      title={gt("Context window")}
       showHeading={false}
     >
       <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
         <UsageRow
-          label="Context"
+          label={gt("Context", { $context: "context window row label" })}
           fill={used}
           tone={used === null ? null : used >= 90 ? "error" : used >= 80 ? "warning" : null}
           tick={tick}
@@ -185,21 +217,29 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
               ? `${usedTokens} / ${formatContextWindowTokens(maxTokens)}`
               : usedTokens
           }
-          ariaValue={used !== null ? `${used}% used` : `${usedTokens} tokens used`}
+          ariaValue={
+            used !== null
+              ? gt("{used}% used", { used })
+              : gt("{usedTokens} tokens used", { usedTokens })
+          }
           tooltip={
             <>
               <span className="text-foreground">
-                {used !== null ? `Context: ${used}% used` : `Context: ${usedTokens} tokens used`}
+                {used !== null
+                  ? gt("Context: {used}% used", { used })
+                  : gt("Context: {usedTokens} tokens used", { usedTokens })}
               </span>
               {maxTokens !== null ? (
                 <span className="text-muted-foreground">
-                  {usage.usedTokens.toLocaleString("en-US")} of {maxTokens.toLocaleString("en-US")}{" "}
-                  tokens
+                  {gt("{used} of {max} tokens", {
+                    used: usage.usedTokens.toLocaleString(locale),
+                    max: maxTokens.toLocaleString(locale),
+                  })}
                 </span>
               ) : null}
               {threshold !== null && threshold > 0 ? (
                 <span className="text-muted-foreground">
-                  {formatContextWindowCompactionMessage(threshold)}
+                  {formatContextWindowCompactionMessage(threshold, m)}
                 </span>
               ) : null}
             </>
@@ -219,9 +259,12 @@ function LimitRow({
   readonly window: ServerProviderUsageWindow;
   readonly now: number;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const left = remainingPercent(window);
   const pace = paceOf(window, now);
+  const timeLeft = paceRemainingPercent(window, now);
   const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
   const projection = projectsLimitWindow(driver, window.id)
     ? projectLimitWindows([window], now)
@@ -230,25 +273,33 @@ function LimitRow({
     <UsageRow
       label={window.label}
       fill={left}
-      tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
+      tone={limitTone(left)}
       projection={projection}
+      // The projection's notch replaces the pace tick.
+      tick={projection ? null : timeLeft}
       value={`${left}%`}
-      ariaValue={`${left}% left`}
+      ariaValue={gt("{left}% left", { left })}
+      opensUsage
       tooltip={
         <>
           <span className="text-foreground">
-            {window.label}: {left}% left
+            {gt("{label}: {left}% left", { label: window.label, left })}
           </span>
+          {!projection && pace && timeLeft !== null ? (
+            <span className="text-muted-foreground">
+              {m(PACE_LABEL[pace])} · {gt("{timeLeft}% of the window left", { timeLeft })}
+            </span>
+          ) : null}
           {window.resetsAt && resetsAt > now ? (
             <span className="text-muted-foreground">
-              Resets in {formatDuration(resetsAt - now)} ·{" "}
-              {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}
+              {gt("Resets in {duration} · {time}", {
+                duration: formatDuration(resetsAt - now, m),
+                time: formatUpcomingTimestamp(window.resetsAt, timestampFormat, now, undefined, m),
+              })}
             </span>
           ) : null}
           {projection ? (
             <ProjectionLines windows={[window]} projection={projection} now={now} />
-          ) : pace ? (
-            <span className="text-muted-foreground">{PACE_LABEL[pace]}</span>
           ) : null}
         </>
       }
@@ -260,48 +311,64 @@ function LimitRow({
 function PoolRow({
   driver,
   window,
-  accountCount,
+  label: labelOverride,
   now,
 }: {
   readonly driver: ProviderDriverKind;
   readonly window: LimitPoolWindow;
-  readonly accountCount: number;
+  readonly label?: string;
   readonly now: number;
 }) {
+  const label = labelOverride ?? window.label;
+  const gt = useGT();
+  const m = useMessages();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const left = window.remainingPercent;
-  const refill = window.resets.find((reset) => reset.restoresPercent > 0 && reset.at > now);
-  const label =
-    (driver === "cursor" ? cursorUsageWindowDetails(window.id)?.label : null) ?? window.label;
+  const accounts = window.members.length;
+  const from = poolSources(window);
+  const sourceLabels = [...from.hubs, ...(from.signedIn ? [gt("Signed-in accounts")] : [])];
+  const next = nextPoolReset(window, now);
+  const resetsAt = next?.member.window.resetsAt;
+  const reset =
+    next && resetsAt
+      ? {
+          duration: formatDuration(next.at - now, m),
+          time: formatUpcomingTimestamp(resetsAt, timestampFormat, now, undefined, m),
+        }
+      : null;
   const windows = window.members.map((member) => member.window);
-  const projection = projectsLimitWindow(driver, window.id)
-    ? projectLimitWindows(windows, now)
-    : null;
-  const pooled = window.members.length > 1;
-  const measuring =
-    !projection && pooled && projectsLimitWindow(driver, window.id) ? measuringNote(windows) : null;
+  const projects = projectsLimitWindow(driver, window.id);
+  const projection = projects ? projectLimitWindows(windows, now) : null;
+  const pooled = accounts > 1;
+  const measuring = !projection && pooled && projects ? measuringNote(windows, m) : null;
   return (
     <UsageRow
       label={label}
       fill={left}
-      tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
+      tone={limitTone(left)}
       projection={projection}
       value={`${left}%`}
       ariaValue={
-        accountCount > 1 ? `${left}% left across ${accountCount} pooled accounts` : `${left}% left`
+        pooled
+          ? gt("{left}% left across {accounts} pooled accounts", { left, accounts })
+          : gt("{left}% left", { left })
       }
+      opensUsage
       tooltip={
         <>
           <span className="text-foreground">
-            {label}: {left}% left
+            {pooled
+              ? gt("{label}: {left}% left across {accounts} accounts", { label, left, accounts })
+              : gt("{label}: {left}% left", { label, left })}
           </span>
-          {accountCount > 1 ? (
-            <span className="text-muted-foreground">Pooled across {accountCount} accounts</span>
-          ) : null}
-          {refill ? (
+          {next && reset ? (
             <span className="text-muted-foreground">
-              +{refill.restoresPercent}% in {formatDuration(refill.at - now)} ·{" "}
-              {formatUpcomingTimestamp(new Date(refill.at).toISOString(), timestampFormat, now)}
+              {pooled
+                ? gt("+{percent}% in {duration} · {time}", {
+                    percent: next.restoresPercent,
+                    ...reset,
+                  })
+                : gt("Resets in {duration} · {time}", reset)}
             </span>
           ) : null}
           {projection ? (
@@ -314,12 +381,19 @@ function PoolRow({
           ) : measuring ? (
             <span className="text-muted-foreground">{measuring}</span>
           ) : window.pace ? (
-            <span className="text-muted-foreground">{PACE_LABEL[window.pace]}</span>
+            <span className="text-muted-foreground">{m(PACE_LABEL[window.pace])}</span>
+          ) : null}
+          {sourceLabels.length > 0 ? (
+            <span className="text-muted-foreground">
+              {gt("From {sources}", { sources: sourceLabels.join(", ") })}
+            </span>
           ) : null}
           {pooled ? (
             <span className="mt-1 grid grid-cols-[auto_auto_1fr] items-center gap-x-2 gap-y-0.5 border-t border-border/60 pt-1.5 tabular-nums">
               {window.members.map((member) => {
-                const resetsAt = member.window.resetsAt ? Date.parse(member.window.resetsAt) : null;
+                const memberResetsAt = member.window.resetsAt
+                  ? Date.parse(member.window.resetsAt)
+                  : null;
                 return (
                   <Fragment key={member.account.key}>
                     <AccountMark account={member.account} />
@@ -327,8 +401,10 @@ function PoolRow({
                       {remainingPercent(member.window)}%
                     </span>
                     <span className="text-muted-foreground">
-                      {resetsAt !== null && resetsAt > now
-                        ? `refills in ${formatDuration(resetsAt - now)}`
+                      {memberResetsAt !== null && memberResetsAt > now
+                        ? gt("refills in {duration}", {
+                            duration: formatDuration(memberResetsAt - now, m),
+                          })
                         : ""}
                     </span>
                   </Fragment>
@@ -343,12 +419,20 @@ function PoolRow({
 }
 
 /** How much of its pace a pool has measured, while that is short of forecasting and a day or longer. */
-function measuringNote(windows: readonly ServerProviderUsageWindow[]): string | null {
+function measuringNote(
+  windows: readonly ServerProviderUsageWindow[],
+  resolve: MessageResolver,
+): string | null {
   if (windows.every(measuredOverWindow)) return null;
   const windowDays = Math.max(...windows.map((window) => window.windowDurationMins ?? 0)) / 1440;
   if (windowDays < 1) return null;
   const days = Math.min(...windows.map((window) => window.recentSpend?.hours ?? 0)) / 24;
-  return `Measuring the pool's pace before forecasting: ${Math.floor(days)} of ${Math.round(windowDays)} days read`;
+  return resolve(
+    msg("Measuring the pool's pace before forecasting: {days} of {windowDays} days read", {
+      days: Math.floor(days),
+      windowDays: Math.round(windowDays),
+    }),
+  );
 }
 
 function AccountMark({ account }: { readonly account: LimitAccount }) {
@@ -373,6 +457,8 @@ function ProjectionLines({
   /** A pool's accounts, in window order; a single window has none. */
   readonly accounts?: readonly LimitAccount[];
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const paces = projectionPaces(windows, now);
   const [dry] = projection.dry;
   const dryTotal = projection.dry.reduce((sum, stretch) => sum + stretch.until - stretch.from, 0);
@@ -382,61 +468,98 @@ function ProjectionLines({
     ? Math.min(...windows.map((window) => window.recentSpend!.hours))
     : null;
   const measuredDays = measuredHours === null ? null : Math.round(measuredHours / 24);
+  const pooledAccounts = accounts !== undefined && accounts.length > 1;
   return (
     <>
       {dry ? (
         <span className="text-warning-foreground">
-          Runs out in {formatDuration(dry.from - now)}, {formatDuration(dry.until - dry.from)}{" "}
-          before{" "}
           {accounts ? (
-            <>
-              <AccountMark account={accounts[dry.refill]!} /> refills
-            </>
+            <T>
+              Runs out in <Var>{formatDuration(dry.from - now, m)}</Var>,{" "}
+              <Var>{formatDuration(dry.until - dry.from, m)}</Var> before{" "}
+              <Var>
+                <AccountMark account={accounts[dry.refill]!} />
+              </Var>{" "}
+              refills
+            </T>
           ) : (
-            "it resets"
+            <T>
+              Runs out in <Var>{formatDuration(dry.from - now, m)}</Var>,{" "}
+              <Var>{formatDuration(dry.until - dry.from, m)}</Var> before it resets
+            </T>
           )}
-          {projection.dry.length > 1 ? `. ${formatDuration(dryTotal)} with no room in all` : ""}
+          {projection.dry.length > 1 ? (
+            <>
+              {". "}
+              <T>
+                <Var>{formatDuration(dryTotal, m)}</Var> with no room in all
+              </T>
+            </>
+          ) : null}
         </span>
       ) : null}
       {expiring.map((entry) => (
         <span key={entry.member} className="text-foreground">
-          {Math.round(entry.percent)}%{" "}
           {accounts ? (
-            <>
-              of <AccountMark account={accounts[entry.member]!} />{" "}
-            </>
-          ) : null}
-          resets unused in {formatDuration(entry.at - now)}
+            <T>
+              <Var>{Math.round(entry.percent)}</Var>% of{" "}
+              <Var>
+                <AccountMark account={accounts[entry.member]!} />
+              </Var>{" "}
+              resets unused in <Var>{formatDuration(entry.at - now, m)}</Var>
+            </T>
+          ) : (
+            <T>
+              <Var>{Math.round(entry.percent)}</Var>% resets unused in{" "}
+              <Var>{formatDuration(entry.at - now, m)}</Var>
+            </T>
+          )}
         </span>
       ))}
       {!dry && expiring.length === 0 ? (
         <span className="text-foreground">
-          Lasts until {accounts ? "the refills" : "the reset"}, with nothing left over
+          {accounts ? (
+            <T>Lasts until the refills, with nothing left over</T>
+          ) : (
+            <T>Lasts until the reset, with nothing left over</T>
+          )}
         </span>
       ) : null}
       <span className="text-muted-foreground">
         {dry
           ? safe > 0
-            ? `Slowing to ${safe}× this pace keeps you covered`
-            : "Even a crawl runs dry first"
+            ? gt("Slowing to {safe}× this pace keeps you covered", { safe })
+            : gt("Even a crawl runs dry first")
           : paces.safe >= 3
-            ? "Covered even at 3× this pace"
-            : `Covered up to ${safe}× this pace`}
+            ? gt("Covered even at 3× this pace")
+            : gt("Covered up to {safe}× this pace", { safe })}
       </span>
       {measuredHours !== null && measuredDays !== null ? (
         <span className="text-muted-foreground">
-          This pace is what {accounts && accounts.length > 1 ? "the accounts" : "the account"} spent
-          over the last{" "}
           {measuredHours < 24
-            ? formatDuration(measuredHours * 3_600_000)
-            : measuredDays === 1
-              ? "day"
-              : `${measuredDays} days`}
+            ? pooledAccounts
+              ? gt("This pace is what the accounts spent over the last {duration}", {
+                  duration: formatDuration(measuredHours * 3_600_000, m),
+                })
+              : gt("This pace is what the account spent over the last {duration}", {
+                  duration: formatDuration(measuredHours * 3_600_000, m),
+                })
+            : pooledAccounts
+              ? gt(
+                  "{days, plural, =1 {This pace is what the accounts spent over the last day} other {This pace is what the accounts spent over the last {days} days}}",
+                  { days: measuredDays },
+                )
+              : gt(
+                  "{days, plural, =1 {This pace is what the account spent over the last day} other {This pace is what the account spent over the last {days} days}}",
+                  { days: measuredDays },
+                )}
         </span>
       ) : null}
       {paces.usesAll !== null ? (
         <span className="text-muted-foreground">
-          At {Math.ceil(paces.usesAll * 10) / 10}× this pace, nothing resets unused
+          {gt("At {pace}× this pace, nothing resets unused", {
+            pace: Math.ceil(paces.usesAll * 10) / 10,
+          })}
         </span>
       ) : null}
     </>
@@ -454,7 +577,7 @@ function notchAt(percent: number) {
   };
 }
 
-/** One label, hairline, and value row; the whole row opens the details tooltip. */
+/** One label, hairline, and value row; the whole row opens the details tooltip. With `opensUsage` it links to the usage page. */
 function UsageRow({
   label,
   fill,
@@ -465,6 +588,7 @@ function UsageRow({
   ariaValue = value,
   tooltip,
   muted = false,
+  opensUsage = false,
 }: {
   readonly label: string;
   /** Bar fill from 0 to 100. Null hides the bar. */
@@ -478,22 +602,31 @@ function UsageRow({
   readonly ariaValue?: string;
   readonly tooltip: ReactNode;
   readonly muted?: boolean;
+  readonly opensUsage?: boolean;
 }) {
+  const gt = useGT();
   const solid = projection ? projection.usePercent : (fill ?? 0);
   const need = projection ? Math.min(100, solid + projection.shortPercent) : null;
   const notch = need === null ? null : notchAt(need);
+  const rowProps = {
+    "aria-label": gt("{label}: {value}", { label, value: ariaValue }),
+    className: cn(
+      "col-span-3 grid h-6 grid-cols-subgrid items-center rounded-lg px-2.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]",
+      opensUsage
+        ? "group cursor-pointer active:bg-black/[0.06] dark:active:bg-white/[0.12]"
+        : "cursor-default",
+    ),
+  };
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <div
-            tabIndex={0}
-            aria-label={`${label}: ${ariaValue}`}
-            className="col-span-3 grid h-6 cursor-default grid-cols-subgrid items-center rounded-lg px-2.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]"
-          />
+          opensUsage ? <Link to="/usage" {...rowProps} /> : <div tabIndex={0} {...rowProps} />
         }
       >
-        <span className="max-w-28 truncate text-muted-foreground">{label}</span>
+        <span className="max-w-28 truncate text-muted-foreground group-hover:text-foreground">
+          {label}
+        </span>
         {fill !== null ? (
           <span className="relative h-[3px]">
             <span className="absolute inset-0" style={notch ? { clipPath: notch.clipPath } : {}}>
@@ -534,8 +667,8 @@ function UsageRow({
             {tick !== null ? (
               <span
                 aria-hidden
-                className="absolute -top-[3px] h-[9px] w-px -translate-x-1/2 bg-foreground/60"
-                style={{ left: `${tick}%` }}
+                className="absolute -top-[3px] h-[9px] w-px -translate-x-1/2 bg-foreground/75"
+                style={{ left: `clamp(0.5px, ${tick}%, calc(100% - 0.5px))` }}
               />
             ) : null}
             {notch ? (
@@ -566,7 +699,10 @@ function UsageRow({
       </TooltipTrigger>
       {/* Rows sit 8px inside the card; clear its edge instead of overlapping it. */}
       <TooltipPopup side="left" sideOffset={16}>
-        <div className="flex flex-col gap-0.5">{tooltip}</div>
+        <div className="flex flex-col gap-0.5">
+          {tooltip}
+          {opensUsage ? <span className="text-muted-foreground">{gt("Open usage")}</span> : null}
+        </div>
       </TooltipPopup>
     </Tooltip>
   );

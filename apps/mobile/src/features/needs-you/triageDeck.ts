@@ -6,7 +6,7 @@ import type {
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import type { ResolvedHomeListOptions } from "../home/home-list-options";
-import { buildHomeProjectScopes, resolveHomeProjectScope } from "../home/homeThreadList";
+import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "../home/homeThreadList";
 import { buildThreadListV2Items } from "../threads/threadListV2";
 
 /**
@@ -25,16 +25,15 @@ export function triageDeckThreads(input: {
   readonly now: string;
 }) {
   const { threads, projects, options, snoozeEnvironmentIds, now } = input;
-  const projectScope = resolveHomeProjectScope({
-    scopes: buildHomeProjectScopes({
+  const projectScope = resolveHomeProjectFilterScope(
+    buildHomeProjectScopes({
       projects,
       environmentId: options.selectedEnvironmentId,
       projectGroupingMode: options.projectGroupingMode,
     }),
     projects,
-    projectKey: options.selectedProjectKey,
-    projectGroupingMode: options.projectGroupingMode,
-  });
+    options,
+  );
   const layout = buildThreadListV2Items({
     threads,
     environmentId: options.selectedEnvironmentId,

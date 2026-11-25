@@ -14,6 +14,7 @@ import {
   type FollowUp,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { useGT } from "gt-react-native";
 import { useRef, useState } from "react";
 
 import * as Dialog from "../../components/ui/Dialog";
@@ -43,6 +44,7 @@ export function useStartFollowUpThread(input: {
   readonly onSaved: (followUp: FollowUp) => void;
   readonly onStarted: (thread: { environmentId: EnvironmentId; threadId: ThreadId }) => void;
 }) {
+  const gt = useGT();
   const startTurn = useAtomCommand(threadEnvironment.startTurn, {
     label: "follow-up start thread",
     reportFailure: false,
@@ -59,7 +61,10 @@ export function useStartFollowUpThread(input: {
     const config = appAtomRegistry.get(serverEnvironment.configValueAtom(environmentId));
     const modelSelection = scheduledTaskDefaultModel(config, project);
     if (modelSelection === null) {
-      Dialog.alert("Could not start a thread", "That environment has no model to start with.");
+      Dialog.alert(
+        gt("Could not start a thread"),
+        gt("That environment has no model to start with."),
+      );
       return;
     }
     const settings = resolveProjectSettings(
@@ -88,7 +93,7 @@ export function useStartFollowUpThread(input: {
       }),
     });
     const startFailure = failureMessage(started);
-    if (startFailure !== null) Dialog.alert("Could not start a thread", startFailure);
+    if (startFailure !== null) Dialog.alert(gt("Could not start a thread"), startFailure);
     if (started._tag !== "Success") return;
     const threadId = ThreadId.make(metadata.threadId);
     const saved = await save({
@@ -102,7 +107,7 @@ export function useStartFollowUpThread(input: {
     if (saved._tag === "Success") input.onSaved(saved.value);
     const saveFailure = failureMessage(saved);
     if (saveFailure !== null) {
-      Dialog.alert("The thread started, but the follow-up still reads open", saveFailure);
+      Dialog.alert(gt("The thread started, but the follow-up still reads open"), saveFailure);
     }
     input.onStarted({ environmentId, threadId });
   };
@@ -110,7 +115,7 @@ export function useStartFollowUpThread(input: {
   const start = (project: EnvironmentProject) => {
     if (busy.current) return;
     if (!readEnvironmentScope(project.environmentId, AuthOrchestrationOperateScope)) {
-      Dialog.alert("Could not start a thread", "This device may not start threads there.");
+      Dialog.alert(gt("Could not start a thread"), gt("This device may not start threads there."));
       return;
     }
     busy.current = true;

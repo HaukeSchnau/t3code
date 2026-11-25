@@ -17,6 +17,8 @@ import {
   HTML_RENDER_STORAGE_METHOD,
 } from "@t3tools/shared/htmlRender";
 import * as Predicate from "effect/Predicate";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 const MAX_PENDING_REQUESTS = 4;
 // Page script can post the activated notice itself while a click's transient activation lasts
@@ -60,6 +62,8 @@ export interface HtmlRenderHostOptions {
   readonly bridge: HtmlRenderBridgeTarget | undefined;
   /** Milliseconds; defaults to `Date.now`. */
   readonly now?: () => number;
+  /** Resolves the sent message's chip label; defaults to English. */
+  readonly resolve?: MFunctionType;
 }
 
 export interface HtmlRenderHost {
@@ -75,13 +79,14 @@ export interface HtmlRenderHost {
 function htmlRenderMessage(
   render: Pick<HtmlRenderBridgeTarget, "renderId" | "title">,
   text: string,
+  resolve: MFunctionType,
 ): { readonly text: string; readonly context: OrchestrationMessageContext } {
   const contextId = toKindScopedComposerContextId("html-render", render.renderId);
   const record: HtmlRenderContextRecord = {
     version: 1,
     kind: "html-render",
     contextId,
-    label: `From ${render.title}`,
+    label: resolve(msg("From {title}", { title: render.title })),
     renderId: render.renderId,
     title: render.title,
   };
@@ -222,17 +227,19 @@ export function makeHtmlRenderHost(options: HtmlRenderHostOptions): HtmlRenderHo
         const sentAt = now();
         messages = [...messages, sentAt];
         answer(id, () =>
-          bridge.send(htmlRenderMessage(bridge, text)).catch((error: unknown) => {
-            // A refused send never went out: the page keeps its click and its place under the
-            // cap, so it can try again.
-            if (error instanceof HtmlRenderHostRefusal) {
-              clickCredit = true;
-              const index = messages.indexOf(sentAt);
-              if (index !== -1)
-                messages = [...messages.slice(0, index), ...messages.slice(index + 1)];
-            }
-            throw error;
-          }),
+          bridge
+            .send(htmlRenderMessage(bridge, text, options.resolve ?? mFallback))
+            .catch((error: unknown) => {
+              // A refused send never went out: the page keeps its click and its place under the
+              // cap, so it can try again.
+              if (error instanceof HtmlRenderHostRefusal) {
+                clickCredit = true;
+                const index = messages.indexOf(sentAt);
+                if (index !== -1)
+                  messages = [...messages.slice(0, index), ...messages.slice(index + 1)];
+              }
+              throw error;
+            }),
         );
         return;
       }

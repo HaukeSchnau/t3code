@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronsUpDownIcon } from "lucide-react";
+import { T, useGT, useMessages, Var } from "gt-react";
 
 import { environmentModeLabel } from "@t3tools/client-runtime/connection";
 
@@ -23,6 +24,8 @@ import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 const ALL_VALUE = "all";
 
 export function SidebarEnvironmentModeMenu() {
+  const gt = useGT();
+  const messages = useMessages();
   const navigate = useNavigate();
   const { modes, active, activeLabel } = useEnvironmentModes();
   const shortcutLabel = shortcutLabelForCommand(
@@ -35,7 +38,12 @@ export function SidebarEnvironmentModeMenu() {
     <SidebarMenuItem className="min-w-0 shrink">
       <Menu>
         <MenuTrigger
-          render={<SidebarMenuButton size="sm" aria-label={`Environment mode: ${activeLabel}`} />}
+          render={
+            <SidebarMenuButton
+              size="sm"
+              aria-label={gt("Environment mode: {mode}", { mode: activeLabel })}
+            />
+          }
         >
           <span className="truncate">{activeLabel}</span>
           <ChevronsUpDownIcon />
@@ -57,7 +65,7 @@ export function SidebarEnvironmentModeMenu() {
             ))}
             <MenuRadioItem value={ALL_VALUE} closeOnClick>
               <span className="flex items-center justify-between gap-3">
-                {environmentModeLabel(modes, null)}
+                {environmentModeLabel(modes, null, messages)}
                 <MenuRadioItemIndicator />
               </span>
             </MenuRadioItem>
@@ -68,8 +76,14 @@ export function SidebarEnvironmentModeMenu() {
               void navigate({ to: "/settings/connections", hash: "environment-modes" })
             }
           >
-            Edit modes
-            {shortcutLabel ? <MenuShortcut>Cycle {shortcutLabel}</MenuShortcut> : null}
+            <T>Edit modes</T>
+            {shortcutLabel ? (
+              <MenuShortcut>
+                <T>
+                  Cycle <Var>{shortcutLabel}</Var>
+                </T>
+              </MenuShortcut>
+            ) : null}
           </MenuItem>
         </MenuPopup>
       </Menu>

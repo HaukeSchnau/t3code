@@ -12,14 +12,12 @@ every subscription's room at a glance without opening Usage.
 
 ## Requirements
 
-- When the selected provider instance reports its limits as `unsupported` and a usage limit source
-  (hub) reports accounts of the same driver, the row shows the hub's pooled windows, the same
-  numbers Usage → Limits leads with. Hovering a row shows the account count, the next reset that
-  hands quota back, and the pace.
-- Codex whose configured `model_provider` is not `openai` reports its limits as `unsupported`, like an
-  API-key login, whatever login `auth.json` holds.
-- A provider that reports its own windows, a failed read (`probeFailed`), or a driver no hub
-  reports keeps upstream's behavior.
+- A selected instance sent through a hub shows the hub's pooled windows. Upstream does this now
+  (`resolveThreadDetailsLimits`, pingdotgg/t3code#30778): it matches the instance's `auth.endpoint`
+  to the hub's `origin` and pools only the accounts the hub routes the thread's model to.
+- Codex whose configured route is not OpenAI reports its limits as `unsupported`, like an API-key
+  login, whatever login `auth.json` holds. Upstream does this now (`codexRoutesSpendNativeQuota` in
+  `CodexProvider.ts`), so the fork's own `model_provider` check is gone.
 - Below the selected provider, the row lists every other driver on the environment that has
   readable limits, from its own login or a hub, pooled like Usage → Limits. Those groups always
   carry a caption with the provider's name, and the selected provider's group does once any follow.
@@ -34,10 +32,9 @@ every subscription's room at a glance without opening Usage.
 
 ## Implementation
 
-`apps/web/src/components/chat/ThreadDetailsUsage.logic.ts` (`hubPoolFor`, `otherDriverPools`) is
-fork-owned. `ThreadDetailsUsage.tsx` renders their windows as `PoolRow`s under `DriverCaption`s,
-and `ChatView.tsx` passes the environment id in the panel's `usage` input. `CodexProvider.ts` takes `model_provider` from the
-`config/read` call it already makes for the service tier.
+`otherDriverPools` in `apps/web/src/components/chat/ThreadDetailsUsage.logic.ts` is fork-owned.
+`ThreadDetailsUsage.tsx` renders its windows as `PoolRow`s under `DriverCaption`s, beside
+upstream's rows for the selected instance.
 
 `projectLimitWindows` and `projectionPaces` in `packages/shared/src/usageLimits.ts` are fork-owned.
 They spend a pool the way infra's claude-pool priorities route it
@@ -56,8 +53,5 @@ measured on a Monday were mostly weekend and read 0.22% an hour for a pool that 
 
 ## Removal
 
-Drop the hub fallback when upstream's thread details usage row falls back to hub accounts, the
-other providers' groups when upstream's row lists every provider, and the projection when upstream
-draws one. Upstream tracks the bug in
-pingdotgg/t3code#30990, and pingdotgg/t3code#30634 pools the hub accounts the same way. Neither covers Codex's leftover login; that part stays until upstream checks Codex's model
-provider before reading limits.
+Drop the other providers' groups when upstream's row lists every provider, and the projection when
+upstream draws one.

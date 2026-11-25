@@ -14,7 +14,9 @@ handling, because the maintainer and their agents work in jj repositories.
   actions and branch selector.
 - jj 0.46 or newer; older versions fall back to Git in colocated repositories.
 - Checkpoints are commit ids of `@` after a snapshot, recorded under `.jj/t3/checkpoints`
-  (`vcs/JjVcsDriver.ts`). Diffs run Git against jj's backing store, so output matches the Git
+  (`vcs/JjVcsDriver.ts`). Upstream skips the snapshot for a folder that matches its commit
+  (`resolveCleanHead`); for jj that is an empty `@`, whose commit id becomes the checkpoint when
+  one is needed. Diffs run Git against jj's backing store, so output matches the Git
   driver. Later checkpoints are kept after a rollback, so it can be undone. Turn diffs keep every
   changed path: upstream's Git driver drops paths a pull or rebase brought in
   (`listAuthoredPaths`), and the jj driver returns null there because telling them apart would
