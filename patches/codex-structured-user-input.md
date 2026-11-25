@@ -21,8 +21,10 @@ feature off.
   upstream's question contract. A request without the field stays blocking, as Codex treats it.
 - When every question is optional, the prompt shows an Optional label and a Skip action that
   answers `{}`. `isOptionalPendingUserInput` lives in client-runtime `state/pendingUserInput.ts`.
-  Web renders it in `ComposerPendingUserInputPanel.tsx` with the Skip handler in
-  `chat/usePendingThreadRequests.ts`; mobile renders it in `PendingUserInputCard.tsx`.
+  Web renders both in fork-owned `chat/OptionalQuestionControls.tsx`, mounted in the header and
+  footer of `ComposerPendingUserInputPanel.tsx`, with the Skip handler in
+  `chat/usePendingThreadRequests.ts`. A dismissible question keeps upstream's Skip, which
+  dismisses it. Mobile renders both in `PendingUserInputCard.tsx`.
 
 ## Removal
 

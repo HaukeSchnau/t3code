@@ -7,7 +7,6 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { type PendingUserInput } from "../../session-logic";
 import {
   countPendingUserInputQuestions,
-  isOptionalPendingUserInput,
   type PendingUserInputDraftAnswer,
 } from "@t3tools/client-runtime/state/pending-user-input";
 import { derivePendingUserInputProgress } from "../../pendingUserInput";
@@ -20,6 +19,7 @@ import { useLayoutPaneFocusedRef } from "../../layout/layoutPaneContext";
 import { ComposerBanner } from "./ComposerBanner";
 import ChatMarkdown from "../ChatMarkdown";
 import { ComposerRequestCard, useRequestCardEnterShortcut } from "./ComposerRequestCard";
+import { OptionalQuestionBadge, OptionalQuestionSkip } from "./OptionalQuestionControls";
 
 /** Enablement of the card's Answer / Next action, derived by the composer. */
 export interface PendingUserInputPrimaryAction {
@@ -144,7 +144,6 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = disabled || isResponding || !canRespond;
-  const optional = isOptionalPendingUserInput(prompt.questions);
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const advance = useStableCallback(onAdvance);
   const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
@@ -334,6 +333,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         }
         trailing={
           <>
+            <OptionalQuestionBadge prompt={prompt} />
             {questionCount > 1 ? (
               <ComposerRequestCard.Counter index={questionIndex + 1} total={questionCount} />
             ) : null}
@@ -428,6 +428,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         <ComposerRequestCard.Footer>
           <span className="min-w-0 truncate text-dim-foreground">{hint}</span>
           <ComposerRequestCard.Spacer />
+          <OptionalQuestionSkip prompt={prompt} disabled={responseDisabled} onSkip={onSkip} />
           {prompt.dismissible ? (
             <Button
               size="sm"
