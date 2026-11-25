@@ -89,17 +89,21 @@ export function BackgroundWorkDetails(props: {
                     </span>
                   </div>
                   {task.startedAt === undefined && task.expectedBy === undefined ? null : (
-                    <p className="text-xs text-muted-foreground">
-                      {[
-                        task.startedAt === undefined
-                          ? null
-                          : `Since ${formatDayAwareTimestamp(task.startedAt, timestampFormat)}`,
-                        task.expectedBy === undefined
-                          ? null
-                          : `expected by ${formatUpcomingTimestamp(task.expectedBy, timestampFormat)}`,
-                      ]
-                        .filter((part) => part !== null)
-                        .join(" · ")}
+                    <p className="flex flex-wrap gap-x-3 text-meta text-muted-foreground">
+                      {task.startedAt === undefined ? null : (
+                        <span>
+                          {gt("Since {time}", {
+                            time: formatDayAwareTimestamp(task.startedAt, timestampFormat),
+                          })}
+                        </span>
+                      )}
+                      {task.expectedBy === undefined ? null : (
+                        <span>
+                          {gt("Expected by {time}", {
+                            time: formatUpcomingTimestamp(task.expectedBy, timestampFormat),
+                          })}
+                        </span>
+                      )}
                     </p>
                   )}
                   {command ? (

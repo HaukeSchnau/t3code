@@ -524,20 +524,20 @@ function SidebarThreadTooltip({
             />
             <div className="min-w-0 flex-1">
               <div className="truncate text-foreground/75">{waits.title}</div>
-              {waits.since !== null || thread.waitCheckInAt !== null ? (
+              {waits.since === null ? null : (
                 <div className="text-muted-foreground">
-                  {[
-                    waits.since === null
-                      ? null
-                      : `Since ${formatDayAwareTimestamp(waits.since, timestampFormat)}`,
-                    thread.waitCheckInAt === null
-                      ? null
-                      : `next check-in ${formatUpcomingTimestamp(thread.waitCheckInAt, timestampFormat)}`,
-                  ]
-                    .filter((part) => part !== null)
-                    .join(" · ")}
+                  {gt("Since {time}", {
+                    time: formatDayAwareTimestamp(waits.since, timestampFormat),
+                  })}
                 </div>
-              ) : null}
+              )}
+              {thread.waitCheckInAt === null ? null : (
+                <div className="text-muted-foreground">
+                  {gt("Next check-in {time}", {
+                    time: formatUpcomingTimestamp(thread.waitCheckInAt, timestampFormat),
+                  })}
+                </div>
+              )}
             </div>
           </div>
         ) : null}
