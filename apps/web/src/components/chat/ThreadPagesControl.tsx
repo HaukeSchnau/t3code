@@ -127,9 +127,7 @@ function ThreadPagesList(props: {
       {GROUPS.map((group) =>
         groups[group.key].length === 0 ? null : (
           <section key={group.key} className="flex flex-col gap-0.5">
-            <h3 className="px-3 pb-1 text-xs font-medium text-muted-foreground/70">
-              {m(group.label)}
-            </h3>
+            <h3 className="px-3 pb-1 text-meta text-dim-foreground">{m(group.label)}</h3>
             {groups[group.key].map((page) => (
               <PageListRow key={page.renderId} page={page} onOpen={props.onOpen} />
             ))}

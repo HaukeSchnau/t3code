@@ -101,8 +101,8 @@ export function PagesPage() {
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="flex min-h-0 flex-1 flex-col bg-background">
-        <WorkspacePageHeader electron={isElectron} className="bg-background">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <WorkspacePageHeader electron={isElectron}>
           <WorkspaceBreadcrumb ariaLabel={gt("Pages breadcrumb")}>
             <WorkspaceBreadcrumbItem current>
               <h1 className="truncate">
@@ -189,7 +189,7 @@ export function PagesEnvironmentSection(props: {
   return (
     <section className="flex flex-col gap-1">
       {props.label !== null ? (
-        <div className="flex min-w-0 items-center gap-2 px-3 pb-1 text-xs font-medium text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2 px-3 pb-1 text-meta text-muted-foreground">
           <h2 className="shrink-0">{props.label}</h2>
           <Separator className="min-w-2 flex-1" />
         </div>
@@ -233,7 +233,7 @@ function PagesChunk(props: {
   );
   if (query.data === null) {
     return query.error !== null ? (
-      <p className="px-3 text-sm text-muted-foreground">
+      <p className="px-3 text-body text-muted-foreground">
         <T>
           Could not load pages: <Var>{query.error}</Var>
         </T>
@@ -247,7 +247,7 @@ function PagesChunk(props: {
   }
   const { pages, nextCursor } = query.data;
   if (props.cursor === undefined && pages.length === 0) {
-    return <p className="px-3 text-sm text-muted-foreground">{EMPTY[props.filter]}</p>;
+    return <p className="px-3 text-body text-muted-foreground">{EMPTY[props.filter]}</p>;
   }
   return (
     <>
@@ -264,7 +264,7 @@ function PagesChunk(props: {
         <PagesChunk {...props} cursor={nextCursor} remaining={props.remaining - 1} />
       ) : (
         <div className="px-3 pt-2">
-          <Button size="sm" variant="secondary" onClick={props.onMore}>
+          <Button size="standard" variant="secondary" onClick={props.onMore}>
             <T>Load more</T>
           </Button>
         </div>
