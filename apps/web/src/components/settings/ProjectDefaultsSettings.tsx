@@ -7,7 +7,6 @@ import {
 import { createModelSelection, pickModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
-import { useRef } from "react";
 import { T, useGT, useMessages } from "gt-react";
 import { FolderGit2Icon, FolderIcon, GitBranchIcon } from "lucide-react";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -27,6 +26,7 @@ import { PULL_REQUEST_MERGE_METHOD_LABELS } from "../pullRequest/pullRequestDeta
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
+import { JjCommitTrailerRows } from "./JjCommitTrailerSettings";
 import { resolveDefaultModelSettingsPresentation } from "./ProjectDefaultsSettings.logic";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { useSearchableSetting } from "./settingsSearch";
@@ -109,10 +109,6 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
-  const mixedJjTrailers = useScopedSettingsMixed(["jjCommitTrailers"]);
-  const mixedJjStripRemotes = useScopedSettingsMixed(["jjStripTrailersRemotes"]);
-  const jjStripRemotesEdited = useRef(false);
-  const scopeKey = targets.map((entry) => `${entry.environmentId}:${entry.projectId}`).join(",");
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const unavailable = connectedEnvironments.length === 0;
@@ -613,6 +609,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
           {autoPullRow}
           {agentCreditsRow}
           {mergeMethodRow}
+          <JjCommitTrailerRows />
         </>
       )}
     </SettingsSection>

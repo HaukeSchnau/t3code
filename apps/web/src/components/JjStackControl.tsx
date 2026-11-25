@@ -331,7 +331,7 @@ function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex min-h-5 items-center gap-2 px-1">
-        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        <p className="min-w-0 flex-1 truncate text-meta text-muted-foreground">
           <T>
             Stack on <Var>{view.base}</Var>
           </T>
@@ -346,7 +346,7 @@ function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
         {pending ? <Spinner size="sm" tone="muted" /> : null}
       </div>
       {view.rows.length === 0 ? (
-        <p className="px-1 text-sm text-muted-foreground">
+        <p className="px-1 text-body text-muted-foreground">
           <T>
             No changes above <Var>{view.base}</Var>.
           </T>
@@ -358,7 +358,7 @@ function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap gap-1 border-t px-1 pt-2">
+      <div className="flex flex-wrap gap-1 border-t border-divider px-1 pt-2">
         {props.onOpenChanges ? (
           <Button size="xs" variant="secondary" onClick={props.onOpenChanges}>
             <T>View changes</T>
@@ -403,29 +403,29 @@ function JjStackRowItem({
   return (
     <li
       className={cn(
-        "flex items-start gap-2 rounded-md px-1 py-1.5",
+        "flex items-start gap-2 px-1 py-1.5",
         row.ownership === "other-thread" && "opacity-60",
       )}
     >
       <span
         aria-hidden="true"
-        className="w-3 shrink-0 text-center font-mono text-xs leading-5 text-muted-foreground"
+        className="w-3 shrink-0 text-center font-mono text-meta leading-5 text-muted-foreground"
       >
         {row.workingCopy ? "@" : "○"}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p
           className={cn(
-            "truncate text-sm leading-5",
+            "truncate text-body leading-5",
             row.undescribed && "italic text-muted-foreground",
           )}
         >
           {row.title}
         </p>
         <div className="flex flex-wrap items-center gap-1">
-          <code className="text-xs text-muted-foreground">{row.shortChangeId}</code>
+          <code className="font-mono text-meta text-muted-foreground">{row.shortChangeId}</code>
           {row.empty ? (
-            <span className="text-xs text-muted-foreground">
+            <span className="text-meta text-muted-foreground">
               <T context="a jj change with no file changes">empty</T>
             </span>
           ) : null}
@@ -462,7 +462,7 @@ function JjStackRowItem({
         </div>
         {showUnattributed ? (
           <div className="flex flex-col gap-1 pt-1">
-            <p className="text-xs text-muted-foreground">
+            <p className="text-meta text-muted-foreground">
               {gt(
                 "{count, plural, =1 {No turn claimed this file:} other {No turn claimed these {count} files:}}",
                 { count: view.unattributed.length },
@@ -470,13 +470,13 @@ function JjStackRowItem({
             </p>
             <ul className="flex flex-col">
               {view.unattributed.slice(0, UNATTRIBUTED_PREVIEW_COUNT).map((path) => (
-                <li key={path} className="truncate font-mono text-xs">
+                <li key={path} className="truncate font-mono text-meta">
                   {path}
                 </li>
               ))}
             </ul>
             {hiddenUnattributed > 0 ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-meta text-muted-foreground">
                 <T>
                   and <Var>{hiddenUnattributed}</Var> more
                 </T>
@@ -601,7 +601,7 @@ function JjDialogPopup({
             <ul className="flex flex-col gap-1">
               {row.bookmarks.map((bookmark) => (
                 <li key={bookmark} className="flex items-center gap-2">
-                  <code className="min-w-0 flex-1 truncate text-sm">{bookmark}</code>
+                  <code className="min-w-0 flex-1 truncate font-mono text-body">{bookmark}</code>
                   <Button
                     size="xs"
                     variant="secondary"
