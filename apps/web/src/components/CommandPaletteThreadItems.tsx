@@ -1,8 +1,10 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
 import {
   claimThreadOpen,
   nextShownOrder,
+  threadSearchSubject,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -11,6 +13,7 @@ import {
   PALETTE_MESSAGE_LIMIT,
   pickedQuery,
   rankMessageMatches,
+  threadRecentUse,
 } from "@t3tools/shared/paletteSearch";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -19,6 +22,7 @@ import { MessageSquareIcon } from "lucide-react";
 import { useState } from "react";
 import { useGT, useMessages } from "gt-react";
 
+import { useNowMinute } from "../hooks/useNowMinute";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -36,7 +40,12 @@ import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { formatRelativeTimeLabel } from "../timestampFormat";
-import { buildThreadActionItems, ITEM_ICON_CLASS } from "./CommandPalette.logic";
+import {
+  buildThreadActionItems,
+  ITEM_ICON_CLASS,
+  RECENT_THREAD_LIMIT,
+  type CommandPaletteActionItem,
+} from "./CommandPalette.logic";
 import { useEnvironmentLookups, useProjectLookups } from "./CommandPaletteLookups";
 import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
 import {
@@ -44,6 +53,7 @@ import {
   ThreadRowTrailingStatus,
   ThreadSearchPullRequestNumber,
 } from "./ThreadStatusIndicators";
+import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 
 function useProviderEntryByEnvironmentAndInstanceId() {
   const { environments } = useEnvironments();
@@ -90,6 +100,37 @@ function useConnectedThreadSearch(query: string) {
   );
 }
 
+function useRecentThreads(
+  activeThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null,
+  delegatedUnderParent: ReadonlySet<string>,
+) {
+  const threads = useVisibleThreadShells();
+  const { projectByKey } = useProjectLookups();
+  return threads
+    .filter(
+      (thread) =>
+        thread.archivedAt === null &&
+        !isShownUnderParent(
+          { environmentId: thread.environmentId, threadId: thread.id },
+          thread.lineage,
+          delegatedUnderParent,
+        ) &&
+        !(thread.id === activeThread?.id && thread.environmentId === activeThread.environmentId),
+    )
+    .map((thread) => ({
+      thread,
+      usedAt: threadRecentUse(
+        threadSearchSubject(
+          thread,
+          projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.title,
+        ),
+      ),
+    }))
+    .toSorted((left, right) => right.usedAt - left.usedAt)
+    .slice(0, RECENT_THREAD_LIMIT)
+    .map(({ thread }) => thread);
+}
+
 /**
  * Every visible thread as a palette item, plus, for a non-empty
  * `threadSearchQuery`, the threads whose messages match, best first.
@@ -97,13 +138,15 @@ function useConnectedThreadSearch(query: string) {
 export function useCommandPaletteThreadItems(input: {
   readonly activeThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null;
   readonly threadSearchQuery: string;
+  readonly includeAllThreads: boolean;
 }) {
-  const { activeThread, threadSearchQuery } = input;
+  const { activeThread, threadSearchQuery, includeAllThreads } = input;
   const messages = useMessages();
   const gt = useGT();
   const navigate = useNavigate();
   const threads = useVisibleThreadShells();
   const delegatedUnderParent = useDelegatedUnderParent();
+  const recentThreads = useRecentThreads(activeThread, delegatedUnderParent);
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);
@@ -112,10 +155,12 @@ export function useCommandPaletteThreadItems(input: {
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
   const [now] = useState(() => Date.now());
 
+  const nowMinute = useNowMinute();
   const { environments } = useEnvironments();
+  const nowMs = Date.parse(`${nowMinute}:00.000Z`);
   const threadItems = buildThreadActionItems(
     {
-      threads,
+      threads: includeAllThreads ? threads : recentThreads,
       delegatedUnderParent,
       ...(environments.length > 1
         ? {
@@ -125,6 +170,7 @@ export function useCommandPaletteThreadItems(input: {
         : {}),
       ...(activeThread ? { activeThread } : {}),
       projectByKey,
+      nowMs,
       icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
       renderLeadingContent: (thread) => <ThreadRowLeadingStatus thread={thread} />,
       renderTrailingContent: (thread) => (
@@ -219,7 +265,7 @@ export function useCommandPaletteThreadItems(input: {
         ...rest,
         // When the matching message was written, not when the thread last moved.
         ...(match.messageCreatedAt
-          ? { timestamp: formatRelativeTimeLabel(match.messageCreatedAt, undefined, messages) }
+          ? { timestamp: formatRelativeTimeLabel(match.messageCreatedAt, nowMs, messages) }
           : {}),
         threadContentMatch: {
           source: match.source,
@@ -252,8 +298,46 @@ export function useCommandPaletteThreadItems(input: {
     .slice(0, order.shown)
     .flatMap((value) => messageItemByValue.get(value) ?? []);
 
+  // Recent threads stay on one line: provider logo, title, then the dim branch.
+  const recentThreadItems = recentThreads.flatMap((thread): CommandPaletteActionItem[] => {
+    const original = itemByValue.get(`thread:${thread.environmentId}:${thread.id}`);
+    if (!original) return [];
+    const { description: _description, ...item } = original;
+    const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const providerEntry =
+      providerEntryByEnvironmentAndInstanceId.get(`${thread.environmentId}:${modelInstanceId}`) ??
+      null;
+    return [
+      {
+        ...item,
+        icon: providerEntry ? (
+          <ProviderInstanceIcon
+            driverKind={providerEntry.driverKind}
+            displayName={thread.runtime?.providerName ?? providerEntry.displayName}
+            acpRegistryAgentId={providerEntry.acpRegistryAgentId}
+            acpRegistryIconUrl={providerEntry.acpRegistryIconUrl}
+            iconClassName="size-3.5 shrink-0"
+          />
+        ) : (
+          item.icon
+        ),
+        title: (
+          <>
+            {thread.title}
+            {thread.branch ? (
+              <span className="command-palette-recent-branch ms-2 text-caption text-dim-foreground">
+                {thread.branch}
+              </span>
+            ) : null}
+          </>
+        ),
+      },
+    ];
+  });
+
   return {
     threadItems,
+    recentThreadItems,
     threadMessageItems,
     now,
     isSearchPending: messageSearch.isPending,

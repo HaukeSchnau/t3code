@@ -4,6 +4,7 @@ import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/c
 import {
   isJsonToolText,
   toolCallLines,
+  turnItemHasDetail,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
   turnItemOutputImages,
@@ -94,6 +95,11 @@ function StructuredValue({
   );
 }
 
+/** Whether the inspector can show the item, including output fetched on demand. */
+export function v2ItemInspectorHasContent(item: OrchestrationV2ProjectedTurnItem["item"]): boolean {
+  return turnItemHasDetail(item);
+}
+
 function useFetchedTurnItem(
   projectedItem: OrchestrationV2ProjectedTurnItem,
   environmentId: EnvironmentId,
@@ -166,7 +172,7 @@ function ToolOutput(props: ToolOutputState) {
       <T>Loading output…</T>
     </div>
   ) : props.error ? (
-    <div className="text-destructive">
+    <div className="text-error-foreground">
       <T>
         Couldn&apos;t load output: <Var>{props.error}</Var>
       </T>
@@ -184,12 +190,15 @@ export function FetchedToolOutput(props: {
   readonly environmentId: EnvironmentId;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   readonly source?: TurnItemSource | undefined;
+  readonly showImages?: boolean;
 }) {
   const { output } = useFetchedTurnItem(props.projectedItem, props.environmentId, props.source);
   useInitialOutputReady(output.pending, props.onInitialOutputReady);
   return (
     <div className={cn("mt-1.5 space-y-1.5", monoClassName)}>
-      <ToolOutputImages {...output} onImageExpand={props.onImageExpand} />
+      {props.showImages !== false ? (
+        <ToolOutputImages {...output} onImageExpand={props.onImageExpand} />
+      ) : null}
       <ToolOutput {...output} onImageExpand={props.onImageExpand} />
     </div>
   );
@@ -262,7 +271,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
   return (
     <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
       {item.type === "reasoning" && item.text ? (
-        <div className="rounded-md border border-border/45 bg-muted/15 p-2 italic text-muted-foreground">
+        <div className="rounded-control border border-transparent surface-timeline-inspector p-2 italic text-muted-foreground">
           <ChatMarkdown
             text={item.text}
             cwd={props.cwd}
@@ -298,19 +307,20 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       {item.type === "file_change" ? (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-muted-foreground">
-              {formatWorkspaceRelativePath(item.fileName, props.workspaceRoot)}
-            </span>
             {item.additions !== undefined || item.deletions !== undefined ? (
               <span>
-                <span className="text-diff-addition">+{formatDiffCount(item.additions ?? 0)}</span>{" "}
-                <span className="text-diff-deletion">-{formatDiffCount(item.deletions ?? 0)}</span>
+                <span className="text-diff-addition-foreground">
+                  +{formatDiffCount(item.additions ?? 0)}
+                </span>{" "}
+                <span className="text-diff-deletion-foreground">
+                  -{formatDiffCount(item.deletions ?? 0)}
+                </span>
               </span>
             ) : null}
             {props.onOpenToolDiff ? (
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 onClick={() =>
                   props.onOpenToolDiff?.({
                     threadId: props.projectedItem.sourceThreadId,
@@ -327,7 +337,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             <StructuredValue value={item.diffStr} />
           ) : null}
           {item.changes !== undefined && item.changes.length > 0 ? (
-            <ul className="space-y-1 font-mono text-muted-foreground">
+            <ul className="space-y-1 font-mono text-dim-foreground">
               {item.changes.map((change) => (
                 <li key={JSON.stringify([change.operation, change.oldPath, change.path])}>
                   {change.operation} {change.oldPath ? `${change.oldPath} → ` : ""}
@@ -354,7 +364,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         <ul className="space-y-1">
           {item.results.map((result) => (
             <li key={JSON.stringify(result)}>
-              <span className="font-mono text-foreground/80">
+              <span className="font-mono text-dim-foreground">
                 {formatWorkspaceRelativePath(result.fileName, props.workspaceRoot)}
                 {result.line === undefined ? "" : `:${result.line}`}
                 {result.column === undefined ? "" : `:${result.column}`}
@@ -384,7 +394,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
                     <ExternalLinkIcon className="size-3" />
                   </a>
                 ) : (
-                  <p className="font-medium text-foreground">
+                  <p className="text-label text-foreground">
                     {result.title ?? result.url ?? gt("Search result")}
                   </p>
                 )}

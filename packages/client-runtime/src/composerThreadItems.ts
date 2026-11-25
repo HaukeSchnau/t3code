@@ -26,26 +26,26 @@ export interface ComposerThreadItem {
 }
 
 /**
- * Threads to reference from the composer, matched and ranked like the command
- * palette, without subagent threads or other threads' side chats. The agent reads threads
- * on its own server and on the machines it links to, so candidates stay within those, and a
- * linked machine's threads say which machine they are on.
+ * Threads from this server and linked machines, excluding subagents and other threads' side
+ * chats. A bare `@` stays a file picker; `#` lists recent threads.
  */
-export function matchComposerThreadItems(
+export function matchComposerThreadItems<Candidate extends ComposerThreadCandidate>(
   input: {
-    shells: ReadonlyArray<ComposerThreadCandidate>;
+    shells: ReadonlyArray<Candidate>;
     environmentId: EnvironmentId;
     /** The machines the composer's environment links to, by name. */
     linkedEnvironments: ReadonlyMap<EnvironmentId, string>;
     excludeThreadId: ThreadId | null;
     query: string;
+    allowEmptyQuery?: boolean;
+    describe?: (shell: Candidate) => string;
     /** Recency is measured against this time. */
     now: number;
   },
   resolve: MFunctionType = mFallback,
 ): ComposerThreadItem[] {
   const query = foldSearchQuery(input.query);
-  if (query.length === 0) return [];
+  if (query.length === 0 && !input.allowEmptyQuery) return [];
   // Closing an unused side chat deletes it, so only one with a message is offered.
   const isOwnSideChat = (shell: ComposerThreadCandidate) =>
     shell.lineage.sideChat === true &&
@@ -60,30 +60,37 @@ export function matchComposerThreadItems(
       shell.archivedAt === null &&
       (isListedThreadLineage(shell.lineage) || isOwnSideChat(shell)),
   );
-  return rankSearchItems(candidates, (shell, options) =>
-    scoreThreadSearch(query, threadSearchSubject(shell, null), input.now, {
-      ...options,
-      picks: false,
-    }),
-  )
-    .slice(0, COMPOSER_THREAD_RESULT_LIMIT)
-    .map(({ item: shell }) => {
-      const machine =
-        shell.environmentId === input.environmentId
-          ? undefined
-          : input.linkedEnvironments.get(shell.environmentId);
-      return {
-        id: `thread:${shell.environmentId}:${shell.id}`,
-        type: "thread",
-        thread: { environmentId: shell.environmentId, threadId: shell.id },
-        label: shell.title,
-        description: isOwnSideChat(shell)
-          ? resolve(msg("Side chat"))
-          : machine === undefined
-            ? resolve(msg("Thread", { $context: "noun, search result type" }))
-            : resolve(msg("Thread on {machine}", { machine })),
-      };
-    });
+  const matches =
+    query.length === 0
+      ? candidates
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .map((item) => ({ item }))
+      : rankSearchItems(candidates, (shell, options) =>
+          scoreThreadSearch(query, threadSearchSubject(shell, null), input.now, {
+            ...options,
+            picks: false,
+          }),
+        );
+  return matches.slice(0, COMPOSER_THREAD_RESULT_LIMIT).map(({ item: shell }) => {
+    const machine =
+      shell.environmentId === input.environmentId
+        ? undefined
+        : input.linkedEnvironments.get(shell.environmentId);
+    const description = input.describe?.(shell);
+    return {
+      id: `thread:${shell.environmentId}:${shell.id}`,
+      type: "thread",
+      thread: { environmentId: shell.environmentId, threadId: shell.id },
+      label: shell.title,
+      description: isOwnSideChat(shell)
+        ? resolve(msg("Side chat"))
+        : machine === undefined
+          ? (description ?? resolve(msg("Thread", { $context: "noun, search result type" })))
+          : description === undefined
+            ? resolve(msg("Thread on {machine}", { machine }))
+            : `${description} · ${machine}`,
+    };
+  });
 }
 
 export interface ComposerEnvironmentCandidate {

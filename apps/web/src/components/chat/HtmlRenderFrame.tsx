@@ -112,13 +112,13 @@ export function HtmlRenderFrame(props: {
           <Button
             aria-label={gt("Previous version")}
             size="icon-xs"
-            variant="glass"
+            variant="floating"
             disabled={index === 0}
             onClick={() => select(index - 1)}
           >
             <ChevronLeftIcon className="size-3.5" />
           </Button>
-          <span className="rounded-full surface-glass px-2 py-0.5 text-foreground text-xs tabular-nums">
+          <span className="rounded-full surface-floating px-2 py-0.5 text-foreground text-meta tabular-nums">
             {index + 1} of {last + 1}
           </span>
           <Tooltip>
@@ -129,7 +129,7 @@ export function HtmlRenderFrame(props: {
                     index < last ? gt("Next version, a newer one exists") : gt("Next version")
                   }
                   size="icon-xs"
-                  variant="glass"
+                  variant="floating"
                   disabled={index === last}
                   onClick={() => select(index + 1)}
                 />
@@ -272,7 +272,7 @@ function HtmlRenderVersionFrame(props: {
                   <Button
                     aria-label={gt("Open full screen")}
                     size="icon-xs"
-                    variant="glass"
+                    variant="floating"
                     onClick={() => void openFullScreen()}
                   />
                 }
@@ -286,7 +286,7 @@ function HtmlRenderVersionFrame(props: {
           </div>
         </>
       ) : failed ? (
-        <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+        <p className="flex size-full items-center justify-center text-muted-foreground text-meta">
           <T>
             Unable to load <Var>{title}</Var>
           </T>

@@ -6,8 +6,8 @@ agent-exec runtime instead, on Linux hosts that set `T3CODE_EXECUTION_LAUNCHER`.
 run `git worktree add` inside a colocated jj repository, cannot start a new workspace for a
 project without Git, and has no notion of an isolated runtime.
 
-Plain Git projects follow upstream on every host and client: upstream's run-context and env-mode
-selectors (including the previous worktree), the "Select a base branch" guard, and upstream's
+Plain Git projects follow upstream on every host and client: upstream's workspace pickers
+(including the previous worktree), the "Select a base branch" guard, and upstream's
 worktree creation for new threads, MCP launches and handoffs.
 
 ## Model

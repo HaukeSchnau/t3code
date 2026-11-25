@@ -2,6 +2,7 @@ import { deriveProjectIdentity } from "../../projectIdentity";
 import { ProjectMonogram } from "../ProjectMonogram";
 import type { ProjectIconColor, ProjectIconOverride } from "@t3tools/contracts";
 import { T, useGT, useMessages } from "gt-react";
+import { SearchIcon } from "lucide-react";
 import { createElement, useState } from "react";
 import {
   filterProjectIconNames,
@@ -24,14 +25,15 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 const DEFAULT_ICON = "folder-code";
 
-function PickerIcon({ name }: { name: string }) {
+function PickerIcon({ name, className = "size-4.5" }: { name: string; className?: string }) {
   const icon = lucideIconByName(name);
-  return icon ? createElement(icon, { className: "size-5" }) : null;
+  return icon ? createElement(icon, { className }) : null;
 }
 
 function iconLabel(name: string): string {
@@ -56,7 +58,7 @@ export function ProjectIconPickerDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="w-full sm:w-[32rem]">
+      <DialogPopup className="w-full sm:w-[32rem]" showCloseButton={false}>
         {/* The popup mounts per open, so the draft below starts from `current` each time. */}
         <ProjectIconPickerBody
           current={current}
@@ -127,6 +129,7 @@ function ProjectIconPickerBody({
         <ToggleGroup
           aria-label={gt("Icon type")}
           variant="segmented"
+          className="w-full *:flex-1"
           value={[mode]}
           onValueChange={(next) => {
             const value = next[0];
@@ -144,55 +147,35 @@ function ProjectIconPickerBody({
           </Toggle>
         </ToggleGroup>
 
-        {mode !== "emoji" ? (
-          <div>
-            <div className="mb-2 text-xs font-medium text-muted-foreground">
-              <T>Color</T>
-            </div>
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label={gt("Icon color")}>
-              {PROJECT_ICON_COLORS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  aria-label={m(option.label)}
-                  aria-pressed={color === option.value}
-                  className={cn(
-                    "flex size-6 items-center justify-center rounded-full border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                    color === option.value && "border-foreground/64",
-                  )}
-                  onClick={() => setColor(option.value)}
-                >
-                  <span className={cn("size-4 rounded-full", option.swatchClassName)} />
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
         {mode === "lucide" ? (
           <>
-            {/* Native search inputs clear on Escape even during IME composition. */}
-            <Input
-              type="text"
-              role="searchbox"
-              value={query}
-              aria-label={gt("Search Lucide icons")}
-              placeholder={gt("Search all Lucide icons")}
-              onChange={(event) => setQuery(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (
-                  event.key !== "Escape" ||
-                  event.nativeEvent.isComposing ||
-                  event.keyCode === 229
-                )
-                  return;
-                if (!query && !event.repeat) return;
-                event.stopPropagation();
-                setQuery("");
-              }}
-            />
+            <InputGroup>
+              <InputGroupAddon>
+                <SearchIcon aria-hidden />
+              </InputGroupAddon>
+              {/* Native search inputs clear on Escape even during IME composition. */}
+              <InputGroupInput
+                type="text"
+                role="searchbox"
+                value={query}
+                aria-label={gt("Search Lucide icons")}
+                placeholder={gt("Search all Lucide icons")}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key !== "Escape" ||
+                    event.nativeEvent.isComposing ||
+                    event.keyCode === 229
+                  )
+                    return;
+                  if (!query && !event.repeat) return;
+                  event.stopPropagation();
+                  setQuery("");
+                }}
+              />
+            </InputGroup>
             <ScrollArea scrollFade className="max-h-64">
-              <div className="grid grid-cols-8 gap-1 p-0.5 sm:grid-cols-10">
+              <div className="grid grid-cols-8 gap-1.5 p-0.5">
                 {icons.map((name) => (
                   <button
                     key={name}
@@ -200,9 +183,11 @@ function ProjectIconPickerBody({
                     aria-label={iconLabel(name)}
                     aria-pressed={iconName === name}
                     className={cn(
-                      "flex aspect-square items-center justify-center rounded-md border border-transparent outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                      iconName === name && "border-border bg-accent",
-                      selectedColorClassName,
+                      "flex aspect-square items-center justify-center rounded-project-icon border border-transparent outline-none hover:surface-ghost-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      iconName === name
+                        ? "surface-raised [--surface-rim:linear-gradient(180deg,color-mix(in_srgb,currentColor_60%,transparent),color-mix(in_srgb,currentColor_20%,transparent))]"
+                        : "bg-settings-icon-fill text-muted-foreground",
+                      iconName === name && selectedColorClassName,
                     )}
                     onClick={() => setIconName(name)}
                   >
@@ -212,7 +197,7 @@ function ProjectIconPickerBody({
               </div>
             </ScrollArea>
             {icons.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
+              <p className="py-8 text-center text-body text-muted-foreground">
                 <T>No icons found.</T>
               </p>
             ) : null}
@@ -225,7 +210,7 @@ function ProjectIconPickerBody({
               className="size-12"
             />
             <div className="flex-1 space-y-2">
-              <label htmlFor="project-monogram" className="text-sm font-medium">
+              <label htmlFor="project-monogram" className="text-label">
                 <T>Letters</T>
               </label>
               <Input
@@ -236,7 +221,7 @@ function ProjectIconPickerBody({
                 aria-invalid={!validMonogram}
                 autoComplete="off"
               />
-              <p id="project-monogram-hint" className="text-xs text-muted-foreground">
+              <p id="project-monogram-hint" className="text-meta text-muted-foreground">
                 <T>One or two letters or numbers.</T>
               </p>
             </div>
@@ -252,8 +237,8 @@ function ProjectIconPickerBody({
                     aria-label={m(option.label)}
                     aria-pressed={emoji === option.emoji}
                     className={cn(
-                      "flex aspect-square items-center justify-center rounded-md border border-transparent text-xl outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                      emoji === option.emoji && "border-border bg-accent",
+                      "flex aspect-square items-center justify-center rounded-item border border-transparent text-xl outline-none hover:surface-ghost-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      emoji === option.emoji && "border-border surface-selected-soft",
                     )}
                     onClick={() => setEmoji(option.emoji)}
                   >
@@ -263,7 +248,7 @@ function ProjectIconPickerBody({
               </div>
             </ScrollArea>
             <div>
-              <div className="mb-2 text-xs font-medium text-muted-foreground">
+              <div className="mb-2 text-meta text-dim-foreground">
                 <T>Or paste any emoji</T>
               </div>
               <Input
@@ -280,14 +265,66 @@ function ProjectIconPickerBody({
             </div>
           </>
         )}
+        {mode !== "emoji" ? (
+          <div>
+            <div className="mb-2 text-meta text-muted-foreground">
+              <T>Color</T>
+            </div>
+            <div
+              className="grid auto-cols-fr grid-flow-col justify-items-center"
+              role="group"
+              aria-label={gt("Icon color")}
+            >
+              {PROJECT_ICON_COLORS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-label={m(option.label)}
+                  aria-pressed={color === option.value}
+                  className={cn(
+                    "flex size-5.5 items-center justify-center rounded-full border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                    color === option.value && "shadow-project-icon-selected",
+                  )}
+                  onClick={() => setColor(option.value)}
+                >
+                  <span className={cn("size-3.5 rounded-full", option.swatchClassName)} />
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </DialogPanel>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
-          <T>Cancel</T>
-        </Button>
-        <Button onClick={save} disabled={mode === "monogram" && !validMonogram}>
-          <T>Save icon</T>
-        </Button>
+      <DialogFooter className="sm:justify-between">
+        <span className="flex min-w-0 items-center gap-2 text-body text-muted-foreground">
+          <span
+            aria-hidden
+            className={cn(
+              "flex size-7 shrink-0 items-center justify-center rounded-project-icon bg-settings-icon-fill",
+              mode === "lucide" && selectedColorClassName,
+            )}
+          >
+            {mode === "lucide" ? (
+              <PickerIcon name={iconName} className="size-4" />
+            ) : mode === "emoji" ? (
+              <span className="text-prompt leading-none">{emoji}</span>
+            ) : (
+              <ProjectMonogram
+                text={validMonogram ? monogram : automatic.monogram}
+                color={color}
+                className="size-7"
+              />
+            )}
+          </span>
+          <span className="truncate">{projectName}</span>
+        </span>
+        <span className="flex gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            <T>Cancel</T>
+          </Button>
+          <Button onClick={save} disabled={mode === "monogram" && !validMonogram}>
+            <T>Save</T>
+          </Button>
+        </span>
       </DialogFooter>
     </>
   );

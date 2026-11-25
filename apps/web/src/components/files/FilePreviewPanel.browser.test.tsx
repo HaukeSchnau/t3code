@@ -3,7 +3,7 @@ import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@t3tools/co
 import { AsyncResult } from "effect/reactivity";
 import { StrictMode, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { cdp, userEvent } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../../test/render";
 import appCss from "~/index.css?inline";
 import { isMacPlatform } from "~/lib/utils";
@@ -128,7 +128,6 @@ vi.mock(import("~/browser/openFileInPreview"), async (original) => {
 vi.mock(import("./OfficeFilePreview"), () => ({
   OfficeFilePreview: ({ src }: { src: string }) => <div data-testid="office-preview">{src}</div>,
 }));
-vi.mock(import("./FileBreadcrumbs"), () => ({ FileBreadcrumbs: () => <></> }));
 vi.mock(import("./FileBrowserPanel"), () => ({
   default: () => (
     <div role="tree">
@@ -153,6 +152,7 @@ vi.mock(import("./projectFilesQueryState"), async (original) => ({
     readError: null,
     isNotFile: false,
     isFile: true,
+    isBinary: false,
     refresh: vi.fn(),
   }),
   getOptimisticProjectFileQueryData: () => state.optimistic,
@@ -169,6 +169,7 @@ vi.mock(import("./projectFilesQueryState"), async (original) => ({
 }));
 
 import FilePreviewPanel from "./FilePreviewPanel";
+import { PanelTabSlotsContext } from "../PanelTabBreadcrumb";
 
 const environmentId = EnvironmentId.make("markdown-preview-test");
 const threadRef = { environmentId, threadId: ThreadId.make("thread") };
@@ -260,8 +261,14 @@ describe("source file focus", () => {
     using _style = { [Symbol.dispose]: () => style.remove() };
     await preloadHighlighter({ themes: Object.values(DEFAULT_THEMES), langs: ["typescript"] });
     const panel = () => (
-      <div {...workspaceAreaProps("panel", 1, "Workspace panel")}>
-        <div data-right-panel-surface-content>{filePreview("server.ts")}</div>
+      <div {...workspaceAreaProps("panel", 1, "Workspace panel")} style={{ width: 900 }}>
+        <PanelTabSlotsContext
+          value={{ breadcrumb: null, actions: null, registerActions: () => () => {} }}
+        >
+          <div data-right-panel-surface-content>
+            {filePreview("src/orchestration-v2/server.ts")}
+          </div>
+        </PanelTabSlotsContext>
       </div>
     );
     const editorHasFocus = () => expect(deepActiveElement()?.matches("[data-content]")).toBe(true);
@@ -271,15 +278,29 @@ describe("source file focus", () => {
     using _focus = { [Symbol.dispose]: focus.dispose };
     expect(focus.focus("panel")).toBe(true);
     state.file = {
-      relativePath: "server.ts",
+      relativePath: "src/orchestration-v2/server.ts",
       contents: "const server = 1;\n",
       byteLength: 18,
       truncated: false,
     };
     await screen.rerender(panel());
     await vi.waitFor(editorHasFocus);
+    await expect.element(screen.getByRole("button", { name: "More file actions" })).toBeVisible();
     await userEvent.keyboard("x");
     await vi.waitFor(() => expect(deepActiveElement()?.textContent).toContain("xconst server"));
+
+    const crumbs = screen.getByRole("navigation", { name: "File path" }).element();
+    const currentCrumb = crumbs.querySelector<HTMLElement>("[aria-current='page']")!;
+    const breadcrumbViewport = crumbs.closest<HTMLElement>("[data-slot='scroll-area-viewport']")!;
+    screen.container.querySelector<HTMLElement>(
+      "[data-right-panel-surface-content]",
+    )!.parentElement!.style.width = "320px";
+    await vi.waitFor(() => {
+      const current = currentCrumb.getBoundingClientRect();
+      const viewport = breadcrumbViewport.getBoundingClientRect();
+      expect(current.left).toBeGreaterThanOrEqual(viewport.left - 1);
+      expect(current.right).toBeLessThanOrEqual(viewport.right + 1);
+    });
 
     (deepActiveElement() as HTMLElement).blur();
     expect(focus.focus("panel", false)).toBe(true);
@@ -422,8 +443,10 @@ describe("source file scroll", () => {
 
       const lines = Array.from({ length: 400 }, (_, index) => `line ${index + 1} markdown content`);
       const contents = `${lines.join("\n")}\n`;
+      // Its own file per case: the preview restores a file's scroll position across mounts.
+      const relativePath = `notes-${direction}-${startLine}.md`;
       state.file = {
-        relativePath: "notes.md",
+        relativePath,
         contents,
         byteLength: contents.length,
         truncated: false,
@@ -431,7 +454,7 @@ describe("source file scroll", () => {
 
       await using screen = await render(
         <div style={{ width: 560, height: 400, display: "flex", flexDirection: "column" }}>
-          {filePreview("notes.md")}
+          {filePreview(relativePath)}
         </div>,
       );
 
@@ -574,6 +597,18 @@ describe("source file scroll", () => {
 });
 
 describe("rendered Markdown task saves", () => {
+  it("opens Markdown source until a rendered preview is requested", async () => {
+    using _settings = setup();
+    localStorage.removeItem("t3code.renderMarkdown");
+    await using screen = await render(
+      <div className="flex h-150 w-240">{markdownPreview(false)}</div>,
+    );
+    await expect
+      .element(screen.getByRole("button", { name: "Show preview", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(screen.container.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+
   it("renders the whole file of a truncated read, read-only", async () => {
     using _settings = setup();
     state.assetUrl = {
@@ -691,11 +726,14 @@ describe("open file in preview browser", () => {
       truncated: false,
     };
     await using screen = await render(filePreview("page.html"));
-    const button = screen.getByRole("button", { name: "Open file in preview browser" });
+    const openInBrowser = async () => {
+      await userEvent.click(screen.getByRole("button", { name: "More file actions" }));
+      await userEvent.click(page.getByRole("menuitem", { name: "Open file in preview browser" }));
+    };
 
-    await userEvent.click(button);
+    await openInBrowser();
     await vi.waitFor(() => expect(state.openedBrowserUrls).toHaveLength(1));
-    await userEvent.click(button);
+    await openInBrowser();
     await vi.waitFor(() => expect(state.openedBrowserUrls).toHaveLength(2));
 
     expect(state.openedBrowserUrls[1], "the second click reused the first signed URL").not.toBe(

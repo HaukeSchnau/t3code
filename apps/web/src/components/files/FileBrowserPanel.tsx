@@ -5,19 +5,22 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import type {
   ContextMenuItem as TreeContextMenuItem,
   ContextMenuOpenContext as TreeContextMenuOpenContext,
+  GitStatusEntry,
 } from "@pierre/trees";
 import type { ContextMenuSource, EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { workspaceRelativeFilePath } from "@t3tools/shared/path";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
 import { T, useGT, useMessages } from "gt-react";
-import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
-import { type Ref, useEffect, useEffectEvent, useRef, useState } from "react";
+import { FolderOpen, SearchIcon, ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
+
+import { type Ref, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
-import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useComposerHandleContext } from "~/composerHandleContext";
@@ -34,6 +37,11 @@ import {
   titleClippedPierreTreeRow,
 } from "~/pierre-tree-theme";
 
+import { observeResize } from "~/lib/observeResize";
+import { cn } from "~/lib/utils";
+
+import { addFileMentionToChat } from "./addFileToChat";
+import { FileSurfaceFailure, FileSurfaceState } from "./fileSurfaceChrome";
 import { joinHostPath } from "./filePath";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import {
@@ -49,13 +57,25 @@ import { useDirectoryEntries } from "./useDirectoryEntries";
 import { useProjectPathSearch } from "~/state/queries";
 import { isMacPlatform } from "~/lib/utils";
 import { type PreviewAction, subscribePreviewAction } from "../preview/previewActionBus";
+import { useEnvironmentQuery } from "~/state/query";
+import { vcsEnvironment } from "~/state/vcs";
+import { resolveDiffPathForWorkspace } from "~/diffFileActions";
 
 interface FileBrowserPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
+  /** The repository's root when `cwd` may be a folder inside it; status paths are relative to it. */
+  repositoryRoot?: string | undefined;
   projectName: string;
   selectedPath: string | null;
   selectedPathRevealId: number;
+  /** False while the tree sits hidden behind a stacked preview. */
+  visible?: boolean;
+  /**
+   * The panel reaches up under its pane's tab row (--surface-top-inset): the search row floats
+   * at the row's foot and the tree scrolls under both.
+   */
+  underPaneHeader?: boolean;
   onOpenFile: (relativePath: string) => void;
   /** Host-folder entries use absolute paths. Avoid full traversal: disable expand-all and search only
    * loaded folders. */
@@ -77,14 +97,14 @@ function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }
         render={
           <Button
             type="button"
-            variant="ghost"
-            size="icon-xs"
+            variant="secondary"
+            size="icon-sm"
             aria-label={gt("Refresh workspace files")}
             onClick={props.onRefresh}
           />
         }
       >
-        <RefreshIcon refreshing={props.isPending} />
+        <RefreshIcon refreshing={props.isPending} tone="muted" />
       </TooltipTrigger>
       <TooltipPopup>{props.isPending ? gt("Refreshing…") : gt("Refresh files")}</TooltipPopup>
     </Tooltip>
@@ -98,13 +118,20 @@ function FileSearchField({
   ariaLabel: string;
   name: string;
   onClose: () => void;
+  onOpenMatch: () => void;
   onValueChange: (value: string) => void;
   ref: Ref<HTMLInputElement>;
   value: string;
 }) {
   const gt = useGT();
   return (
-    <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
+    <InputGroup
+      variant="default"
+      className="h-8 min-w-0 flex-1 in-data-[preview-panel-mode=inline]:h-7"
+    >
+      <InputGroupAddon>
+        <SearchIcon aria-hidden className="size-3.5" />
+      </InputGroupAddon>
       {/* Native search inputs clear on Escape even during IME composition. */}
       <InputGroupInput
         ref={ref}
@@ -119,6 +146,11 @@ function FileSearchField({
         spellCheck={false}
         onChange={(event) => props.onValueChange(event.target.value)}
         onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            props.onOpenMatch();
+            return;
+          }
           if (event.key !== "Escape" || event.nativeEvent.isComposing || event.keyCode === 229)
             return;
           if (props.value || event.repeat) {
@@ -168,9 +200,12 @@ function buildTreeEntries(
 export default function FileBrowserPanel({
   environmentId,
   cwd,
+  repositoryRoot,
   projectName,
   selectedPath,
   selectedPathRevealId,
+  visible = true,
+  underPaneHeader = false,
   onOpenFile,
   onRefreshSelectedFile,
   workspaceMutationId,
@@ -193,6 +228,12 @@ export default function FileBrowserPanel({
     isPending,
     loadingDirectories,
   } = useDirectoryEntries(environmentId, cwd);
+  // Shares the status stream the git controls already subscribe to.
+  const { data: vcsStatus } = useEnvironmentQuery(
+    vcsEnvironment.status({ environmentId, input: { cwd } }),
+  );
+  const workingTreeFiles = vcsStatus?.workingTree.files;
+  const workingTreeRootPath = vcsStatus?.workingTree.rootPath;
   const [query, setQuery] = useState("");
   const [expandAll, setExpandAll] = useState(false);
   const pathSearch = useProjectPathSearch(
@@ -275,23 +316,7 @@ export default function FileBrowserPanel({
           return;
         }
         if (clicked === "add-to-chat") {
-          const composer = composerRef?.current;
-          if (!composer) {
-            toastManager.add({
-              type: "error",
-              title: gt("Unable to add to chat"),
-              description: gt("Open a chat for this project and try again."),
-            });
-            return;
-          }
-          const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
-          if (!inserted) {
-            toastManager.add({
-              type: "error",
-              title: gt("Unable to add to chat"),
-              description: gt("The chat isn't ready to accept input right now."),
-            });
-          }
+          addFileMentionToChat(composerRef, panelPath(relativePath));
         }
       }).then((result) => {
         if (!AsyncResult.isSuccess(result)) throw Cause.squash(result.cause);
@@ -300,6 +325,7 @@ export default function FileBrowserPanel({
   );
 
   const loadingDirectoriesRef = useRef(loadingDirectories);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const dragMention = createFileTreeDragMentionController(
     hostFolder ? { mentionPath: (path: string) => joinHostPath(cwd, path) } : {},
   );
@@ -314,6 +340,7 @@ export default function FileBrowserPanel({
     },
     dragAndDrop: { canDrop: () => false },
     density: "compact",
+    itemHeight: 26,
     fileTreeSearchMode: "hide-non-matches",
     flattenEmptyDirectories: true,
     initialExpansion: "closed",
@@ -421,17 +448,25 @@ export default function FileBrowserPanel({
     loadExpanded();
     return model.subscribe(loadExpanded);
   }, [directoryPaths, expansionRoot, load, model, pendingExpandedPaths]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes ignored-file status into the imperative Pierre tree model
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes ignored and working-tree file statuses to the imperative Pierre tree model
   useEffect(() => {
-    model.setGitStatus(
-      entries
-        .filter((entry) => entry.ignored)
-        .map((entry) => ({
-          path: treePath(entry),
-          status: "ignored",
-        })),
-    );
-  }, [entries, model]);
+    const statuses: GitStatusEntry[] = entries
+      .filter((entry) => entry.ignored)
+      .map((entry) => ({ path: treePath(entry), status: "ignored" }));
+    for (const file of workingTreeFiles ?? []) {
+      if (!file.status) continue;
+      // Status paths are the repository's; the tree's are the cwd's.
+      const path = workingTreeRootPath
+        ? workspaceRelativeFilePath(joinHostPath(workingTreeRootPath, file.path), cwd)
+        : resolveDiffPathForWorkspace({
+            filePath: file.path,
+            workspaceRoot: cwd,
+            repositoryRoot,
+          });
+      if (path !== null) statuses.push({ path, status: file.status });
+    }
+    model.setGitStatus(statuses);
+  }, [cwd, entries, model, repositoryRoot, workingTreeFiles, workingTreeRootPath]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the selected file's ancestor directories and aborts on cleanup
   useEffect(() => {
     if (!selectedPath) return;
@@ -451,6 +486,20 @@ export default function FileBrowserPanel({
       return;
     }
     search.setValue(value);
+  };
+  // Enter in the search opens the highlighted hit, else the first matching file.
+  const openSearchMatch = () => {
+    const filePath = (path: string | null | undefined) => {
+      const entryPath = path?.replace(/\/$/, "");
+      return entryPath && entryKindsRef.current.get(entryPath) === "file" ? entryPath : null;
+    };
+    // The revealed file keeps tree focus, so a focused row only counts when it is a hit.
+    const matches = model.getSearchMatchingPaths();
+    const focusedPath = model.getFocusedPath();
+    const path =
+      (focusedPath && matches.includes(focusedPath) ? filePath(focusedPath) : null) ??
+      matches.map(filePath).find((match) => match !== null);
+    if (path) onOpenFile(panelPath(path));
   };
   const handleRefresh = () => {
     refresh();
@@ -566,9 +615,73 @@ export default function FileBrowserPanel({
     });
   }, [entryKinds, model, selectedPath, selectedPathRevealId]);
 
+  // A reveal while hidden cannot scroll, so showing the tree scrolls the open
+  // entry into view.
+  const wasVisibleRef = useRef(visible);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Scroll the selected tree entry after its hidden viewport becomes visible.
+  useEffect(() => {
+    const becameVisible = visible && !wasVisibleRef.current;
+    wasVisibleRef.current = visible;
+    if (!becameVisible || !selectedPath) return;
+    const path =
+      entryKindsRef.current.get(selectedPath) === "directory" ? `${selectedPath}/` : selectedPath;
+    if (!model.getItem(path)) return;
+    const frame = requestAnimationFrame(() => model.scrollToPath(path, { offset: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [model, selectedPath, visible]);
+
+  // Rows pad clear of the floating search row (PIERRE_TREE_UNSAFE_CSS's --file-tree-top-inset).
+  const chromeRef = useRef<HTMLDivElement | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Observe the committed header height and publish its inset to the file tree DOM.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const chrome = chromeRef.current;
+    if (!underPaneHeader || !panel || !chrome) return;
+    // The border box keeps its fraction; offsetHeight rounds it and leaves a seam.
+    const stopObserving = observeResize(chrome, ([entry]) => {
+      const height = entry?.borderBoxSize[0]?.blockSize;
+      if (height !== undefined) panel.style.setProperty("--file-tree-top-inset", `${height}px`);
+    });
+    return () => {
+      stopObserving();
+      panel.style.removeProperty("--file-tree-top-inset");
+    };
+  }, [underPaneHeader]);
+
+  // A failed or empty root, or a search with no hits, replaces the tree with one
+  // centered state; failures below the root keep the tree and show the inline retry.
+  const trimmedQuery = query.trim();
+  const surfaceState =
+    directoryEntries.length === 0 && error && !isPending ? (
+      <FileSurfaceFailure title={gt("Can't list files")} message={error} onRetry={handleRefresh} />
+    ) : ready && directoryEntries.length === 0 && !isPending && !trimmedQuery ? (
+      <FileSurfaceState
+        icon={<FolderOpen />}
+        title={gt("No files yet")}
+        description={gt("{projectName} is empty. Files the agent creates show up here.", {
+          projectName,
+        })}
+      />
+    ) : hasNoSearchMatches &&
+      ready &&
+      !isPending &&
+      !error &&
+      !pathSearch.isPending &&
+      !pathSearch.error ? (
+      <FileSurfaceState
+        icon={<SearchIcon />}
+        title={gt("No matching files")}
+        description={gt('Nothing in {projectName} matches "{query}".', {
+          projectName,
+          query: trimmedQuery,
+        })}
+      />
+    ) : null;
+
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col bg-background"
+      ref={panelRef}
+      className="relative flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
       // Capture runs before the tree's shadow-internal row handler opens the menu.
       onContextMenuCapture={(event) => {
@@ -595,82 +708,101 @@ export default function FileBrowserPanel({
       }}
     >
       <div
-        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
-        data-surface-subheader
+        ref={chromeRef}
+        className={cn(
+          "flex shrink-0 flex-col",
+          // Floats over the tree, which scrolls under it and the pane's tab row up to the notch.
+          underPaneHeader &&
+            "pointer-events-none absolute inset-x-0 top-0 z-10 pt-under-header *:pointer-events-auto [&>:not([data-surface-subheader])]:bg-background",
+        )}
       >
-        <RefreshFilesButton isPending={isPending} onRefresh={handleRefresh} />
-        <FileSearchField
-          ref={searchInputRef}
-          name="project-files-search"
-          ariaLabel={gt("Search {projectName} files", { projectName })}
-          value={search.value}
-          onValueChange={handleSearchValueChange}
-          onClose={closeSearch}
-        />
-        {directoryPaths.length > 0 && !hostFolder ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label={
-                    expandAll || allDirectoriesExpanded
-                      ? gt("Collapse all folders")
-                      : gt("Expand all folders")
-                  }
-                  onClick={toggleAllDirectories}
-                />
-              }
-            >
-              {allDirectoriesExpanded ? (
-                <ChevronsDownUpIcon className="size-3.5" />
-              ) : (
-                <ChevronsUpDownIcon className="size-3.5" />
-              )}
-            </TooltipTrigger>
-            <TooltipPopup>
-              {expandAll || allDirectoriesExpanded
-                ? gt("Collapse all folders")
-                : gt("Expand all folders")}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null}
-      </div>
-      {error || pathSearch.error ? (
-        <button
-          type="button"
-          onClick={handleRefresh}
-          className="p-4 text-left text-xs leading-relaxed text-destructive"
-        >
-          {gt("{error} Click to retry.", { error: error ?? pathSearch.error })}
-        </button>
-      ) : null}
-      {query.trim() && pathSearch.truncated && !pathSearch.isPending ? (
-        <div className="px-3 py-1 text-xs text-muted-foreground">
-          <T>More matches available. Refine your search.</T>
-        </div>
-      ) : null}
-      {(!ready || pathSearch.isPending) && (
         <div
-          role="status"
-          className={
-            entries.length > 0 && !hasNoSearchMatches
-              ? "sr-only"
-              : "px-3 py-1 text-xs text-muted-foreground"
-          }
+          className="flex shrink-0 items-center gap-2 px-4 py-2.5 in-data-[preview-panel-mode=inline]:px-2 in-data-[preview-panel-mode=inline]:py-0"
+          data-surface-subheader
         >
-          <T>Loading files…</T>
+          <FileSearchField
+            ref={searchInputRef}
+            name="project-files-search"
+            ariaLabel={gt("Search {projectName} files", { projectName })}
+            value={search.value}
+            onValueChange={handleSearchValueChange}
+            onClose={closeSearch}
+            onOpenMatch={openSearchMatch}
+          />
+          {directoryPaths.length > 0 && !hostFolder ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label={
+                      expandAll || allDirectoriesExpanded
+                        ? gt("Collapse all folders")
+                        : gt("Expand all folders")
+                    }
+                    onClick={toggleAllDirectories}
+                  />
+                }
+              >
+                {allDirectoriesExpanded ? (
+                  <ChevronsDownUpIcon className="size-3.5" />
+                ) : (
+                  <ChevronsUpDownIcon className="size-3.5" />
+                )}
+              </TooltipTrigger>
+              <TooltipPopup>
+                {expandAll || allDirectoriesExpanded
+                  ? gt("Collapse all folders")
+                  : gt("Expand all folders")}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          <RefreshFilesButton isPending={isPending} onRefresh={handleRefresh} />
         </div>
-      )}
-      {hasNoSearchMatches ? (
-        ready && !isPending && !pathSearch.isPending && !error && !pathSearch.error ? (
-          <div role="status" className="px-3 py-4 text-xs text-muted-foreground">
-            <T>No matching files.</T>
+        {!surfaceState && (error || pathSearch.error) ? (
+          <button
+            type="button"
+            onClick={handleRefresh}
+            className="p-4 text-left text-xs leading-relaxed text-error-foreground outline-none hover:surface-ghost-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            {gt("{error} Click to retry.", { error: error ?? pathSearch.error })}
+          </button>
+        ) : null}
+        {query.trim() && pathSearch.truncated && !pathSearch.isPending ? (
+          <div className="px-3 py-1 text-xs text-muted-foreground">
+            <T>More matches available. Refine your search.</T>
           </div>
-        ) : null
+        ) : null}
+        {(!ready || pathSearch.isPending) && (
+          <div
+            role="status"
+            className={
+              entries.length > 0 && !hasNoSearchMatches
+                ? "sr-only"
+                : "px-3 py-1 text-xs text-muted-foreground"
+            }
+          >
+            <T>Loading files…</T>
+          </div>
+        )}
+      </div>
+      {surfaceState && underPaneHeader ? (
+        // Centered in the area below the floating search row.
+        <div className="flex min-h-0 flex-1 flex-col pt-(--file-tree-top-inset)">
+          {surfaceState}
+        </div>
       ) : (
+        surfaceState
+      )}
+      {/* Kept mounted behind a state so the tree's expansion survives a search. */}
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col",
+          (surfaceState || hasNoSearchMatches) && "hidden",
+        )}
+      >
         <FileTree
           model={model}
           aria-label={gt("{projectName} files", { projectName })}
@@ -704,7 +836,7 @@ export default function FileBrowserPanel({
           style={pierreTreeStyle(resolvedTheme)}
           onPointerOver={titleClippedPierreTreeRow}
         />
-      )}
+      </div>
     </div>
   );
 }

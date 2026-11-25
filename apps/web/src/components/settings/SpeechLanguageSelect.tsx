@@ -55,7 +55,12 @@ export function SpeechLanguageSelect({
         if (value) void updateClientSettings({ speechLanguage: value });
       }}
     >
-      <SelectTrigger size="sm" aria-label={gt("Transcription language")} className="max-w-64">
+      <SelectTrigger
+        variant="well"
+        size="compact"
+        aria-label={gt("Transcription language")}
+        className="max-w-64"
+      >
         <SelectValue>{label}</SelectValue>
       </SelectTrigger>
       <SelectPopup align="end" alignItemWithTrigger={false}>

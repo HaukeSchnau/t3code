@@ -2,9 +2,15 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
-import { render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { SharedTooltipProvider, SharedTooltipTrigger } from "./shared-tooltip";
-import { Tooltip, TooltipPopup, TooltipScrollDismissArea, TooltipTrigger } from "./tooltip";
+import {
+  Tooltip,
+  TooltipPopup,
+  TooltipProvider,
+  TooltipScrollDismissArea,
+  TooltipTrigger,
+} from "./tooltip";
 
 function TimelineAction({ shared }: { shared: boolean }) {
   if (shared) {
@@ -113,6 +119,40 @@ it("refreshes a pending shared tooltip if its label changes during the open dela
   );
   await expect.element(page.getByText("Copy code")).toBeVisible();
   expect(page.getByText("Copied").query()).toBeNull();
+});
+
+it("blocks sidebar hover cards until scrolling settles", async () => {
+  const onOpenChange = vi.fn();
+  await using screen = await render(
+    <TooltipScrollDismissArea suppressHoverWhileScrolling>
+      <div data-testid="viewport">
+        <TooltipProvider delay={50} closeDelay={0} timeout={400}>
+          <Tooltip>
+            <TooltipTrigger>First row</TooltipTrigger>
+            <TooltipPopup>First details</TooltipPopup>
+          </Tooltip>
+          <Tooltip onOpenChange={onOpenChange}>
+            <TooltipTrigger>Second row</TooltipTrigger>
+            <TooltipPopup>Second details</TooltipPopup>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    </TooltipScrollDismissArea>,
+  );
+  using _timers = fakeTimers();
+  await act(() => screen.getByTestId("viewport").element().dispatchEvent(new Event("scroll")));
+  await screen.getByRole("button", { name: "Second row" }).hover();
+  await act(() => vi.advanceTimersByTime(50));
+  await expect.element(page.getByText("Second details")).not.toBeInTheDocument();
+  expect(onOpenChange.mock.calls.some(([open, details]) => open && !details.isCanceled)).toBe(
+    false,
+  );
+
+  await act(() => vi.advanceTimersByTime(200));
+  await screen.getByRole("button", { name: "First row" }).hover();
+  await screen.getByRole("button", { name: "Second row" }).hover();
+  await act(() => vi.advanceTimersByTime(600));
+  await expect.element(page.getByText("Second details")).toBeInTheDocument();
 });
 
 it("opens a shared tooltip in place the first time", async () => {

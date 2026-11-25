@@ -43,15 +43,15 @@ const STANDARD_THEME_PREVIEW_COLORS: Record<
   light: {
     sidebar: "#fafafa",
     surface: "#ffffff",
-    accentSurface: "#f4f4f5",
-    messageSurface: "#e4e4e7",
+    accentSurface: "#f4f4f4",
+    messageSurface: "#e4e4e4",
     ...SHARED_STANDARD_THEME_PREVIEW_COLORS.light,
   },
   dark: {
-    sidebar: "#0f0f10",
+    sidebar: "#0f0f0f",
     surface: "#121212",
-    accentSurface: "#27272a",
-    messageSurface: "#27272a",
+    accentSurface: "#272727",
+    messageSurface: "#272727",
     ...SHARED_STANDARD_THEME_PREVIEW_COLORS.dark,
   },
 };
@@ -66,13 +66,6 @@ export const STANDARD_THEME_CARDS: ReadonlyArray<ThemeCardDefinition> = [
     })),
   },
 ];
-
-export function previewColorsOf(
-  card: ThemeCardDefinition,
-  mode: ThemeAppearance,
-): ThemeCardPreviewColors | null {
-  return card.previews.find((preview) => preview.mode === mode)?.colors ?? null;
-}
 
 export function getThemeCardDefinition(theme: ThemeDefinition): ThemeCardDefinition {
   return {
@@ -162,7 +155,7 @@ export function ThemePreviewCircles({
 }) {
   const gt = useGT();
   return (
-    <div className="flex min-h-16 items-center justify-center gap-2.5 px-3 pt-3">
+    <div className="flex h-24 items-center justify-center gap-1.5 px-3">
       {previews.map((preview) => {
         const mode = preview.mode;
         const isPicked = activeModes.includes(mode);
@@ -178,7 +171,7 @@ export function ThemePreviewCircles({
                   }
                   aria-pressed={isPicked}
                   className={cn(
-                    "relative flex size-[68px] shrink-0 transform-gpu cursor-pointer items-center justify-center rounded-full p-1.5 outline-none transition-transform hover:scale-105 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-5 focus-visible:outline-foreground/60",
+                    "relative flex size-16 shrink-0 transform-gpu cursor-pointer items-center justify-center rounded-full p-1 outline-none transition-transform hover:scale-105 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-5 focus-visible:outline-foreground/60",
                     isPicked && "hover:scale-100",
                   )}
                   onClick={(event) => {
@@ -193,7 +186,7 @@ export function ThemePreviewCircles({
                       <span
                         aria-hidden
                         className="pointer-events-none absolute inset-0 rounded-full"
-                        style={{ boxShadow: "inset 0 0 0 2px var(--ring)" }}
+                        style={{ boxShadow: "inset 0 0 0 2px var(--settings-active-rim)" }}
                       />
                       <span
                         aria-hidden

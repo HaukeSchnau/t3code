@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import { decodeMsg, msg, useMessages } from "gt-react";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
+import { isScrollingWorkspaceCommand } from "../../layout/layoutBehavior";
 import type { MessageResolver } from "../../i18n/messages";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
@@ -25,6 +26,7 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/chat"
   | "/settings/diffs"
+  | "/settings/layout"
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
@@ -76,6 +78,8 @@ export interface SettingsSearchItem {
   readonly textGeneratorsOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  /** Hidden until Labs › Scrolling workspaces is on. */
+  readonly scrollingWorkspacesOnly?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -92,6 +96,7 @@ export interface SettingsSearchAvailability {
   readonly hasAgentFeedbackEnvironment?: boolean;
   /** An environment without a provider allow-list, which hides text generators. */
   readonly hasTextGeneratorsEnvironment?: boolean;
+  readonly scrollingWorkspaces?: boolean;
   readonly hasPrimaryEnvironment?: boolean;
   readonly hasSecretProvidersEnvironment?: boolean;
 }
@@ -103,6 +108,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": msg("Appearance"),
   "/settings/chat": msg("Chat"),
   "/settings/diffs": msg("Diffs & pull requests"),
+  "/settings/layout": msg("Layout"),
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
@@ -145,6 +151,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     paths: [
       "/settings/general",
       "/settings/appearance",
+      "/settings/layout",
       "/settings/chat",
       "/settings/diffs",
       "/settings/keybindings",
@@ -207,6 +214,7 @@ const KEYBINDING_SEARCH_ITEMS = STATIC_KEYBINDING_COMMANDS.toSorted((left, right
     to: "/settings/keybindings" as const,
     searchTerms: [command, ...defaultKeys],
     secondary: true,
+    ...(isScrollingWorkspaceCommand(command) ? { scrollingWorkspacesOnly: true } : {}),
     ...(defaultKeys.length === 0 ? { targetId: "keybindings" } : {}),
   };
 });
@@ -279,7 +287,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
     searchTerms: [
       msg(
-        "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom",
+        "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom local changes kept branches thread history commits default branch",
       ),
     ],
   },
@@ -297,7 +305,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
     searchTerms: [
       msg(
-        "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention",
+        "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention recordings traces days capture links",
       ),
     ],
   },
@@ -319,7 +327,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Default model"),
     to: "/settings/threads",
     scope: "project-defaults",
-    searchTerms: [msg("new thread project provider reasoning effort")],
+    searchTerms: [msg("new thread project provider reasoning effort automatic")],
   },
   {
     id: "fallback-model",
@@ -339,17 +347,71 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "layout-template",
+    title: msg("Your layout"),
+    to: "/settings/layout",
+    searchTerms: [
+      msg("layout panes split columns template chat terminal diff files browser drag resize"),
+    ],
+  },
+  {
+    id: "layout-terminal-placement",
+    title: msg("Terminal"),
+    to: "/settings/layout",
+    searchTerms: [msg("terminal placement where cmd+j opens it below the chat new tab new column")],
+  },
+  {
+    id: "layout-side-pane-placement",
+    title: msg("Side pane"),
+    to: "/settings/layout",
+    searchTerms: [
+      msg("side pane placement diff files browser pull request beside the chat new column"),
+    ],
+  },
+  {
+    id: "layout-side-pane-opens-on",
+    title: msg("Side pane opens on"),
+    to: "/settings/layout",
+    searchTerms: [msg("side pane first tab last used diff files browser pull request")],
+  },
+  {
+    id: "layout-new-tab-position",
+    title: msg("New tabs"),
+    to: "/settings/layout",
+    searchTerms: [msg("where new tabs open after the current tab at the end cmd+t")],
+  },
+  {
+    id: "layout-when-no-room",
+    title: msg("When it doesn't fit"),
+    to: "/settings/layout",
+    searchTerms: [
+      msg("no room shrink then scroll always shrink always scroll strip columns width"),
+    ],
+    scrollingWorkspacesOnly: true,
+  },
+  {
+    id: "layout-three-finger-swipe",
+    title: msg("Three-finger swipe"),
+    to: "/settings/layout",
+    searchTerms: [msg("trackpad gesture swipe between pages column workspace")],
+    desktopOnly: true,
+    macOnly: true,
+    scrollingWorkspacesOnly: true,
+  },
+  {
     id: "color-scheme",
-    title: msg("Color scheme"),
+    title: msg("Appearance mode"),
     to: "/settings/appearance",
-    searchTerms: [msg("appearance light dark system mode")],
+    searchTerms: [msg("color scheme light dark system black chrome")],
     targetId: "appearance",
   },
   {
     id: "theme",
     title: msg("Themes"),
     to: "/settings/appearance",
-    searchTerms: [msg("appearance colors palette custom import")],
+    searchTerms: [
+      msg("appearance colors palette custom import export download t3 code classic old"),
+    ],
     targetId: "appearance",
   },
   {
@@ -358,13 +420,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Contrast"),
     to: "/settings/appearance",
     searchTerms: [msg("colors borders interface")],
-  },
-  {
-    // Prefixed because the slider control already owns the `glass-opacity` id.
-    id: "setting-glass-opacity",
-    title: msg("Glass opacity"),
-    to: "/settings/appearance",
-    searchTerms: [msg("transparent transparency solid menus dialogs composer")],
   },
   {
     id: "diff-color-scheme",
@@ -403,10 +458,26 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("reasoning effort thinking bars graph word label level composer")],
   },
   {
+    id: "app-icon",
+    title: msg("App icon"),
+    to: "/settings/appearance",
+    searchTerms: [msg("dock taskbar favicon logo nightly blueprint sunrise orbital black classic")],
+  },
+  {
     id: "math-rendering",
     title: msg("Render math"),
     to: "/settings/appearance",
     searchTerms: [msg("latex tex katex equations formulas markdown")],
+  },
+  {
+    id: "surface-style",
+    title: msg("Style"),
+    to: "/settings/appearance",
+    searchTerms: [
+      msg(
+        "surface buttons composer finish standard flat soft gloss glossy accent outline aqua gradient rim",
+      ),
+    ],
   },
   {
     id: "panel-animations",
@@ -419,6 +490,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: [msg("dev nightly latest channel artwork pill label hide none")],
     targetId: "appearance-interface",
+  },
+  {
+    id: "hide-window-controls",
+    title: msg("Hide window controls when the sidebar is collapsed"),
+    to: "/settings/appearance",
+    searchTerms: [msg("traffic lights close minimize zoom buttons titlebar")],
+    desktopOnly: true,
+    macOnly: true,
   },
   {
     id: "interface-font",
@@ -464,11 +543,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("long lines code blocks diffs file previews")],
   },
   {
-    id: "composer-context",
-    title: msg("Composer context"),
-    to: "/settings/appearance",
-  },
-  {
     id: "project-grouping",
     title: msg("Project grouping"),
     to: "/settings/general",
@@ -492,19 +566,37 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "snooze-limited-threads",
     title: msg("Snooze until limits reset"),
     to: "/settings/threads",
-    searchTerms: [msg("usage quota rate limit reset wake recover continue")],
+    searchTerms: [
+      msg(
+        "usage quota rate limit reset wake recover continue reported reset time combine auto-resume wake",
+      ),
+    ],
   },
   {
     id: "auto-resume-limited-threads",
     title: msg("Resume after usage limits"),
     to: "/settings/threads",
-    searchTerms: [msg("usage quota rate limit reset recover continue")],
+    searchTerms: [
+      msg(
+        "usage quota rate limit reset recover continue reported reset time cancel scheduled continuation",
+      ),
+    ],
   },
   {
     id: "working-shelf",
     title: msg("Working section"),
     to: "/settings/general",
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
+  },
+  {
+    id: "scrolling-workspaces",
+    title: msg("Scrolling workspaces"),
+    to: "/settings/labs",
+    searchTerms: [
+      msg(
+        "beta labs redesign niri strip scroll sideways workspaces overview layout tour swipe panes shrink",
+      ),
+    ],
   },
   {
     id: "boring-sidebar",
@@ -521,6 +613,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("beta boring sidebar folder rows multiline branch pull request details")],
   },
 
+  {
+    id: "turn-work-fold",
+    title: msg("Fold each turn's work"),
+    to: "/settings/labs",
+    searchTerms: [
+      msg(
+        "beta labs redesign working section window fold collapse turn tool calls open worked for wake-ups timeline",
+      ),
+    ],
+  },
   {
     id: "tool-call-visibility",
     title: msg("Tool calls in chat"),
@@ -781,7 +883,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "in-app-notifications",
     title: msg("In-app notifications"),
     to: "/settings/general",
-    searchTerms: [msg("notification toast popup completion input approval failure")],
+    searchTerms: [
+      msg("notification toast popup completion input approval failure input approval focus"),
+    ],
   },
   {
     id: "language",
@@ -816,27 +920,33 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "default-diff-file-state",
     title: msg("Default diff file state"),
     to: "/settings/diffs",
-    searchTerms: [msg("collapsed expanded collapse expand files pull request pr code tab")],
+    searchTerms: [
+      msg(
+        "collapsed expanded collapse expand files pull request pr code tab pull request code tab opening",
+      ),
+    ],
   },
   {
     id: "diff-layout",
     title: msg("Diff layout"),
     to: "/settings/diffs",
-    searchTerms: [msg("stacked split side by side unified inline view")],
+    searchTerms: [msg("stacked split side by side unified inline view diff toolbar toggle")],
   },
   {
     id: "proactive-panels",
     title: msg("Open pull requests and changes panels proactively"),
     to: "/settings/diffs",
     searchTerms: [
-      msg("proactive automatically open diff pull request pr right panel agent completion"),
+      msg(
+        "proactive automatically open diff pull request pr right panel agent completion working tree diff 3 files 50 lines",
+      ),
     ],
   },
   {
     id: "skills-in-slash-menu",
     title: msg("Show skills in slash menu"),
     to: "/settings/chat",
-    searchTerms: [msg("command menu dollar $ slash /")],
+    searchTerms: [msg("command menu dollar $ slash / dollar $ always appear")],
   },
   {
     id: "composer-rich-text",
@@ -882,7 +992,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
     searchTerms: [
       msg(
-        "resume running active interrupted work restart reboot machine crash desktop update automatically",
+        "resume running active interrupted work restart reboot machine crash desktop update automatically machine restart selected environments update older servers",
       ),
     ],
   },
@@ -949,7 +1059,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "archive-confirmation",
     title: msg("Archive confirmation"),
     to: "/settings/general",
-    searchTerms: [msg("ask before thread second click inline action")],
+    searchTerms: [
+      msg("ask before thread second click inline action second click inline archive action"),
+    ],
   },
   {
     id: "delete-confirmation",
@@ -961,7 +1073,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "terminal-close-confirmation",
     title: msg("Terminal close confirmation"),
     to: "/settings/general",
-    searchTerms: ["ask before delete stop process shell console history"],
+    searchTerms: [msg("ask before delete stop process shell console history")],
   },
   {
     id: "quit-confirmation",
@@ -975,7 +1087,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Text generation model"),
     to: "/settings/threads",
     scope: "project-defaults",
-    searchTerms: [msg("generated thread titles source control content default provider")],
+    searchTerms: [
+      msg(
+        "generated thread titles source control content default provider connected devices provider source control override",
+      ),
+    ],
   },
   {
     id: "automatic-thread-titles",
@@ -1150,7 +1266,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Agent browser access"),
     to: "/settings/browser",
     scope: "project-defaults",
-    searchTerms: [msg("allow disable enable open drive preview tools sessions project override")],
+    searchTerms: [
+      msg(
+        "allow disable enable open drive preview tools sessions project override next session start",
+      ),
+    ],
   },
   {
     id: "device-sources",
@@ -1199,7 +1319,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-default-viewport",
     title: msg("Default browser viewport"),
     to: "/settings/browser",
-    searchTerms: [msg("preview size width height device desktop mobile rotate")],
+    searchTerms: [
+      msg("preview size width height device desktop mobile rotate fill fits panel device toolbar"),
+    ],
   },
   {
     id: "browser-default-zoom",
@@ -1222,7 +1344,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-recording-key-presses",
     title: msg("Show key presses in recordings"),
     to: "/settings/browser",
-    searchTerms: [msg("browser preview keyboard shortcuts keystrokes overlay capture")],
+    searchTerms: [
+      msg("browser preview keyboard shortcuts keystrokes overlay capture password fields excluded"),
+    ],
   },
   {
     id: "browser-recording-mouse-presses",
@@ -1234,7 +1358,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-link-target",
     title: msg("Open links in"),
     to: "/settings/browser",
-    searchTerms: [msg("links default browser in-app browser external open")],
+    searchTerms: [
+      msg(
+        "links default browser in-app browser external open hold cmd ctrl click default browser either way",
+      ),
+    ],
   },
   {
     id: "browser-search-engine",
@@ -1254,14 +1382,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-auto-show-floating-preview",
     title: msg("Auto-show floating preview"),
     to: "/settings/browser",
-    searchTerms: [msg("agent opens browser device simulator pop into view hide")],
+    searchTerms: [
+      msg("agent opens browser device simulator pop into view hide unless agent says otherwise"),
+    ],
   },
   {
     id: "automatic-pull",
     title: msg("Automatically pull"),
     to: "/settings/source-control",
     scope: "project-defaults",
-    searchTerms: [msg("auto pull default branch current checkout fast forward upstream")],
+    searchTerms: [
+      msg(
+        "auto pull default branch current checkout fast forward upstream no local changes or commits",
+      ),
+    ],
   },
   {
     id: "remove-agent-credits-on-merge",
@@ -1277,7 +1411,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Default merge method"),
     to: "/settings/source-control",
     scope: "project-defaults",
-    searchTerms: [msg("pull request merge squash rebase last selected")],
+    searchTerms: [msg("pull request merge squash rebase last selected most recently this device")],
   },
   {
     id: "issue-trackers",
@@ -1354,7 +1488,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Source control writer model"),
     to: "/settings/source-control",
     searchTerms: [
-      msg("override generated commit change request pr titles descriptions branch bookmark"),
+      msg(
+        "override generated commit change request pr titles descriptions branch bookmark source control text branch bookmark names",
+      ),
     ],
     environmentOnly: true,
     scope: "project-defaults",
@@ -1576,6 +1712,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/appearance": null,
   "/settings/chat": null,
   "/settings/diffs": null,
+  "/settings/layout": null,
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
@@ -1730,6 +1867,7 @@ export function filterAvailableSettingsSearchItems(
         availability.hasFastWorktreeCheckoutEnvironment === true) &&
       (!item.agentFeedbackOnly || availability.hasAgentFeedbackEnvironment === true) &&
       (!item.textGeneratorsOnly || availability.hasTextGeneratorsEnvironment === true) &&
+      (!item.scrollingWorkspacesOnly || availability.scrollingWorkspaces === true) &&
       (!item.secretProvidersOnly || availability.hasSecretProvidersEnvironment === true),
   );
 }

@@ -19,6 +19,8 @@ import {
 import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings";
 import { isWindowsPlatform } from "../lib/utils";
 import { needsYouSubjectsAtom } from "../state/needsYou";
+import { selectVisibleLayoutTabs } from "../layout/layoutModel";
+import { useLayoutStore } from "../layout/layoutStore";
 import { environmentSummaries } from "../state/presentation";
 import { environmentShell } from "../state/shell";
 import { environmentThreadShells } from "../state/threads";
@@ -114,7 +116,23 @@ export function startThreadNotifications(
     (router.state.matches.at(-1)?.params ?? {}) as {
       environmentId?: EnvironmentId;
       threadId?: ThreadId;
+      draftId?: string;
     };
+  /** A pane shows the thread, also one the route does not name. */
+  const threadShown = (environmentId: EnvironmentId, threadId: ThreadId) => {
+    const active = activeThread();
+    if (active.environmentId === environmentId && active.threadId === threadId) return true;
+    return (
+      (active.threadId !== undefined || active.draftId !== undefined) &&
+      selectVisibleLayoutTabs(useLayoutStore.getState().layout).some(
+        (tab) =>
+          tab.content.kind === "chat" &&
+          tab.content.target.kind === "server" &&
+          tab.content.target.threadRef.environmentId === environmentId &&
+          tab.content.target.threadRef.threadId === threadId,
+      )
+    );
+  };
   const closeOpenedThreadToasts = () => {
     const { environmentId, threadId } = activeThread();
     if (environmentId === undefined || threadId === undefined) return;
@@ -340,7 +358,6 @@ export function startThreadNotifications(
     withClaimsLock(() => {
       const storage = needsYouStorage();
       const nowMs = Date.now();
-      const active = activeThread();
       for (const subject of subjects()) {
         // A newer version, such as its resolution, waits behind this lock and decides it.
         if (subject.version < (newest.get(subject.id) ?? 0)) continue;
@@ -362,7 +379,7 @@ export function startThreadNotifications(
         const tab = {
           ...tabState(),
           scheduled: subject.source === "reminder" || subject.source === "digest",
-          viewing: active.environmentId === environmentId && active.threadId === subject.threadId,
+          viewing: threadShown(environmentId, subject.threadId),
         };
         const channel = presentationChannel(tab);
         if (channel === null) {

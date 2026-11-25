@@ -2,7 +2,6 @@ import { useGT } from "gt-react";
 import { ChevronDownIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -15,22 +14,18 @@ export function PullRequestCompactFilterMenu<Value extends string>({
   label,
   triggerIcon,
   triggerLabel,
-  outlined = false,
   iconOnly = false,
   value,
   options,
   onChange,
-  className,
 }: {
   label: string;
   triggerIcon?: ReactNode;
   triggerLabel?: string;
-  outlined?: boolean;
   iconOnly?: boolean;
   value: Value;
   options: ReadonlyArray<PullRequestFilterOption<Value>>;
   onChange: (value: Value) => void;
-  className?: string;
 }) {
   const gt = useGT();
   const current = options.find((option) => option.value === value) ?? options[0];
@@ -42,26 +37,16 @@ export function PullRequestCompactFilterMenu<Value extends string>({
           triggerLabel || iconOnly ? gt("{label}: {value}", { label, value: current.label }) : label
         }
         title={iconOnly ? gt("{label}: {value}", { label, value: current.label }) : undefined}
-        render={
-          outlined ? (
-            <Button variant="outline" size={iconOnly ? "icon" : "default"} />
-          ) : (
-            <Button variant="ghost-muted" size="sm" />
-          )
-        }
-        className={cn("min-w-0", className)}
+        render={<Button variant="secondary" size={iconOnly ? "icon" : "default"} />}
+        className="min-w-0"
       >
         {iconOnly ? (
           <current.Icon aria-hidden className="size-4" />
-        ) : triggerLabel ? (
-          <>
-            {triggerIcon}
-            <span>{triggerLabel}</span>
-          </>
         ) : (
           <>
-            <span className="truncate">{current.label}</span>
-            <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
+            {triggerIcon ?? <current.Icon aria-hidden className="size-4 shrink-0" />}
+            <span className="truncate">{triggerLabel ?? current.label}</span>
+            <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-dim-foreground" />
           </>
         )}
       </MenuTrigger>

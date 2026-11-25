@@ -146,7 +146,7 @@ function groupLabel(
 ): string | null {
   switch (triggerKind) {
     case "pull-request":
-      return resolve(msg("Pull requests"));
+      return resolve(msg("Pull requests and threads"));
     case "slash-command":
       return resolve(msg("Commands"));
     case "skill":
@@ -170,7 +170,7 @@ function emptyText(
   }
   switch (triggerKind) {
     case "pull-request":
-      return resolve(msg("No matching pull requests."));
+      return resolve(msg("No matching pull requests or threads."));
     case "path":
       return resolve(msg("No matching mentions."));
     case "skill":
@@ -252,9 +252,7 @@ export const ComposerCommandPopover = memo(function ComposerCommandPopover(
     <PopoverSurface>
       {label ? (
         <View className="px-3.5 pt-2.5 pb-1">
-          <Text className="text-3xs font-t3-bold tracking-[0.8px] uppercase text-foreground-muted">
-            {label}
-          </Text>
+          <Text className="text-3xs font-t3-bold text-foreground-muted">{label}</Text>
         </View>
       ) : null}
       {props.items.length > 0 ? (

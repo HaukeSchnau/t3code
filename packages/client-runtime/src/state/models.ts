@@ -102,6 +102,8 @@ export interface ThreadRunSummary {
    * instead of "Thinking".
    */
   readonly providerStartingLabel?: string;
+  /** The run prepared a new worktree before its provider started, so its work began at `requestedAt`. */
+  readonly preparedWorktree?: true;
   /** `providerStartingLabel` as a `msg()` string; display sites resolve this one. */
   readonly providerStartingLabelMsg?: string;
   /** The starting provider, so clients can show its logo beside the label. */
@@ -202,6 +204,8 @@ export interface EnvironmentThreadShell {
   readonly goal: OrchestrationV2ProviderGoal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
+  /** Settled user and assistant messages; only archived snapshots carry it. */
+  readonly messageCount?: number;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly archivedAt: string | null;
@@ -372,6 +376,7 @@ export function presentThreadShell(
     goal: thread.goal ?? null,
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,
+    ...(thread.messageCount === undefined ? {} : { messageCount: thread.messageCount }),
     createdAt: iso(thread.createdAt),
     updatedAt,
     archivedAt: nullableIso(thread.archivedAt),

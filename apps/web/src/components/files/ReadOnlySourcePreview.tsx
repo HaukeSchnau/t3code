@@ -74,7 +74,7 @@ export default function ReadOnlySourcePreview(props: {
         <Virtualizer
           // Not keyed on the text: a file that grows or finishes downloading keeps its scroll position.
           key={`${props.name}:${resolvedTheme}`}
-          className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
+          className="file-preview-virtualizer min-h-0 flex-1 scroll-pt-[var(--surface-top-inset,0px)] overflow-auto pt-under-header"
           config={{ overscrollSize: 600, intersectionObserverMargin: 1200 }}
         >
           <File

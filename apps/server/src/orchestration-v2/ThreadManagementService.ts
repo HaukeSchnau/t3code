@@ -70,7 +70,7 @@ import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
-import { projectTurnItemForDetail } from "./WireProjection.ts";
+import { projectTurnItemForDetail } from "@t3tools/shared/wireProjection";
 import { cancelledBeforeStart } from "./RestartBackgroundNote.ts";
 import { contextBoundaryOrdinal } from "./contextBoundary.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -477,6 +477,7 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>;
   readonly listActiveSubagentThreadIds: Orchestrator.OrchestratorV2["Service"]["listActiveSubagentThreadIds"];
   readonly countThreads: Orchestrator.OrchestratorV2["Service"]["countThreads"];
+  readonly countArchivedThreadMessages: Orchestrator.OrchestratorV2["Service"]["countArchivedThreadMessages"];
   readonly listActiveShellIndex: Orchestrator.OrchestratorV2["Service"]["listActiveShellIndex"];
   readonly listOlderSettledThreads: Orchestrator.OrchestratorV2["Service"]["listOlderSettledThreads"];
   readonly readShellSnapshot: (
@@ -2004,6 +2005,7 @@ const make = Effect.gen(function* () {
     getShellSnapshot: orchestrator.getShellSnapshot,
     listActiveSubagentThreadIds: orchestrator.listActiveSubagentThreadIds,
     countThreads: orchestrator.countThreads,
+    countArchivedThreadMessages: orchestrator.countArchivedThreadMessages,
     listActiveShellIndex: orchestrator.listActiveShellIndex,
     listOlderSettledThreads: orchestrator.listOlderSettledThreads,
     readShellSnapshot: orchestrator.readShellSnapshot,

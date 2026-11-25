@@ -14,6 +14,7 @@ export function AssistantCitationCommentEditor({
   onSubmit,
   onSubmitAndSend,
   onCancel,
+  onViewSource,
   onDraftChange,
   onVoiceSetupOpenChange,
 }: {
@@ -22,6 +23,7 @@ export function AssistantCitationCommentEditor({
   onSubmit: (comment: string) => boolean;
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
+  onViewSource?: () => void;
   onDraftChange?: (comment: string) => void;
   onVoiceSetupOpenChange?: (open: boolean) => void;
 }) {
@@ -91,8 +93,8 @@ export function AssistantCitationCommentEditor({
         placeholder={gt("Add an optional comment...")}
         rows={2}
         dir={textDirection(comment)}
-        className="field-sizing-content block max-h-40 min-h-16 w-full resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
-        value={comment}
+        className="field-sizing-content block max-h-40 min-h-16 w-full resize-none bg-transparent px-1 py-1.5 text-body outline-none text-foreground placeholder:text-muted-foreground max-sm:text-base"
+        value={speech.displayText}
         onChange={(event) => updateComment(event.currentTarget.value)}
         onKeyDown={(event) => {
           if (
@@ -111,7 +113,7 @@ export function AssistantCitationCommentEditor({
         }}
       />
       {commentTooLong ? (
-        <p role="status" className="pt-1 text-xs text-destructive">
+        <p role="status" className="pt-1 text-meta text-error-foreground">
           <T>
             Comments can contain up to{" "}
             <Var>{ASSISTANT_CITATION_MAX_COMMENT_LENGTH.toLocaleString()}</Var> characters.
@@ -120,10 +122,22 @@ export function AssistantCitationCommentEditor({
       ) : null}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         <TextFieldSpeechControls speech={speech} />
+        {onViewSource ? (
+          <Button
+            variant="secondary"
+            size="xs"
+            // Escape cancels; keep Tab from the comment on Save so Enter cannot leave a new citation.
+            tabIndex={-1}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={onViewSource}
+          >
+            <T>View source</T>
+          </Button>
+        ) : null}
         {/* Wrap as a pair so the recording pill never pushes Save alone onto a new row under Cancel. */}
         <div className="flex gap-2">
           <Button
-            variant="outline"
+            variant="secondary"
             size="xs"
             // Escape cancels; keep Tab from the comment on Save so Enter cannot discard a new citation.
             tabIndex={-1}
@@ -135,6 +149,7 @@ export function AssistantCitationCommentEditor({
           <Button
             size="xs"
             disabled={speech.preparing || (commentTooLong && !speech.blocksSubmission)}
+            aria-keyshortcuts="Enter"
             onPointerDown={(event) => event.preventDefault()}
             onClick={submit}
           >

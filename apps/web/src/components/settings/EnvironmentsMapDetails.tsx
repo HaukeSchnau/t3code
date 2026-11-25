@@ -18,8 +18,10 @@ import type { EnvironmentPresentation } from "~/state/environments";
 import { peerLinkEnvironment } from "~/state/peerLinks";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { accessConfig } from "../auth/ConnectAgentSurface";
-import { Button } from "../ui/button";
+import { Button, ContentButton, InlineButton } from "../ui/button";
+import { CardSection } from "../ui/card-section";
 import { Input } from "../ui/input";
+import { StatusDot } from "../ui/status-dot";
 import { formatAccessTimestamp } from "./ConnectionsSettings.logic";
 import { EnvironmentRow, EnvironmentTransportLabel } from "./EnvironmentRow";
 import {
@@ -30,7 +32,6 @@ import {
   type FleetNode,
   type FleetStack,
   fleetLinkBackOffered,
-  fleetSummary,
   fleetTwoWayLinks,
   isLinkEdge,
   linkNeedsAttention,
@@ -105,7 +106,7 @@ export function HealthGlyph({ health }: { health: PeerLinkHealth }) {
     return <span aria-hidden className="size-2 rounded-full border border-muted-foreground" />;
   }
   return health.expiresInDays === null ? (
-    <span aria-hidden className="size-2 rounded-full bg-success forced-colors:border-4" />
+    <StatusDot size="md" tone="success" />
   ) : (
     <ClockAlertIcon aria-hidden className={cn("size-3", tone)} />
   );
@@ -132,8 +133,6 @@ export interface FleetDetailsProps {
   readonly onAddEnvironment: (host?: string) => void;
 }
 
-const SECTION = "px-3 py-3 sm:px-4";
-
 /** What is selected on the map, with the controls the list keeps on each row. */
 export function FleetDetails(props: FleetDetailsProps) {
   const { graph, stacks, selection, onSelect, connectProblem } = props;
@@ -153,29 +152,34 @@ export function FleetDetails(props: FleetDetailsProps) {
     onSelect(focus);
     panel.current?.focus();
   };
+  // At rest the map says it all: the panel opens for what is selected, or a listing that failed.
+  if (connectProblem === null && node === undefined && edge === undefined && stack === undefined) {
+    return null;
+  }
   return (
     <div
       ref={panel}
       tabIndex={-1}
       role="group"
       aria-label={gt("Details")}
-      className="min-h-20 border-t border-border/60 text-xs outline-none"
+      className="text-meta outline-none"
     >
       {connectProblem ? (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/60 px-3 py-2 sm:px-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 not-last:border-b not-last:border-divider sm:px-4">
           <p className="min-w-0 flex-1 text-muted-foreground">
-            <span className="font-medium text-destructive">
+            <span className="text-label text-destructive">
               <T>Could not load T3 Connect environments</T>
-            </span>{" "}
+            </span>
+            {""}
             {connectProblem.message}
           </p>
-          <Button size="xs" variant="outline" onClick={connectProblem.retry}>
+          <Button size="xs" variant="secondary" onClick={connectProblem.retry}>
             {gt("Try again")}
           </Button>
         </div>
       ) : null}
       {pair ? (
-        <div className={SECTION}>
+        <CardSection>
           <p className="mb-3 text-muted-foreground">{gt("Two links, one each way.")}</p>
           <div className="space-y-4">
             {[pair.forward, pair.back].map((link) => (
@@ -191,9 +195,9 @@ export function FleetDetails(props: FleetDetailsProps) {
               />
             ))}
           </div>
-        </div>
+        </CardSection>
       ) : edge ? (
-        <div className={SECTION}>
+        <CardSection>
           <LinkDetails
             key={edge.id}
             edge={edge}
@@ -204,7 +208,7 @@ export function FleetDetails(props: FleetDetailsProps) {
               ? { onLinkBack: () => props.onLinkBack(edge) }
               : {})}
           />
-        </div>
+        </CardSection>
       ) : stack ? (
         <StackDetails
           key={`${stack.id}:${props.found ?? ""}`}
@@ -218,9 +222,7 @@ export function FleetDetails(props: FleetDetailsProps) {
         />
       ) : node ? (
         <NodeDetails {...props} key={node.id} node={node} links={links} onSelect={selectWithin} />
-      ) : (
-        <FleetSummary graph={graph} links={links} />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -228,44 +230,8 @@ export function FleetDetails(props: FleetDetailsProps) {
 function Heading({ children, detail }: { children: ReactNode; detail?: ReactNode }) {
   return (
     <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-      <h3 className="text-sm font-medium text-foreground">{children}</h3>
+      <h3 className="text-label text-foreground">{children}</h3>
       {detail ? <span className="text-muted-foreground">{detail}</span> : null}
-    </div>
-  );
-}
-
-function FleetSummary({
-  graph,
-  links,
-}: {
-  readonly graph: FleetGraph;
-  readonly links: ReadonlyArray<FleetLinkEdge>;
-}) {
-  const gt = useGT();
-  const summary = fleetSummary(graph);
-  const attention = links.filter((edge) => linkNeedsAttention(edge.health)).length;
-  const { machines } = summary;
-  return (
-    <div className={SECTION}>
-      <Heading
-        detail={
-          summary.loading
-            ? gt("Loading links…")
-            : attention > 0
-              ? gt("{count, plural, one {# needs attention} other {# need attention}}", {
-                  count: attention,
-                  $context: "after a count of links: how many of those links have a problem",
-                })
-              : null
-        }
-      >
-        {summary.links !== null
-          ? gt(
-              "{machines, plural, one {# machine} other {# machines}}, {links, plural, =0 {no links} one {# link} other {# links}}",
-              { machines, links: summary.links },
-            )
-          : gt("{machines, plural, one {# machine} other {# machines}}", { machines })}
-      </Heading>
     </div>
   );
 }
@@ -285,17 +251,17 @@ function LinkButton({
   const attention = linkNeedsAttention(edge.health);
   return (
     <li>
-      <button
-        type="button"
-        className="grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-1.5 py-1 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:grid-cols-[auto_minmax(0,10rem)_minmax(0,10rem)_minmax(0,1fr)_auto]"
+      <ContentButton
+        variant="fleet-link-row"
+        className="grid w-full grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] lg:grid-cols-[auto_minmax(0,10rem)_minmax(0,10rem)_minmax(0,1fr)_auto]"
         onClick={() => onSelect({ kind: "edge", id: edge.id })}
       >
         <AccessMeter access={edge.link.access} className="text-foreground/80" />
-        <span className="truncate font-medium text-foreground">{label}</span>
+        <span className="truncate text-label text-foreground">{label}</span>
         <span className="truncate text-foreground/80">
           {m(accessConfig[edge.link.access].label)}
         </span>
-        <span className="hidden truncate font-mono text-2xs text-muted-foreground lg:block">
+        <span className="hidden truncate font-mono text-caption text-muted-foreground lg:block">
           {edge.link.urls[0]}
         </span>
         <span
@@ -312,7 +278,7 @@ function LinkButton({
                 $context: "the date a link between two machines stops working",
               })}
         </span>
-      </button>
+      </ContentButton>
     </li>
   );
 }
@@ -412,7 +378,7 @@ function StackDetails({
   const sources = stack.sources.map((source) => nodeById.get(source.sourceId)?.label ?? "");
   const [only] = stack.sources;
   return (
-    <div className={SECTION}>
+    <CardSection>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <Heading
           detail={(stack.kind === "environments"
@@ -426,7 +392,7 @@ function StackDetails({
                 gt("{machines, plural, one {# machine} other {# machines}}", {
                   machines: members.length,
                 }),
-                sources.join(", "),
+                sources.join(","),
                 ...(stack.sources.length === 1 && only !== undefined
                   ? [m(accessConfig[only.access].label)]
                   : []),
@@ -436,11 +402,11 @@ function StackDetails({
                     "on a card for a group of linked machines: how many of them answer right now",
                 }),
               ]
-          ).join(" · ")}
+          ).join(", ")}
         >
           {range}
         </Heading>
-        <Button size="xs" variant="outline" onClick={onToggle}>
+        <Button size="xs" variant="secondary" onClick={onToggle}>
           {stack.expanded
             ? gt("Collapse", { $context: "button: folds a group of machines back into one card" })
             : gt("Show on map")}
@@ -479,7 +445,7 @@ function StackDetails({
           renderItem={({ item }) => <MemberButton member={item} onSelect={onSelect} />}
         />
       </div>
-    </div>
+    </CardSection>
   );
 }
 
@@ -494,15 +460,15 @@ function MemberButton({
   const { worst } = member;
   const attention = worst !== null && linkNeedsAttention(worst.health);
   return (
-    <button
-      type="button"
+    <ContentButton
+      variant="fleet-row"
       style={{ height: MEMBER_ROW_HEIGHT }}
-      className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:grid-cols-[minmax(0,12rem)_minmax(0,10rem)_minmax(0,1fr)_auto]"
+      className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,12rem)_minmax(0,10rem)_minmax(0,1fr)_auto]"
       onClick={() => onSelect({ kind: "node", id: member.id })}
     >
-      <span className="truncate font-medium text-foreground">{member.label}</span>
+      <span className="truncate text-label text-foreground">{member.label}</span>
       <span className="truncate text-foreground/80">{member.detail}</span>
-      <span className="hidden truncate font-mono text-2xs text-muted-foreground lg:block">
+      <span className="hidden truncate font-mono text-caption text-muted-foreground lg:block">
         {member.address}
       </span>
       {worst === null ? (
@@ -518,7 +484,7 @@ function MemberButton({
           {healthLabel(worst.health, gt)}
         </span>
       )}
-    </button>
+    </ContentButton>
   );
 }
 
@@ -552,7 +518,7 @@ function Reconnect({ environment }: { readonly environment: EnvironmentPresentat
       <span className="text-muted-foreground">{savedBackendStatus(environment, m).text}</span>
       <Button
         size="xs"
-        variant="outline"
+        variant="secondary"
         disabled={phase === "connecting"}
         onClick={() => void retryNow(environment.environmentId)}
       >
@@ -601,7 +567,7 @@ function LinkList({
   return (
     <section>
       <div className="mb-1 flex min-h-6 items-center gap-3">
-        {title === null ? null : <h4 className="font-medium text-foreground">{title}</h4>}
+        {title === null ? null : <h4 className="text-label text-foreground">{title}</h4>}
         {action}
       </div>
       {edges.length > 0 ? (
@@ -636,7 +602,7 @@ function NodeDetails({
   if (node.kind === "client") {
     const hosts = graph.nodes.filter((entry) => entry.kind === "environment");
     return (
-      <div className={SECTION}>
+      <CardSection>
         <Heading
           detail={gt("{connected} of {total} connected", {
             connected: hosts.filter((entry) => entry.phase === "connected").length,
@@ -648,7 +614,7 @@ function NodeDetails({
         <p className="text-muted-foreground">
           {gt("Each line from here is a saved route to an environment.")}
         </p>
-      </div>
+      </CardSection>
     );
   }
   const out = links.filter((edge) => edge.from === node.id);
@@ -668,23 +634,25 @@ function NodeDetails({
     return (
       <>
         {renderConnectMachine(node.environmentId)}
-        <div className={cn(SECTION, "space-y-3 border-t border-border/60")}>
-          <p className="max-w-2xl text-muted-foreground">
-            {gt("Add {label} to this app to connect to it.", { label: node.label })}
-          </p>
-          {incoming.length > 0 ? linkedFrom : null}
-        </div>
+        <CardSection divided="top">
+          <div className="space-y-3">
+            <p className="max-w-2xl text-muted-foreground">
+              {gt("Add {label} to this app to connect to it.", { label: node.label })}
+            </p>
+            {incoming.length > 0 ? linkedFrom : null}
+          </div>
+        </CardSection>
       </>
     );
   }
   if (node.kind === "target") {
     return (
-      <div className={SECTION}>
+      <CardSection>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <Heading detail={gt("Known only through a link")}>{node.label}</Heading>
           <Button
             size="xs"
-            variant="outline"
+            variant="secondary"
             onClick={() => onAddEnvironment(node.address ?? undefined)}
           >
             <PlusIcon className="size-3" />
@@ -706,7 +674,7 @@ function NodeDetails({
         <p className="mt-3 max-w-2xl text-muted-foreground">
           {gt("Not connected, so its links are not shown.")}
         </p>
-      </div>
+      </CardSection>
     );
   }
   const environment = environments.find((entry) => entry.environmentId === node.environmentId);
@@ -721,36 +689,37 @@ function NodeDetails({
             kind={resolveEnvironmentMachineKind(environment.serverConfig)}
             label={environment.label}
             subtitle={
-              <>
+              <span className="flex flex-wrap gap-x-2">
                 <EnvironmentTransportLabel environment={environment} />
-                {" · "}
-                {connectionStatusTitle(environment.connection, m)}
-                {environment.serverConfig
-                  ? ` · ${environment.serverConfig.environment.serverVersion}`
-                  : ""}
-              </>
+                <span>{connectionStatusTitle(environment.connection, m)}</span>
+                {environment.serverConfig ? (
+                  <span>{environment.serverConfig.environment.serverVersion}</span>
+                ) : null}
+              </span>
             }
           />
         ) : null)}
-      <div className={cn(SECTION, "space-y-3 border-t border-border/60")}>
-        {environment && saved !== null ? <Reconnect environment={environment} /> : null}
-        {note ? <p className="max-w-2xl text-muted-foreground">{note}</p> : null}
-        <LinkList
-          title={
-            loaded
-              ? gt(
-                  "{count, plural, =0 {Links to no one} one {Links to # machine} other {Links to # machines}}",
-                  { count: out.length },
-                )
-              : null
-          }
-          action={<LinkAnother node={node} onLinkFrom={onLinkFrom} />}
-          edges={out}
-          labelOf={(edge) => labelOf(edge.to)}
-          onSelect={onSelect}
-        />
-        {linkedFrom}
-      </div>
+      <CardSection divided="top">
+        <div className="space-y-3">
+          {environment && saved !== null ? <Reconnect environment={environment} /> : null}
+          {note ? <p className="max-w-2xl text-muted-foreground">{note}</p> : null}
+          <LinkList
+            title={
+              loaded
+                ? gt(
+                    "{count, plural, =0 {Links to no one} one {Links to # machine} other {Links to # machines}}",
+                    { count: out.length },
+                  )
+                : null
+            }
+            action={<LinkAnother node={node} onLinkFrom={onLinkFrom} />}
+            edges={out}
+            labelOf={(edge) => labelOf(edge.to)}
+            onSelect={onSelect}
+          />
+          {linkedFrom}
+        </div>
+      </CardSection>
     </>
   );
 }
@@ -779,35 +748,25 @@ function LinkDetails({
   const access = accessConfig[link.access];
   const when = (value: DateTime.Utc) => formatAccessTimestamp(DateTime.formatIso(value));
   const term = "text-muted-foreground";
-  const endpoint =
-    "cursor-pointer rounded-sm font-medium text-foreground underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm">
-          <button
-            type="button"
-            className={endpoint}
-            onClick={() => onSelect({ kind: "node", id: edge.from })}
-          >
+        <h3 className="flex min-w-0 flex-wrap items-center gap-1.5 text-body">
+          <InlineButton onClick={() => onSelect({ kind: "node", id: edge.from })}>
             {sourceLabel}
-          </button>
+          </InlineButton>
           <ArrowRightIcon
             role="img"
             aria-label={gt("links to", { $context: "between two machine names: A links to B" })}
             className="size-3.5 text-muted-foreground"
           />
-          <button
-            type="button"
-            className={endpoint}
-            onClick={() => onSelect({ kind: "node", id: edge.to })}
-          >
+          <InlineButton onClick={() => onSelect({ kind: "node", id: edge.to })}>
             {targetLabel}
-          </button>
+          </InlineButton>
         </h3>
         <div className="flex items-center gap-2">
           {onLinkBack ? (
-            <Button size="xs" variant="outline" onClick={onLinkBack}>
+            <Button size="xs" variant="secondary" onClick={onLinkBack}>
               {gt("Link back…", {
                 $context: "button: also link the second machine to the first one",
               })}
@@ -828,7 +787,7 @@ function LinkDetails({
       <dl className="grid max-w-2xl grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
         <dt className={term}>{gt("Access", { $context: "access level" })}</dt>
         <dd>
-          <span className="flex items-center gap-2 font-medium text-foreground">
+          <span className="flex items-center gap-2 text-label text-foreground">
             <AccessMeter access={link.access} className="text-foreground/80" />
             {m(access.label)}
           </span>
@@ -851,7 +810,7 @@ function LinkDetails({
         </dt>
         <dd className="text-foreground">{when(link.expiresAt)}</dd>
         <dt className={term}>{gt("Addresses")}</dt>
-        <dd className="min-w-0 font-mono text-2xs break-all text-foreground">
+        <dd className="min-w-0 font-mono text-caption break-all text-foreground">
           {link.urls.map((url) => (
             <span key={url} className="block">
               {url}

@@ -1,12 +1,13 @@
 import { type EnvironmentId, type WorkflowRunReference } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { WorkflowIcon } from "lucide-react";
+import { CircleAlertIcon, WorkflowIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { Button } from "../ui/button";
+import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { Button, ContentButton, InlineButton } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -105,7 +106,7 @@ export function WorkflowRunsView({
   }
   if (!snapshot) {
     return (
-      <p className="p-6 text-sm text-muted-foreground" role="status">
+      <p className="p-6 text-body text-muted-foreground" role="status">
         <T>Loading workflow runs…</T>
       </p>
     );
@@ -113,22 +114,24 @@ export function WorkflowRunsView({
   // A broken file is said even where nothing has run, or its workflows would just seem missing.
   const problemAlert =
     snapshot.definition?.problem == null ? null : (
-      <div
-        role="alert"
-        className="flex shrink-0 items-center gap-3 border-b bg-destructive/4 px-4 py-2 text-xs"
-      >
-        <span className="min-w-0 flex-1 text-muted-foreground">
-          <T>
-            <span className="font-medium text-destructive-foreground">
-              A workflow file has a problem.
-            </span>{" "}
-            The last version that did keeps running.
-          </T>
-        </span>
-        <Button size="xs" variant="outline" onClick={onOpenDefinitions}>
-          <T>Open the file</T>
-        </Button>
-      </div>
+      <Alert variant="error" density="strip" edge="bottom" className="shrink-0">
+        <CircleAlertIcon aria-hidden />
+        <AlertDescription>
+          <p>
+            <T>
+              <span className="text-label text-destructive-foreground">
+                A workflow file has a problem.
+              </span>{" "}
+              The last version that did keeps running.
+            </T>
+          </p>
+        </AlertDescription>
+        <AlertAction>
+          <Button size="xs" variant="secondary" onClick={onOpenDefinitions}>
+            <T>Open the file</T>
+          </Button>
+        </AlertAction>
+      </Alert>
     );
   const withProblem = (empty: ReactNode) =>
     problemAlert === null ? (
@@ -145,13 +148,9 @@ export function WorkflowRunsView({
       description={
         <T>
           This environment has no run with that link.{" "}
-          <button
-            type="button"
-            className="cursor-pointer underline underline-offset-2 hover:text-foreground"
-            onClick={() => onSelect(null)}
-          >
+          <InlineButton tone="muted" onClick={() => onSelect(null)}>
             Back to the runs
-          </button>
+          </InlineButton>
         </T>
       }
     />
@@ -168,22 +167,16 @@ export function WorkflowRunsView({
           <T>
             A workflow ties agents, code, schedules and questions to you into one run that survives
             restarts. Write one under{" "}
-            <button
-              type="button"
-              className="underline underline-offset-2 hover:text-foreground"
-              onClick={onOpenDefinitions}
-            >
+            <InlineButton tone="muted" onClick={onOpenDefinitions}>
               Definitions
-            </button>
+            </InlineButton>
             , or ask an agent to.{" "}
-            <a
-              href={WORKFLOWS_GUIDE_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="underline underline-offset-2 hover:text-foreground"
+            <InlineButton
+              tone="muted"
+              render={<a href={WORKFLOWS_GUIDE_URL} target="_blank" rel="noreferrer" />}
             >
               Read the guide
-            </a>
+            </InlineButton>
           </T>
         }
       />,
@@ -224,13 +217,13 @@ export function WorkflowRunsView({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {problemAlert}
-      <div className="flex min-h-0 min-w-0 flex-1">
-        {/* Below md there is room for one of the two: the list, or the run picked from it. */}
+      <div className="@container/runs flex min-h-0 min-w-0 flex-1">
+        {/* Below @2xl there is room for one of the two: the list, or the run picked from it. */}
         <div
           className={cn(
-            "min-h-0 w-full shrink-0 flex-col md:w-72 md:border-e",
+            "min-h-0 w-full shrink-0 flex-col @2xl/runs:w-72 @2xl/runs:border-e @2xl/runs:border-divider",
             selectedRunId === null ? "flex" : "hidden",
-            paneOpen ? "xl:flex" : "md:flex",
+            paneOpen ? "@4xl/runs:flex" : "@2xl/runs:flex",
           )}
         >
           <div className="space-y-2 p-2 pb-1">
@@ -280,7 +273,7 @@ export function WorkflowRunsView({
               </Select>
             ) : null}
             {section === null ? null : (
-              <p className="px-1 text-xs text-muted-foreground">
+              <p className="px-1 text-meta text-muted-foreground">
                 {workflowTriggerLine(section, m)}
               </p>
             )}
@@ -288,7 +281,7 @@ export function WorkflowRunsView({
           <ScrollArea className="min-h-0 flex-1">
             <nav aria-label={gt("Workflow runs")} className="p-2 pt-1">
               {listed.length === 0 ? (
-                <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+                <p className="px-2 py-6 text-center text-meta text-muted-foreground">
                   {section?.neverRan ? gt("Has not run yet.") : m(NOTHING[tab])}
                 </p>
               ) : (
@@ -318,7 +311,7 @@ export function WorkflowRunsView({
         <ScrollArea
           className={cn(
             "@container/feed min-h-0 min-w-0 flex-1",
-            selectedRunId === null ? "hidden md:block" : "block",
+            selectedRunId === null ? "hidden @2xl/runs:block" : "block",
           )}
         >
           {shown === null ? (
@@ -357,28 +350,31 @@ function WorkflowRunListItem({
   const m = useMessages();
   return (
     <li>
-      <button
-        type="button"
+      <ContentButton
         aria-current={current ? "true" : undefined}
-        className={cn(
-          "flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:outline-none focus-visible:ring-inset",
-          current ? "bg-accent" : "hover:bg-accent/50",
-        )}
+        className="group/run block w-full cursor-pointer text-left"
         onClick={() => onSelect(run.runId)}
       >
-        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <WorkflowChip name={run.workflow} />
-          <span className="min-w-0 flex-1 truncate">{run.workflow}</span>
-          <WorkflowStateWord node={node} />
-        </span>
-        <span className="truncate text-sm text-foreground">{run.title}</span>
-        <span className="flex min-w-0 gap-1.5 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{workflowRunNow(node, m)}</span>
-          <span className="shrink-0">
-            <RelativeLabel value={run.updatedAt} />
+        <span
+          className={cn(
+            "flex w-full flex-col gap-0.5 rounded-row px-2.5 py-2 group-focus-visible/run:ring-2 group-focus-visible/run:ring-ring/70 group-focus-visible/run:ring-inset",
+            current ? "surface-selected" : "group-hover/run:surface-ghost-hover",
+          )}
+        >
+          <span className="flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground">
+            <WorkflowChip name={run.workflow} />
+            <span className="min-w-0 flex-1 truncate">{run.workflow}</span>
+            <WorkflowStateWord node={node} />
+          </span>
+          <span className="truncate text-body text-foreground">{run.title}</span>
+          <span className="flex min-w-0 gap-1.5 text-meta text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate">{workflowRunNow(node, m)}</span>
+            <span className="shrink-0">
+              <RelativeLabel value={run.updatedAt} />
+            </span>
           </span>
         </span>
-      </button>
+      </ContentButton>
     </li>
   );
 }

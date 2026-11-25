@@ -12,8 +12,10 @@ import { useGT } from "gt-react";
 import { FolderIcon } from "lucide-react";
 
 import { contextMenuSourceOf, openContextMenuFromKeyboard } from "../../contextMenuSource";
+import { beginLayoutContentDrag } from "../../layout/layoutDrag";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
+import { fileSurface } from "../../rightPanelStore";
 import { shouldOpenMarkdownFileLinkInEditor } from "../../markdown-links";
 import type { markdownFileCopyPaths } from "../../markdownFileHostPath";
 import { documentChipKindForFileName } from "../../pierre-icons";
@@ -46,6 +48,7 @@ interface MarkdownFileLinkProps {
   onOpen?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   onOpenInPanel: (panelPath: string, line: number | undefined) => void;
   resolveDragPath: () => Promise<string>;
+  resolvePanelPath: (panelPath: string) => string | Promise<string>;
   resolveCopyPaths: () => Promise<ReturnType<typeof markdownFileCopyPaths>>;
   openInEditorMenuLabel: string;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
@@ -71,6 +74,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   threadRef,
   onOpen,
   onOpenInPanel,
+  resolvePanelPath,
   openInEditorMenuLabel,
   onOpenInBrowser,
   onOpenMedia,
@@ -332,6 +336,8 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     canOpenInPanel,
   });
   const chipKind = documentChipKindForFileName(iconPath) ?? "mention";
+  const layoutDragThreadRef =
+    threadRef && panelPath && !useBrowserPrimaryAction && !nativeDrag.draggable ? threadRef : null;
 
   const tooltipContent = (
     <WorkspaceEntryTooltip path={iconPath} label={targetPath} environmentId={environmentId} />
@@ -346,7 +352,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
       {...nativeDrag}
       kind={chipKind}
       dir="ltr"
-      render={<a href={href} />}
+      render={<a href={href} {...(layoutDragThreadRef ? { draggable: false } : {})} />}
       className={MARKDOWN_FILE_LINK_CLASS_NAME}
       data-markdown-copy={copyMarkdown}
       onClick={(event) => {
@@ -364,6 +370,15 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
       }}
       onContextMenu={handleContextMenu}
       onKeyDown={openContextMenuFromKeyboard}
+      onPointerDown={(event) => {
+        if (!layoutDragThreadRef || !panelPath) return;
+        beginLayoutContentDrag(event, {
+          kind: "surface",
+          threadRef: layoutDragThreadRef,
+          surface: fileSurface(panelPath, line ?? null, 0),
+          resolve: async () => fileSurface(await resolvePanelPath(panelPath), line ?? null, 0),
+        });
+      }}
     >
       <FileTagChipContent
         icon={
@@ -430,6 +445,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.isAppBundle === next.isAppBundle &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInPanel === next.onOpenInPanel &&
+    previous.resolvePanelPath === next.resolvePanelPath &&
     previous.openInEditorMenuLabel === next.openInEditorMenuLabel &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.onOpenMedia === next.onOpenMedia &&

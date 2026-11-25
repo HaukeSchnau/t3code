@@ -20,21 +20,28 @@ import {
   PullRequestRowLines,
 } from "../pullRequest/PullRequestListRow";
 import { PullRequestActorLabel } from "../pullRequest/pullRequestPresentation";
+import { ThreadPullRequestMiniListItem } from "../ThreadStatusIndicators";
 import { ThreadDetailsControl, ThreadDetailsMoreButton } from "./ThreadDetailsControl";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
+/**
+ * How a linked issue row is drawn: thread details' two-line row, the linked items panel's
+ * pull request row, or the sidebar hover list's one line.
+ */
+export type LinkedIssueRowVariant = "compact" | "panel" | "mini";
 
 function LinkedIssueRow({
   link,
   threadRef,
-  compact,
+  variant,
   mountScope,
-  onOpen,
+  openWith,
 }: {
   link: ThreadIssueLink;
   threadRef: ScopedThreadRef;
-  compact: boolean;
+  variant: LinkedIssueRowVariant;
   mountScope: "thread-details" | "linked-items" | "sidebar-tooltip";
-  onOpen: (() => void) | undefined;
+  openWith: ((open: () => void) => void) | undefined;
 }) {
   const gt = useGT();
   const configs = useServerConfigs();
@@ -53,8 +60,9 @@ function LinkedIssueRow({
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       if (configs.get(threadRef.environmentId)?.environment.capabilities.issues !== true) return;
       event.preventDefault();
-      useRightPanelStore.getState().openIssue(threadRef, link);
-      onOpen?.();
+      const open = () => useRightPanelStore.getState().openIssue(threadRef, link);
+      if (openWith) openWith(open);
+      else open();
     },
   };
   const glyph = (
@@ -85,95 +93,113 @@ function LinkedIssueRow({
       className="size-3 shrink-0"
     />
   );
+  const rowLines = (
+    <PullRequestRowLines
+      number={<span className={PULL_REQUEST_ROW_NUMBER_CLASS}>{link.displayKey}</span>}
+      title={title}
+      status={comments}
+      meta={
+        <>
+          {detail?.author ? <PullRequestActorLabel actor={detail.author} tooltip={false} /> : null}
+          {trackerIcon}
+          <span className="truncate">{link.scope}</span>
+        </>
+      }
+      updatedAt={detail?.updatedAt ?? link.linkedAt}
+    />
+  );
   const lines = (
     <>
       {glyph}
-      <PullRequestRowLines
-        number={<span className={PULL_REQUEST_ROW_NUMBER_CLASS}>{link.displayKey}</span>}
-        title={title}
-        status={comments}
-        meta={
-          <>
-            {detail?.author ? (
-              <PullRequestActorLabel actor={detail.author} tooltip={false} />
-            ) : null}
-            {trackerIcon}
-            <span className="truncate">{link.scope}</span>
-          </>
-        }
-        updatedAt={detail?.updatedAt ?? link.linkedAt}
-      />
+      {rowLines}
     </>
   );
-  return compact ? (
-    <div className="pb-1.5">
-      <Tooltip>
-        <TooltipTrigger
-          render={<ThreadDetailsControl part="title" render={<a {...anchorProps} />} />}
-        >
-          {glyph}
-          <span className="min-w-0 flex-1 line-clamp-2 whitespace-normal leading-4.5">{title}</span>
-        </TooltipTrigger>
-        <TooltipPopup
-          side="top"
-          align="start"
-          variant="glass"
-          className="w-80 max-w-[calc(100vw-2rem)]"
-        >
-          <div className="flex min-w-0 items-center gap-2">{lines}</div>
-        </TooltipPopup>
-      </Tooltip>
-      <div className="flex h-5 min-w-0 items-center gap-1.5 ps-9 pe-2.5 text-xs text-muted-foreground">
-        <span aria-hidden className="shrink-0 tabular-nums">
-          {link.displayKey}
-        </span>
-        {trackerIcon}
-        {comments}
+  if (variant === "mini") {
+    return (
+      <ThreadPullRequestMiniListItem
+        keyLabel={link.displayKey}
+        url={link.url}
+        title={title}
+        presentation={state ?? { Icon: IssueGlyph.issue, toneClassName: "" }}
+        ariaLabel={anchorProps["aria-label"]}
+        onOpenPullRequest={(event) => anchorProps.onClick(event)}
+      />
+    );
+  }
+  return variant === "compact" ? (
+    <div className="flex min-h-9 min-w-0 items-center gap-2.5 ps-2.5 pe-1">
+      {glyph}
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <Tooltip>
+          <TooltipTrigger
+            render={<ThreadDetailsControl part="heading" render={<a {...anchorProps} />} />}
+          >
+            <span className="truncate text-meta text-foreground">{title}</span>
+          </TooltipTrigger>
+          <TooltipPopup
+            side="top"
+            align="start"
+            variant="popover"
+            className="w-80 max-w-[calc(100vw-2rem)] text-left whitespace-normal"
+          >
+            <div className="flex min-w-0 items-center gap-2">{lines}</div>
+          </TooltipPopup>
+        </Tooltip>
+        <div className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
+          <span aria-hidden className="shrink-0 tabular-nums">
+            {link.displayKey}
+          </span>
+          {trackerIcon}
+          {comments}
+        </div>
       </div>
     </div>
   ) : (
-    <a
-      {...anchorProps}
-      className={cn(
-        PULL_REQUEST_ROW_CLASS,
-        "px-2 hover:bg-accent/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-      )}
-    >
-      {lines}
-    </a>
+    // The linked items panel's pull request row: content on the panel's 16px lines.
+    <div className={cn(PULL_REQUEST_ROW_CLASS, "relative ps-2.5 pr-2.5 hover:surface-ghost-hover")}>
+      <a {...anchorProps} className="flex min-w-0 flex-1">
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          {glyph}
+          {rowLines}
+        </span>
+      </a>
+    </div>
   );
 }
 
 export function ThreadDetailsIssueRows({
   links,
   threadRef,
-  compact = true,
+  variant = "compact",
   mountScope = "thread-details",
-  onOpen,
+  openWith,
 }: {
   links: ReadonlyArray<ThreadIssueLink>;
   threadRef: ScopedThreadRef;
-  compact?: boolean;
+  variant?: LinkedIssueRowVariant;
   mountScope?: "thread-details" | "linked-items" | "sidebar-tooltip";
-  onOpen?: () => void;
+  /** Runs the open itself, for a caller that must show the thread first. */
+  openWith?: (open: () => void) => void;
 }) {
   const [expandedThread, setExpandedThread] = useState<string | null>(null);
   const threadKey = scopedThreadKey(threadRef);
   const expanded = expandedThread === threadKey;
-  const hasMore = compact && links.length > 1;
+  const hasMore = variant === "compact" && links.length > 1;
   const visibleLinks = hasMore && !expanded ? links.slice(0, 1) : links;
+  const rows = visibleLinks.map((link) => (
+    <LinkedIssueRow
+      key={threadIssueKeyOf(link)}
+      link={link}
+      threadRef={threadRef}
+      variant={variant}
+      mountScope={mountScope}
+      openWith={openWith}
+    />
+  ));
+  if (variant === "mini") return <ul className="flex flex-col gap-1">{rows}</ul>;
   return (
     <>
-      {visibleLinks.map((link) => (
-        <LinkedIssueRow
-          key={threadIssueKeyOf(link)}
-          link={link}
-          threadRef={threadRef}
-          compact={compact}
-          mountScope={mountScope}
-          onOpen={onOpen}
-        />
-      ))}
+      {rows}
       {hasMore ? (
         <ThreadDetailsMoreButton
           expanded={expanded}

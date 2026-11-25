@@ -13,6 +13,7 @@ export interface SidebarRouteReveal {
   pendingKey: string | null;
   // A draft's first send names its thread without navigating; the user is not looking for it.
   pendingInPlace?: boolean;
+  quietKey?: string | null;
 }
 
 export function pendingSidebarRouteReveal(
@@ -25,13 +26,27 @@ export function pendingSidebarRouteReveal(
     reveal.observedKey = routeKey;
     reveal.pendingKey = routeKey;
     reveal.pendingInPlace = inPlace;
+    reveal.quietKey = null;
   }
   return reveal.pendingKey;
 }
 
+export function observeSidebarDraftPromotion(
+  reveal: SidebarRouteReveal,
+  routeKey: string | null,
+): void {
+  if (routeKey === null || reveal.observedKey === routeKey) return;
+  reveal.observedKey = routeKey;
+  reveal.pendingKey = null;
+  reveal.quietKey = routeKey;
+}
+
 export function completeSidebarRouteReveal(reveal: SidebarRouteReveal): void {
   reveal.pendingKey = null;
+  reveal.quietKey = null;
 }
+
+const scrollRowIntoView = (row: HTMLElement) => row.scrollIntoView({ block: "nearest" });
 
 // Each route change and each mount scroll to the open thread once. Render records
 // the route, so a thread left before its row mounted still counts as a change.
@@ -40,12 +55,18 @@ export function useActiveRowReveal(
   reveal: SidebarRouteReveal,
   routeKey: string | null,
   inPlace = false,
+  scrollRow: (row: HTMLElement) => void = scrollRowIntoView,
 ) {
   const mountRevealOwed = useRef(true);
   pendingSidebarRouteReveal(reveal, routeKey, inPlace);
   // Returns a ref cleanup while it waits on a hidden row, so an unmount releases the wait.
   const revealRow = (row: HTMLElement | null, rowKey: string): (() => void) | undefined => {
     if (row === null) return undefined;
+    // A draft's first send right after a mount: its row spends the mount reveal, unscrolled.
+    if (reveal.quietKey === rowKey) {
+      mountRevealOwed.current = false;
+      return undefined;
+    }
     if (reveal.pendingKey !== rowKey && !mountRevealOwed.current) return undefined;
     // The closed narrow sheet keeps rows mounted but hidden, and opening it does not
     // re-render them, so wait for the row to get a box before spending the reveal.
@@ -63,7 +84,7 @@ export function useActiveRowReveal(
     // A row under the pointer was just clicked, so it is in view; scrolling it would force a
     // layout mid-commit. Keyboard activation can come from a focused row scrolled out of view.
     if (revealInPlace || row.matches(":hover")) return undefined;
-    row.scrollIntoView({ block: "nearest" });
+    scrollRow(row);
     return undefined;
   };
   return revealRow;

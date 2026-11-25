@@ -99,8 +99,10 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
   controller's first read (`loaded`) is done. The card shows no thread settings, so these entries set
   `inheritThreadSettings`: delivery skips the mode sync and sends no model, and the server applies
   the thread's model and modes as they are when the message arrives.
-- `apps/web/src/routes/_chat.tsx`: mounts `DurableOutboxDelivery`, which starts delivery for the
-  session and shows a toast with an Open action when a message is rejected.
+- `apps/web/src/components/AppSidebarLayout.tsx`: mounts `DurableOutboxDelivery`, which starts
+  delivery for the session and shows a toast with an Open action when a message is rejected. It
+  sits in the app shell because workspace panes replace the chat route's outlet while a thread is
+  open.
 - `packages/client-runtime/package.json`: the `./state/command-outbox` export.
 
 ## Known limits

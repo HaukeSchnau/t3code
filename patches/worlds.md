@@ -68,7 +68,7 @@ notion of any of it.
 
 ## Clients
 
-- Web: `ThreadWorldPanel` in the thread details card; the Version Control row hides for world
+- Web: `ThreadWorldPanel` in the thread details card; the git actions control hides for world
   projects and thread worlds, whose roots are no repository.
 - Mobile: the thread header's git menu becomes a World menu for a thread world.
 - Both offer no workspace choice for a world project (`managedWorkspacesForProject` returns null,

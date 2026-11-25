@@ -11,7 +11,7 @@ import {
   resolveSubagentMetadata,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
-import { readSelectedEffortValue } from "@t3tools/client-runtime/state/thread-execution";
+import { formatSubagentEffort } from "@t3tools/client-runtime/state/thread-execution";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
 import { useGT, useMessages } from "gt-react";
@@ -79,10 +79,11 @@ export function SubagentTooltipContent(props: {
     childModel === modelSlug && childSelection?.instanceId === props.providerInstanceId
       ? childSelection
       : undefined;
-  const effort = readSelectedEffortValue(
-    matchingSelection,
-    providerModel?.capabilities?.optionDescriptors,
-  );
+  const effort = formatSubagentEffort({
+    modelSlug,
+    modelSelection: childSelection,
+    provider: props.provider,
+  });
   const speed = provider
     ? providerModel?.capabilities?.optionDescriptors
         ?.map((descriptor) => {
@@ -148,13 +149,11 @@ export function SubagentTooltipContent(props: {
         ) : (
           <BotIcon className="size-3 shrink-0" />
         )}
-        <span className="inline-flex min-w-0 items-center gap-1 text-foreground/75">
-          <span className="min-w-0 truncate">
-            {showInstanceBadge ? `${modelLabel} · ${entry.displayName}` : modelLabel}
-          </span>
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          <span className="min-w-0 truncate">{modelLabel}</span>
+          {showInstanceBadge ? <span className="shrink-0">{entry.displayName}</span> : null}
           {effort || speed?.speedIcon ? (
             <span className="inline-flex shrink-0 items-center gap-1">
-              {effort ? " · " : null}
               {speed?.speedIcon && provider ? (
                 <TraitsSpeedIcon provider={provider.driver} speedIcon={speed.speedIcon} size="xs" />
               ) : null}
@@ -168,11 +167,11 @@ export function SubagentTooltipContent(props: {
           className={cn(
             "inline-flex items-center gap-1 rounded-sm font-medium capitalize",
             working
-              ? "text-info"
+              ? "text-info-foreground"
               : failed
-                ? "text-error"
+                ? "text-error-foreground"
                 : props.status === "completed"
-                  ? "text-success"
+                  ? "text-success-foreground"
                   : "text-muted-foreground",
           )}
         >

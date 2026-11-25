@@ -18,6 +18,7 @@ import { T, useGT } from "gt-react";
 
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
+import { StatusDot } from "~/components/ui/status-dot";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 
@@ -95,8 +96,8 @@ export function PreviewChromeRow({
     <div className="relative">
       <form
         onSubmit={submit}
-        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
-        data-surface-subheader
+        className="flex min-h-12.5 shrink-0 items-center gap-1.5 px-3 py-2.5"
+        data-preview-chrome
       >
         <div className="flex items-center gap-0.5" role="group" aria-label={gt("Navigation")}>
           <Tooltip>
@@ -162,7 +163,7 @@ export function PreviewChromeRow({
 
         {leadingActions}
 
-        <InputGroup variant="ghost" className="group/address h-7 flex-1">
+        <InputGroup variant="default" className="group/address h-7.5 flex-1">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -195,7 +196,7 @@ export function PreviewChromeRow({
                   aria-label={gt("Search or enter URL")}
                   data-workspace-focus-default
                   spellCheck={false}
-                  disabled={inputDisabled}
+                  readOnly={inputDisabled}
                   data-preview-url-input
                   size="sm"
                 />
@@ -272,11 +273,24 @@ export function PreviewChromeRow({
             >
               <Camera className={cn(recording && "text-destructive")} />
               {recording ? (
-                <span className="absolute right-0.5 top-0.5 size-1.5 motion-safe:animate-status-pulse rounded-full bg-destructive" />
+                <span className="absolute right-0.5 top-0.5 flex">
+                  <StatusDot tone="danger" pulse />
+                </span>
               ) : null}
             </TooltipTrigger>
             <TooltipPopup>
-              {recording ? gt("Stop recording") : gt("Screenshot · Shift-click to record")}
+              <span className="flex flex-col gap-0.5">
+                <span>
+                  {recording
+                    ? gt("Stop recording")
+                    : gt("Screenshot", { $context: "button, captures the page" })}
+                </span>
+                {!recording ? (
+                  <span>
+                    <T>Shift-click to record</T>
+                  </span>
+                ) : null}
+              </span>
             </TooltipPopup>
           </Tooltip>
         ) : null}

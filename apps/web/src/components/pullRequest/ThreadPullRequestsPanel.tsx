@@ -40,10 +40,10 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { RelativeTime } from "~/components/RelativeTime";
+import { PanelEmptyState } from "../PanelEmptyState";
 import { ThreadDetailsIssueRows } from "../chat/ThreadDetailsIssueRows";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 import {
@@ -145,7 +145,8 @@ function LinkRowImpl({
     actionEntry !== null && pullRequestQuickActions(actionEntry, linkHostActions).length > 0;
   return (
     <div
-      className={cn(PULL_REQUEST_ROW_CLASS, "relative hover:bg-accent/60")}
+      // Content on the panel's 16px lines: the 6px list inset plus 10px of row padding a side.
+      className={cn(PULL_REQUEST_ROW_CLASS, "relative pr-2.5 hover:surface-ghost-hover")}
       onPointerEnter={() => onIntent(link)}
       onPointerLeave={(event) => {
         if (!event.currentTarget.contains(document.activeElement)) onIntent(null);
@@ -160,9 +161,9 @@ function LinkRowImpl({
         setMenuPosition({ x: event.clientX, y: event.clientY });
         setMenuOpen(true);
       }}
-      style={{ paddingLeft: `${0.5 + Math.min(depth, 3) * 1.25}rem` }}
+      style={{ paddingLeft: `${0.625 + Math.min(depth, 3) * 1.25}rem` }}
     >
-      {depth > 0 ? <span aria-hidden className="-ml-2 h-6 w-px shrink-0 bg-border/70" /> : null}
+      {depth > 0 ? <span aria-hidden className="-ml-2 h-6 w-px shrink-0 bg-border" /> : null}
       {snapshot === null ? (
         <PullRequestGlyph.pullRequest
           aria-label={gt("Waiting for host state")}
@@ -205,8 +206,20 @@ function LinkRowImpl({
               <TooltipTrigger render={<span className={PULL_REQUEST_ROW_NUMBER_CLASS} />}>
                 #{link.number}
               </TooltipTrigger>
+              {/* The repository lives here, not on the meta line, so the branches get its room. */}
               <TooltipPopup>
-                {resolve(SOURCE_LABELS[link.source])} · <RelativeTime timestamp={link.linkedAt} />
+                <span className="flex flex-col gap-0.5">
+                  <span>{link.repository}</span>
+                  <span>{resolve(SOURCE_LABELS[link.source])}</span>
+                  <span>
+                    <T context="followed by a relative time such as 5m ago or just now">
+                      linked{" "}
+                      <Var>
+                        <RelativeTime timestamp={link.linkedAt} />
+                      </Var>
+                    </T>
+                  </span>
+                </span>
               </TooltipPopup>
             </Tooltip>
           }
@@ -293,12 +306,6 @@ function LinkRowImpl({
               ) : null}
               {snapshot !== null ? (
                 <>
-                  <Tooltip>
-                    <TooltipTrigger render={<span className="flex min-w-0 max-w-32 font-mono" />}>
-                      <MiddleTruncate value={link.repository} showTitle={false} />
-                    </TooltipTrigger>
-                    <TooltipPopup>{link.repository}</TooltipPopup>
-                  </Tooltip>
                   <PullRequestRowBranches head={snapshot.headBranch} base={snapshot.baseBranch} />
                 </>
               ) : (
@@ -326,11 +333,12 @@ function LinkRowImpl({
           "pointer-events-none opacity-0 group-hover/pr-row:pointer-events-auto group-hover/pr-row:opacity-100",
           "has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:opacity-100",
           "has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
-          "group-has-[[data-pull-request-action-pending=true]]/pr-row:hidden",
+          // The row's quick actions come right before this span.
+          "[[data-pull-request-action-pending=true]~&]:hidden",
           speedMode && hasQuickActions && "hidden",
         )}
       >
-        <span aria-hidden className="absolute inset-0 bg-accent/60" />
+        <span aria-hidden className="absolute inset-0 surface-ghost-hover" />
         <Menu
           open={menuOpen}
           onOpenChange={(open) => {
@@ -444,7 +452,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const opensInApp = useClientSettings((settings) => settings.pullRequestLinksOpenInApp);
-  const prefetch = usePullRequestIntentPrefetch((target) =>
+  const { prefetch, reads: intentReads } = usePullRequestIntentPrefetch((target) =>
     links.some(
       (link) =>
         link.number === target.number &&
@@ -512,28 +520,35 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
 
   if (linkCount === 0 && issues.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <PullRequestGlyph.link aria-hidden className="size-6 text-muted-foreground/60" />
-        <p className="text-sm font-medium">
-          <T>No linked pull requests</T>
-        </p>
-        <p className="max-w-60 text-xs text-muted-foreground">
-          <T>
-            Pull requests the agent opens from this thread land here. Link one yourself from a URL
-            or a number.
-          </T>
-        </p>
-        <Button size="sm" variant="outline" onClick={openLinkDialog}>
-          <PlusIcon className="size-3.5" />
-          <T>Link pull request</T>
-        </Button>
+      <div className="flex h-full flex-col">
+        <PanelEmptyState
+          icon={<PullRequestGlyph.link />}
+          title={<T>No linked pull requests</T>}
+          description={
+            <T>
+              Pull requests the agent opens from this thread land here. Link one yourself from a URL
+              or a number.
+            </T>
+          }
+          action={
+            <Button size="sm" variant="secondary" onClick={openLinkDialog}>
+              <PlusIcon className="size-3.5" />
+              <T>Link pull request</T>
+            </Button>
+          }
+        />
       </div>
     );
   }
 
   return (
     <PullRequestSpeedModeContext value={speedMode}>
-      <div className="flex h-full min-h-0 flex-col">
+      {intentReads}
+      {/* The list scrolls up under a pane's tab row (--surface-top-inset). */}
+      <div
+        className="flex h-[calc(100%+var(--surface-top-inset,0px))] min-h-0 flex-col"
+        data-surface-reaches-under-header=""
+      >
         {/* Threads that run a stack or a sweep link hundreds of pull requests; only the rows in
           view are mounted. */}
         <LegendList<PullRequestListLine>
@@ -544,18 +559,18 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
             issues.length > 0 ? (
               <>
                 <section aria-label={gt("Linked issues")} className="flex flex-col">
-                  <h2 className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                  <h2 className="px-2.5 pt-1 pb-1 text-meta text-muted-foreground">
                     <T>Issues</T>
                   </h2>
                   <ThreadDetailsIssueRows
                     links={issues}
                     threadRef={threadRef}
-                    compact={false}
+                    variant="panel"
                     mountScope="linked-items"
                   />
                 </section>
                 {linkCount > 0 ? (
-                  <h2 className="mt-2 border-t border-border/60 px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+                  <h2 className="mt-2 border-t border-border px-2.5 pt-2 pb-1 text-meta text-muted-foreground">
                     <T>Pull requests</T>
                   </h2>
                 ) : null}
@@ -582,28 +597,59 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
           )}
           estimatedItemSize={44}
           drawDistance={440}
-          className="min-h-0 flex-1 overscroll-contain p-1.5"
+          className="min-h-0 flex-1 overscroll-contain p-1.5 pt-under-header-1.5"
         />
-        <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
-          <span>
-            {linkCount > 0
-              ? gt(
-                  "{openCount, plural, one {{openCount} open} other {{openCount} open}} · {linkCount, plural, one {{linkCount} linked} other {{linkCount} linked}}",
-                  { openCount, linkCount },
-                )
-              : null}
-            {lastSynced ? (
-              <>
-                {" · "}
-                <T context="followed by a relative time such as 5m ago or just now">
-                  synced{" "}
-                  <Var>
-                    <RelativeTime timestamp={lastSynced} />
-                  </Var>
-                </T>
-              </>
-            ) : null}
-          </span>
+        <footer className="flex items-center justify-between border-t border-border py-1.5 ps-4 pe-2.25 text-meta text-muted-foreground">
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex min-w-0 flex-wrap gap-x-2" />}>
+              {linkCount > 0 ? (
+                <>
+                  <span>
+                    {gt("{count, plural, one {{count} linked} other {{count} linked}}", {
+                      count: linkCount,
+                    })}
+                  </span>
+                  <span>
+                    {gt("{count, plural, one {{count} open} other {{count} open}}", {
+                      count: openCount,
+                    })}
+                  </span>
+                </>
+              ) : null}
+              {lastSynced ? (
+                <span>
+                  <T context="followed by a relative time such as 5m ago or just now">
+                    synced{" "}
+                    <Var>
+                      <RelativeTime timestamp={lastSynced} />
+                    </Var>
+                  </T>
+                </span>
+              ) : null}
+            </TooltipTrigger>
+            <TooltipPopup>
+              <span className="flex flex-col gap-0.5">
+                {linkCount > 0 ? (
+                  <span>
+                    {gt("{count, plural, one {{count} open} other {{count} open}}", {
+                      count: openCount,
+                    })}
+                  </span>
+                ) : null}
+                {lastSynced ? (
+                  <span>
+                    <T context="followed by a relative time such as 5m ago or just now">
+                      synced{" "}
+                      <Var>
+                        <RelativeTime timestamp={lastSynced} />
+                      </Var>
+                    </T>
+                  </span>
+                ) : null}
+              </span>
+            </TooltipPopup>
+          </Tooltip>
+          {/* Borderless: the footer's 9px end padding puts its ink, 7px inside, on the 16px line. */}
           <Button size="xs" variant="ghost" onClick={openLinkDialog}>
             <PlusIcon className="size-3.5" />
             <T context="verb, button">Link pull request</T>

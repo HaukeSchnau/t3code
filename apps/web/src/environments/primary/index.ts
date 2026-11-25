@@ -1,6 +1,7 @@
 export {
   clearOfflineAuthProof,
   offlineAuthProofExpiresAtEpochMs,
+  isPrimaryEnvironmentRequestError,
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,

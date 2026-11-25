@@ -49,6 +49,7 @@ export function extensionStatusBannerItem(
     id: "pi-extension-status",
     variant: "default",
     icon: <span>▸</span>,
+    // oxlint-disable-next-line t3code/no-dot-separated-text -- Main's Pi extension status line; the redesign restyles it later.
     title: <output>{`Pi · ${statuses.map((status) => status.text).join(" · ")}`}</output>,
   };
 }
@@ -162,8 +163,10 @@ export function goalNowItem(
     title: (
       <Popover>
         <PopoverTrigger openOnHover render={<InlineButton />}>
-          {presentation.title}
-          {presentation.usage === null ? null : ` · ${presentation.usage}`}
+          <span className="inline-flex flex-col">
+            <span>{presentation.title}</span>
+            {presentation.usage === null ? null : <span>{presentation.usage}</span>}
+          </span>
         </PopoverTrigger>
         <PopoverPopup
           side="top"
@@ -171,7 +174,7 @@ export function goalNowItem(
           padding="compact"
           aria-label={resolve(msg("Goal objective"))}
         >
-          <p className="whitespace-pre-wrap wrap-anywhere text-sm">{presentation.objective}</p>
+          <p className="whitespace-pre-wrap wrap-anywhere text-body">{presentation.objective}</p>
         </PopoverPopup>
       </Popover>
     ),
@@ -188,7 +191,6 @@ export function goalNowItem(
             >
               <T context="verb, resumes the goal">Resume</T>
             </InlineButton>
-            <span aria-hidden>·</span>
           </>
         ) : null}
         <InlineButton
@@ -308,15 +310,14 @@ export function backgroundWorkNowItem(
     title:
       only && typeof only.label !== "string" && only.task.label !== only.task.kind ? (
         <>
-          {presentation.waiting ? (
-            <T>
-              Waiting · <Var>{only.label}</Var>
-            </T>
-          ) : (
-            <T>
-              Running · <Var>{only.label}</Var>
-            </T>
-          )}
+          <span className="inline-flex flex-col">
+            <span>
+              {presentation.waiting
+                ? resolve(msg("Waiting", { $context: "status of background work" }))
+                : resolve(msg("Running", { $context: "status of background work" }))}
+            </span>
+            <span>{only.label}</span>
+          </span>
         </>
       ) : (
         presentation.title
@@ -386,37 +387,33 @@ export function branchMismatchBannerItem(
   resolve: MessageResolver = m,
 ): ComposerBannerStackItem {
   const { mismatch } = input;
-  const branchTooltip = (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <code className="min-w-0 truncate font-medium text-foreground">
-            {mismatch.threadBranch}
-          </code>
-        }
-      />
-      <TooltipPopup side="top">
-        <T>
-          This thread last ran on <Var>{mismatch.threadBranch}</Var>. Sending will continue on{" "}
-          <Var>{mismatch.currentBranch}</Var>.
-        </T>
-      </TooltipPopup>
-    </Tooltip>
-  );
   return {
     id: `branch-mismatch:${input.mismatchKey}`,
-    variant: "info",
+    variant: "warning",
     icon: <GitBranchIcon />,
-    title: (
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        <T>
-          <span className="shrink-0 font-normal text-muted-foreground">Branch changed from</span>
-          <Var>{branchTooltip}</Var>
-        </T>
-      </span>
+    title: resolve(msg("Branch changed")),
+    description: (
+      <Tooltip>
+        <TooltipTrigger render={<span className="min-w-0 truncate" />}>
+          <T>
+            was <Var>{mismatch.threadBranch}</Var>
+          </T>
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          <T>
+            This thread last ran on <Var>{mismatch.threadBranch}</Var>. Sending will continue on{" "}
+            <Var>{mismatch.currentBranch}</Var>.
+          </T>
+        </TooltipPopup>
+      </Tooltip>
     ),
     actions: (
-      <Button size="xs" variant="ghost" disabled={input.restoreDisabled} onClick={input.onRestore}>
+      <Button
+        size="xs"
+        variant="secondary"
+        disabled={input.restoreDisabled}
+        onClick={input.onRestore}
+      >
         {input.restoring ? <T>Restoring...</T> : <T>Restore branch</T>}
       </Button>
     ),

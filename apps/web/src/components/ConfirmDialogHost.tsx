@@ -1,5 +1,6 @@
 import { msg, T, useMessages } from "gt-react";
-import { useSyncExternalStore } from "react";
+import { Trash2Icon } from "lucide-react";
+import { useRef, useSyncExternalStore } from "react";
 
 import {
   completeConfirmDialogClose,
@@ -7,6 +8,7 @@ import {
   respondToConfirmDialog,
   subscribeConfirmDialogHost,
 } from "../confirmDialog";
+import { returnKeyboardToFocusedPane } from "../layout/layoutPaneContext";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -19,6 +21,7 @@ import {
 } from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import type { MessageResolver } from "../i18n/messages";
+import { useDialogActionInitialFocus } from "./ui/dialog";
 
 type ConfirmationCopy = {
   readonly title: string;
@@ -64,9 +67,19 @@ export function ConfirmDialogHost() {
     readConfirmDialogState,
   );
 
-  const copy = resolveConfirmDialogCopy(state.status === "idle" ? "" : state.message, m);
+  const openerRef = useRef<Element | null>(null);
+  const { popupRef, initialFocus } = useDialogActionInitialFocus();
+
+  const copy =
+    state.status !== "idle" && state.title
+      ? { title: state.title, description: state.message.trim() || null }
+      : resolveConfirmDialogCopy(state.status === "idle" ? "" : state.message, m);
   const confirmVariant = state.status === "idle" ? "default" : state.variant;
   const focusConfirm = state.status !== "idle" && state.initialFocus === "confirm";
+  const confirmLabel =
+    (state.status === "idle" ? undefined : state.confirmLabel) ?? m(msg("Confirm"));
+  const showDeleteIcon =
+    state.status !== "idle" && confirmVariant === "destructive" && state.deleteIcon === true;
   const onCancel = () => respondToConfirmDialog(false);
   const onConfirm = () => respondToConfirmDialog(true);
 
@@ -80,7 +93,25 @@ export function ConfirmDialogHost() {
         if (!open) completeConfirmDialogClose();
       }}
     >
-      <AlertDialogPopup>
+      <AlertDialogPopup
+        ref={popupRef}
+        className="sm:max-w-105"
+        initialFocus={(openType) => {
+          openerRef.current = document.activeElement;
+          return initialFocus(openType);
+        }}
+        finalFocus={() => {
+          const opener = openerRef.current;
+          if (opener?.isConnected && !opener.closest("[data-layout-strip]")) return true;
+          if (returnKeyboardToFocusedPane()) return false;
+          // A chat pane takes it in its composer.
+          return (
+            document.querySelector<HTMLElement>(
+              "[data-layout-pane-focused] [contenteditable='true']",
+            ) ?? true
+          );
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{copy.title}</AlertDialogTitle>
           {copy.description ? (
@@ -89,17 +120,18 @@ export function ConfirmDialogHost() {
             </AlertDialogDescription>
           ) : null}
         </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogClose render={<Button variant="outline" />}>
+        <AlertDialogFooter variant="bare">
+          <AlertDialogClose render={<Button size="standard" variant="secondary" />}>
             <T>Cancel</T>
           </AlertDialogClose>
           {focusConfirm && confirmVariant === "default" ? (
-            <AlertDialogAction onClick={onConfirm}>
-              <T>Confirm</T>
+            <AlertDialogAction size="standard" onClick={onConfirm}>
+              {confirmLabel}
             </AlertDialogAction>
           ) : (
-            <Button variant={confirmVariant} onClick={onConfirm}>
-              <T>Confirm</T>
+            <Button size="standard" variant={confirmVariant} onClick={onConfirm}>
+              {showDeleteIcon ? <Trash2Icon aria-hidden /> : null}
+              {confirmLabel}
             </Button>
           )}
         </AlertDialogFooter>

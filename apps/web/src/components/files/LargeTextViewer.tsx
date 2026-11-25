@@ -2,13 +2,14 @@ import { msg, T, useGT, useMessages } from "gt-react";
 import { useEffect, useImperativeHandle, useRef, useState, type RefObject } from "react";
 import { m } from "~/i18n/messages";
 import { Spinner } from "~/components/ui/spinner";
-import { parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
+import { delimitedColumnKinds, parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { useClientSettings } from "~/hooks/useSettings";
 import { FileSurfaceFailure, FileSurfaceLoading, FileSurfaceNotice } from "./fileSurfaceChrome";
 import { PREVIEW_PAGE_ROWS, type TextPreviewResult } from "./largeTextProtocol";
 import { previewFailureText } from "./previewFailureMessages";
 import VirtualTablePreview from "./VirtualTablePreview";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const FIRST_SCREEN_BYTES = 16 * 1024;
 
@@ -248,32 +249,55 @@ export default function LargeTextViewer(props: {
     );
   if (!meta || (meta.count > 0 && !pages.has(0))) return <FileSurfaceLoading />;
   const header = props.delimiter ? pages.get(0)?.[0] : undefined;
+  const columnKinds = props.delimiter
+    ? delimitedColumnKinds(pages.get(0)?.slice(1) ?? [], meta.columns)
+    : undefined;
   const rowCount = Math.max(0, meta.count - 1);
   const columnCount = meta.count ? meta.columns : 0;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
-        className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-1 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground tabular-nums"
+        className="order-last flex shrink-0 flex-wrap items-center gap-x-1 px-4 py-1 text-caption text-dim-foreground tabular-nums"
         role="status"
       >
         {/* Counts appear once indexing ends; the prefix count alone would understate the file. */}
-        {!meta.complete
-          ? null
-          : props.delimiter
-            ? `${gt("{count, plural, one {{formatted} row} other {{formatted} rows}}", {
-                count: rowCount,
-                formatted: rowCount.toLocaleString(),
-              })} · ${gt("{count, plural, one {{formatted} column} other {{formatted} columns}}", {
-                count: columnCount,
-                formatted: columnCount.toLocaleString(),
-              })}`
-            : gt("{count, plural, one {{formatted} line} other {{formatted} lines}}", {
-                count: meta.count,
-                formatted: meta.count.toLocaleString(),
-              })}
-        {meta.complete && meta.sizeBytes !== undefined
-          ? ` · ${meta.sizeBytes === 0 ? gt("0 bytes") : formatAttachmentSize(meta.sizeBytes, messages)}`
-          : null}
+        {meta.complete ? (
+          <Tooltip>
+            <TooltipTrigger render={<span tabIndex={0} />}>
+              {props.delimiter
+                ? gt("{count, plural, one {{formatted} row} other {{formatted} rows}}", {
+                    count: rowCount,
+                    formatted: rowCount.toLocaleString(),
+                  })
+                : gt("{count, plural, one {{formatted} line} other {{formatted} lines}}", {
+                    count: meta.count,
+                    formatted: meta.count.toLocaleString(),
+                  })}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {props.delimiter ? (
+                <>
+                  <span className="block">
+                    {gt("{count, plural, one {{formatted} column} other {{formatted} columns}}", {
+                      count: columnCount,
+                      formatted: columnCount.toLocaleString(),
+                    })}
+                  </span>
+                  <span className="block">
+                    {props.delimiter === "," ? gt("Comma separated") : gt("Tab separated")}
+                  </span>
+                </>
+              ) : null}
+              {meta.sizeBytes !== undefined ? (
+                <span className="block">
+                  {meta.sizeBytes === 0
+                    ? gt("0 bytes")
+                    : formatAttachmentSize(meta.sizeBytes, messages)}
+                </span>
+              ) : null}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
       {!meta.complete ? (
         <div className="pointer-events-none absolute right-4 bottom-3 z-20">
@@ -291,6 +315,7 @@ export default function LargeTextViewer(props: {
           count={meta.count}
           columns={meta.columns}
           header={header}
+          columnKinds={columnKinds}
           source={!props.delimiter}
           wrap={wordWrap}
           revealLine={meta.complete ? (props.revealLine ?? null) : null}
@@ -303,7 +328,7 @@ export default function LargeTextViewer(props: {
           }}
         />
       ) : (
-        <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center p-6 text-meta text-muted-foreground">
           <T>This file is empty.</T>
         </div>
       )}

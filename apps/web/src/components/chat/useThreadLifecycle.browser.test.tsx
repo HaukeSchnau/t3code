@@ -26,10 +26,12 @@ vi.mock(import("../../state/use-orchestration-command"), async (importOriginal) 
   useOrchestrationCommand: (() => (input: unknown) => state.switchRef(input)) as never,
 }));
 
-vi.mock(import("../../hooks/useThreadActions"), async (importOriginal) => ({
-  ...(await importOriginal()),
+// Not importOriginal: the original imports itself back through PaneTabs' thread menu.
+vi.mock(import("../../hooks/useThreadActions"), () => ({
   useThreadActions: (() => ({})) as never,
   useAcknowledgeThreadWoke: (() => () => undefined) as never,
+  canTurnThreadIntoProject: () => false,
+  navigateAfterThreadDeletion: async () => undefined,
 }));
 
 vi.mock(import("../../state/entities"), async (importOriginal) => ({
@@ -38,6 +40,7 @@ vi.mock(import("../../state/entities"), async (importOriginal) => ({
 }));
 
 import { render } from "../../../test/render";
+import { LayoutPaneContext } from "../../layout/layoutPaneContext";
 import { useThreadLifecycle } from "./useThreadLifecycle";
 
 const environmentId = EnvironmentId.make("environment:test");
@@ -64,11 +67,10 @@ function threadInput(threadId: string, branch: string) {
 type ThreadInput = ReturnType<typeof threadInput>;
 
 it.each([
-  { remote: false, approval: false, link: "Open question" },
-  { remote: true, approval: false, link: "Open question" },
-  { remote: true, approval: false, link: "Child" },
-  { remote: true, approval: true, link: "Open approval" },
-])("opens the child in its environment ($remote, $link)", async ({ remote, approval, link }) => {
+  { remote: false, link: "Open question" },
+  { remote: true, link: "Open question" },
+  { remote: true, link: "Child" },
+])("opens the child in its environment ($remote, $link)", async ({ remote, link }) => {
   setup();
   const parent = threadInput("parent", "main");
   const childEnvironmentId = remote ? EnvironmentId.make("remote") : environmentId;
@@ -77,7 +79,7 @@ it.each([
       id: ThreadId.make("child"),
       environmentId: childEnvironmentId,
       title: "Child",
-      hasPendingApprovals: approval,
+      hasPendingApprovals: false,
       lineage: { sideChat: false },
     } as EnvironmentThreadShell,
   ];
@@ -96,6 +98,33 @@ it.each([
       `/${encodeURIComponent(childEnvironmentId)}/child`,
     ),
   );
+});
+
+it("keeps approval-only child threads out of the composer notice", async () => {
+  setup();
+  const parent = threadInput("parent", "main");
+  state.childThreadInputs = [
+    {
+      id: ThreadId.make("child"),
+      environmentId: EnvironmentId.make("remote"),
+      title: "Child",
+      hasPendingApprovals: true,
+      hasPendingUserInput: false,
+      lineage: { sideChat: false },
+    } as EnvironmentThreadShell,
+  ];
+  await using screen = await render(
+    <RestoreBranchHarness
+      thread={parent}
+      currentRouteThreadKeyRef={{ current: parent.routeThreadKey }}
+      refreshGitStatus={() => undefined}
+      focusComposer={() => undefined}
+    />,
+    { router: "/environment:test/parent" },
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Open approval", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 function RestoreBranchHarness(props: {
@@ -153,7 +182,7 @@ function RestoreBranchHarness(props: {
   );
 }
 
-it.each(["a", "b", "navigation"] as const)(
+it.each(["a", "b", "navigation", "pane-focus"] as const)(
   "isolates restore completion and queued focus for %s",
   async (scenario) => {
     const first = scenario === "b" ? "b" : "a";
@@ -166,13 +195,28 @@ it.each(["a", "b", "navigation"] as const)(
     const currentRouteThreadKeyRef = { current: threadA.routeThreadKey };
     const refreshGitStatus = vi.fn();
     const focusComposer = vi.fn();
+    let focused = true;
     const harness = (thread: ThreadInput) => (
-      <RestoreBranchHarness
-        thread={thread}
-        currentRouteThreadKeyRef={currentRouteThreadKeyRef}
-        refreshGitStatus={refreshGitStatus}
-        focusComposer={focusComposer}
-      />
+      <LayoutPaneContext
+        value={{
+          tabId: null,
+          paneId: null,
+          split: true,
+          narrow: false,
+          leadingEdge: true,
+          trailingEdge: true,
+          focused,
+          related: false,
+          visible: true,
+        }}
+      >
+        <RestoreBranchHarness
+          thread={thread}
+          currentRouteThreadKeyRef={currentRouteThreadKeyRef}
+          refreshGitStatus={refreshGitStatus}
+          focusComposer={focusComposer}
+        />
+      </LayoutPaneContext>
     );
     await using screen = await render(harness(threadA));
     const focusFrames: FrameRequestCallback[] = [];
@@ -225,8 +269,14 @@ it.each(["a", "b", "navigation"] as const)(
       currentRouteThreadKeyRef.current = completed.routeThreadKey;
       await screen.rerender(harness(completed));
     }
+    if (scenario === "pane-focus") {
+      focused = false;
+      await screen.rerender(harness(pending));
+    }
     focusFrames[0]!(0);
-    expect(focusComposer).toHaveBeenCalledTimes(scenario === "navigation" ? 0 : 1);
+    expect(focusComposer).toHaveBeenCalledTimes(
+      scenario === "navigation" || scenario === "pane-focus" ? 0 : 1,
+    );
   },
 );
 

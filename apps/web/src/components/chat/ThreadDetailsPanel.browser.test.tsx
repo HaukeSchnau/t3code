@@ -87,13 +87,20 @@ import { PopoverCreateHandle } from "../ui/popover";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout } from "./chatCanvasLayout";
 import { ThreadDetailsPanel } from "./ThreadDetailsPanel";
+import { THREAD_DETAILS_CARD_GAP } from "./threadDetailsCardLayout";
 
 const threadRef: ScopedThreadRef = {
   environmentId: EnvironmentId.make("environment"),
   threadId: ThreadId.make("thread"),
 };
 const container = { width: 1200, height: 800 };
-const placement = { x: 908, y: 0, right: 12, width: 280, height: 400 } as const;
+const placement = {
+  x: 928 - THREAD_DETAILS_CARD_GAP,
+  y: 0,
+  right: THREAD_DETAILS_CARD_GAP,
+  width: 272,
+  height: 400,
+} as const;
 const linkedPullRequest: ThreadPullRequestLink = {
   host: "github.com",
   repository: "pingdotgg/t3code",
@@ -152,7 +159,6 @@ function Panel({
         lane: { padding: 48, minChatWidth: 640 },
         layout: resolveChatCanvasLayout({ container, preview: null }),
         previewKey: null,
-        registerTimeline: noop,
         measureDetailsCard: noop,
         detailsCardTopInset: 0,
         preferredDetailsCard: placement,
@@ -191,7 +197,13 @@ function Panel({
         onAddProjectScript={scriptResult}
         onUpdateProjectScript={scriptResult}
         onDeleteProjectScript={scriptResult}
-        usage={{} as never}
+        usage={{
+          providerInstanceId: null,
+          model: null,
+          providers: [],
+          sources: [],
+          contextWindow: null,
+        }}
       />
     </ChatCanvasContext>
   );
@@ -213,8 +225,10 @@ it("offers no git controls in a No project thread, but shows its linked pull req
 it("shows Current checkout where no worktree can come from, even when New worktree is the default", async () => {
   using fixture = setup({ workspaceRoot: SCRATCH_ROOT, folder: SCRATCH_ROOT });
   await using _screen = await render(<Panel fixture={fixture} draftEnvMode="worktree" />);
-  await expect.element(page.getByLabelText("Run context: Current checkout")).toBeVisible();
-  await expect.element(page.getByRole("button", { name: /Run context/ })).not.toBeInTheDocument();
+  await page.getByRole("button", { name: "Run on: Run on" }).click();
+  await expect.element(page.getByText(SCRATCH_ROOT)).toBeVisible();
+  await expect.element(page.getByText("New worktree")).not.toBeInTheDocument();
+  await expect.element(page.getByRole("button", { name: /Workspace:/ })).not.toBeInTheDocument();
 });
 
 it("offers only machines where no worktree can come from and several machines exist", async () => {
@@ -222,9 +236,10 @@ it("offers only machines where no worktree can come from and several machines ex
   await using _screen = await render(
     <Panel fixture={fixture} draftEnvMode="worktree" onMachines />,
   );
-  await page.getByRole("button", { name: "Run context: This Mac, Current checkout" }).click();
+  await page.getByRole("button", { name: "Run on: This Mac" }).click();
   await expect.element(page.getByText("Run on")).toBeVisible();
   await expect.element(page.getByText("New worktree")).not.toBeInTheDocument();
+  await expect.element(page.getByRole("button", { name: /Workspace:/ })).not.toBeInTheDocument();
 });
 
 it("shows a linked pull request in a folder that is not a git repository", async () => {

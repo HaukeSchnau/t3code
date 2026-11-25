@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  foldLimitRows,
   otherDriverPools,
   poolSources,
   resolveThreadDetailsLimits,
@@ -191,5 +192,50 @@ describe("otherDriverPools", () => {
       ["claudeAgent", [30]],
       ["codex", [100]],
     ]);
+  });
+});
+
+describe("foldLimitRows", () => {
+  const antigravity = ProviderDriverKind.make("antigravity");
+  const row = (
+    id: string,
+    kind: "session" | "weekly",
+    usedPercent: number,
+    driver: ProviderDriverKind = antigravity,
+  ) => ({ driver, window: { id, kind, label: id, usedPercent } });
+  const ids = (rows: ReadonlyArray<{ readonly window: { readonly id: string } }>) =>
+    rows.map((entry) => entry.window.id);
+
+  it("shows the rows of the thread's model, else the nearest per period, and never hides a low one", () => {
+    const rows = [
+      row("3p-5h", "session", 0),
+      row("gemini-5h", "session", 17),
+      row("3p-weekly", "weekly", 0),
+      row("gemini-weekly", "weekly", 6),
+    ];
+    expect(ids(foldLimitRows(rows, "gemini-4-neon").shown)).toEqual(["gemini-5h", "gemini-weekly"]);
+    expect(ids(foldLimitRows(rows, "claude-opus-5-5").hidden)).toEqual([
+      "gemini-5h",
+      "gemini-weekly",
+    ]);
+    expect(ids(foldLimitRows(rows, null).shown)).toEqual(["gemini-5h", "gemini-weekly"]);
+    const spent = [...rows.slice(0, 3), row("gemini-weekly", "weekly", 100)];
+    expect(ids(foldLimitRows(spent, "claude-opus-5-5").shown)).toEqual([
+      "3p-5h",
+      "3p-weekly",
+      "gemini-weekly",
+    ]);
+  });
+
+  it("folds a Claude weekly limit scoped to another model", () => {
+    const rows = [
+      row("five_hour", "session", 40, claude),
+      row("seven_day", "weekly", 30, claude),
+      row("seven_day_opus", "weekly", 50, claude),
+      row("seven_day_sonnet", "weekly", 10, claude),
+    ];
+    expect(ids(foldLimitRows(rows, "claude-opus-5-5").hidden)).toEqual(["seven_day_sonnet"]);
+    expect(foldLimitRows(rows.slice(0, 2), "claude-opus-5-5").hidden).toEqual([]);
+    expect(foldLimitRows(rows.slice(0, 3), "claude-opus-5-5").hidden).toEqual([]);
   });
 });

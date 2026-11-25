@@ -16,20 +16,22 @@ import {
   CircleDotIcon,
   CircleSlashIcon,
   CircleXIcon,
+  MessageSquarePlusIcon,
   OctagonXIcon,
   UserCheckIcon,
   UserRoundIcon,
   UserRoundXIcon,
 } from "lucide-react";
 import { msg, useGT, useMessages } from "gt-react";
-import { Children, type CSSProperties, isValidElement, type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 
 import { m, type MessageResolver } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../ui/badge";
-import { InlineButton } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { RowTooltip } from "../workItem/WorkItemRowTooltip";
 import type { PullRequestReviewOutcome } from "./pullRequestDetail.logic";
 import { pullRequestLabelColor } from "./pullRequestList.logic";
 import {
@@ -39,22 +41,46 @@ import {
   type PullRequestGlyphIcon,
 } from "./pullRequestIcons";
 
+export function AddToChatIconButton({ onClick }: { onClick: () => void }) {
+  const gt = useGT();
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            aria-label={gt("Add to chat")}
+            onClick={onClick}
+          />
+        }
+      >
+        <MessageSquarePlusIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup>{gt("Add to chat")}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function PullRequestLabelChip({
   label,
   size = "sm",
   className,
   focusable = false,
   children,
+  ...props
 }: {
   label: Pick<PullRequestLabel, "name" | "color" | "description">;
   size?: "sm" | "default";
   className?: string;
   focusable?: boolean;
   children?: ReactNode;
+  "data-row-label"?: string;
 }) {
   const color = pullRequestLabelColor(label.color);
   const badge = (
     <Badge
+      {...props}
       size={size}
       variant={color ? "label" : "secondary"}
       className={cn("min-w-0 max-w-40 shrink justify-start", className)}
@@ -67,12 +93,7 @@ export function PullRequestLabelChip({
     </Badge>
   );
   if (!label.description) return badge;
-  return (
-    <Tooltip>
-      <TooltipTrigger render={badge} />
-      <TooltipPopup>{label.description}</TooltipPopup>
-    </Tooltip>
-  );
+  return <RowTooltip render={badge} popup={<TooltipPopup>{label.description}</TooltipPopup>} />;
 }
 
 function reviewDecisionPresentation(decision: PullRequestReviewDecision) {
@@ -87,13 +108,13 @@ function reviewDecisionPresentation(decision: PullRequestReviewDecision) {
       return {
         Icon: UserRoundXIcon,
         label: msg("Changes requested"),
-        toneClassName: "text-amber-600/90 dark:text-amber-400/80",
+        toneClassName: "text-warning-foreground",
       };
     case "review-required":
       return {
         Icon: UserRoundIcon,
         label: msg("Awaiting review"),
-        toneClassName: "text-muted-foreground/60",
+        toneClassName: "text-dim-foreground",
       };
   }
 }
@@ -167,16 +188,16 @@ export function PullRequestStateGlyph({
   const m = useMessages();
   const presentation = resolvePullRequestState({ state, isDraft }, m);
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-        <presentation.Icon
-          role="img"
-          aria-label={presentation.label}
-          className={cn("size-4 shrink-0", presentation.toneClassName, className)}
-        />
-      </TooltipTrigger>
-      <TooltipPopup>{presentation.label}</TooltipPopup>
-    </Tooltip>
+    <RowTooltip
+      render={<span className="inline-flex shrink-0" />}
+      popup={<TooltipPopup>{presentation.label}</TooltipPopup>}
+    >
+      <presentation.Icon
+        role="img"
+        aria-label={presentation.label}
+        className={cn("size-4 shrink-0", presentation.toneClassName, className)}
+      />
+    </RowTooltip>
   );
 }
 
@@ -205,16 +226,16 @@ export function PullRequestConflictGlyph({
   );
   if (presentation === null) return null;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-        <presentation.Icon
-          role="img"
-          aria-label={presentation.label}
-          className={cn("size-4 shrink-0", presentation.toneClassName, className)}
-        />
-      </TooltipTrigger>
-      <TooltipPopup>{presentation.label}</TooltipPopup>
-    </Tooltip>
+    <RowTooltip
+      render={<span className="inline-flex shrink-0" />}
+      popup={<TooltipPopup>{presentation.label}</TooltipPopup>}
+    >
+      <presentation.Icon
+        role="img"
+        aria-label={presentation.label}
+        className={cn("size-4 shrink-0", presentation.toneClassName, className)}
+      />
+    </RowTooltip>
   );
 }
 
@@ -222,17 +243,17 @@ const CHECK_STATUS_PRESENTATION = {
   pending: {
     label: msg("Running", { $context: "check status" }),
     Icon: Spinner,
-    toneClassName: "text-amber-500",
+    toneClassName: "text-warning-foreground",
   },
   "action-required": {
     label: msg("Awaiting action"),
     Icon: CircleDotIcon,
-    toneClassName: "text-amber-600 dark:text-amber-400/90",
+    toneClassName: "text-warning-foreground",
   },
   success: {
     label: msg("Passed", { $context: "check status" }),
     Icon: CircleCheckIcon,
-    toneClassName: "text-emerald-600 dark:text-emerald-300/90",
+    toneClassName: "text-success-foreground",
   },
   failure: {
     label: msg("Failed", { $context: "check status" }),
@@ -242,17 +263,17 @@ const CHECK_STATUS_PRESENTATION = {
   cancelled: {
     label: msg("Cancelled", { $context: "check status" }),
     Icon: OctagonXIcon,
-    toneClassName: "text-muted-foreground/70",
+    toneClassName: "text-dim-foreground",
   },
   skipped: {
     label: msg("Skipped", { $context: "check status" }),
     Icon: CircleSlashIcon,
-    toneClassName: "text-muted-foreground/70",
+    toneClassName: "text-dim-foreground",
   },
   neutral: {
     label: msg("Neutral", { $context: "check status" }),
     Icon: CircleDashedIcon,
-    toneClassName: "text-muted-foreground/70",
+    toneClassName: "text-dim-foreground",
   },
 } as const satisfies Record<
   PullRequestCheckStatus,
@@ -300,7 +321,7 @@ const CHECKS_STATE_PRESENTATION = {
   pending: {
     label: msg("Some checks haven't completed yet"),
     Icon: CircleDotIcon,
-    toneClassName: "text-amber-600 dark:text-amber-400/90",
+    toneClassName: "text-warning-foreground",
   },
 } as const satisfies Record<
   PullRequestChecksState,
@@ -328,19 +349,22 @@ export function pullRequestChecksState(
 const REVIEW_OUTCOME_PRESENTATION = {
   approved: {
     label: msg("Approved", { $context: "review outcome" }),
+    verb: msg("approved", { $context: "review outcome, shown after the reviewer's name" }),
     staleLabel: msg("Approved earlier changes", {
       $context: "tooltip: this approval was given before the latest commits were pushed",
     }),
     Icon: CircleCheckIcon,
-    toneClassName: "text-emerald-600 dark:text-emerald-300/90",
-    ringClassName: "ring-2 ring-emerald-500 dark:ring-emerald-400",
-    staleRingClassName:
-      "ring-2 ring-[color-mix(in_srgb,var(--color-emerald-500)_35%,var(--background))] dark:ring-[color-mix(in_srgb,var(--color-emerald-400)_35%,var(--background))]",
-    fillClassName: "fill-emerald-500 dark:fill-emerald-400",
+    toneClassName: "text-success-foreground",
+    ringClassName: "ring-2 ring-success",
+    staleRingClassName: "ring-2 ring-[color-mix(in_srgb,var(--success)_35%,var(--background))]",
+    fillClassName: "fill-success",
     badgeVariant: "success",
   },
   "changes-requested": {
     label: msg("Changes requested"),
+    verb: msg("requested changes", {
+      $context: "review outcome, shown after the reviewer's name",
+    }),
     staleLabel: msg("Changes requested earlier changes", {
       $context:
         "tooltip: the reviewer requested changes on an older version, before the latest commits",
@@ -354,11 +378,14 @@ const REVIEW_OUTCOME_PRESENTATION = {
   },
   dismissed: {
     label: msg("Review dismissed"),
+    verb: msg("had a review dismissed", {
+      $context: "review outcome, shown after the pull request author's name",
+    }),
     staleLabel: msg("Review dismissed earlier changes", {
       $context: "tooltip: a review of an older version, before the latest commits, was dismissed",
     }),
     Icon: CircleDashedIcon,
-    toneClassName: "text-muted-foreground/70",
+    toneClassName: "text-dim-foreground",
     ringClassName: "ring-2 ring-muted-foreground/60",
     staleRingClassName:
       "ring-2 ring-[color-mix(in_srgb,var(--contrast-muted-foreground)_30%,var(--background))]",
@@ -369,6 +396,7 @@ const REVIEW_OUTCOME_PRESENTATION = {
   PullRequestReviewOutcome,
   {
     label: string;
+    verb: string;
     staleLabel: string;
     Icon: typeof CircleCheckIcon;
     toneClassName: string;
@@ -435,6 +463,13 @@ export function PullRequestReviewOutcomeAvatarBadge({
       )}
     />
   );
+}
+
+export function pullRequestReviewOutcomeVerb(
+  outcome: PullRequestReviewOutcome,
+  resolve: MessageResolver = m,
+): string {
+  return resolve(REVIEW_OUTCOME_PRESENTATION[outcome].verb);
 }
 
 export function pullRequestReviewOutcomeLabel(
@@ -545,7 +580,6 @@ export function PullRequestActorLabel({
       </TooltipTrigger>
       <TooltipPopup side="top">
         {actor?.name && actor.name !== login ? `${actor.name} (@${login})` : login}
-        {profileUrl ? ` · ${gt("Open profile")}` : ""}
       </TooltipPopup>
     </Tooltip>
   );
@@ -566,39 +600,7 @@ export function PullRequestDiffStat({
   return (
     <span className={cn("inline-flex items-baseline gap-1 tabular-nums", className)}>
       <span className="text-diff-addition-foreground">+{formatDiffCount(additions)}</span>
-      <span className="text-diff-deletion">-{formatDiffCount(deletions)}</span>
-    </span>
-  );
-}
-
-function separatorKey(segment: ReactNode): string {
-  return `separator:${isValidElement(segment) ? String(segment.key) : String(segment)}`;
-}
-
-export function PullRequestMetaLine({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  const segments = Children.toArray(children);
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
-      {segments.flatMap((segment, index) =>
-        index === 0
-          ? segment
-          : [
-              <span
-                aria-hidden
-                className="shrink-0 text-muted-foreground/50"
-                key={separatorKey(segment)}
-              >
-                ·
-              </span>,
-              segment,
-            ],
-      )}
+      <span className="text-diff-deletion-foreground">-{formatDiffCount(deletions)}</span>
     </span>
   );
 }

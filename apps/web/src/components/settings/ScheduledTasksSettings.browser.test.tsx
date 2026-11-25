@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import * as Effect from "effect/Effect";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -100,6 +100,7 @@ function environment() {
   return {
     environmentId,
     label: "Laptop",
+    entry: { target: { _tag: "PrimaryConnectionTarget" } },
     connection: { phase: state.connected ? "connected" : "disconnected" },
     serverConfig: state.connected
       ? { environment: { platform: "linux", capabilities: { oneTimeSchedules: true } } }
@@ -140,6 +141,8 @@ vi.mock(import("../../state/server"), async (original) => {
         run: state.remove,
       },
       providersValueAtom: (() => state.providers) as never,
+      scheduledTasksLive: (() =>
+        Atom.make(AsyncResult.success({ tasks: state.tasksLoaded ? state.tasks : [] }))) as never,
       upsertScheduledTask: {
         ...actual.serverEnvironment.upsertScheduledTask,
         run: state.upsert,
@@ -273,8 +276,10 @@ describe("ScheduledTasksSettings", () => {
       );
       if (!editing) {
         await screen.getByRole("button", { name: "New task" }).click();
-        await page.getByRole("combobox", { name: "Workspace" }).click();
-        await page.getByRole("option", { name: "Use the project checkout" }).click();
+        await page
+          .getByRole("group", { name: "Workspace" })
+          .getByRole("button", { name: "Project checkout" })
+          .click();
       }
       await fillTitleAndPrompt();
       await page.getByRole("button", { name: "GPT-5.4", exact: true }).click();
@@ -325,6 +330,44 @@ describe("ScheduledTasksSettings", () => {
       }),
     );
   });
+
+  it("opens templates on a permitted secondary environment", async () => {
+    setup();
+    state.secondary = true;
+    state.tasksLoaded = false;
+    const registry = AtomRegistry.make();
+    using _registry = { [Symbol.dispose]: () => registry.dispose() };
+    registry.set(permissions.get(environmentId)!, false);
+    await using screen = await render(
+      <RegistryContext.Provider value={registry}>
+        <ScheduledTasksSettings />
+      </RegistryContext.Provider>,
+    );
+    await screen.getByRole("button", { name: "Use template" }).first().click();
+    await expect.element(page.getByLabelText("Runs on")).toHaveTextContent("Secondary");
+  });
+
+  it.each([false, true])(
+    "hides templates when creation is denied with secondary=%s",
+    async (secondary) => {
+      setup();
+      state.secondary = secondary;
+      state.tasksLoaded = false;
+      const registry = AtomRegistry.make();
+      using _registry = { [Symbol.dispose]: () => registry.dispose() };
+      registry.set(permissions.get(environmentId)!, false);
+      registry.set(permissions.get(secondaryId)!, false);
+      await using screen = await render(
+        <RegistryContext.Provider value={registry}>
+          <ScheduledTasksSettings />
+        </RegistryContext.Provider>,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: "Use template" }))
+        .not.toBeInTheDocument();
+    },
+  );
+
   it("creates on a permitted secondary and reacts to permission changes", async () => {
     setup();
     state.secondary = true;
@@ -390,7 +433,7 @@ describe("ScheduledTasksSettings", () => {
     expect(enabledPicker).toBeNull();
     expect(page.getByRole("button", { name: "High", exact: true }).query()).toBeNull();
     await expect
-      .element(page.getByRole("dialog").getByRole("button", { name: "Bound model", exact: true }))
+      .element(page.getByRole("dialog").getByRole("button", { name: /^Bound model$/i }))
       .toBeDisabled();
   });
 
@@ -406,7 +449,9 @@ describe("ScheduledTasksSettings", () => {
     state.tasksLoaded = true;
     await screen.rerender(<ScheduledTasksSettings taskId={task.id} />);
 
-    await expect.element(dialog.getByRole("heading", { name: "New task" })).toBeInTheDocument();
+    await expect
+      .element(dialog.getByRole("heading", { name: "New scheduled task" }))
+      .toBeInTheDocument();
     await expect.element(name).toHaveValue("My draft");
   });
 

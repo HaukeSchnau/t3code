@@ -75,6 +75,7 @@ import {
   deriveLockedProvider,
   hasCompactableConversation,
   hasServerAcknowledgedLocalDispatch,
+  shouldShowComposerTasks,
   waitForRevertedMessage,
 } from "./ChatView.logic";
 
@@ -188,6 +189,18 @@ describe("buildExpiredTerminalContextToastCopy", () => {
   });
 });
 
+describe("shouldShowComposerTasks", () => {
+  it("hides a settled run's finished plan while the next send is pending", () => {
+    expect(
+      shouldShowComposerTasks({
+        steps: [{ status: "completed" }],
+        planRunSettled: true,
+        isSendBusy: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   it("acknowledges a settled newer background turn", () => {
     const localDispatch = createLocalDispatchSnapshot(
@@ -269,6 +282,15 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         threadError: null,
       }),
     ).toBe(acknowledged);
+
+    expect(
+      deriveTimelineWorking({
+        phase: derivePhase({ ...readySession, status }),
+        isSendBusy: !acknowledged,
+        isCompacting: false,
+        runlessWorkStartedAt: null,
+      }),
+    ).toBe(true);
   });
 
   it("waits for the matching running turn before acknowledging", () => {

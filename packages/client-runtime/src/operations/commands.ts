@@ -196,6 +196,7 @@ interface StartThreadBootstrap {
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly manualContinuationOfRunId?: RunId;
+  readonly retryOfRunId?: RunId;
   readonly message: {
     readonly messageId: MessageId;
     readonly role: "user";
@@ -276,6 +277,11 @@ export interface ResumeThreadQueueInput extends ThreadCommandInput {
 export interface PromoteQueuedRunInput extends ThreadCommandInput {
   readonly queuedRunId: RunId;
   readonly targetRunId: RunId;
+}
+
+export interface ReorderQueuedRunInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly beforeRunId: RunId | null;
 }
 
 export interface CancelQueuedRunInput extends ThreadCommandInput {
@@ -903,6 +909,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         ...(input.message.idleCompaction === undefined
           ? {}
           : { idleCompaction: input.message.idleCompaction }),
+        ...(input.retryOfRunId === undefined ? {} : { retryOfRunId: input.retryOfRunId }),
         attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         ...(input.sourceProposedPlan === undefined
@@ -932,6 +939,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       ...(input.message.idleCompaction === undefined
         ? {}
         : { idleCompaction: input.message.idleCompaction }),
+      ...(input.retryOfRunId === undefined ? {} : { retryOfRunId: input.retryOfRunId }),
       attachments,
       ...(input.titleSeed === undefined ? {} : { titleSeed: input.titleSeed }),
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
@@ -1222,6 +1230,18 @@ export const promoteQueuedRun = Effect.fn("EnvironmentCommands.promoteQueuedRun"
       targetRunId: input.targetRunId,
     }),
   );
+});
+
+export const reorderQueuedRun = Effect.fn("EnvironmentCommands.reorderQueuedRun")(function* (
+  input: ReorderQueuedRunInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.reorder",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+    beforeRunId: input.beforeRunId,
+  });
 });
 
 export const cancelQueuedRun = Effect.fn("EnvironmentCommands.cancelQueuedRun")(function* (

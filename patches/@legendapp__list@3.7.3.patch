@@ -1,7 +1,7 @@
-diff --git a/react-native.js b/react-native.js
+diff --git i/react-native.js w/react-native.js
 index 440b0ad0d8af34e5dc4ae9b2a21a7addd2d71efb..fd5d18d8d184036d140f543285c9b5738513baa7 100644
---- a/react-native.js
-+++ b/react-native.js
+--- i/react-native.js
++++ w/react-native.js
 @@ -1344,7 +1344,8 @@ function checkAtBottom(ctx, allowedEdge, allowGateCreatedInCurrentCheck) {
      return;
    }
@@ -12,10 +12,10 @@ index 440b0ad0d8af34e5dc4ae9b2a21a7addd2d71efb..fd5d18d8d184036d140f543285c9b573
      set$(ctx, "isAtEnd", isContentLess || distanceFromEnd <= EDGE_POSITION_EPSILON);
      set$(ctx, "isNearEnd", isContentLess || distanceFromEnd <= onEndReachedThreshold * scrollLength);
      set$(
-diff --git a/react-native.mjs b/react-native.mjs
+diff --git i/react-native.mjs w/react-native.mjs
 index b95e1f86d2cd76d5dbaf1340fdc37f3f1990e9ee..e2b013a0969d512d7c9b5e6fe7d348761f286bed 100644
---- a/react-native.mjs
-+++ b/react-native.mjs
+--- i/react-native.mjs
++++ w/react-native.mjs
 @@ -1323,7 +1323,8 @@ function checkAtBottom(ctx, allowedEdge, allowGateCreatedInCurrentCheck) {
      return;
    }
@@ -26,11 +26,36 @@ index b95e1f86d2cd76d5dbaf1340fdc37f3f1990e9ee..e2b013a0969d512d7c9b5e6fe7d34876
      set$(ctx, "isAtEnd", isContentLess || distanceFromEnd <= EDGE_POSITION_EPSILON);
      set$(ctx, "isNearEnd", isContentLess || distanceFromEnd <= onEndReachedThreshold * scrollLength);
      set$(
-diff --git a/react.js b/react.js
-index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb452be397 100644
---- a/react.js
-+++ b/react.js
-@@ -6376,7 +6376,8 @@ function useOnLayoutSync({
+diff --git i/react.d.ts w/react.d.ts
+index 08cb3e9ce8b545697ff2e810db588b4952b838ac..3669a065003e5868d8e88ab784bee9fea6e55d08 100644
+--- i/react.d.ts
++++ w/react.d.ts
+@@ -315,6 +315,7 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
+      * @default 0.1
+      */
+     maintainScrollAtEndThreshold?: number;
++    immediateWebShrinks?: boolean;
+     /**
+      * Maintains visibility of content.
+      * - size (default: true) stabilizes during size/layout changes while scrolling.
+diff --git i/react.js w/react.js
+index 24cc6054d3fa59742c7f50457a18adf451128bbb..703ddb516277d03ed2665e6bee2ed8675a25768e 100644
+--- i/react.js
++++ w/react.js
+@@ -3590,6 +3590,12 @@ function abortBootstrapInitialScroll(ctx) {
+ 
+ // src/core/containerLayoutBaseline.ts
+ var containerLayoutBaselines = /* @__PURE__ */ new WeakMap();
++// Offset sizes stay in layout pixels throughout ancestor transforms, including
++// the last frames of an overview zoom. The list rounds measured sizes too.
++function measureLayoutRect(element) {
++  const rect = element.getBoundingClientRect();
++  return { height: element.offsetHeight, left: rect.left, top: rect.top, width: element.offsetWidth, x: rect.x, y: rect.y };
++}
+ function getContainerLayoutBaseline(element) {
+   return containerLayoutBaselines.get(element);
+ }
+@@ -6376,7 +6382,8 @@ function useOnLayoutSync({
    onLayoutProp,
    onLayoutChange,
    webLayoutResync,
@@ -40,7 +65,12 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
  }, deps) {
    const callbacks = useLatestRef({ onLayoutChange, onLayoutProp, webLayoutResync });
    const onExternalLayout = React3.useCallback(
-@@ -6409,7 +6410,7 @@ function useOnLayoutSync({
+@@ -6405,11 +6412,11 @@ function useOnLayoutSync({
+     };
+     let prevRect;
+     if (measureInLayoutEffect) {
+-      const rect = element.getBoundingClientRect();
++      const rect = measureLayoutRect(element);
        emit(toLayout(rect), true);
        prevRect = rect;
      }
@@ -49,7 +79,16 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
        var _a4, _b2, _c;
        const target = entry.target instanceof HTMLElement ? entry.target : void 0;
        const borderBoxSize = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize;
-@@ -6427,7 +6428,30 @@ function useOnLayoutSync({
+@@ -6418,7 +6425,7 @@ function useOnLayoutSync({
+         left: entry.contentRect.left,
+         top: entry.contentRect.top,
+         width: borderBoxSize.inlineSize
+-      } : (_a4 = target == null ? void 0 : target.getBoundingClientRect()) != null ? _a4 : entry.contentRect;
++      } : (_a4 = target == null ? void 0 : measureLayoutRect(target)) != null ? _a4 : entry.contentRect;
+       const previousRect = prevRect != null ? prevRect : getContainerLayoutBaseline(element);
+       const didSizeChange = previousRect === void 0 || rectObserved.width !== previousRect.width || rectObserved.height !== previousRect.height;
+       prevRect = rectObserved;
+@@ -6427,7 +6434,30 @@ function useOnLayoutSync({
          emit(toLayout(rectObserved), false);
        }
      });
@@ -81,7 +120,16 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
    return webExternalScroll ? { onLayout: onExternalLayout } : {};
  }
  function toLayout(rect) {
-@@ -7801,10 +7825,10 @@ function useStableRenderComponent(renderComponent, mapProps) {
+@@ -6481,7 +6511,7 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+       size: layout
+     });
+   };
+-  const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
++  const shouldDeferWebShrinkLayoutUpdate = !listState.props.immediateWebShrinks && !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
+   if (shouldDeferWebShrinkLayoutUpdate) {
+     scheduleWebShrinkMeasurement(state, () => {
+       if (state.itemKey === currentItemKey) {
+@@ -7801,10 +7831,10 @@ function useStableRenderComponent(renderComponent, mapProps) {
      [mapPropsRef, renderComponentRef]
    );
  }
@@ -94,7 +142,7 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
    return /* @__PURE__ */ React3__namespace.createElement("div", { ...rest, ref }, children);
  };
  var subscribeScreenReader = () => () => {
-@@ -7881,6 +7905,16 @@ var ListComponent = typedMemo(function ListComponent2({
+@@ -7881,6 +7911,16 @@ var ListComponent = typedMemo(function ListComponent2({
    );
    const ScrollComponent = renderScrollComponent ? CustomScrollComponent : ListComponentScrollView;
    const SnapOrScroll = snapToIndices ? SnapWrapper : ScrollComponent;
@@ -111,7 +159,7 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
    const updateFooterSize = React3.useCallback(
      (size, afterSizeUpdate) => {
        var _a3;
-@@ -7956,7 +7990,7 @@ var ListComponent = typedMemo(function ListComponent2({
+@@ -7956,7 +7996,7 @@ var ListComponent = typedMemo(function ListComponent2({
        style: autoOtherAxisStyle ? [autoOtherAxisStyle, style] : style
      },
      Platform.OS !== "web",
@@ -120,7 +168,7 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
      ListEmptyComponent && getComponent(ListEmptyComponent),
      shouldRenderAlignItemsAtEndSpacer && /* @__PURE__ */ React3__namespace.createElement(AlignItemsAtEndSpacer, { horizontal }),
      canRender && !ListEmptyComponent && /* @__PURE__ */ React3__namespace.createElement(
-@@ -7970,7 +8004,7 @@ var ListComponent = typedMemo(function ListComponent2({
+@@ -7970,7 +8010,7 @@ var ListComponent = typedMemo(function ListComponent2({
          stickyHeaderConfig
        }
      ),
@@ -129,7 +177,7 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
      /* @__PURE__ */ React3__namespace.createElement(ScrollAdjust, null),
      IS_DEV && ENABLE_DEVMODE
    );
-@@ -8853,7 +8887,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -8853,7 +8893,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
          runScrollRequest(
            pendingScroll.token,
            state.pendingScrollResolve,
@@ -143,11 +191,40 @@ index 24cc6054d3fa59742c7f50457a18adf451128bbb..32e59a03a4da96776f2690085ff3eebb
            () => isScrollToIndexReady(state.props.data.length - 1, true)
          );
        }
-diff --git a/react.mjs b/react.mjs
-index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df85187521c39518a 100644
---- a/react.mjs
-+++ b/react.mjs
-@@ -6355,7 +6355,8 @@ function useOnLayoutSync({
+@@ -9348,6 +9393,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     getFixedItemSize,
+     getItemType,
+     horizontal,
++    immediateWebShrinks,
+     rtl,
+     estimatedHeaderSize,
+     initialScrollAtEnd = false,
+@@ -9646,6 +9692,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     hasExternalScroll,
+     hideItemsUntilMeasured: experimental_hideItemsUntilMeasured,
+     horizontal: !!horizontal,
++    immediateWebShrinks: !!immediateWebShrinks,
+     itemsAreEqual,
+     keyExtractor: useWrapIfItem(keyExtractor),
+     maintainScrollAtEnd: maintainScrollAtEndConfig,
+diff --git i/react.mjs w/react.mjs
+index 2cf1995d97cd101244b08b2b055265add859e064..ac46adfa780330bad338d389ec7c413313f6c380 100644
+--- i/react.mjs
++++ w/react.mjs
+@@ -3569,6 +3569,12 @@ function abortBootstrapInitialScroll(ctx) {
+ 
+ // src/core/containerLayoutBaseline.ts
+ var containerLayoutBaselines = /* @__PURE__ */ new WeakMap();
++// Offset sizes stay in layout pixels throughout ancestor transforms, including
++// the last frames of an overview zoom. The list rounds measured sizes too.
++function measureLayoutRect(element) {
++  const rect = element.getBoundingClientRect();
++  return { height: element.offsetHeight, left: rect.left, top: rect.top, width: element.offsetWidth, x: rect.x, y: rect.y };
++}
+ function getContainerLayoutBaseline(element) {
+   return containerLayoutBaselines.get(element);
+ }
+@@ -6355,7 +6361,8 @@ function useOnLayoutSync({
    onLayoutProp,
    onLayoutChange,
    webLayoutResync,
@@ -157,7 +234,12 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
  }, deps) {
    const callbacks = useLatestRef({ onLayoutChange, onLayoutProp, webLayoutResync });
    const onExternalLayout = useCallback(
-@@ -6388,7 +6389,7 @@ function useOnLayoutSync({
+@@ -6384,11 +6391,11 @@ function useOnLayoutSync({
+     };
+     let prevRect;
+     if (measureInLayoutEffect) {
+-      const rect = element.getBoundingClientRect();
++      const rect = measureLayoutRect(element);
        emit(toLayout(rect), true);
        prevRect = rect;
      }
@@ -166,7 +248,16 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
        var _a4, _b2, _c;
        const target = entry.target instanceof HTMLElement ? entry.target : void 0;
        const borderBoxSize = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize;
-@@ -6406,7 +6407,30 @@ function useOnLayoutSync({
+@@ -6397,7 +6404,7 @@ function useOnLayoutSync({
+         left: entry.contentRect.left,
+         top: entry.contentRect.top,
+         width: borderBoxSize.inlineSize
+-      } : (_a4 = target == null ? void 0 : target.getBoundingClientRect()) != null ? _a4 : entry.contentRect;
++      } : (_a4 = target == null ? void 0 : measureLayoutRect(target)) != null ? _a4 : entry.contentRect;
+       const previousRect = prevRect != null ? prevRect : getContainerLayoutBaseline(element);
+       const didSizeChange = previousRect === void 0 || rectObserved.width !== previousRect.width || rectObserved.height !== previousRect.height;
+       prevRect = rectObserved;
+@@ -6406,7 +6413,30 @@ function useOnLayoutSync({
          emit(toLayout(rectObserved), false);
        }
      });
@@ -198,7 +289,16 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
    return webExternalScroll ? { onLayout: onExternalLayout } : {};
  }
  function toLayout(rect) {
-@@ -7780,10 +7804,10 @@ function useStableRenderComponent(renderComponent, mapProps) {
+@@ -6460,7 +6490,7 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+       size: layout
+     });
+   };
+-  const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
++  const shouldDeferWebShrinkLayoutUpdate = !listState.props.immediateWebShrinks && !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
+   if (shouldDeferWebShrinkLayoutUpdate) {
+     scheduleWebShrinkMeasurement(state, () => {
+       if (state.itemKey === currentItemKey) {
+@@ -7780,10 +7810,10 @@ function useStableRenderComponent(renderComponent, mapProps) {
      [mapPropsRef, renderComponentRef]
    );
  }
@@ -211,7 +311,7 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
    return /* @__PURE__ */ React3.createElement("div", { ...rest, ref }, children);
  };
  var subscribeScreenReader = () => () => {
-@@ -7860,6 +7884,16 @@ var ListComponent = typedMemo(function ListComponent2({
+@@ -7860,6 +7890,16 @@ var ListComponent = typedMemo(function ListComponent2({
    );
    const ScrollComponent = renderScrollComponent ? CustomScrollComponent : ListComponentScrollView;
    const SnapOrScroll = snapToIndices ? SnapWrapper : ScrollComponent;
@@ -228,7 +328,7 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
    const updateFooterSize = useCallback(
      (size, afterSizeUpdate) => {
        var _a3;
-@@ -7935,7 +7969,7 @@ var ListComponent = typedMemo(function ListComponent2({
+@@ -7935,7 +7975,7 @@ var ListComponent = typedMemo(function ListComponent2({
        style: autoOtherAxisStyle ? [autoOtherAxisStyle, style] : style
      },
      Platform.OS !== "web",
@@ -237,7 +337,7 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
      ListEmptyComponent && getComponent(ListEmptyComponent),
      shouldRenderAlignItemsAtEndSpacer && /* @__PURE__ */ React3.createElement(AlignItemsAtEndSpacer, { horizontal }),
      canRender && !ListEmptyComponent && /* @__PURE__ */ React3.createElement(
-@@ -7949,7 +7983,7 @@ var ListComponent = typedMemo(function ListComponent2({
+@@ -7949,7 +7989,7 @@ var ListComponent = typedMemo(function ListComponent2({
          stickyHeaderConfig
        }
      ),
@@ -246,7 +346,7 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
      /* @__PURE__ */ React3.createElement(ScrollAdjust, null),
      IS_DEV && ENABLE_DEVMODE
    );
-@@ -8832,7 +8866,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -8832,7 +8872,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
          runScrollRequest(
            pendingScroll.token,
            state.pendingScrollResolve,
@@ -260,3 +360,19 @@ index 2cf1995d97cd101244b08b2b055265add859e064..af2a2817af1873ab5b5f0d8df8518752
            () => isScrollToIndexReady(state.props.data.length - 1, true)
          );
        }
+@@ -9327,6 +9372,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     getFixedItemSize,
+     getItemType,
+     horizontal,
++    immediateWebShrinks,
+     rtl,
+     estimatedHeaderSize,
+     initialScrollAtEnd = false,
+@@ -9625,6 +9671,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     hasExternalScroll,
+     hideItemsUntilMeasured: experimental_hideItemsUntilMeasured,
+     horizontal: !!horizontal,
++    immediateWebShrinks: !!immediateWebShrinks,
+     itemsAreEqual,
+     keyExtractor: useWrapIfItem(keyExtractor),
+     maintainScrollAtEnd: maintainScrollAtEndConfig,

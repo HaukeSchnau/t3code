@@ -9,7 +9,8 @@ import { cn } from "~/lib/utils";
 import { RelativeTime } from "~/components/RelativeTime";
 
 import { MiddleTruncate } from "../ui/middle-truncate";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { TooltipPopup } from "../ui/tooltip";
+import { RowTooltip } from "../workItem/WorkItemRowTooltip";
 import {
   PullRequestActorAvatar,
   PullRequestConflictGlyph,
@@ -17,10 +18,10 @@ import {
 } from "./pullRequestPresentation";
 
 export const PULL_REQUEST_ROW_CLASS =
-  "group/pr-row flex w-full items-center gap-2 rounded-md py-1 pr-1 text-left";
+  "group/pr-row flex w-full items-center gap-2 rounded-row py-1 pr-1 text-left";
 
 export const PULL_REQUEST_ROW_NUMBER_CLASS =
-  "shrink-0 font-mono text-xs tabular-nums text-muted-foreground";
+  "shrink-0 font-mono text-xs tabular-nums text-dim-foreground";
 
 export function PullRequestRowGlyph({
   state,
@@ -64,7 +65,9 @@ export function PullRequestRowLines({
   signals,
   meta,
   metaClassName,
+  metaStatus,
   updatedAt,
+  layout = "panel",
 }: {
   number: ReactNode;
   title: ReactNode;
@@ -72,31 +75,63 @@ export function PullRequestRowLines({
   signals?: ReactNode;
   meta?: ReactNode;
   metaClassName?: string;
+  /** Right of the second line, before the time: what the pull request is waiting on. */
+  metaStatus?: ReactNode;
   updatedAt?: string | null | undefined;
+  /**
+   * The page reads title first with the number after it, on two looser lines; the panel's
+   * narrow column leads with the number.
+   */
+  layout?: "panel" | "page";
 }) {
+  const page = layout === "page";
+  const time = updatedAt ? (
+    <span className="shrink-0 whitespace-nowrap tabular-nums text-dim-foreground">
+      <RelativeTime timestamp={updatedAt} />
+    </span>
+  ) : null;
   return (
-    <span className="min-w-0 flex-1">
-      <span className="flex min-w-0 items-center gap-1.5">
-        {number}
-        <span className="min-w-0 truncate text-sm">{title}</span>
+    <span className={cn("min-w-0 flex-1", page && "flex flex-col gap-1.25")}>
+      <span
+        className={cn(
+          "flex min-w-0 items-center",
+          page ? "gap-2 @max-md/pr-list:flex-wrap @max-md/pr-list:gap-y-1" : "gap-1.5",
+        )}
+      >
+        {page ? null : number}
+        <span
+          className={cn(
+            "min-w-0 truncate text-body text-foreground",
+            page
+              ? "font-normal @max-md/pr-list:line-clamp-2 @max-md/pr-list:w-full @max-md/pr-list:whitespace-normal @max-md/pr-list:wrap-anywhere"
+              : "font-medium",
+          )}
+        >
+          {title}
+        </span>
+        {page ? number : null}
         {signals ? (
-          <span className="flex shrink-0 items-center gap-1 text-2xs">{signals}</span>
+          <span className="flex shrink-0 items-center gap-1 text-caption">{signals}</span>
         ) : null}
         {status ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-2xs">{status}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-caption">{status}</span>
         ) : null}
       </span>
       <span
         className={cn(
-          "flex min-w-0 items-center gap-1.5 overflow-hidden text-2xs text-muted-foreground",
+          "flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground",
+          page ? "text-meta @max-md/pr-list:flex-wrap" : "text-caption",
           metaClassName,
         )}
       >
         {meta}
-        {updatedAt ? (
-          <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
-            <RelativeTime timestamp={updatedAt} />
+        {page ? (
+          <span className="ml-auto flex min-w-0 max-w-3/5 shrink-0 items-center gap-2 pl-2 @max-md/pr-list:ml-0 @max-md/pr-list:max-w-none @max-md/pr-list:basis-full @max-md/pr-list:justify-between @max-md/pr-list:pl-0">
+            {metaStatus}
+            {time}
           </span>
+        ) : time ? (
+          <span className="ml-auto flex shrink-0">{time}</span>
         ) : null}
       </span>
     </span>
@@ -114,17 +149,17 @@ export function PullRequestRowAuthor({
 }) {
   const login = actor?.login ?? "ghost";
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<span className={cn("inline-flex min-w-0 items-center gap-1", className)} />}
-      >
-        <PullRequestActorAvatar actor={actor} className="size-3.5" />
-        <span className={cn("truncate", labelClassName)}>{login}</span>
-      </TooltipTrigger>
-      <TooltipPopup side="top">
-        {actor?.name && actor.name !== login ? `${actor.name} (@${login})` : login}
-      </TooltipPopup>
-    </Tooltip>
+    <RowTooltip
+      render={<span className={cn("inline-flex min-w-0 items-center gap-1", className)} />}
+      popup={
+        <TooltipPopup side="top">
+          {actor?.name && actor.name !== login ? `${actor.name} (@${login})` : login}
+        </TooltipPopup>
+      }
+    >
+      <PullRequestActorAvatar actor={actor} className="size-3.5" />
+      <span className={cn("truncate", labelClassName)}>{login}</span>
+    </RowTooltip>
   );
 }
 

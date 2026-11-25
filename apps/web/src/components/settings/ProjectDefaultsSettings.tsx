@@ -9,6 +9,8 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import { useRef } from "react";
 import { T, useGT, useMessages } from "gt-react";
+import { FolderGit2Icon, FolderIcon, GitBranchIcon } from "lucide-react";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import {
@@ -20,11 +22,8 @@ import { useEnvironmentProviders, useEnvironments } from "../../state/environmen
 import { firstManagedDenial } from "../../state/managedPolicy";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { resolveEnvModeLabel, WORKTREE_SUBMODULES_LABELS } from "../BranchToolbar.logic";
-import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { runtimeModeConfig, runtimeModeOptions } from "../chat/runtimeModeConfig";
 import { PULL_REQUEST_MERGE_METHOD_LABELS } from "../pullRequest/pullRequestDetail.logic";
-import { TraitsPicker } from "../chat/TraitsPicker";
-import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
@@ -32,13 +31,9 @@ import { resolveDefaultModelSettingsPresentation } from "./ProjectDefaultsSettin
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { useSearchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
-import {
-  SETTINGS_PICKER_TRIGGER_CLASSNAME,
-  SettingResetButton,
-  SettingsRow,
-  SettingsSection,
-} from "./settingsLayout";
+import { SettingsModelPicker } from "./SettingsModelPicker";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
+import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -110,6 +105,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
+  const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
@@ -175,50 +171,46 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       }
       control={
         selection ? (
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
-            <ProviderModelPicker
-              environmentId={representative?.environmentId ?? null}
-              activeInstanceId={selection.instanceId}
-              model={selection.model}
-              lockedProvider={null}
-              instanceEntries={entries}
-              modelOptionsByInstance={modelOptions}
-              triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-              {...(mixedModel
-                ? {
-                    triggerLabel: automaticModel
-                      ? gt("Automatic (mixed)")
-                      : gt("Mixed", { $context: "values differ across targets" }),
-                  }
-                : {})}
-              getModelDisabledReason={modelDisabledReason}
-              onOpenProviderSetup={(instanceId) => {
-                if (representative)
-                  void navigate({
-                    to: "/settings/providers",
-                    search: { environmentId: representative.environmentId, instanceId },
-                  });
-              }}
-              onInstanceModelChange={(instanceId, model) =>
-                setModel(pickModelSelection(mixedModel ? null : selection, instanceId, model))
-              }
-            />
-            {!mixedModel && !presentation.providerNote && !effortDisabledReason && activeEntry ? (
-              <TraitsPicker
-                provider={activeEntry.driverKind}
-                models={activeEntry.models}
-                model={selection.model}
-                modelOptions={selection.options ?? []}
-                allowPromptInjectedEffort={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onModelOptionsChange={(options) =>
-                  setModel(createModelSelection(selection.instanceId, selection.model, options))
+          <SettingsModelPicker
+            environmentId={representative?.environmentId ?? null}
+            activeInstanceId={selection.instanceId}
+            model={selection.model}
+            instanceEntries={entries}
+            modelOptionsByInstance={modelOptions}
+            {...(mixedModel
+              ? {
+                  triggerLabel: automaticModel
+                    ? gt("Automatic (mixed)")
+                    : gt("Mixed", { $context: "values differ across targets" }),
                 }
-              />
-            ) : null}
-          </div>
+              : {})}
+            getModelDisabledReason={modelDisabledReason}
+            onOpenProviderSetup={(instanceId) => {
+              if (representative)
+                void navigate({
+                  to: "/settings/providers",
+                  search: { environmentId: representative.environmentId, instanceId },
+                });
+            }}
+            onInstanceModelChange={(instanceId, model) =>
+              setModel(pickModelSelection(mixedModel ? null : selection, instanceId, model))
+            }
+            traits={
+              mixedModel || presentation.providerNote || effortDisabledReason || !activeEntry
+                ? null
+                : {
+                    provider: activeEntry.driverKind,
+                    models: activeEntry.models,
+                    modelOptions: selection.options ?? [],
+                    onModelOptionsChange: (options) =>
+                      setModel(
+                        createModelSelection(selection.instanceId, selection.model, options),
+                      ),
+                  }
+            }
+          />
         ) : (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             {mixedModel
               ? gt("Mixed", { $context: "values differ across targets" })
               : gt("No providers available")}
@@ -237,7 +229,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       description={
         isProjectScope
           ? gt("Where new threads in this project start.")
-          : gt("Where new threads start. Projects and their t3.json can override it.")
+          : gt("Where new threads start, unless overridden by the project or t3.json.")
       }
       resetAction={
         !isProjectScope && settings.defaultThreadEnvMode !== null ? (
@@ -255,7 +247,18 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               updateSettings({ defaultThreadEnvMode: value });
           }}
         >
-          <SelectTrigger size="sm" aria-label={gt("Default workspace")}>
+          <SelectTrigger
+            variant="well"
+            size="compact"
+            aria-label={gt("Default workspace")}
+            leadingIcon={
+              (effective?.defaultThreadEnvMode ?? null) === "worktree" && !mixedWorkspace ? (
+                <FolderGit2Icon />
+              ) : (
+                <FolderIcon />
+              )
+            }
+          >
             <SelectValue>
               {(value: string | null) =>
                 value === "local" || value === "worktree"
@@ -292,63 +295,57 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       }
       control={
         fallbackSelection ? (
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
-            <ProviderModelPicker
-              environmentId={representative?.environmentId ?? null}
-              activeInstanceId={fallbackSelection.instanceId}
-              model={fallbackSelection.model}
-              lockedProvider={null}
-              instanceEntries={entries}
-              modelOptionsByInstance={fallbackModelOptions}
-              triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-              triggerAriaLabel={gt("Fallback model")}
-              {...(mixedFallback
-                ? { triggerLabel: gt("Mixed", { $context: "values differ across targets" }) }
-                : settings.fallbackModelSelection === null
-                  ? { triggerLabel: gt("None", { $context: "no fallback model" }) }
-                  : {})}
-              getModelDisabledReason={modelDisabledReason}
-              onInstanceModelChange={(instanceId, model) => {
-                const reason = modelDisabledReason(instanceId, model);
-                if (reason) {
-                  toastManager.add({
-                    type: "error",
-                    title: gt("Fallback model not saved"),
-                    description: reason,
-                  });
-                  return;
-                }
-                updateSettings({
-                  fallbackModelSelection: pickModelSelection(
-                    mixedFallback ? null : settings.fallbackModelSelection,
-                    instanceId,
-                    model,
-                  ),
+          <SettingsModelPicker
+            environmentId={representative?.environmentId ?? null}
+            activeInstanceId={fallbackSelection.instanceId}
+            model={fallbackSelection.model}
+            traits={
+              settings.fallbackModelSelection !== null && fallbackEntry && !mixedFallback
+                ? {
+                    provider: fallbackEntry.driverKind,
+                    models: fallbackEntry.models,
+                    modelOptions: fallbackSelection.options ?? [],
+                    onModelOptionsChange: (options) =>
+                      updateSettings({
+                        fallbackModelSelection: createModelSelection(
+                          fallbackSelection.instanceId,
+                          fallbackSelection.model,
+                          options,
+                        ),
+                      }),
+                  }
+                : null
+            }
+            instanceEntries={entries}
+            modelOptionsByInstance={fallbackModelOptions}
+            triggerAriaLabel={gt("Fallback model")}
+            {...(mixedFallback
+              ? { triggerLabel: gt("Mixed", { $context: "values differ across targets" }) }
+              : settings.fallbackModelSelection === null
+                ? { triggerLabel: gt("None", { $context: "no fallback model" }) }
+                : {})}
+            getModelDisabledReason={modelDisabledReason}
+            onInstanceModelChange={(instanceId, model) => {
+              const reason = modelDisabledReason(instanceId, model);
+              if (reason) {
+                toastManager.add({
+                  type: "error",
+                  title: gt("Fallback model not saved"),
+                  description: reason,
                 });
-              }}
-            />
-            {settings.fallbackModelSelection !== null && fallbackEntry && !mixedFallback ? (
-              <TraitsPicker
-                provider={fallbackEntry.driverKind}
-                models={fallbackEntry.models}
-                model={fallbackSelection.model}
-                modelOptions={fallbackSelection.options ?? []}
-                allowPromptInjectedEffort={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onModelOptionsChange={(options) =>
-                  updateSettings({
-                    fallbackModelSelection: createModelSelection(
-                      fallbackSelection.instanceId,
-                      fallbackSelection.model,
-                      options,
-                    ),
-                  })
-                }
-              />
-            ) : null}
-          </div>
+                return;
+              }
+              updateSettings({
+                fallbackModelSelection: pickModelSelection(
+                  mixedFallback ? null : settings.fallbackModelSelection,
+                  instanceId,
+                  model,
+                ),
+              });
+            }}
+          />
         ) : (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             <T>No providers available</T>
           </span>
         )
@@ -356,305 +353,266 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     />
   ) : null;
 
+  const permissionsRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["defaultRuntimeMode"]}
+      mixed={mixedPermissions}
+      {...searchableSetting("default-permissions")}
+      description={
+        isProjectScope
+          ? gt("Permissions for new threads in this project.")
+          : gt("Default permissions for new threads. Projects can override them.")
+      }
+      resetAction={
+        settings.defaultRuntimeMode !== DEFAULT_SERVER_SETTINGS.defaultRuntimeMode ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset default permissions to default")}
+            onClick={() =>
+              updateSettings({
+                defaultRuntimeMode: DEFAULT_SERVER_SETTINGS.defaultRuntimeMode,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Select
+          value={mixedPermissions ? null : settings.defaultRuntimeMode}
+          onValueChange={(value) => {
+            if (value) updateSettings({ defaultRuntimeMode: value });
+          }}
+        >
+          <SelectTrigger
+            variant="well"
+            size="compact"
+            aria-label={gt("Default permissions")}
+            leadingIcon={mixedPermissions ? undefined : <PermissionIcon />}
+          >
+            <SelectValue>
+              {mixedPermissions
+                ? gt("Mixed", { $context: "values differ across targets" })
+                : m(runtimeModeConfig[settings.defaultRuntimeMode].label)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {runtimeModeOptions.map((mode) => {
+              const option = runtimeModeConfig[mode];
+              const Icon = option.icon;
+              const managedReason = firstManagedDenial(
+                connectedEnvironments.map((environment) => environment.serverConfig?.managedPolicy),
+                (policy) => managedRuntimeModeDenial(policy, mode, m),
+              );
+              return (
+                <SelectItem
+                  key={mode}
+                  value={mode}
+                  disabled={managedReason !== undefined}
+                  className="min-w-64"
+                >
+                  <div className="grid gap-0.5">
+                    <span className="inline-flex items-center gap-1.5 font-medium">
+                      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                      {m(option.label)}
+                    </span>
+                    <span className="text-meta leading-4 text-muted-foreground">
+                      {managedReason ?? m(option.description)}
+                    </span>
+                  </div>
+                </SelectItem>
+              );
+            })}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
+  const autoPullRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["defaultAutoPull"]}
+      mixed={mixedAutoPull}
+      id="automatic-pull"
+      title={gt("Automatically pull")}
+      description={
+        isProjectScope
+          ? gt("Keep this project's default branch current when the checkout is clean.")
+          : gt("Keep the default branch current when the checkout is clean.")
+      }
+      resetAction={
+        settings.defaultAutoPull ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset default automatic pull to default")}
+            tooltip={gt("Reset automatic pull to off")}
+            onClick={() => updateSettings({ defaultAutoPull: false })}
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          aria-label={gt("Default automatic pull")}
+          mixed={mixedAutoPull}
+          checked={mixedAutoPull ? false : settings.defaultAutoPull}
+          onCheckedChange={(enabled) => updateSettings({ defaultAutoPull: enabled })}
+        />
+      }
+    />
+  );
+  const agentCreditsRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["removeAgentCreditsOnMerge"]}
+      mixed={mixedAgentCredits}
+      {...searchableSetting("remove-agent-credits-on-merge")}
+      description={gt(
+        "Remove recognized agent credit lines from merge and squash messages on hosts that support it, keeping human co-authors. Includes auto-merge. Excludes merge queues, stack merges, and existing commits.",
+      )}
+      resetAction={
+        settings.removeAgentCreditsOnMerge ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset agent credit removal to default")}
+            tooltip={gt("Keep agent credits")}
+            onClick={() => updateSettings({ removeAgentCreditsOnMerge: false })}
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          aria-label={gt("Remove agent credits when merging")}
+          mixed={mixedAgentCredits}
+          checked={mixedAgentCredits ? false : settings.removeAgentCreditsOnMerge}
+          onCheckedChange={(enabled) => updateSettings({ removeAgentCreditsOnMerge: enabled })}
+        />
+      }
+    />
+  );
+  const mergeMethodRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["pullRequestMergeMethod"]}
+      mixed={mixedMergeMethod}
+      {...searchableSetting("pull-request-merge-method")}
+      description={
+        isProjectScope
+          ? gt("Pull requests in this project start with this method.")
+          : gt("Pull requests start with this method, or the one you used last.")
+      }
+      resetAction={
+        settings.pullRequestMergeMethod !== null ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset default merge method to default")}
+            tooltip={gt("Reset to last selected")}
+            onClick={() => updateSettings({ pullRequestMergeMethod: null })}
+          />
+        ) : null
+      }
+      control={
+        <Select
+          value={mixedMergeMethod ? null : (settings.pullRequestMergeMethod ?? "last")}
+          onValueChange={(value) => {
+            if (value === "last") updateSettings({ pullRequestMergeMethod: null });
+            else if (value === "merge" || value === "squash" || value === "rebase")
+              updateSettings({ pullRequestMergeMethod: value });
+          }}
+        >
+          <SelectTrigger
+            variant="well"
+            size="compact"
+            aria-label={gt("Default pull request merge method")}
+            leadingIcon={<PullRequestGlyph.merged />}
+          >
+            <SelectValue>
+              {(value: string | null) =>
+                value === "merge" || value === "squash" || value === "rebase"
+                  ? m(PULL_REQUEST_MERGE_METHOD_LABELS[value])
+                  : value === "last"
+                    ? gt("Last selected")
+                    : gt("Mixed", { $context: "values differ across targets" })
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            <SelectItem value="last">
+              <T>Last selected</T>
+            </SelectItem>
+            <SelectItem value="merge">{m(PULL_REQUEST_MERGE_METHOD_LABELS.merge)}</SelectItem>
+            <SelectItem value="squash">{m(PULL_REQUEST_MERGE_METHOD_LABELS.squash)}</SelectItem>
+            <SelectItem value="rebase">{m(PULL_REQUEST_MERGE_METHOD_LABELS.rebase)}</SelectItem>
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
+  const browserAccessRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["enableAgentBrowserAccess"]}
+      mixed={mixedBrowser}
+      id={searchableSetting("agent-browser-access").id}
+      title={gt("Agent browser access")}
+      description={
+        isProjectScope
+          ? gt("Allow agents in this project to use the shared browser.")
+          : gt("Allow agents to use the shared browser. Projects can override it.")
+      }
+      resetAction={
+        settings.enableAgentBrowserAccess !== DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset default browser access to default")}
+            onClick={() =>
+              updateSettings({
+                enableAgentBrowserAccess: DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          aria-label={gt("Agent browser access")}
+          mixed={mixedBrowser}
+          checked={mixedBrowser ? false : settings.enableAgentBrowserAccess}
+          onCheckedChange={(enabled) => updateSettings({ enableAgentBrowserAccess: enabled })}
+        />
+      }
+    />
+  );
+
   return (
     <SettingsSection
       id={category === "source-control" ? "source-control-defaults" : "project-defaults"}
-      title={category === "source-control" ? gt("Repositories") : gt("New threads")}
+      title={
+        category === "source-control"
+          ? gt("Repositories")
+          : category === "project"
+            ? gt("Defaults", { $context: "settings section, project defaults" })
+            : gt("New threads")
+      }
     >
       {category === "project" ? (
+        // The project page gathers every setting a project can override.
         <>
           {modelRow}
           {fallbackRow}
           {workspaceRow}
+          {permissionsRow}
+          {autoPullRow}
+          {browserAccessRow}
+          {mergeMethodRow}
+          <WorktreeSubmodulesRow />
         </>
       ) : category === "general" ? (
         <>
           {modelRow}
           {fallbackRow}
-          <SettingsRow
-            serverScoped
-            settingKeys={["defaultRuntimeMode"]}
-            mixed={mixedPermissions}
-            {...searchableSetting("default-permissions")}
-            description={
-              isProjectScope
-                ? gt("Permissions for new threads in this project.")
-                : gt("Default permissions for new threads. Projects can override them.")
-            }
-            resetAction={
-              settings.defaultRuntimeMode !== DEFAULT_SERVER_SETTINGS.defaultRuntimeMode ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset default permissions to default")}
-                  onClick={() =>
-                    updateSettings({
-                      defaultRuntimeMode: DEFAULT_SERVER_SETTINGS.defaultRuntimeMode,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Select
-                value={mixedPermissions ? null : settings.defaultRuntimeMode}
-                onValueChange={(value) => {
-                  if (value) updateSettings({ defaultRuntimeMode: value });
-                }}
-              >
-                <SelectTrigger size="sm" aria-label={gt("Default permissions")}>
-                  {!mixedPermissions && (
-                    <PermissionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                  )}
-                  <SelectValue>
-                    {mixedPermissions
-                      ? gt("Mixed", { $context: "values differ across targets" })
-                      : m(runtimeModeConfig[settings.defaultRuntimeMode].label)}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {runtimeModeOptions.map((mode) => {
-                    const option = runtimeModeConfig[mode];
-                    const Icon = option.icon;
-                    const managedReason = firstManagedDenial(
-                      connectedEnvironments.map(
-                        (environment) => environment.serverConfig?.managedPolicy,
-                      ),
-                      (policy) => managedRuntimeModeDenial(policy, mode, m),
-                    );
-                    return (
-                      <SelectItem
-                        key={mode}
-                        value={mode}
-                        disabled={managedReason !== undefined}
-                        className="min-w-64"
-                      >
-                        <div className="grid gap-0.5">
-                          <span className="inline-flex items-center gap-1.5 font-medium">
-                            <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                            {m(option.label)}
-                          </span>
-                          <span className="text-xs leading-4 text-muted-foreground">
-                            {managedReason ?? m(option.description)}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectPopup>
-              </Select>
-            }
-          />
+          {permissionsRow}
           {workspaceRow}
         </>
       ) : (
         <>
-          <SettingsRow
-            serverScoped
-            settingKeys={["defaultAutoPull"]}
-            mixed={mixedAutoPull}
-            id="automatic-pull"
-            title={gt("Automatically pull")}
-            description={
-              isProjectScope
-                ? gt(
-                    "Keeps this project's default branch current when the checkout has no local changes or commits.",
-                  )
-                : gt(
-                    "Keeps the default branch current when the checkout has no local changes or commits. Projects can override it.",
-                  )
-            }
-            resetAction={
-              settings.defaultAutoPull ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset default automatic pull to default")}
-                  tooltip={gt("Reset automatic pull to off")}
-                  onClick={() => updateSettings({ defaultAutoPull: false })}
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                aria-label={gt("Default automatic pull")}
-                mixed={mixedAutoPull}
-                checked={mixedAutoPull ? false : settings.defaultAutoPull}
-                onCheckedChange={(enabled) => updateSettings({ defaultAutoPull: enabled })}
-              />
-            }
-          />
-          <SettingsRow
-            serverScoped
-            settingKeys={["removeAgentCreditsOnMerge"]}
-            mixed={mixedAgentCredits}
-            {...searchableSetting("remove-agent-credits-on-merge")}
-            description={gt(
-              "Remove recognized agent credit lines from merge and squash messages on hosts that support it, keeping human co-authors. Includes auto-merge. Excludes merge queues, stack merges, and existing commits.",
-            )}
-            resetAction={
-              settings.removeAgentCreditsOnMerge ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset agent credit removal to default")}
-                  tooltip={gt("Keep agent credits")}
-                  onClick={() => updateSettings({ removeAgentCreditsOnMerge: false })}
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                aria-label={gt("Remove agent credits when merging")}
-                mixed={mixedAgentCredits}
-                checked={mixedAgentCredits ? false : settings.removeAgentCreditsOnMerge}
-                onCheckedChange={(enabled) =>
-                  updateSettings({ removeAgentCreditsOnMerge: enabled })
-                }
-              />
-            }
-          />
-          <SettingsRow
-            serverScoped
-            settingKeys={["pullRequestMergeMethod"]}
-            mixed={mixedMergeMethod}
-            {...searchableSetting("pull-request-merge-method")}
-            description={
-              isProjectScope
-                ? gt("Pull requests in this project start with this method.")
-                : gt(
-                    "Pull requests start with this method. Last selected reuses whatever you chose most recently on this device.",
-                  )
-            }
-            resetAction={
-              settings.pullRequestMergeMethod !== null ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset default merge method to default")}
-                  tooltip={gt("Reset to last selected")}
-                  onClick={() => updateSettings({ pullRequestMergeMethod: null })}
-                />
-              ) : null
-            }
-            control={
-              <Select
-                value={mixedMergeMethod ? null : (settings.pullRequestMergeMethod ?? "last")}
-                onValueChange={(value) => {
-                  if (value === "last") updateSettings({ pullRequestMergeMethod: null });
-                  else if (value === "merge" || value === "squash" || value === "rebase")
-                    updateSettings({ pullRequestMergeMethod: value });
-                }}
-              >
-                <SelectTrigger size="sm" aria-label={gt("Default pull request merge method")}>
-                  <SelectValue>
-                    {(value: string | null) =>
-                      value === "merge" || value === "squash" || value === "rebase"
-                        ? m(PULL_REQUEST_MERGE_METHOD_LABELS[value])
-                        : value === "last"
-                          ? gt("Last selected")
-                          : gt("Mixed", { $context: "values differ across targets" })
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="last">
-                    <T>Last selected</T>
-                  </SelectItem>
-                  <SelectItem value="merge">{m(PULL_REQUEST_MERGE_METHOD_LABELS.merge)}</SelectItem>
-                  <SelectItem value="squash">
-                    {m(PULL_REQUEST_MERGE_METHOD_LABELS.squash)}
-                  </SelectItem>
-                  <SelectItem value="rebase">
-                    {m(PULL_REQUEST_MERGE_METHOD_LABELS.rebase)}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-            }
-          />
-          <SettingsRow
-            serverScoped
-            settingKeys={["jjCommitTrailers"]}
-            mixed={mixedJjTrailers}
-            {...searchableSetting("jj-commit-trailers")}
-            description={
-              isProjectScope
-                ? gt(
-                    "Commits that agents or T3 make in this jj repository get T3-Thread and T3-Turn trailers that link them to the thread and turn.",
-                  )
-                : gt(
-                    "Commits that agents or T3 make in jj repositories get T3-Thread and T3-Turn trailers that link them to the thread and turn. Projects can override it.",
-                  )
-            }
-            resetAction={
-              settings.jjCommitTrailers !== DEFAULT_SERVER_SETTINGS.jjCommitTrailers ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset jj commit trailers to default")}
-                  onClick={() =>
-                    updateSettings({ jjCommitTrailers: DEFAULT_SERVER_SETTINGS.jjCommitTrailers })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                aria-label={gt("Add T3 trailers to jj commits")}
-                mixed={mixedJjTrailers}
-                checked={mixedJjTrailers ? false : settings.jjCommitTrailers}
-                onCheckedChange={(enabled) => updateSettings({ jjCommitTrailers: enabled })}
-              />
-            }
-          />
-          <SettingsRow
-            serverScoped
-            settingKeys={["jjStripTrailersRemotes"]}
-            mixed={mixedJjStripRemotes}
-            {...searchableSetting("jj-strip-trailers-remotes")}
-            description={
-              isProjectScope
-                ? gt(
-                    "Pushes from this project to these remotes drop the T3 trailers first. Separate remote names with commas.",
-                  )
-                : gt(
-                    "Pushes to these remotes drop the T3 trailers first. Separate remote names with commas. Projects can override it.",
-                  )
-            }
-            resetAction={
-              settings.jjStripTrailersRemotes.length > 0 ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset remotes that strip T3 trailers to default")}
-                  onClick={() => updateSettings({ jjStripTrailersRemotes: [] })}
-                />
-              ) : null
-            }
-            control={
-              <Input
-                key={`${scopeKey}:${mixedJjStripRemotes}:${settings.jjStripTrailersRemotes.join(",")}`}
-                aria-label={gt("Strip T3 trailers when pushing to")}
-                autoCapitalize="none"
-                spellCheck={false}
-                placeholder={
-                  mixedJjStripRemotes
-                    ? gt("Mixed", { $context: "projects have different values" })
-                    : gt("No remotes")
-                }
-                defaultValue={mixedJjStripRemotes ? "" : settings.jjStripTrailersRemotes.join(", ")}
-                onChange={() => {
-                  jjStripRemotesEdited.current = true;
-                }}
-                onBlur={(event) => {
-                  const remotes = [
-                    ...new Set(
-                      event.target.value
-                        .split(",")
-                        .map((remote) => remote.trim())
-                        .filter((remote) => remote.length > 0),
-                    ),
-                  ];
-                  if (
-                    jjStripRemotesEdited.current &&
-                    (mixedJjStripRemotes ||
-                      remotes.join(",") !== settings.jjStripTrailersRemotes.join(","))
-                  ) {
-                    updateSettings({ jjStripTrailersRemotes: remotes });
-                  }
-                  jjStripRemotesEdited.current = false;
-                }}
-              />
-            }
-          />
+          {autoPullRow}
+          {agentCreditsRow}
+          {mergeMethodRow}
         </>
       )}
     </SettingsSection>
@@ -684,9 +642,7 @@ export function WorktreeSubmodulesRow() {
       description={
         isProjectScope
           ? gt("How new worktrees in this project populate git submodules.")
-          : gt(
-              "How new worktrees populate git submodules. Projects and their t3.json can override it.",
-            )
+          : gt("How new worktrees populate git submodules.")
       }
       resetAction={
         !isProjectScope && settings.worktreeSubmodules !== null ? (
@@ -703,7 +659,12 @@ export function WorktreeSubmodulesRow() {
             if (isWorktreeSubmodules(value)) updateSettings({ worktreeSubmodules: value });
           }}
         >
-          <SelectTrigger size="sm" aria-label={gt("Worktree submodules")}>
+          <SelectTrigger
+            variant="well"
+            size="compact"
+            aria-label={gt("Worktree submodules")}
+            leadingIcon={<GitBranchIcon />}
+          >
             <SelectValue>
               {(value: string | null) =>
                 isWorktreeSubmodules(value)

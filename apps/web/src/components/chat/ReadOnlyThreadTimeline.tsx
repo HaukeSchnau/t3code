@@ -132,13 +132,12 @@ export function ReadOnlyThreadTimeline(props: {
             footer={props.renderFooter?.(items) ?? null}
           />
         </SideThreadsOpenContext>
-        {follow.showScrollToBottom ? (
-          <ScrollToEndButton
-            summary={null}
-            bottom={4}
-            onScrollToEnd={() => follow.scrollToEnd(true)}
-          />
-        ) : null}
+        <ScrollToEndButton
+          visible={follow.showScrollToBottom}
+          summary={[]}
+          bottom={4}
+          onScrollToEnd={() => follow.scrollToEnd(true)}
+        />
       </div>
       {props.children({ scrollToEnd: () => follow.scrollToEnd(true) })}
     </>

@@ -241,6 +241,94 @@ const nativeReport = (provider: ServerProvider): AccountReport => ({
   usageLimits: provider.usageLimits,
 });
 
+/** Resolve the selected login across native duplicates and linked usage sources. */
+export function resolveProviderUsageLimits(
+  instanceId: ProviderInstanceId,
+  providers: readonly ServerProvider[],
+  sources: UsageLimitSourceSnapshots,
+): ServerProviderUsageLimits | undefined {
+  const selected = providers.find((provider) => provider.instanceId === instanceId);
+  if (!selected) return undefined;
+  const reports = [
+    ...providers.filter((provider) => provider.enabled).map(nativeReport),
+    ...sources.flatMap((source) => source.accounts),
+  ];
+  const resolveKey = accountKeyResolver(reports);
+  const key = resolveKey(nativeReport(selected));
+  const candidates = key === null ? [] : reports.filter((report) => resolveKey(report) === key);
+  return (
+    candidates
+      .flatMap((report) =>
+        report.usageLimits && limitsNotice(report.usageLimits) === null ? [report.usageLimits] : [],
+      )
+      .sort((a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt))[0] ?? selected.usageLimits
+  );
+}
+
+/** A provider with no login of its own, such as a custom endpoint, spends from the accounts linked sources report for its driver. */
+export function resolveProviderLimitPool(
+  instanceId: ProviderInstanceId,
+  providers: readonly ServerProvider[],
+  sources: UsageLimitSourceSnapshots,
+  now: number,
+): LimitPool | undefined {
+  const selected = providers.find((provider) => provider.instanceId === instanceId);
+  if (!selected || accountKey(selected.driver, selected.auth.email, selected.usageLimits)) {
+    return undefined;
+  }
+  const resolveKey = accountKeyResolver(sources.flatMap((source) => source.accounts));
+  const accounts = new Map<string, LimitAccount>();
+  for (const source of sources) {
+    for (const account of source.accounts) {
+      if (account.driver !== selected.driver || limitsNotice(account.usageLimits) !== null) {
+        continue;
+      }
+      const key =
+        resolveKey(account) ??
+        `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
+      const seen = accounts.get(key);
+      if (seen && Date.parse(seen.limits.checkedAt) >= Date.parse(account.usageLimits.checkedAt)) {
+        continue;
+      }
+      accounts.set(key, {
+        key,
+        driver: account.driver,
+        displayName: account.email ? null : hubAccountName(account),
+        email: account.email,
+        plan: account.plan,
+        accentColor: undefined,
+        environments: [],
+        sourceLabel: source.label,
+        redeem: null,
+        limits: account.usageLimits,
+      });
+    }
+  }
+  return collectLimitPools([...accounts.values()], now)[0];
+}
+
+/** Why a custom endpoint provider has no pool: nothing linked reports accounts for its driver. */
+export function limitPoolNotice(
+  instanceId: ProviderInstanceId,
+  providers: readonly ServerProvider[],
+  sources: UsageLimitSourceSnapshots,
+): string | null {
+  const selected = providers.find((provider) => provider.instanceId === instanceId);
+  if (
+    !selected ||
+    selected.auth.type !== "customEndpoint" ||
+    accountKey(selected.driver, selected.auth.email, selected.usageLimits) ||
+    sources.some((source) => source.accounts.some((account) => account.driver === selected.driver))
+  ) {
+    return null;
+  }
+  const failed = sources.find((source) => source.error);
+  if (failed) return `${failed.label}: ${failed.error}`;
+  const name =
+    selected.displayName?.trim() || PROVIDER_DISPLAY_NAMES[selected.driver] || selected.driver;
+  return `${name} runs through a custom endpoint. Add its usage provider in Settings → Providers → Usage providers to see the limits of the accounts behind it.`;
+}
+
 // Include every enabled login, even unreadable workspaces.
 function accountKeyResolver(reports: Iterable<AccountReport>) {
   const workspaces = new Map<string, Set<string>>();
@@ -984,6 +1072,62 @@ export function resetCountdown(
   return { kind: "in", ms: resetsAt - now };
 }
 
+/** Under this share of quota left, a window reads as low: amber, and worth a notice. */
+const LOW_LIMIT_REMAINING_PERCENT = 25;
+
+/** Whether the window has less than a quarter of its quota left. */
+export function isLowLimit(window: ServerProviderUsageWindow): boolean {
+  return remainingPercent(window) < LOW_LIMIT_REMAINING_PERCENT;
+}
+
+/**
+ * Milliseconds until the window's quota runs out at the rate spent so far,
+ * or null when that rate is unknown or the window resets first.
+ */
+export function projectRunOut(window: ServerProviderUsageWindow, now: number): number | null {
+  const resetsAt = resetMillis(window);
+  const elapsed = elapsedShare(window, now);
+  if (resetsAt === null || elapsed === null || window.windowDurationMins === undefined) {
+    return null;
+  }
+  const used = Math.max(0, Math.min(100, window.usedPercent));
+  const elapsedMs = elapsed * window.windowDurationMins * MINUTE;
+  if (used <= 0 || elapsedMs <= 0) return null;
+  if (used >= 100) return 0;
+  const runOut = ((100 - used) / used) * elapsedMs;
+  return runOut < resetsAt - now ? runOut : null;
+}
+
+export interface TightestLimit {
+  readonly account: LimitAccount;
+  readonly window: ServerProviderUsageWindow;
+  readonly remainingPercent: number;
+}
+
+/**
+ * The session window with the least quota left across the accounts, optionally
+ * for one driver. Accounts with no session window fall back to their shortest
+ * window kind, so a monthly-only plan still has something to report.
+ */
+export function tightestSessionLimit(
+  accounts: readonly LimitAccount[],
+  driver?: ServerProvider["driver"],
+): TightestLimit | null {
+  let tightest: TightestLimit | null = null;
+  for (const account of accounts) {
+    if (driver !== undefined && account.driver !== driver) continue;
+    const window = [...account.limits.windows].sort(
+      (left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
+    )[0];
+    if (!window) continue;
+    const remaining = remainingPercent(window);
+    if (tightest === null || remaining < tightest.remainingPercent) {
+      tightest = { account, window, remainingPercent: remaining };
+    }
+  }
+  return tightest;
+}
+
 export const USAGE_LIMITS_COMMAND = {
   name: "usage-limits",
   description: "Show this provider's usage limits",
@@ -1231,16 +1375,25 @@ export function collectProviderUsageLimits(
       limits: shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
     });
   }
+  let proxyAccountNumber = 0;
   for (const source of shownHubs) {
     const matching = source.accounts.filter(routes);
     for (const account of matching) {
       const key = resolveKey(account);
       if (key && nativeAccountKeys.has(key)) continue;
+      proxyAccountNumber += 1;
+      const driverLabel =
+        account.driver === "claudeAgent"
+          ? "Claude"
+          : String(account.driver).charAt(0).toUpperCase() + String(account.driver).slice(1);
       accounts.push({
         id: `${source.id}:${account.id}`,
         driver: account.driver,
-        label: `${source.label} · ${hubAccountName(account)}`,
-        sourceLabel: "CLI Proxy",
+        label:
+          account.email?.trim() ||
+          hubAccountName(account) ||
+          `${driverLabel} account ${proxyAccountNumber}`,
+        sourceLabel: source.label,
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {
               resetCreditInput: {
@@ -1259,5 +1412,7 @@ export function collectProviderUsageLimits(
       notices.push(`${source.label}: ${source.error}`);
     }
   }
+  const poolNotice = limitPoolNotice(instanceId, providers, sources);
+  if (poolNotice && !notices.includes(poolNotice)) notices.push(poolNotice);
   return { createdAt: DateTime.formatIso(DateTime.makeUnsafe(now)), accounts, notices };
 }

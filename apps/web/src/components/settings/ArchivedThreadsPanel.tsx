@@ -3,8 +3,7 @@ import type { ContextMenuSource } from "@t3tools/contracts";
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import { m as resolveMessage } from "~/i18n/messages";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
-import { Spinner } from "~/components/ui/spinner";
-import { ArchiveIcon, ArchiveX, Trash2Icon } from "lucide-react";
+import { ArchiveIcon, ArchiveRestoreIcon, CheckCheckIcon, Trash2Icon } from "lucide-react";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
@@ -19,15 +18,26 @@ import { readLocalApi } from "../../localApi";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { RelativeTime } from "../RelativeTime";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+  SettingsToolbar,
+  SettingsSearchField,
+  SettingsNoMatches,
+  SettingsLoadingRows,
+  SettingsEmptyState,
+  SettingsEmptyTiles,
+  SettingsEmptyTile,
+} from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
 
-import { msg, T, useGT, useMessages } from "gt-react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { type ReactNode, useRef, useState } from "react";
 import { observeIntersection } from "~/lib/observeIntersection";
-import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 
 const ARCHIVE_ACTIONS = [
   {
@@ -35,7 +45,7 @@ const ARCHIVE_ACTIONS = [
     label: msg("Unarchive"),
     threadLabel: msg("Unarchive {title}"),
     failureTitle: msg("Failed to unarchive thread"),
-    Icon: ArchiveX,
+    Icon: ArchiveRestoreIcon,
   },
   {
     action: "delete",
@@ -76,7 +86,7 @@ function ArchivedThreadChunk(props: {
           { root: node.closest("[data-settings-page-scroll]"), rootMargin: "1200px 0px" },
         );
       }}
-      className="*:not-first:border-t *:not-first:border-border/50"
+      className="*:not-first:border-t *:not-first:border-divider"
       style={view.near ? undefined : { height: view.rowHeight * rowCount }}
     >
       {view.near ? props.renderRows() : null}
@@ -98,8 +108,10 @@ export function ArchivedThreadsPanel() {
     isLoading: isLoadingArchive,
     refresh: refreshArchivedThreads,
   } = useArchivedThreadSnapshots(scope.environmentIds);
+  const [archiveQuery, setArchiveQuery] = useState("");
+  const normalizedArchiveQuery = archiveQuery.trim().toLowerCase();
 
-  const { groups: archivedGroups, hasMultipleEnvironments } = (() => {
+  const { groups: allArchivedGroups, hasMultipleEnvironments } = (() => {
     const selectedProjectKeys =
       scope.kind === "project" || scope.kind === "checkout"
         ? new Set(scope.members.map((member) => `${member.environmentId}:${member.id}`))
@@ -126,6 +138,8 @@ export function ArchivedThreadsPanel() {
     const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
       snapshot.threads.map((thread) => ({
         ...presentThreadShell(environmentId, thread),
+        projectTitle:
+          projectsByEnvironmentAndId.get(`${environmentId}:${thread.projectId}`)?.title ?? "",
         environmentLabel: environmentLabels.get(environmentId) ?? environmentId,
       })),
     );
@@ -195,6 +209,26 @@ export function ArchivedThreadsPanel() {
       firstRow += group.threads.length;
     }
     return { groups: sortedGroups, hasMultipleEnvironments };
+  })();
+  // Filters the loaded snapshots on the client: a thread matches on its title
+  // or its project's name.
+  const archivedGroups = (() => {
+    if (normalizedArchiveQuery.length === 0) return allArchivedGroups;
+    let firstRow = 0;
+    return allArchivedGroups.flatMap((group) => {
+      const projectMatches = group.title.toLowerCase().includes(normalizedArchiveQuery);
+      const threads = projectMatches
+        ? group.threads
+        : group.threads.filter(
+            (thread) =>
+              thread.title.toLowerCase().includes(normalizedArchiveQuery) ||
+              thread.projectTitle.toLowerCase().includes(normalizedArchiveQuery),
+          );
+      if (threads.length === 0) return [];
+      const filtered = { ...group, firstRow, threads };
+      firstRow += threads.length;
+      return [filtered];
+    });
   })();
 
   type ArchivedThread = (typeof archivedGroups)[number]["threads"][number];
@@ -277,13 +311,29 @@ export function ArchivedThreadsPanel() {
         }}
         title={thread.title}
         description={
-          <span className={hasMultipleEnvironments ? "block truncate" : undefined}>
-            {hasMultipleEnvironments ? `${thread.environmentLabel} · ` : null}
-            <T>
-              Archived <RelativeTime timestamp={thread.archivedAt ?? thread.createdAt} />
-              {" \u00b7 Created "}
-              <RelativeTime timestamp={thread.createdAt} />
-            </T>
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {hasMultipleEnvironments ? (
+              <span className="w-full truncate">{thread.environmentLabel}</span>
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger render={<span tabIndex={0} />}>
+                <T>
+                  Archived <RelativeTime timestamp={thread.archivedAt ?? thread.createdAt} />
+                </T>
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                <T>
+                  Created <RelativeTime timestamp={thread.createdAt} />
+                </T>
+              </TooltipPopup>
+            </Tooltip>
+            {thread.messageCount === undefined ? null : (
+              <span>
+                {gt("{count, plural, one {{count} message} other {{count} messages}}", {
+                  count: thread.messageCount,
+                })}
+              </span>
+            )}
           </span>
         }
         control={
@@ -294,7 +344,7 @@ export function ArchivedThreadsPanel() {
                   render={
                     <Button
                       type="button"
-                      variant={action === "delete" ? "destructive-outline" : "outline"}
+                      variant={action === "delete" ? "destructive-outline" : "secondary"}
                       size="icon-sm"
                       aria-label={m(threadLabel, { title: thread.title })}
                       disabled={pendingKeys.has(threadKey)}
@@ -314,34 +364,68 @@ export function ArchivedThreadsPanel() {
   };
 
   return (
-    <SettingsPageContainer>
-      {archivedGroups.length === 0 ? (
+    <SettingsPageContainer
+      centered={allArchivedGroups.length === 0 && !isLoadingArchive && !archiveError}
+    >
+      {allArchivedGroups.length > 0 ? (
+        <SettingsToolbar>
+          <SettingsSearchField
+            value={archiveQuery}
+            onChange={setArchiveQuery}
+            placeholder={gt("Search archived threads")}
+          />
+        </SettingsToolbar>
+      ) : null}
+      {allArchivedGroups.length > 0 && archivedGroups.length === 0 ? (
+        <SettingsNoMatches onClear={() => setArchiveQuery("")}>
+          <T>
+            No archived threads match “<Var>{archiveQuery.trim()}</Var>”.
+          </T>
+        </SettingsNoMatches>
+      ) : null}
+      {allArchivedGroups.length === 0 && (isLoadingArchive || archiveError) ? (
         <SettingsSection
           id={isLoadingArchive ? undefined : searchableSetting("archive").id}
           title={searchableSetting("archive").title}
+          hideTitle
         >
-          <SettingsRow
-            title={
-              <span className="inline-flex items-center gap-2">
-                {isLoadingArchive ? (
-                  <Spinner size="sm" tone="muted" />
-                ) : (
+          {isLoadingArchive ? (
+            <SettingsLoadingRows label={gt("Loading archived threads")} />
+          ) : (
+            <SettingsRow
+              title={
+                <span className="inline-flex items-center gap-2">
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
-                )}
-                {isLoadingArchive
-                  ? gt("Loading archived threads")
-                  : archiveError
-                    ? gt("Could not load archived threads")
-                    : gt("No archived threads")}
-              </span>
-            }
-            description={
-              isLoadingArchive
-                ? gt("Checking connected environments.")
-                : (archiveError ?? gt("Archived threads will appear here."))
-            }
-          />
+                  {gt("Could not load archived threads")}
+                </span>
+              }
+              description={archiveError}
+            />
+          )}
         </SettingsSection>
+      ) : allArchivedGroups.length === 0 ? (
+        <section id={searchableSetting("archive").id} tabIndex={-1} className="pt-19">
+          <SettingsEmptyState
+            icon={<ArchiveIcon />}
+            title={gt("No archived threads")}
+            description={gt(
+              "Threads you archive stay searchable here and can be restored at any time.",
+            )}
+          >
+            <SettingsEmptyTiles narrow>
+              <SettingsEmptyTile
+                icon={<ArchiveIcon />}
+                title={gt("Archive a thread")}
+                description={gt("From its menu in the sidebar.")}
+              />
+              <SettingsEmptyTile
+                icon={<CheckCheckIcon />}
+                title={gt("Settled threads")}
+                description={gt("Cleared from Settled.")}
+              />
+            </SettingsEmptyTiles>
+          </SettingsEmptyState>
+        </section>
       ) : (
         archivedGroups.map(({ key, project, title, firstRow, threads: projectThreads }, index) => (
           <SettingsSection

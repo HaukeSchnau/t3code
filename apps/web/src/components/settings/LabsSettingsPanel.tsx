@@ -7,7 +7,7 @@ import { T, useGT, useMessages } from "gt-react";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
@@ -37,7 +37,60 @@ export function LabsSettingsPanel() {
         <FastWorktreeCheckoutRow />
         <AgentFeedbackRow />
       </SettingsSection>
+      <SettingsSection
+        id="redesign"
+        title={gt("Redesign", { $context: "settings section, labs features of the redesign" })}
+      >
+        <ScrollingWorkspacesRow />
+        <TurnWorkFoldRow />
+      </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function ScrollingWorkspacesRow() {
+  const searchableSetting = useSearchableSetting();
+  const gt = useGT();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("scrolling-workspaces")}
+      description={gt(
+        "Panes scroll sideways instead of shrinking, and you can keep several workspaces with an overview, swipes and a layout tour. Splits, tabs and layout templates work either way.",
+      )}
+      control={
+        <Switch
+          checked={settings.scrollingWorkspacesEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ scrollingWorkspacesEnabled: Boolean(checked) })
+          }
+          aria-label={gt("Scrolling workspaces")}
+        />
+      }
+    />
+  );
+}
+
+function TurnWorkFoldRow() {
+  const searchableSetting = useSearchableSetting();
+  const gt = useGT();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("turn-work-fold")}
+      description={gt(
+        "Gather a running turn's tool calls and notes under one Working line that folds into its Worked for row when the turn ends, with the tool calls inside shown open.",
+      )}
+      control={
+        <Switch
+          checked={settings.turnWorkFoldEnabled}
+          onCheckedChange={(checked) => updateSettings({ turnWorkFoldEnabled: Boolean(checked) })}
+          aria-label={gt("Fold each turn's work")}
+        />
+      }
+    />
   );
 }
 
@@ -109,7 +162,7 @@ function GuestLinksRowWithSignIn() {
         "Share a thread with a guest who watches it live in a browser and sends messages you approve. Sign in to T3 Connect to use guest links.",
       )}
       control={
-        <Button size="sm" variant="outline" onClick={openAuthPrompt}>
+        <Button size="sm" variant="secondary" onClick={openAuthPrompt}>
           <T>Sign in</T>
         </Button>
       }
@@ -143,10 +196,8 @@ function GuestLinksRow() {
         <T>
           Share a thread with a guest who watches it live in a browser and sends messages you
           approve. Needs T3 Connect: sign in and link this machine in{" "}
-          <Link to="/settings/access" className="underline underline-offset-2">
-            Sharing & access
-          </Link>
-          . Turning it off stops every guest link.
+          <InlineButton render={<Link to="/settings/access" />}>Sharing & access</InlineButton>.
+          Turning it off stops every guest link.
         </T>
       }
       control={
@@ -175,10 +226,8 @@ function LinkedEnvironmentsRow() {
         <T>
           Let agents here work on your other machines, and theirs here. Turn it on for each machine,
           then link them in{" "}
-          <Link to="/settings/connections" className="underline underline-offset-2">
-            Connections
-          </Link>
-          . While off, nothing new starts over a link; running tasks finish.
+          <InlineButton render={<Link to="/settings/connections" />}>Connections</InlineButton>.
+          While off, nothing new starts over a link; running tasks finish.
         </T>
       }
       control={
@@ -260,19 +309,16 @@ function SimlockHostsRow() {
       description={
         <T>
           Let the Device panel lease simulators and emulators from your own{" "}
-          <a
-            href="https://incubator.callstack.com/simlock/"
-            target="_blank"
-            rel="noreferrer"
-            className="underline underline-offset-2"
+          <InlineButton
+            render={
+              <a href="https://incubator.callstack.com/simlock/" target="_blank" rel="noreferrer" />
+            }
           >
             Simlock
-          </a>{" "}
+          </InlineButton>{" "}
           pool, added in{" "}
-          <Link to="/settings/devices" className="underline underline-offset-2">
-            Devices
-          </Link>
-          . An alpha that may change or break. T3 Code never installs Simlock.
+          <InlineButton render={<Link to="/settings/devices" />}>Devices</InlineButton>. An alpha
+          that may change or break. T3 Code never installs Simlock.
         </T>
       }
       control={
@@ -386,7 +432,7 @@ function AgentFeedbackRow() {
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {AGENT_FEEDBACK_MODES.map((mode) => (
-              <SelectItem key={mode} hideIndicator value={mode}>
+              <SelectItem key={mode} value={mode}>
                 {m(AGENT_FEEDBACK_MODE_LABELS[mode])}
               </SelectItem>
             ))}
