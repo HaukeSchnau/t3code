@@ -14,7 +14,7 @@ plus the fork lockfile checks.
   own, so a stale hash fails before the release gate. On `main`, the release deploys to srv-1 and
   srv-2 once every check passed, and then the desktop and mobile steps ship the apps from the Apple
   builder (`desktop-distribution.md`, `mobile-distribution.md`). Inspect runs at
-  https://calder.schnau.dev and preview the pipeline with `calder plan --event push:main` or
+  https://calder.schnau.dev and preview the pipeline with `calder plan --event push:redesign` or
   `calder plan --event pr:1`.
 - After a push, `just ci-watch <revision>` fetches `origin/main`, checks that each new head
   descends from the revision, and follows the head's `calder` commit status. When a later push

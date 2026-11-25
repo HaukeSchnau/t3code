@@ -104,7 +104,7 @@ See [00_development.md](docs/operations/00_development.md) for setup, ports, see
 
 ## Fork maintenance
 
-This is a personal fork. `origin/main` is the published fork branch; `upstream/main` is the upstream source. Preserve published fork history and integrate upstream through merge commits.
+This is a personal fork. `origin/main` holds the fork's history and takes upstream syncs; `upstream/main` is the upstream source. Preserve published fork history and integrate upstream through merge commits. Production runs `origin/redesign`: fork `main` plus Maria's upstream redesign stack, rebuilt on every sync and described in `patches/redesign-integration.md` on that bookmark.
 
 Do not include an upstream merge in unrelated feature or bug-fix work.
 
@@ -116,7 +116,7 @@ Do not use `jj-pull` to synchronize this fork if it would rebase published fork 
 
 Keep changes to upstream-owned code narrow. Document each fork-specific behavior in `patches/*.md`, including why it exists, the requirements upstream does not meet, and what would allow us to remove it. Update the existing document when that behavior changes.
 
-Commit completed work, push a feature bookmark with `jj-push <bookmark>`, and automatically open or update a pull request targeting `main` after relevant checks pass and the working copy has no file changes. This applies to upstream syncs as well. Do not push directly to `main`. If concurrent work has an uncertain destination, finish the authorized local work and ask before including it in the push.
+Feature and fix work starts from `redesign@origin`, so you build and test it in the UI production runs. Commit completed work, push a feature bookmark with `jj-push <bookmark>`, and automatically open or update a pull request into `redesign` after relevant checks pass and the working copy has no file changes. Merge it with squash (`do=squash`); merge commits are for `main`. Then backport that commit in a second pull request into `main`: duplicate it onto `main@origin` (`jj duplicate <commit> -o main@origin`), since merging `redesign` would carry Maria's stack into `main`. A commit that only fits the redesigned UI stays on `redesign`; list it under "Redesign-only work" in `patches/redesign-integration.md`. Upstream syncs target `main` (`.agents/skills/upstream-sync`). Both bookmarks change only through pull requests, except the sync's `redesign` refresh. If concurrent work has an uncertain destination, finish the authorized local work and ask before including it in the push.
 
 ## Coupling to `infra`
 
