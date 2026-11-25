@@ -75,7 +75,8 @@ merge conflicts easier to reason about.
   `run.tasks.typecheck` in an app's `vite.config.ts`. A limit only Calder needs, such as
   the server's checker count, goes in `.calder/ci.ts` (see [Fast project QA](fast-project-qa.md)).
 - Push completed fork work to a feature bookmark with `jj-push <bookmark>` and open a pull request
-  targeting `main`, including upstream sync merges. Do not push directly to `main`.
+  into `redesign`, then backport it into `main` (AGENTS.md "Fork maintenance"). Upstream sync
+  merges target `main`. Do not push directly to `main`.
 - Use Jujutsu for VCS operations unless explicitly instructed otherwise.
 - Keep new fork patches minimally invasive:
   - prefer extension points and small adapters

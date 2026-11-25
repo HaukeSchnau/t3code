@@ -8,17 +8,20 @@ plus the fork lockfile checks.
 
 ## Implementation
 
-- Calder runs `.calder/ci.ts` on pull requests and on pushes to the Gitea `main` branch. Each step
-  reports a `calder/<step>` commit status, and branch protection requires them. The three
+- Calder runs `.calder/ci.ts` on pull requests and on pushes to the branch its `defaultBranch`
+  names, now `redesign` (`redesign-integration.md` on that bookmark). Each step reports a
+  `calder/<step>` commit status, and branch protection on `main` requires them. The three
   fixed-output pnpm store builds (`deps-web`, `deps-server`, `deps-runtime`) are checks of their
-  own, so a stale hash fails before the release gate. On `main`, the release deploys to srv-1 and
-  srv-2 once every check passed, and then the desktop and mobile steps ship the apps from the Apple
+  own, so a stale hash fails before the release gate. On that branch, the release deploys to the
+  fleet once every check passed, and then the desktop and mobile steps ship the apps from the Apple
   builder (`desktop-distribution.md`, `mobile-distribution.md`). Inspect runs at
-  https://calder.schnau.dev and preview the pipeline with `calder plan --event push:main` or
+  https://calder.schnau.dev and preview the pipeline with `calder plan --event push:redesign` or
   `calder plan --event pr:1`.
 - After a push, `just ci-watch <revision>` fetches `origin/main`, checks that each new head
   descends from the revision, and follows the head's `calder` commit status. When a later push
   cancels the run, it moves on to the descendant head instead of reporting the cancelled ancestor.
+  It follows `main`, which no longer deploys, and a refresh rewrites `redesign` rather than
+  extending it, so follow a `redesign` push in `calder runs` by its commit.
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
 - Calder (`.calder/ci.ts`) runs each QA task in a persistent workspace slot. The `install` setup
   installs dependencies once per lockfile state and keeps
