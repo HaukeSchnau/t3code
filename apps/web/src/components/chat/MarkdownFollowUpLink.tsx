@@ -58,7 +58,9 @@ export function MarkdownFollowUpLink(props: {
             <ListTodoIcon />
             <ContextChipLabel>{title}</ContextChipLabel>
             {status !== null ? (
-              <span className="shrink-0 self-baseline text-3xs opacity-80">· {status}</span>
+              <span className="ms-0.5 shrink-0 self-baseline text-caption opacity-80">
+                {status}
+              </span>
             ) : null}
           </ContextChip>
         }

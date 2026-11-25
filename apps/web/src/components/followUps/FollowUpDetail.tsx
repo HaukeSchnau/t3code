@@ -143,7 +143,7 @@ function FollowUpHistory(props: {
   const changes = history.data?.changes ?? [];
   if (changes.length === 0) {
     return history.error ? (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         <T>
           Could not load the history: <Var>{history.error}</Var>
         </T>
@@ -152,16 +152,16 @@ function FollowUpHistory(props: {
   }
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="text-sm font-medium">
+      <h3 className="text-label text-foreground">
         <T>History</T>
       </h3>
-      <ol className="flex flex-col gap-1.5 text-sm">
+      <ol className="flex flex-col gap-1.5 text-body">
         {changes.toReversed().map((change) => (
           <li
             key={`${change.at}:${change.summary}`}
             className="flex flex-wrap items-baseline gap-x-2"
           >
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            <span className="shrink-0 text-meta text-muted-foreground tabular-nums">
               {formatDayAwareTimestamp(change.at, timestampFormat)}
             </span>
             <span className="min-w-0">
@@ -251,7 +251,7 @@ function DonePopover(props: {
             });
           }}
         >
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
+          <label className="flex flex-col gap-1.5 text-label">
             <T>What came of it? (optional)</T>
             <Textarea
               rows={3}
@@ -404,8 +404,8 @@ export function FollowUpDetail(props: {
             </Badge>
           ))}
         </div>
-        <h2 className="text-xl font-semibold text-balance">{followUp.title}</h2>
-        {when !== null ? <p className="text-sm text-muted-foreground">{when}</p> : null}
+        <h2 className="text-title text-balance text-foreground">{followUp.title}</h2>
+        {when !== null ? <p className="text-body text-muted-foreground">{when}</p> : null}
         <FollowUpActions homeEnvironmentId={homeEnvironmentId} followUp={followUp} />
       </header>
 
@@ -413,7 +413,7 @@ export function FollowUpDetail(props: {
         <ChatMarkdown text={followUp.body} cwd={undefined} environmentId={homeEnvironmentId} />
       ) : null}
 
-      <dl className="flex flex-col gap-3 text-sm">
+      <dl className="flex flex-col gap-3 rounded-card surface-card-settings p-4 text-body">
         {followUp.origin !== null ? (
           <Fact label={gt("Came from")}>
             <div className="flex flex-col items-start gap-2">
@@ -425,7 +425,8 @@ export function FollowUpDetail(props: {
                 }}
               />
               {followUp.origin.quote !== null ? (
-                <blockquote className="border-l-2 border-border ps-3 whitespace-pre-wrap text-muted-foreground">
+                // Chat markdown's quote: a bar in the text's own color.
+                <blockquote className="border-s-2 border-current/35 ps-3 whitespace-pre-wrap text-muted-foreground">
                   {followUp.origin.quote}
                 </blockquote>
               ) : null}
@@ -495,7 +496,9 @@ export function FollowUpDetail(props: {
           return (
             <Fact key={name} label={name}>
               <span className="break-words whitespace-pre-wrap">{fieldValueText(value)}</span>
-              {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+              {description ? (
+                <p className="text-meta text-muted-foreground">{description}</p>
+              ) : null}
             </Fact>
           );
         })}

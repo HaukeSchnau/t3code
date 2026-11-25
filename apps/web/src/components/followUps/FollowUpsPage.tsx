@@ -34,6 +34,12 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { PULL_REQUEST_ROW_CLASS, PullRequestRowLines } from "../pullRequest/PullRequestListRow";
+import {
+  PAGE_ROW_CLASS,
+  PAGE_ROW_HOVER_CLASS,
+  PAGE_ROW_PRESS_CLASS,
+} from "../pullRequest/PullRequestRow";
 import { FollowUpDetail } from "./FollowUpDetail";
 import { FollowUpGraphView } from "./FollowUpGraphView";
 import { followUpGraphKey, followUpSections, followUpWhenLabel } from "./followUps.logic";
@@ -116,44 +122,56 @@ function FollowUpRow(props: {
   const nowMinute = useNowMinute();
   const when = followUpWhenLabel(followUp, timestampFormat, Date.parse(`${nowMinute}:00.000Z`), m);
   const origin = followUp.origin?.threadTitle ?? null;
+  // The pull request and issue pages' row.
   return (
-    <button
-      type="button"
-      aria-current={props.selected ? "true" : undefined}
-      onClick={() => props.onSelect(followUp.id)}
+    <div
       className={cn(
-        "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-md px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-        props.selected ? "bg-accent" : "hover:bg-accent/60",
+        "flex items-center rounded-control",
+        props.selected ? "bg-selection-subtle" : PAGE_ROW_HOVER_CLASS,
       )}
     >
-      <span className="flex min-w-0 items-baseline gap-3">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{followUp.title}</span>
-        {when !== null ? (
-          <span className="max-w-48 shrink-0 truncate text-xs text-muted-foreground">{when}</span>
-        ) : null}
-      </span>
-      {followUp.type !== null || followUp.tags.length > 0 || origin !== null ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {followUp.type !== null ? (
-            <Badge variant="outline" size="sm">
-              {followUp.type}
-            </Badge>
-          ) : null}
-          {followUp.tags.map((tag) => (
-            <Badge key={tag} variant="secondary" size="sm">
-              {tag}
-            </Badge>
-          ))}
-          {origin !== null ? (
-            <span className="min-w-0 truncate">
-              <T>
-                from <Var>{origin}</Var>
-              </T>
-            </span>
-          ) : null}
-        </span>
-      ) : null}
-    </button>
+      <button
+        type="button"
+        aria-current={props.selected ? "true" : undefined}
+        onClick={() => props.onSelect(followUp.id)}
+        className={cn(
+          PULL_REQUEST_ROW_CLASS,
+          PAGE_ROW_CLASS,
+          PAGE_ROW_PRESS_CLASS,
+          "min-w-0 flex-1",
+        )}
+      >
+        <PullRequestRowLines
+          layout="page"
+          number={null}
+          title={followUp.title}
+          meta={
+            <>
+              {followUp.type !== null ? (
+                <Badge variant="outline" size="sm">
+                  {followUp.type}
+                </Badge>
+              ) : null}
+              {followUp.tags.map((tag) => (
+                <Badge key={tag} variant="secondary" size="sm">
+                  {tag}
+                </Badge>
+              ))}
+              {origin !== null ? (
+                <span className="min-w-0 truncate">
+                  <T>
+                    from <Var>{origin}</Var>
+                  </T>
+                </span>
+              ) : null}
+            </>
+          }
+          metaStatus={
+            when !== null ? <span className="min-w-0 truncate tabular-nums">{when}</span> : null
+          }
+        />
+      </button>
+    </div>
   );
 }
 
@@ -186,13 +204,13 @@ function FollowUpStoreHeader(props: {
   return (
     <>
       {props.showLabel ? (
-        <div className="flex min-w-0 items-center gap-2 px-3 text-xs font-medium text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2 px-3 text-label text-foreground">
           <h2 className="shrink-0">{store.label}</h2>
           <Separator className="min-w-2 flex-1" />
         </div>
       ) : null}
       {note !== null ? (
-        <p className="flex items-center gap-2 px-3 text-sm text-muted-foreground">
+        <p className="flex items-center gap-2 px-3 text-body text-muted-foreground">
           <PlugZapIcon aria-hidden className="size-4 shrink-0" />
           {note}
         </p>
@@ -220,15 +238,15 @@ function FollowUpStoreList(props: {
           <Skeleton className="h-10 w-full" />
         </div>
       ) : sections.length === 0 ? (
-        <p className="px-3 text-sm text-muted-foreground">
+        <p className="px-3 text-body text-muted-foreground">
           <T>Nothing to follow up on. Agents add follow-ups here as they work.</T>
         </p>
       ) : (
         sections.map((section) => (
-          <div key={section.key} className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2 px-3 pb-1 text-xs font-medium text-muted-foreground/70">
+          <div key={section.key} className="flex flex-col">
+            <div className="flex h-7 items-center gap-2 px-3 text-meta text-muted-foreground">
               <h3 className="shrink-0">{section.label}</h3>
-              <span className="shrink-0 tabular-nums text-muted-foreground/50">
+              <span className="shrink-0 tabular-nums text-dim-foreground">
                 {section.followUps.length}
               </span>
               <Separator className="min-w-2 flex-1" />
@@ -340,7 +358,7 @@ export function FollowUpsPage() {
             <Skeleton className="h-10 w-full" />
           </div>
         ) : (
-          <p className="p-5 text-sm text-muted-foreground">
+          <p className="p-5 text-body text-muted-foreground">
             <T>Nothing to follow up on. Agents add follow-ups here as they work.</T>
           </p>
         )}
@@ -379,8 +397,8 @@ export function FollowUpsPage() {
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="@container/follow-ups flex min-h-0 flex-1 flex-col bg-background">
-        <WorkspacePageHeader electron={isElectron} className="bg-background">
+      <div className="@container/follow-ups flex min-h-0 flex-1 flex-col">
+        <WorkspacePageHeader electron={isElectron}>
           <WorkspaceBreadcrumb ariaLabel={gt("Follow-ups breadcrumb")}>
             <WorkspaceBreadcrumbItem current={!detailOpen}>
               {detailOpen ? (
@@ -438,7 +456,7 @@ export function FollowUpsPage() {
               </Toggle>
             </ToggleGroup>
           </div>
-          <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground [-webkit-app-region:no-drag]">
+          <label className="flex shrink-0 items-center gap-2 text-body text-muted-foreground [-webkit-app-region:no-drag]">
             <Switch
               size="sm"
               checked={showClosed}
@@ -467,14 +485,14 @@ export function FollowUpsPage() {
               {graphBody}
             </div>
             {detailOpen ? (
-              <div className="min-w-0 flex-1 overflow-y-auto @4xl/follow-ups:w-120 @4xl/follow-ups:flex-none @4xl/follow-ups:border-l @4xl/follow-ups:border-border">
+              <div className="min-w-0 flex-1 overflow-y-auto @4xl/follow-ups:w-120 @4xl/follow-ups:flex-none @4xl/follow-ups:border-l @4xl/follow-ups:border-divider">
                 <WorkspacePageContainer>{detailBody}</WorkspacePageContainer>
               </div>
             ) : null}
           </div>
         ) : detailOpen ? (
           <div className="flex min-h-0 flex-1">
-            <div className="hidden w-88 shrink-0 overflow-y-auto border-r border-border px-2 pt-4 pb-12 @4xl/follow-ups:block">
+            <div className="hidden w-88 shrink-0 overflow-y-auto border-r border-divider px-2 pt-4 pb-12 @4xl/follow-ups:block">
               {listBody}
             </div>
             <div className="min-w-0 flex-1 overflow-y-auto">

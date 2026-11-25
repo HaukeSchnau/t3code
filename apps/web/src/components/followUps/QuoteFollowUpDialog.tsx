@@ -116,7 +116,7 @@ export function QuoteFollowUpDialog(props: {
           </DialogHeader>
           <DialogPanel>
             <div className="flex flex-col gap-4">
-              <blockquote className="max-h-40 overflow-y-auto border-l-2 border-border ps-3 text-sm whitespace-pre-wrap text-muted-foreground">
+              <blockquote className="max-h-40 overflow-y-auto border-s-2 border-current/35 ps-3 text-body whitespace-pre-wrap text-muted-foreground">
                 {props.quote}
               </blockquote>
               <div className="flex flex-col gap-2">
