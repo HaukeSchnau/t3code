@@ -4,7 +4,6 @@ import { useState } from "react";
 
 import { usePlacementAgentLimits, usePlacementWeights } from "~/hooks/useLoadBalancedEnvironment";
 import { useUpdateEnvironmentSettings } from "~/hooks/useSettings";
-import type { MessageResolver } from "~/i18n/messages";
 import type { EnvironmentPresentation } from "~/state/environments";
 import { useEnvironmentScope } from "~/state/session";
 import { Input } from "../ui/input";
@@ -21,34 +20,12 @@ const preferences = [
   { value: 0, label: msg("Manual only") },
 ] as const;
 
-const summaryLabels = {
-  100: msg("{environment} prefer"),
-  25: msg("{environment} less often"),
-} as const;
-
 type LoadPreference = (typeof preferences)[number]["value"];
 
 function loadPreference(weight: number | null | undefined): LoadPreference {
   if (!weight) return 0;
   if (weight === 50) return 50;
   return weight < 50 ? 25 : 100;
-}
-
-function summarizeLoadPreferences(
-  environments: ReadonlyArray<EnvironmentPresentation>,
-  weights: ReadonlyArray<number | null | undefined>,
-  resolve: MessageResolver,
-): string {
-  const parts = environments.flatMap((environment, index) => {
-    const preference = loadPreference(weights[index]);
-    if (preference === 0) return [];
-    return preference === 50
-      ? [environment.label]
-      : [resolve(summaryLabels[preference], { environment: environment.label })];
-  });
-  return parts.length === 0
-    ? resolve(msg("Off", { $context: "load balancing is turned off" }))
-    : parts.join(" · ");
 }
 
 /** The most agents placement starts on a machine at once; empty for no limit. */
@@ -80,7 +57,7 @@ function AgentLimitInput({
   return (
     <div className="w-20">
       <Input
-        size="sm"
+        size="compact"
         // Text, so a stray character stays visible instead of reading as an empty, clearing value.
         inputMode="numeric"
         pattern="[0-9]*"
@@ -161,7 +138,7 @@ export function LoadBalancingSettings({
   environments: ReadonlyArray<EnvironmentPresentation>;
 }) {
   const searchableSetting = useSearchableSetting();
-  const m = useMessages();
+  const gt = useGT();
   const environmentIds = environments.map((environment) => environment.environmentId);
   const weights = usePlacementWeights(environmentIds);
   const agentLimits = usePlacementAgentLimits(environmentIds);
@@ -172,7 +149,11 @@ export function LoadBalancingSettings({
     <FoldedSettingsSection
       id={id}
       title={title}
-      summary={summarizeLoadPreferences(environments, weights, m)}
+      summary={
+        weights.some((weight) => loadPreference(weight) !== 0)
+          ? gt("On", { $context: "load balancing is turned on" })
+          : gt("Off", { $context: "load balancing is turned off" })
+      }
     >
       <SettingsNote>
         <T>
