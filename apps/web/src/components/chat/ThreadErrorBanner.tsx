@@ -13,6 +13,7 @@ import { Button } from "../ui/button";
 import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+import { ThreadErrorDetail } from "./ThreadErrorDetail";
 
 export function copyAdminRequest() {
   void writeTextToClipboard(CHATGPT_WORKSPACE_ADMIN_REQUEST, {
@@ -88,6 +89,7 @@ export function threadErrorBannerItem(
     error,
     errorClass,
     errorCode,
+    detail = null,
     onDismiss,
     onRetry,
     retrying = false,
@@ -138,6 +140,7 @@ export function threadErrorBannerItem(
         {retrying ? resolve(msg("Retrying...")) : resolve(msg("Retry"))}
       </Button>
     ) : undefined,
+    children: detail ? <ThreadErrorDetail detail={detail} /> : undefined,
     dismissLabel: resolve(msg("Dismiss error")),
     ...(onDismiss ? { onDismiss } : {}),
   };
