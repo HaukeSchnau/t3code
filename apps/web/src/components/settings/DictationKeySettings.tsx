@@ -115,7 +115,7 @@ function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationB
               {inOtherApps && status && !status.accessibility ? (
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="secondary"
                   size="sm"
                   onClick={() => void dictation.requestAccessibility()}
                 >

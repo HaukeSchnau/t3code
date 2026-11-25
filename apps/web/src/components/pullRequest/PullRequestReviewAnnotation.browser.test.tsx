@@ -53,7 +53,8 @@ it("leaves IME keys in a review reply to the composition", async () => {
     ),
   };
   const reply = () => screen.getByRole("textbox", { name: "Reply to this conversation" });
-  await screen.getByRole("button", { name: "Reply", exact: true }).click();
+  // The redesigned card keeps a reply field open; focusing it opens the editor.
+  await reply().click();
   await reply().fill("Draft");
 
   for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {
@@ -79,10 +80,11 @@ it("leaves IME keys in a review reply to the composition", async () => {
   expect(onReply).not.toHaveBeenCalled();
 
   await userEvent.keyboard("{Escape}");
-  await expect.element(reply()).not.toBeInTheDocument();
+  // Escape folds the editor back into the read-only field.
+  await expect.element(reply()).toHaveAttribute("readonly");
   expect(heard).toEqual([{ key: "Escape", consumed: true }]);
 
-  await screen.getByRole("button", { name: "Reply", exact: true }).click();
+  await reply().click();
   await reply().fill("Draft");
   await userEvent.keyboard("{Control>}{Enter}{/Control}");
   expect(onReply).toHaveBeenCalledExactlyOnceWith("Draft");

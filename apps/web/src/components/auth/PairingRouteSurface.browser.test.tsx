@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock("../../connection/onboarding", () => ({ connectPairing: {} }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.connect }));
 vi.mock("../../environments/primary", () => ({
+  isPrimaryEnvironmentRequestError: () => false,
   peekPairingTokenFromUrl: () => null,
   stripPairingTokenFromUrl: () => undefined,
   submitServerAuthCredential: () => Promise.resolve(),

@@ -4,6 +4,10 @@ vi.mock("./appInit", () => ({ startAppServices: () => ({ load: async () => {} })
 vi.mock("./AppRoot", () => ({ AppRoot: () => null }));
 vi.mock("./i18n/runtime", () => ({ whenLocaleReady: async () => {} }));
 vi.mock("./surfaceGrainTile", () => ({ startSurfaceGrainTiles: () => {} }));
+// Dev builds load the gap console without awaiting it, which would outlive the test.
+vi.mock("./components/chat/timelineGapRecorderEnabled", () => ({
+  timelineGapRecorderEnabled: false,
+}));
 vi.mock("react-dom/client", () => ({ default: { createRoot: () => ({ render: () => {} }) } }));
 
 // Boots the entry in a fresh page that shares the tab's sessionStorage, as a reload does.

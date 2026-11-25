@@ -102,7 +102,7 @@ export function resolveSidebarRouteReveal<T extends RevealableThread>(input: {
   readonly isSearching: boolean;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   /** Whether a chosen project has not loaded yet, so the thread may be in the scope. */
-  readonly scopeLoading: boolean;
+  readonly scopeLoading?: boolean;
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly findThread: (key: string) => T | undefined;
 }): { readonly pendingKey: string | null; readonly widensScope: boolean } {

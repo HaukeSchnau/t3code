@@ -28,7 +28,6 @@ export function ThreadWorldPanel(props: { environmentId: EnvironmentId; cwd: str
   if (world === undefined) return null;
   return (
     <ThreadDetailsSection
-      headingId="thread-details-world-heading"
       title={gt("World", { $context: "a thread's isolated set of repository checkouts" })}
     >
       <ul className="m-0 flex list-none flex-col p-0">

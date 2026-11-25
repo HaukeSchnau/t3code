@@ -188,7 +188,7 @@ function LaterMenu(props: {
     : [];
   return (
     <Menu open={open} onOpenChange={setOpen}>
-      <MenuTrigger render={<Button size="sm" variant="outline" disabled={props.disabled} />}>
+      <MenuTrigger render={<Button size="sm" variant="secondary" disabled={props.disabled} />}>
         <CalendarClockIcon />
         <T>Later</T>
         <ChevronDownIcon />
@@ -234,7 +234,7 @@ function DonePopover(props: {
         if (!next) setResult("");
       }}
     >
-      <PopoverTrigger render={<Button size="sm" variant="outline" disabled={props.disabled} />}>
+      <PopoverTrigger render={<Button size="sm" variant="secondary" disabled={props.disabled} />}>
         <CheckIcon />
         <T context="verb, marks the follow-up done">Done</T>
       </PopoverTrigger>
@@ -323,7 +323,7 @@ function FollowUpActions(props: {
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
-          variant="outline"
+          variant="secondary"
           disabled={disabled}
           onClick={() => void apply({ status: "open" })}
         >

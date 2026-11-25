@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
-import { RightPanelSheet } from "~/components/RightPanelSheet";
+import { DismissibleSheet } from "../../../test/dismissibleSheet";
 import { act, render } from "../../../test/render";
 import "~/index.css";
 
@@ -342,9 +342,9 @@ it("Escape in Find in PDF clears it without closing the panel sheet", async () =
   const onCloseSheet = vi.fn();
   try {
     await using screen = await render(
-      <RightPanelSheet animationDurationMs={0} open onClose={onCloseSheet}>
+      <DismissibleSheet onClose={onCloseSheet}>
         <PdfViewer src={url} title="Planning PDF" />
-      </RightPanelSheet>,
+      </DismissibleSheet>,
     );
     const find = screen.getByRole("searchbox", { name: "Find in PDF" });
     await find.fill("quarterly");

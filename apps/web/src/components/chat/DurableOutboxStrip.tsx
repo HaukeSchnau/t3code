@@ -137,7 +137,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                 <Button
                   type="button"
                   size="xs"
-                  variant={view.rejected ? "outline" : "ghost"}
+                  variant={view.rejected ? "secondary" : "ghost"}
                   disabled={busy}
                   onClick={() =>
                     void run(entry.id, () =>

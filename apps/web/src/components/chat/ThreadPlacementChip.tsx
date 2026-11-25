@@ -10,23 +10,27 @@ export function ThreadPlacementChip({ placement }: { placement: ThreadPlacement 
   return (
     <Popover>
       <PopoverTrigger nativeButton={false} render={<Badge variant="outline" size="sm" />}>
-        {placement.label} · {placement.reason}
+        {placement.label}
       </PopoverTrigger>
       <PopoverPopup align="start" width="md">
         <PopoverTitle>{gt("Placed on {machine}", { machine: placement.label })}</PopoverTitle>
-        <p className="text-muted-foreground text-xs">
+        <p className="text-caption text-muted-foreground">
           {gt("{machine} chose it: {reason}.", {
             machine: placement.decidedBy.label,
             reason: placement.reason,
           })}
         </p>
         {placement.candidates.length > 0 ? (
-          <ul className="mt-2 flex flex-col gap-1 text-xs">
+          <ul className="mt-2 flex flex-col gap-1 text-caption">
             {placement.candidates.map((candidate) => (
               <li key={candidate.environmentId} className="flex justify-between gap-3">
-                <span className={candidate.admissible ? "" : "text-muted-foreground"}>
-                  {candidate.label}
-                  {candidate.note ? ` · ${candidate.note}` : ""}
+                <span className="flex min-w-0 gap-1.5">
+                  <span className={candidate.admissible ? "" : "text-muted-foreground"}>
+                    {candidate.label}
+                  </span>
+                  {candidate.note ? (
+                    <span className="text-muted-foreground">{candidate.note}</span>
+                  ) : null}
                 </span>
                 <span className="text-muted-foreground tabular-nums">
                   {candidate.admissible
