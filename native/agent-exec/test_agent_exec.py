@@ -84,7 +84,7 @@ class ProjectEnvironmentTests(unittest.TestCase):
         self.assertIn("capability agent-device", target.read_text())
         self.assertTrue(runtime.os.access(target, runtime.os.X_OK))
 
-    def test_jj_user_settings_do_not_mount_host_repository_state(self):
+    def test_user_settings_mount_read_only_without_host_repository_state(self):
         record = runtime.create(self.base / "project")
         home = self.base / "home"
         record["home"] = str(home)
@@ -93,9 +93,11 @@ class ProjectEnvironmentTests(unittest.TestCase):
         (settings / "config.toml").write_text('[user]\nname = "Test"\n')
         (settings / "repos").mkdir()
         (settings / "workspaces").mkdir()
+        (home / ".config/git").mkdir()
         with patch.object(runtime.os, "execvp") as execute:
             runtime.launch(record, record["root"], ["true"])
         args = execute.call_args.args[1]
+        self.assertEqual(args[args.index(str(home / ".config/git")) - 1], "--ro-bind")
         self.assertIn(str(settings / "config.toml"), args)
         self.assertNotIn(str(settings), args)
         self.assertNotIn(str(settings / "repos"), args)
