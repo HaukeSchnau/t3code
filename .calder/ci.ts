@@ -625,6 +625,10 @@ const apps = (promote: Step.Any) => {
 
 export default Project.standard({
   flake,
+  // Production runs the redesign bookmark: main plus Maria's redesign stack, refreshed by the weekly
+  // upstream sync (.agents/skills/upstream-sync). Pushes to main still pass their PR checks but no
+  // longer deploy. Back to main, here and in infra's hosts/srv-2/calder.nix, once upstream lands it.
+  defaultBranch: "redesign",
   // Every fleet host gets the Release built for its system: srv-1 and srv-2, dev-hauke and the
   // tower, and m1.
   releaseSystems: ["aarch64-linux", "x86_64-linux", "aarch64-darwin"],
