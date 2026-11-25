@@ -11,9 +11,9 @@ on/off switch and per-machine weights in each browser's client settings, so web,
 disagree. This is phase 1 of fleet worlds (schnau/t3code#186, #189).
 
 Phase 2 (#190) lets any new thread run on whichever linked machine has room: from clients, agents
-(`t3_thread_launch`, `delegate_task`) and scheduled tasks. A repository thread goes only to a
-machine that already has a project for that repository. Upstream only balances in the browser, and
-never waits for room.
+(`t3_thread_launch`, `delegate_task`) and scheduled tasks, including machines that do not have the
+thread's repository yet. Upstream only balances in the browser, among machines that already have
+the project, and never waits for room.
 
 ## Design
 
@@ -48,12 +48,46 @@ never waits for room.
   on a peer is the one that reads that peer's load.
 - **Decision.** `Placement.decide` classifies the thread by its project: a world project needs a
   host that serves that world (worldfs on Linux; m1 serves none), a repository needs a host with a
-  project of the same `repositoryIdentity.canonicalKey`, and scratch goes anywhere. Peers are asked
+  project of the same `repositoryIdentity.canonicalKey` or one that may clone it (cold hosts,
+  below), and scratch goes anywhere. Peers are asked
   for their matching project with the report request (`match`), cached for a minute. A thread with
   attachments, composer context, an existing worktree or a local base commit stays here, and its
   placement says why. Launches this environment sent count against their machine for 20 seconds.
-  A retried launch reuses its first decision for 10 minutes. That decision lives in memory, so a
+  A retried launch reuses its first decision for 30 minutes. That decision lives in memory, so a
   retry after a restart can pick another machine and start the thread twice.
+- **Cold hosts (decision 2).** A host without the repository is a candidate at half warmth when
+  it reports `canClone`. Before the launch, the decider sends `POST /mcp/placement/hydrate` with
+  the repository's remote and the source project's git-ignored env files (`.env`, `.env.*`,
+  `.envrc`, `.dev.vars`, 1 MiB each). The host clones from the forge into
+  `<baseDir>/placement/repos/<repository>`, with `--reference-if-able` to the worlds mirror in
+  `/var/lib/worlds/*/catalog.json` when one has the repository, so only refs and the objects the mirror lacks travel. It registers
+  the clone as an ordinary project, which later launches find warm. One clone runs at a time.
+  - Who may clone: the user's own launches from a session that may write source control (as for
+    cloning here), and agents at full access and default interaction (as for `t3_project_clone`),
+    over a full-access link with Linked environments on. Before every hydrate
+    request the decider checks the link as stored again; for an agent's launch or delegation it
+    also rereads the caller's modes, and that its turn is still running. A user's launch checks
+    its session once, when it is placed. A host whose
+    managed policy caps runtime below full access reports no `canClone`, and neither does a Windows
+    host: the env-file guards (mode 0600, path checks) are written for POSIX hosts.
+  - Copied files: the host writes only env-file names, with mode 0600, never through a symlink,
+    never over an existing file, and never at a path Git tracks in the index or `HEAD`, compared
+    without case. It adds the path to the clone's `.git/info/exclude` even when a `.gitignore` covers
+    it, as another branch may not, and writes the file only once the clone ignores it, so a secret
+    stays out of commits and checkpoints. The file is written whole in the git folder and then
+    linked into place, so a full disk leaves no partial copy. Where the link fails (the git folder on
+    another filesystem, or no hard links), the file is written in place instead.
+  - Slow clones: the host clones in the background and answers "pending" after 20 seconds. The
+    sender polls with the request id and no files, retries a lost answer, and gives up after 15
+    minutes, so a clone fits within a relay's idle limit. The host keeps each outcome for those
+    15 minutes too. A clone still running at the sender's deadline goes on there, and a retry of
+    the launch may clone on another linked machine, so both get the env files.
+  - Retries: one launch's retries share its single clone and keep its machine for 30 minutes. A
+    failed clone keeps that host out of cold placement for that repository for 10 minutes, and
+    a retry of that launch decides again. A refusal by the caller or the link does not count as
+    a failed clone.
+  - Placement requests never follow redirects. A remote's query or fragment is dropped, as the
+    repository identity drops it, so the host clones the remote without it.
 - **Waiting (decision 1).** When no machine has room, the thread goes to the machine it prefers by
   weight and warmth, behind the fewest waiting threads, with `placement.waitingSince` set.
   `ThreadLaunchService` holds that run's workspace preparation on `LocalPlacement.awaitRoom` until
@@ -79,7 +113,7 @@ never waits for room.
   like upstream's launch, and `redirectPromotedDraftThread` points the draft at the thread
   wherever it started. A send that is offline or loses its reply waits in the
   durable outbox with `placement: "auto"` and replays the same command, so the server's decision
-  and the peer's launch for it are reused while the server keeps that decision (10 minutes, in
+  and the peer's launch for it are reused while the server keeps that decision (30 minutes, in
   memory); a replay after a restart can start the thread a second time. A follow-up queued during
   the launch goes to the thread wherever it started (`placedDraftThreadRef`). The header's `ThreadPlacementChip` shows where and why with
   every candidate; `placementWaitBannerItem` shows the wait with Start anyway and Cancel (the
@@ -96,6 +130,15 @@ never waits for room.
   uncommitted edits, as an explicit remote delegation does. One that names a `driverKind` stays
   here, since remote delegation runs a provider instance and does not check its driver kind.
 - A scheduled task bound to a thread (continue or fresh session) runs where its thread is.
+- The sender copies env files found among the first 200 git-ignored entries of the project, in
+  sorted order, so in a project with many ignored files a nested env file can be missed. An env
+  file inside a folder that is ignored as a whole (such as a git-ignored `config/`) is not copied.
+- A worktree thread on a clone has no env files, like any new worktree: they sit in the clone's
+  checkout, and worktree creation checks out tracked files only.
+- A clone made for placement is a normal project, not a hidden one, and nothing evicts it yet.
+  A clone that borrows a mirror's objects breaks if the mirror prunes them; infra keeps the
+  mirrors with `gc.auto=0`.
+- The cloning host needs read access to the forge; the worlds mirror only lends objects.
 
 ## Removal
 

@@ -7,6 +7,8 @@ import {
   type PlacementRequest,
   recordMatch,
   retryRefusal,
+  shareableRepositoryKey,
+  withoutCredentials,
 } from "./Placement.ts";
 
 const peerChoice: PlacementChoice = {
@@ -30,6 +32,7 @@ const request = (hasAttachments: boolean): PlacementRequest => ({
   workspaceStrategy: { type: "root" },
   hasAttachments,
   hasContext: false,
+  mayClone: true,
 });
 
 it("refuses a retry that must stay here once its first attempt went to a peer", () => {
@@ -62,4 +65,31 @@ it("keeps the answer of the probe that asked last when probes answer out of orde
   recordMatch(other, "peer repo", b);
   recordMatch(other, "peer repo", a);
   assert.equal(other.get("peer repo")?.projectId, "project-b");
+});
+
+it("sends peers a clone URL and a repository key without credentials", () => {
+  assert.equal(
+    withoutCredentials("https://user:token@git.example.com/acme/app.git?private_token=t#x"),
+    "https://git.example.com/acme/app.git",
+  );
+  assert.equal(
+    withoutCredentials("https://token@git.example.com/app"),
+    "https://git.example.com/app",
+  );
+  assert.equal(
+    withoutCredentials("ssh://git@git.example.com/acme/app.git"),
+    "ssh://git@git.example.com/acme/app.git",
+  );
+  assert.equal(
+    withoutCredentials("git@git.example.com:acme/app.git"),
+    "git@git.example.com:acme/app.git",
+  );
+  assert.equal(shareableRepositoryKey("git.example.com/acme/app"), "git.example.com/acme/app");
+  for (const leaky of [
+    "https://token@git.example.com/app",
+    "token@git.example.com/app",
+    "git.example.com/app?t=1",
+  ]) {
+    assert.isNull(shareableRepositoryKey(leaky), leaky);
+  }
 });
