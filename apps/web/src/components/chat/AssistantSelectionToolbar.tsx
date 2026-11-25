@@ -1,10 +1,10 @@
-import { useAtomValue } from "@effect/atom-react";
 import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   MessageId,
   type AssistantCitation,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { msg, useGT } from "gt-react";
 import { CopyIcon, TextQuoteIcon } from "lucide-react";
 import { use, useEffect, useRef, useState } from "react";
@@ -17,12 +17,12 @@ import {
   type AssistantCitationSourceAnchor,
 } from "~/lib/assistantTextSelection";
 import { isSelectionRectVisible, observeSelectionActions } from "~/lib/selectionActions";
-import { followUpEnvironment, followUpHomeOfAtom } from "~/state/followUps";
 import { primaryServerKeybindingsAtom } from "~/state/server";
-import { QuoteFollowUpDialog } from "../followUps/QuoteFollowUpDialog";
+import { QuoteFollowUpButton, useQuoteFollowUp } from "../followUps/QuoteFollowUpAction";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { toastManager } from "../ui/toast";
+import { InlineSelectionReplyButton } from "./AssistantInlineReplies";
 import { BackgroundThreadContext } from "./backgroundThread";
 
 // The one visible selection toolbar registers its cite action here so the
@@ -55,16 +55,10 @@ export function AssistantSelectionToolbar({
     anchor: { centerX: number; top: number; bottom: number };
     sourceAnchor: AssistantCitationSourceAnchor;
   } | null>(null);
-  const [followUpQuote, setFollowUpQuote] = useState<{
-    threadRef: ScopedThreadRef;
-    messageId: MessageId;
-    quote: string;
-  } | null>(null);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<ReturnType<typeof observeSelectionActions> | null>(null);
-  const followUpHome = useAtomValue(followUpHomeOfAtom(threadRef.environmentId));
-  const canSaveFollowUp = useAtomValue(followUpEnvironment.save.permissionAtom(followUpHome));
+  const followUp = useQuoteFollowUp(threadRef);
   const gt = useGT();
 
   const attachToolbar = (toolbar: HTMLDivElement | null) => {
@@ -223,15 +217,7 @@ export function AssistantSelectionToolbar({
     };
   }, [citable, citeStable]);
 
-  const followUpDialog = followUpQuote ? (
-    <QuoteFollowUpDialog
-      threadRef={followUpQuote.threadRef}
-      messageId={followUpQuote.messageId}
-      quote={followUpQuote.quote}
-      onClose={() => setFollowUpQuote((current) => (current === followUpQuote ? null : current))}
-    />
-  ) : null;
-  if (!selection || backgroundThread) return followUpDialog;
+  if (!selection || backgroundThread) return followUp.dialog;
   const copy = () => {
     const text = window.getSelection()?.toString() || selection.citation.text;
     // The native copy runs the chat's copy handlers, so markdown and citations copy like Mod+C.
@@ -258,62 +244,50 @@ export function AssistantSelectionToolbar({
       });
     });
   };
-  const followUp = () => {
-    setFollowUpQuote({
-      threadRef,
-      messageId: selection.citation.messageId,
-      quote: selection.citation.text.trim(),
-    });
-    window.getSelection()?.removeAllRanges();
-    dismiss();
-  };
   const citeShortcut = shortcutLabelForCommand(keybindings, "chat.citeSelection", {
     context: { assistantSelection: true },
   });
-  return (
-    <>
-      {createPortal(
-        <div
-          ref={attachToolbar}
-          role="toolbar"
-          aria-label={gt("Selection actions")}
-          className="fixed z-50 flex h-8 max-w-[calc(100vw-1rem)] items-center gap-0.5 rounded-project-icon surface-popover p-0.75 [--control-radius:var(--radius-row)]"
-          style={{ left: selection.anchor.centerX, top: selection.anchor.top }}
-          onPointerDown={(event) => event.preventDefault()}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              dismiss();
-            }
-          }}
+  return createPortal(
+    <div
+      ref={attachToolbar}
+      role="toolbar"
+      aria-label={gt("Selection actions")}
+      className="fixed z-50 flex h-8 max-w-[calc(100vw-1rem)] items-center gap-0.5 rounded-project-icon surface-popover p-0.75 [--control-radius:var(--radius-row)]"
+      style={{ left: selection.anchor.centerX, top: selection.anchor.top }}
+      onPointerDown={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          dismiss();
+        }
+      }}
+    >
+      {/* Cite is the toolbar's primary action, so it sits on the selected fill. */}
+      <span className={tooLong ? "flex" : "flex rounded-row surface-selected-soft"}>
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={tooLong}
+          aria-label={
+            tooLong ? gt("Selection is too long to cite") : gt("Cite selection in composer")
+          }
+          aria-keyshortcuts={citeShortcut ?? undefined}
+          onClick={cite}
         >
-          {/* Cite is the toolbar's primary action, so it sits on the selected fill. */}
-          <span className={tooLong ? "flex" : "flex rounded-row surface-selected-soft"}>
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={tooLong}
-              aria-label={
-                tooLong ? gt("Selection is too long to cite") : gt("Cite selection in composer")
-              }
-              aria-keyshortcuts={citeShortcut ?? undefined}
-              onClick={cite}
-            >
-              <TextQuoteIcon aria-hidden="true" />
-              {tooLong ? gt("Shorten selection") : gt("Cite in composer")}
-              {!tooLong && citeShortcut ? <Kbd>{citeShortcut}</Kbd> : null}
-            </Button>
-          </span>
-          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-divider" />
-          <Button variant="ghost" size="xs" onClick={copy}>
-            <CopyIcon aria-hidden="true" />
-            {gt("Copy", { $context: "verb, copies text to the clipboard" })}
-          </Button>
-        </div>,
-        document.body,
-      )}
-      {followUpDialog}
-    </>
+          <TextQuoteIcon aria-hidden="true" />
+          {tooLong ? gt("Shorten selection") : gt("Cite in composer")}
+          {!tooLong && citeShortcut ? <Kbd>{citeShortcut}</Kbd> : null}
+        </Button>
+      </span>
+      <span aria-hidden="true" className="h-4 w-px shrink-0 bg-divider" />
+      <Button variant="ghost" size="xs" onClick={copy}>
+        <CopyIcon aria-hidden="true" />
+        {gt("Copy", { $context: "verb, copies text to the clipboard" })}
+      </Button>
+      <InlineSelectionReplyButton range={selection.sourceAnchor.range} onDone={dismiss} />
+      <QuoteFollowUpButton followUp={followUp} citation={selection.citation} onDone={dismiss} />
+    </div>,
+    document.body,
   );
 }

@@ -42,7 +42,7 @@ describe("AssistantInlineReplies", () => {
   it("renders the transparent gutter target before the block is hovered", async () => {
     await using view = await mount(createInlineReplyDraftStore());
     const action = view.container.querySelector("[data-inline-reply-hover-affordance]");
-    expect(action?.tagName).toBe("BUTTON");
+    expect(action?.querySelector("button")).not.toBeNull();
     expect(action?.className).toContain("opacity-0");
     expect(action?.className).toContain("group-hover/inline-reply-block:opacity-100");
   });
