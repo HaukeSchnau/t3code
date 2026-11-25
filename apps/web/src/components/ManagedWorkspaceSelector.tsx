@@ -9,6 +9,7 @@ import {
   FolderGitIcon,
   FolderIcon,
 } from "lucide-react";
+import { T, useGT } from "gt-react";
 import { memo, type ReactNode, useState } from "react";
 
 import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
@@ -77,6 +78,7 @@ function Row(props: {
 export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
   props: ManagedWorkspaceSelectorProps,
 ) {
+  const gt = useGT();
   const composerFloatingLayerProps = useComposerMenuProps();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -100,14 +102,14 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
 
   const isNew = props.effectiveEnvMode === "worktree" && props.activeWorktreePath === null;
   const label = props.forceNewWorktree
-    ? "New workspace per model"
+    ? gt("New workspace per model")
     : props.activeWorktreePath
       ? workspaceLabel(props.activeWorktreePath)
       : isNew
         ? isolatedChoice
-          ? "New isolated workspace"
-          : "New workspace"
-        : "Project checkout";
+          ? gt("New isolated workspace")
+          : gt("New workspace")
+        : gt("Project checkout");
   const Icon = props.activeWorktreePath
     ? FolderGitIcon
     : isNew
@@ -142,7 +144,7 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={<ComposerControl size="xs" />}
-        aria-label="Workspace"
+        aria-label={gt("Workspace")}
         className="min-w-0 shrink"
         data-composer-shortcut="composer.workspace"
         data-composer-context-control
@@ -157,26 +159,28 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
         padding="compact"
         {...composerFloatingLayerProps}
       >
-        <div className="px-2 pb-1 font-medium text-xs">Workspace</div>
+        <div className="px-2 pb-1 font-medium text-xs">
+          <T>Workspace</T>
+        </div>
         <Row
           icon={<FolderGit2Icon className="size-4 shrink-0" />}
-          title="New workspace"
-          detail="A separate copy for this task"
+          title={gt("New workspace")}
+          detail={gt("A separate copy for this task")}
           selected={isNew && !isolatedChoice}
           onSelect={() => choose(() => props.onEnvModeChange("worktree"))}
         />
         {props.isolated ? (
           <Row
             icon={<FlaskConicalIcon className="size-4 shrink-0" />}
-            title="New isolated workspace"
-            detail="A clean room that can't see your other projects"
+            title={gt("New isolated workspace")}
+            detail={gt("A clean room that can't see your other projects")}
             selected={isNew && isolatedChoice}
             onSelect={() => choose(() => props.onEnvModeChange("worktree"), true)}
           />
         ) : null}
         <Row
           icon={<FolderIcon className="size-4 shrink-0" />}
-          title="Project checkout"
+          title={gt("Project checkout")}
           selected={!isNew && props.activeWorktreePath === null}
           onSelect={() =>
             choose(() =>
@@ -189,8 +193,8 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
         {props.onSelectWorkspace !== undefined ? (
           <>
             <Input
-              aria-label="Find workspace"
-              placeholder="Find workspace…"
+              aria-label={gt("Find workspace")}
+              placeholder={gt("Find workspace…")}
               size="compact"
               type="search"
               className="my-1.5"
@@ -202,13 +206,16 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
                 <Row
                   key={workspace.key}
                   title={workspace.label}
-                  detail={`${workspace.threadCount} ${workspace.threadCount === 1 ? "thread" : "threads"}${
-                    workspace.runningCount > 0
-                      ? ` · ${workspace.runningCount} running`
+                  detail={[
+                    gt("{count, plural, one {{count} thread} other {{count} threads}}", {
+                      count: workspace.threadCount,
+                    }),
+                    ...(workspace.runningCount > 0
+                      ? [gt("{count} running", { count: workspace.runningCount })]
                       : workspace.settled
-                        ? " · Settled"
-                        : ""
-                  }`}
+                        ? [gt("Settled", { $context: "workspace whose threads are all settled" })]
+                        : []),
+                  ].join(" · ")}
                   selected={props.activeWorktreePath === workspace.path}
                   onSelect={() =>
                     choose(() =>
@@ -222,26 +229,28 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
               ))}
               {archive.isLoading ? (
                 <p className="px-2 py-1.5 text-muted-foreground text-xs">
-                  Loading settled workspaces…
+                  <T>Loading settled workspaces…</T>
                 </p>
               ) : workspaces.length === 0 ? (
                 <p className="px-2 py-1.5 text-muted-foreground text-xs">
-                  {archive.error ?? "No matching workspaces."}
+                  {archive.error ?? gt("No matching workspaces.")}
                 </p>
               ) : null}
             </div>
             <label className="flex items-center gap-2 px-2 py-1.5 text-muted-foreground text-xs">
               <Checkbox checked={showSettled} onCheckedChange={setShowSettled} />
-              Show settled
+              <T>Show settled</T>
             </label>
           </>
         ) : null}
         {isolatedChoice && isNew ? (
           <details className="mt-1 border-t px-2 pt-1.5 text-xs">
-            <summary className="cursor-pointer text-muted-foreground">Clean room setup</summary>
+            <summary className="cursor-pointer text-muted-foreground">
+              <T>Clean room setup</T>
+            </summary>
             <div className="py-2">
               <RadioGroup
-                aria-label="Agent setup"
+                aria-label={gt("Agent setup")}
                 value={profile}
                 onValueChange={(value) => setProfile(value === "minimal" ? "minimal" : "familiar")}
               >
@@ -249,11 +258,13 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
                   <label key={value} className="flex items-start gap-2">
                     <Radio value={value} className="mt-0.5" />
                     <span>
-                      {value === "familiar" ? "Familiar" : "Minimal"}
+                      {value === "familiar"
+                        ? gt("Familiar", { $context: "clean room agent setup" })
+                        : gt("Minimal", { $context: "clean room agent setup" })}
                       <span className="block text-muted-foreground">
                         {value === "familiar"
-                          ? "Keeps your global instructions and skills"
-                          : "Starts with the project's own instructions and tools"}
+                          ? gt("Keeps your global instructions and skills")
+                          : gt("Starts with the project's own instructions and tools")}
                       </span>
                     </span>
                   </label>

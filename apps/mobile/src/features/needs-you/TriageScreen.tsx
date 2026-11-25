@@ -16,6 +16,7 @@ import { threadNeedLabel } from "@t3tools/client-runtime/state/thread-inbox";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import * as Option from "effect/Option";
+import { T, useGT, useMessages, Var } from "gt-react-native";
 import { useEffectEvent, useState, useSyncExternalStore } from "react";
 import { Pressable, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -82,6 +83,7 @@ function useNeedsYouDeckThreads() {
 
 /** The threads that need you, one card at a time, oldest first. Swipe to move between them. */
 export function TriageScreen() {
+  const gt = useGT();
   const navigation = useNavigation();
   const cards = useNeedsYouDeckThreads();
   const session = useSyncExternalStore(triageDrafts.subscribe, triageDrafts.getSnapshot);
@@ -99,14 +101,14 @@ export function TriageScreen() {
   const step = (delta: 1 | -1) => setStored((current) => stepNeedsYouDeck(current, delta));
 
   return (
-    <SettingsScreen title="Needs you">
+    <SettingsScreen title={gt("Needs you")}>
       {thread === null ? (
         <View className="flex-1 justify-center px-5">
           <EmptyState
             variant="plain"
-            title="Nothing needs you"
-            detail="Threads that wait for an answer, a decision or a review show up here."
-            actionLabel="Close"
+            title={gt("Nothing needs you")}
+            detail={gt("Threads that wait for an answer, a decision or a review show up here.")}
+            actionLabel={gt("Close")}
             onAction={() => navigation.goBack()}
           />
         </View>
@@ -138,6 +140,8 @@ function TriageCard(props: {
   readonly onStep: (delta: 1 | -1) => void;
 }) {
   const { thread, sending } = props;
+  const gt = useGT();
+  const messages = useMessages();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   // The card's controls sit outside the scroll view, so the body clears the iOS bar itself.
@@ -261,23 +265,25 @@ function TriageCard(props: {
           >
             <View className="flex-row items-center gap-2">
               <Text className="min-w-0 flex-1 text-xs text-foreground-tertiary" numberOfLines={1}>
-                {project?.isScratch ? "No project" : (project?.title ?? "Project")}
+                {project?.isScratch ? gt("No project") : (project?.title ?? gt("Project"))}
                 {" · "}
-                {threadNeedLabel({ ...need, text: null })}
-                {waited === null ? null : ` · waiting ${waited}`}
+                {threadNeedLabel({ ...need, text: null }, messages)}
+                {waited === null ? null : ` · ${gt("waiting {time}", { time: waited })}`}
               </Text>
               <DeckStep
                 symbol="chevron.left"
-                label="Previous thread"
+                label={gt("Previous thread")}
                 disabled={props.position.index === 0}
                 onPress={() => props.onStep(-1)}
               />
               <Text className="text-xs text-foreground-secondary">
-                {props.position.index + 1} of {props.position.total}
+                <T>
+                  <Var>{props.position.index + 1}</Var> of <Var>{props.position.total}</Var>
+                </T>
               </Text>
               <DeckStep
                 symbol="chevron.right"
-                label="Next thread"
+                label={gt("Next thread")}
                 disabled={props.position.index === props.position.total - 1}
                 onPress={() => props.onStep(1)}
               />
@@ -318,7 +324,7 @@ function TriageCard(props: {
                 detail !== null &&
                 (indexedPages.isSuccess || indexedPages.error !== null) ? (
                 <Text className="text-sm text-foreground-secondary">
-                  The page is further back in the thread. Open the thread to see it.
+                  <T>The page is further back in the thread. Open the thread to see it.</T>
                 </Text>
               ) : null
             ) : null}
@@ -329,7 +335,7 @@ function TriageCard(props: {
                   <Pressable
                     key={option.value ?? option.label}
                     accessibilityRole="button"
-                    accessibilityLabel={`Answer ${option.label}`}
+                    accessibilityLabel={gt("Answer {option}", { option: option.label })}
                     disabled={sending}
                     className="rounded-2xl border border-border bg-card px-4 py-3"
                     style={({ pressed }) => ({ opacity: pressed || sending ? 0.6 : 1 })}
@@ -351,7 +357,9 @@ function TriageCard(props: {
               </View>
             ) : null}
             <View className="gap-2">
-              <Text className="text-xs text-foreground-tertiary">Last message</Text>
+              <Text className="text-xs text-foreground-tertiary">
+                <T>Last message</T>
+              </Text>
               {latest !== null ? (
                 <View className="rounded-2xl border border-border px-4 py-2">
                   <SelectableMarkdownText
@@ -362,10 +370,10 @@ function TriageCard(props: {
               ) : (
                 <Text className="text-sm text-foreground-secondary">
                   {detail !== null
-                    ? "The agent has not written yet."
+                    ? gt("The agent has not written yet.")
                     : connected
-                      ? "Loading"
-                      : "Its environment is not connected."}
+                      ? gt("Loading")
+                      : gt("Its environment is not connected.")}
                 </Text>
               )}
             </View>
@@ -377,17 +385,17 @@ function TriageCard(props: {
             {replyMode !== null ? (
               <View className="flex-row items-end gap-2">
                 <TextInput
-                  accessibilityLabel={replyMode === "answer" ? "Your answer" : "Reply"}
+                  accessibilityLabel={replyMode === "answer" ? gt("Your answer") : gt("Reply")}
                   className="max-h-32 flex-1"
                   multiline
                   placeholder={
-                    replyMode === "answer" ? "Or type your answer" : "Reply to the agent"
+                    replyMode === "answer" ? gt("Or type your answer") : gt("Reply to the agent")
                   }
                   value={props.draft}
                   onChangeText={props.onDraftChange}
                 />
                 <Button
-                  label="Send"
+                  label={gt("Send")}
                   icon="arrow.up"
                   tone="primary"
                   size="compact"
@@ -399,14 +407,14 @@ function TriageCard(props: {
             ) : null}
             <View className="flex-row flex-wrap gap-2">
               <Button
-                label={answersHere ? "Open thread" : "Open thread to answer"}
+                label={answersHere ? gt("Open thread") : gt("Open thread to answer")}
                 icon="arrow.up.right"
                 tone={answersHere ? "secondary" : "primary"}
                 size="compact"
                 onPress={openThread}
               />
               <Button
-                label="Snooze 1 h"
+                label={gt("Snooze 1 h")}
                 icon="clock"
                 size="compact"
                 disabled={!snoozable}
@@ -416,7 +424,7 @@ function TriageCard(props: {
               />
               {card.hasOpenAsks ? (
                 <Button
-                  label="No reply needed"
+                  label={gt("No reply needed")}
                   icon="checkmark.bubble"
                   size="compact"
                   onPress={() => void dismissThreadAsks(thread)}

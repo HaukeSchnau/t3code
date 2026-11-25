@@ -240,31 +240,63 @@ export const makeVcsDriverShape = Effect.fn("makeJjVcsDriverShape")(function* ()
       })
       .pipe(Effect.map((output) => output.split("\n")[0]?.trim() || null));
 
+  const recordCheckpoint = Effect.fn("JjVcsDriver.recordCheckpoint")(function* (
+    operation: string,
+    cwd: string,
+    root: string,
+    checkpointRef: CheckpointRef,
+    commit: string,
+  ) {
+    const file = checkpointFile(root, checkpointRef);
+    const temporary = `${file}.${NodeCrypto.randomUUID()}.tmp`;
+    yield* fileSystem.makeDirectory(path.dirname(file), { recursive: true }).pipe(
+      Effect.andThen(fileSystem.writeFileString(temporary, `${commit}\n`)),
+      Effect.andThen(fileSystem.rename(temporary, file)),
+      Effect.mapError(
+        (cause) =>
+          new VcsProcessExitError({
+            operation,
+            command: "jj",
+            cwd,
+            exitCode: 1,
+            detail: `Could not record the checkpoint: ${cause.message}`,
+          }),
+      ),
+    );
+  });
+
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("JjVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
-      const marker = yield* requireRoot("JjVcsDriver.checkpoints.captureCheckpoint", input.cwd);
-      const commit = yield* snapshotWorkingCopy(
-        jj,
-        marker.root,
-        "JjVcsDriver.checkpoints.captureCheckpoint",
-      );
-      const file = checkpointFile(marker.root, input.checkpointRef);
-      const temporary = `${file}.${NodeCrypto.randomUUID()}.tmp`;
-      yield* fileSystem.makeDirectory(path.dirname(file), { recursive: true }).pipe(
-        Effect.andThen(fileSystem.writeFileString(temporary, `${commit}\n`)),
-        Effect.andThen(fileSystem.rename(temporary, file)),
-        Effect.mapError(
-          (cause) =>
-            new VcsProcessExitError({
-              operation: "JjVcsDriver.checkpoints.captureCheckpoint",
-              command: "jj",
-              cwd: input.cwd,
-              exitCode: 1,
-              detail: `Could not record the checkpoint: ${cause.message}`,
-            }),
-        ),
-      );
+      const operation = "JjVcsDriver.checkpoints.captureCheckpoint";
+      const marker = yield* requireRoot(operation, input.cwd);
+      const commit = yield* snapshotWorkingCopy(jj, marker.root, operation);
+      yield* recordCheckpoint(operation, input.cwd, marker.root, input.checkpointRef, commit);
     }),
+
+    // After a snapshot `@` holds the folder, which matches its parents exactly when `@` is empty.
+    resolveCleanHead: Effect.fn("JjVcsDriver.checkpoints.resolveCleanHead")(function* (cwd) {
+      const operation = "JjVcsDriver.checkpoints.resolveCleanHead";
+      const marker = yield* requireRoot(operation, cwd);
+      const [commit, state] = (yield* jj.read({
+        operation,
+        root: marker.root,
+        args: ["log", "--no-graph", "-r", "@", "-T", 'commit_id ++ " " ++ if(empty, "empty", "")'],
+      }))
+        .trim()
+        .split(" ");
+      return state === "empty" && commit !== undefined && /^[0-9a-f]{40}$/.test(commit)
+        ? commit
+        : null;
+    }),
+
+    // The clean `@` is already a checkpoint commit; jj keeps it after later snapshots rewrite `@`.
+    captureHeadCheckpoint: Effect.fn("JjVcsDriver.checkpoints.captureHeadCheckpoint")(
+      function* (input) {
+        const operation = "JjVcsDriver.checkpoints.captureHeadCheckpoint";
+        const marker = yield* requireRoot(operation, input.cwd);
+        yield* recordCheckpoint(operation, input.cwd, marker.root, input.checkpointRef, input.head);
+      },
+    ),
 
     hasCheckpointRef: Effect.fn("JjVcsDriver.checkpoints.hasCheckpointRef")(function* (input) {
       const marker = yield* requireRoot("JjVcsDriver.checkpoints.hasCheckpointRef", input.cwd);

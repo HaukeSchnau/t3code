@@ -132,7 +132,7 @@ it.effect("includes committed WAL data and does not publish a failed snapshot", 
     const source = new NodeSqlite.DatabaseSync(sourcePath);
     try {
       source.exec(
-        "PRAGMA journal_mode=WAL; CREATE TABLE messages(text TEXT); INSERT INTO messages VALUES ('committed'); BEGIN; INSERT INTO messages VALUES ('uncommitted');",
+        "PRAGMA journal_mode=WAL; CREATE TABLE messages(text TEXT); INSERT INTO messages VALUES ('committed'); CREATE TABLE dropped(blob BLOB); INSERT INTO dropped VALUES (randomblob(65536)); DROP TABLE dropped; BEGIN; INSERT INTO messages VALUES ('uncommitted');",
       );
       yield* initializeV2Database(destinationPath);
       const copy = new NodeSqlite.DatabaseSync(destinationPath, { readOnly: true });
@@ -144,12 +144,45 @@ it.effect("includes committed WAL data and does not publish a failed snapshot", 
             .map((row) => row.text),
           ["committed"],
         );
+        assert.deepEqual(copy.prepare("PRAGMA auto_vacuum").get(), { auto_vacuum: 2 });
+        assert.deepEqual(copy.prepare("PRAGMA freelist_count").get(), { freelist_count: 0 });
       } finally {
         copy.close();
       }
       source.exec("ROLLBACK");
     } finally {
       source.close();
+    }
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true }))),
+  );
+});
+
+// The read-only source rejects the auto_vacuum pragma once its header already sets a mode.
+it.effect.each([
+  { mode: "INCREMENTAL", autoVacuum: 2 },
+  { mode: "FULL", autoVacuum: 1 },
+])("copies a WAL source whose auto_vacuum is already $mode", ({ mode, autoVacuum }) => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-v2-autovacuum-"));
+  const sourcePath = NodePath.join(directory, "state.sqlite");
+  const destinationPath = NodePath.join(directory, "statev2.sqlite");
+  return Effect.gen(function* () {
+    const source = new NodeSqlite.DatabaseSync(sourcePath);
+    try {
+      source.exec(
+        `PRAGMA auto_vacuum = ${mode}; PRAGMA journal_mode=WAL; CREATE TABLE messages(text TEXT); INSERT INTO messages VALUES ('kept');`,
+      );
+    } finally {
+      source.close();
+    }
+    yield* initializeV2Database(destinationPath);
+    const copy = new NodeSqlite.DatabaseSync(destinationPath, { readOnly: true });
+    try {
+      assert.deepEqual(copy.prepare("SELECT text FROM messages").all(), [{ text: "kept" }]);
+      assert.deepEqual(copy.prepare("PRAGMA auto_vacuum").get(), { auto_vacuum: autoVacuum });
+    } finally {
+      copy.close();
     }
   }).pipe(
     Effect.provide(NodeServices.layer),

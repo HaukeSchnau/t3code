@@ -2,12 +2,13 @@ import { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/co
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
-import { chooseLoadBalancedEnvironment, placementMigrationPatch } from "../load-balancing.ts";
+import { placementMigrationPatch } from "../load-balancing.ts";
 import {
   buildProjectGroups,
   deriveLogicalProjectKeyFromSettings,
   pickableProjectGroups,
   derivePhysicalProjectKey,
+  resolveGroupDefaultProject,
   resolveScratchProjectScopeKey,
   sortProjectsByGroupOrder,
   type ProjectGroupingSettings,
@@ -15,118 +16,7 @@ import {
 
 const environmentId = EnvironmentId.make("environment");
 
-describe("load balancing shared project machines", () => {
-  const now = 100_000;
-  const GiB = 1024 ** 3;
-  const resources = {
-    sampledAt: now,
-    cpuUtilization: 0.2,
-    cpuCount: 8,
-    availableMemoryBytes: 8 * GiB,
-    totalMemoryBytes: 16 * GiB,
-  };
-
-  it("compares three machines using free capacity and preference", () => {
-    const candidates = [
-      { environmentId: "busy", resources: { ...resources, cpuUtilization: 0.9 }, weight: 1 },
-      { environmentId: "idle", resources, weight: 1 },
-      { environmentId: "preferred", resources: { ...resources, cpuCount: 4 }, weight: 3 },
-    ];
-    expect(chooseLoadBalancedEnvironment(candidates, now)).toBe("preferred");
-    expect(chooseLoadBalancedEnvironment(candidates.slice(0, 2), now)).toBe("idle");
-  });
-
-  it("rejects stale, unknown, excluded and saturated machines", () => {
-    expect(
-      chooseLoadBalancedEnvironment(
-        [
-          {
-            environmentId: "stale",
-            resources: { ...resources, sampledAt: now - 15_001 },
-            weight: 1,
-          },
-          { environmentId: "unknown", resources: null, weight: 1 },
-          {
-            environmentId: "no-cpu-sample",
-            resources: { ...resources, cpuUtilization: null },
-            weight: 1,
-          },
-          { environmentId: "excluded", resources, weight: 0 },
-          {
-            environmentId: "cpu-full",
-            resources: { ...resources, cpuUtilization: 0.95 },
-            weight: 1,
-          },
-          {
-            environmentId: "memory-full",
-            resources: { ...resources, availableMemoryBytes: 100 },
-            weight: 1,
-          },
-        ],
-        now,
-      ),
-    ).toBeNull();
-  });
-
-  it("skips a machine under memory pressure even when it reports free memory", () => {
-    // srv-2 on 2026-11-16: MemAvailable looked fine while PSI sat near 90 and oomd killed agents.
-    const thrashing = {
-      ...resources,
-      cpuCount: 16,
-      availableMemoryBytes: 12 * GiB,
-      memoryPressure: { someAvg10: 91.6, someAvg60: 78 },
-    };
-    const idle = { ...resources, memoryPressure: { someAvg10: 1.5, someAvg60: 1.6 } };
-    const candidates = [
-      { environmentId: "srv-2", resources: thrashing, weight: 100 },
-      { environmentId: "dev-hauke", resources: idle, weight: 50 },
-    ];
-    expect(chooseLoadBalancedEnvironment(candidates, now)).toBe("dev-hauke");
-    const recovering = { ...thrashing, memoryPressure: { someAvg10: 2, someAvg60: 25 } };
-    expect(
-      chooseLoadBalancedEnvironment([{ ...candidates[0]!, resources: recovering }], now),
-    ).toBeNull();
-    const mac = { ...resources, cpuCount: 16, memoryPressureLevel: "warning" as const };
-    expect(
-      chooseLoadBalancedEnvironment(
-        [
-          { environmentId: "m1", resources: mac, weight: 100 },
-          { environmentId: "dev-hauke", resources: idle, weight: 50 },
-        ],
-        now,
-      ),
-    ).toBe("dev-hauke");
-  });
-
-  it("counts room left in the agents slice, sized by the agents already running", () => {
-    const sliceNearlyFull = {
-      ...resources,
-      cpuCount: 24,
-      availableMemoryBytes: 14 * GiB,
-      agents: { running: 10, memoryCurrentBytes: 26 * GiB, memoryMaxBytes: 28 * GiB },
-    };
-    // Ten agents at 2.6 GiB each leave room for no more in 2 GiB, despite 14 GiB available.
-    expect(
-      chooseLoadBalancedEnvironment(
-        [{ environmentId: "full-slice", resources: sliceNearlyFull, weight: 100 }],
-        now,
-      ),
-    ).toBeNull();
-    const roomy = {
-      ...sliceNearlyFull,
-      agents: { running: 10, memoryCurrentBytes: 6 * GiB, memoryMaxBytes: 28 * GiB },
-    };
-    expect(
-      chooseLoadBalancedEnvironment(
-        [
-          { environmentId: "small", resources, weight: 100 },
-          { environmentId: "roomy", resources: roomy, weight: 100 },
-        ],
-        now,
-      ),
-    ).toBe("roomy");
-  });
-
+describe("placement weight migration", () => {
   it("migrates a browser's Auto balance choice only onto machines without one", () => {
     const legacy = {
       loadBalancingEnabled: true,
@@ -140,17 +30,6 @@ describe("load balancing shared project machines", () => {
     expect(
       placementMigrationPatch(unset, { ...legacy, loadBalancingEnabled: false }, "srv-1"),
     ).toBeNull();
-  });
-
-  it("uses client receipt time when host clocks differ", () => {
-    const candidate = {
-      environmentId: "different-clock",
-      resources: { ...resources, sampledAt: now + 60_000 },
-      receivedAt: now,
-      weight: 1,
-    };
-    expect(chooseLoadBalancedEnvironment([candidate], now)).toBe("different-clock");
-    expect(chooseLoadBalancedEnvironment([candidate], now + 15_001)).toBeNull();
   });
 });
 const repositoryIdentity = {
@@ -340,6 +219,54 @@ describe("buildProjectGroups", () => {
     }
   });
 
+  it("represents a repository group by its root checkout, even when it was added last", () => {
+    const remoteEnvironmentId = EnvironmentId.make("remote");
+    const local = { ...repositoryIdentity, rootPath: "/work/workspace" };
+    const remote = { ...repositoryIdentity, rootPath: "/srv/workspace" };
+    const archivedTool = makeProject("old-tool", "/work/workspace/_archive/old-tool", {
+      repositoryIdentity: local,
+    });
+    const app = makeProject("app-a", "/work/workspace/app-a", { repositoryIdentity: local });
+    const remoteApp = makeProject("remote-app", "/srv/workspace/app-a", {
+      environmentId: remoteEnvironmentId,
+      repositoryIdentity: remote,
+    });
+    const remoteRoot = makeProject("remote-root", "/srv/workspace", {
+      environmentId: remoteEnvironmentId,
+      repositoryIdentity: remote,
+    });
+    const root = makeProject("workspace", "/work/workspace", { repositoryIdentity: local });
+    const representativeOf = (
+      projects: ReadonlyArray<EnvironmentProject>,
+      preferredEnvironmentId: EnvironmentId | null = null,
+    ) =>
+      buildProjectGroups({ projects, settings: settings("repository"), preferredEnvironmentId })[0]
+        ?.representative.id;
+
+    expect(representativeOf([archivedTool, app, root])).toBe("workspace");
+    expect(representativeOf([archivedTool, app, remoteApp, remoteRoot, root], environmentId)).toBe(
+      "workspace",
+    );
+    expect(
+      representativeOf([archivedTool, app, remoteApp, remoteRoot, root], remoteEnvironmentId),
+    ).toBe("remote-root");
+    // A local root is not worth leaving the current environment for.
+    expect(representativeOf([archivedTool, root, remoteApp], remoteEnvironmentId)).toBe(
+      "remote-app",
+    );
+    expect(representativeOf([archivedTool, app])).toBe("old-tool");
+
+    // A new thread with no current or last-used project starts from the first project's group.
+    const all = [archivedTool, app, remoteApp, remoteRoot, root];
+    expect(resolveGroupDefaultProject(archivedTool, all, settings("repository")).id).toBe(
+      "workspace",
+    );
+    expect(resolveGroupDefaultProject(remoteApp, all, settings("repository")).id).toBe(
+      "remote-root",
+    );
+    expect(resolveGroupDefaultProject(archivedTool, all, settings("separate")).id).toBe("old-tool");
+  });
+
   it("keeps a fork apart from its upstream checkout and labels it by its own remote", () => {
     const fork = makeProject("fork", "/work/t3code-fork", {
       repositoryIdentity: {
@@ -362,6 +289,64 @@ describe("buildProjectGroups", () => {
     ]);
     expect(groups[1]?.members.map((member) => member.project.id)).toEqual(["fork", "fork-2"]);
     expect(groups[1]?.label).toBe("julius/t3code-fork");
+  });
+
+  // regression: #15049 a rename to the repository name snapped back to the display path
+  it("labels a renamed group by its title even when it matches the repository name", () => {
+    const folderTitles = [
+      makeProject("t3code", "/work/t3code", { title: "t3code" }),
+      makeProject("t3code-2", "/work/t3code-2", { title: "t3code" }),
+    ];
+    const renamed = folderTitles.map((project) => ({ ...project, hasCustomTitle: true }));
+
+    const label = (projects: ReadonlyArray<EnvironmentProject>) =>
+      buildProjectGroups({ projects, settings: settings("repository") })[0]?.label;
+    expect(label(folderTitles)).toBe("T3 Code");
+    expect(label(renamed)).toBe("t3code");
+  });
+
+  it("labels a group by its repository when clones disagree on its casing", () => {
+    // A subfolder project, its repository root, and a clone whose remote URL is
+    // lowercased: no shared title or display name, but one repository.
+    const subfolder = makeProject("design-study", "/work/NewCo/reference/design-study");
+    const root = makeProject("NewCo", "/work/NewCo");
+    const lowercasedClone = makeProject("NewCo", "/remote/NewCo", {
+      environmentId: EnvironmentId.make("remote"),
+      repositoryIdentity: { ...repositoryIdentity, name: "T3CODE", displayName: "t3 code" },
+    });
+
+    const groups = buildProjectGroups({
+      projects: [subfolder, root, lowercasedClone],
+      settings: settings("repository"),
+      preferredEnvironmentId: environmentId,
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("T3 Code");
+
+    // A subfolder group in repository_path mode keeps its own title.
+    const localIdentity = { ...repositoryIdentity, rootPath: "/work/t3code" };
+    const pathGroups = buildProjectGroups({
+      projects: [
+        makeProject("design", "/work/t3code/design", {
+          title: "Design docs",
+          hasCustomTitle: true,
+          repositoryIdentity: localIdentity,
+        }),
+        makeProject("design", "/remote/t3code/design", {
+          environmentId: EnvironmentId.make("remote"),
+          repositoryIdentity: {
+            ...repositoryIdentity,
+            rootPath: "/remote/t3code",
+            name: "T3CODE",
+            displayName: "t3 code",
+          },
+        }),
+        makeProject("t3code", "/work/t3code", { repositoryIdentity: localIdentity }),
+      ],
+      settings: settings("repository_path"),
+      preferredEnvironmentId: environmentId,
+    });
+    expect(pathGroups.map((group) => group.label)).toEqual(["Design docs", "t3code"]);
   });
 
   it("applies a physical-project override without dropping its siblings", () => {
@@ -491,8 +476,23 @@ describe("sortProjectsByGroupOrder", () => {
   it("tells the same project id on two environments apart", () => {
     const sorted = sortProjectsByGroupOrder(
       [project("shared"), project("shared", remote)],
-      [{ memberProjectRefs: [ref("shared", remote)] }, { memberProjectRefs: [ref("shared")] }],
+      [
+        { memberProjectRefs: [ref("shared", remote)], pinned: false, archived: false },
+        { memberProjectRefs: [ref("shared")], pinned: false, archived: false },
+      ],
     );
     expect(sorted.map((entry) => entry.environmentId)).toEqual([remote, environmentId]);
+  });
+
+  it("lists pinned projects first and archived ones last, like the sidebar's project menu", () => {
+    const sorted = sortProjectsByGroupOrder(
+      [project("archived"), project("recent"), project("pinned"), project("unlisted")],
+      [
+        { memberProjectRefs: [ref("archived")], pinned: false, archived: true },
+        { memberProjectRefs: [ref("recent")], pinned: false, archived: false },
+        { memberProjectRefs: [ref("pinned")], pinned: true, archived: false },
+      ],
+    );
+    expect(sorted.map((entry) => entry.id)).toEqual(["pinned", "recent", "archived", "unlisted"]);
   });
 });

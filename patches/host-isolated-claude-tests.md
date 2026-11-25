@@ -9,8 +9,10 @@ runners saw a real endpoint and a signed-in account where their fixtures set nei
 
 ## Behavior
 
-- `T3CODE_CLAUDE_MANAGED_SETTINGS_DIR` replaces the platform's managed settings directory for the
-  settings reader (`ClaudeSkills.ts`).
+- `T3CODE_CLAUDE_MANAGED_SETTINGS_DIR` replaces the fixed macOS and Linux managed directory
+  (`claudeManagedDirectory` in `ClaudeSkills.ts`), which upstream reads for managed settings and
+  managed skills. Windows takes that directory from the caller's environment, which tests set, so
+  the override leaves it alone.
 - The server's test setup (`testUtils/managedServiceEnv.setup.ts`) points it at a missing
   directory, so no test reads the host's managed settings.
 

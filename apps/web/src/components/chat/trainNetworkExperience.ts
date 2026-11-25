@@ -2,12 +2,25 @@ import {
   retryRemainingMs,
   type EnvironmentConnectionFreshnessProjection,
 } from "@t3tools/client-runtime/state/connection-freshness";
+import { msg } from "gt-react";
+
+import { m, type MessageResolver } from "~/i18n/messages";
 
 export const NETWORK_DEGRADATION_HOLD_MS = 250;
 export const NETWORK_RECOVERY_HOLD_MS = 500;
 
 export interface TrainNetworkExperienceView {
   readonly kind: "degraded" | "recovered";
+  /** What the strip shows, independent of the language its title is in. */
+  readonly state:
+    | "update-failed"
+    | "loading"
+    | "not-connected"
+    | "offline"
+    | "connection-failed"
+    | "connecting"
+    | "reconnecting"
+    | "connected";
   readonly title: string;
   readonly detail: string;
   readonly attempt: number | null;
@@ -18,13 +31,17 @@ export interface TrainNetworkExperienceView {
 function savedContentDetail(
   projection: EnvironmentConnectionFreshnessProjection,
   withoutContent: string,
+  resolve: MessageResolver,
 ): string {
-  return projection.snapshot.snapshot === null ? withoutContent : "Showing saved content.";
+  return projection.snapshot.snapshot === null
+    ? withoutContent
+    : resolve(msg("Showing saved content."));
 }
 
 export function deriveTrainNetworkExperience(
   projection: EnvironmentConnectionFreshnessProjection,
   nowMs: number,
+  resolve: MessageResolver = m,
 ): TrainNetworkExperienceView | null {
   const { connection, snapshot } = projection;
 
@@ -32,14 +49,17 @@ export function deriveTrainNetworkExperience(
     if (snapshot.error !== null) {
       const errorSentence = /[.!?]$/.test(snapshot.error) ? snapshot.error : `${snapshot.error}.`;
       const detail =
-        snapshot.snapshot === null ? snapshot.error : `${errorSentence} Showing saved content.`;
+        snapshot.snapshot === null
+          ? snapshot.error
+          : resolve(msg("{error} Showing saved content.", { error: errorSentence }));
       return {
         kind: "degraded",
-        title: "Update failed",
+        state: "update-failed",
+        title: resolve(msg("Update failed")),
         detail,
         attempt: connection.attempt,
         retryRemainingMs: null,
-        announcement: `Update failed. ${detail}`,
+        announcement: resolve(msg("Update failed. {detail}", { detail })),
       };
     }
 
@@ -49,86 +69,109 @@ export function deriveTrainNetworkExperience(
 
     return {
       kind: "degraded",
-      title: "Loading",
-      detail: "Loading this conversation.",
+      state: "loading",
+      title: resolve(msg("Loading", { $context: "connection status" })),
+      detail: resolve(msg("Loading this conversation.")),
       attempt: connection.attempt,
       retryRemainingMs: null,
-      announcement: "Connected. Loading this conversation.",
+      announcement: resolve(msg("Connected. Loading this conversation.")),
     };
   }
 
   if (connection.phase === "available") {
     const detail = savedContentDetail(
       projection,
-      "Connect this environment to load the conversation.",
+      resolve(msg("Connect this environment to load the conversation.")),
+      resolve,
     );
     return {
       kind: "degraded",
-      title: "Not connected",
+      state: "not-connected",
+      title: resolve(msg("Not connected")),
       detail,
       attempt: null,
       retryRemainingMs: null,
-      announcement: `Not connected. ${detail}`,
+      announcement: resolve(msg("Not connected. {detail}", { detail })),
     };
   }
 
   if (connection.phase === "offline") {
     const detail = savedContentDetail(
       projection,
-      "Waiting for a connection before loading this conversation.",
+      resolve(msg("Waiting for a connection before loading this conversation.")),
+      resolve,
     );
     return {
       kind: "degraded",
-      title: "Offline",
+      state: "offline",
+      title: resolve(msg("Offline")),
       detail,
       attempt: connection.attempt > 0 ? connection.attempt : null,
       retryRemainingMs: null,
-      announcement: `Offline. ${detail}`,
+      announcement: resolve(msg("Offline. {detail}", { detail })),
     };
   }
 
   if (connection.phase === "error") {
-    const failure = connection.failure?.message ?? "Reconnect this environment to continue.";
+    const failure =
+      connection.failure?.message ?? resolve(msg("Reconnect this environment to continue."));
     const failureSentence = /[.!?]$/.test(failure) ? failure : `${failure}.`;
     const detail =
-      snapshot.snapshot === null ? failure : `${failureSentence} Showing saved content.`;
+      snapshot.snapshot === null
+        ? failure
+        : resolve(msg("{error} Showing saved content.", { error: failureSentence }));
     return {
       kind: "degraded",
-      title: "Connection failed",
+      state: "connection-failed",
+      title: resolve(msg("Connection failed")),
       detail,
       attempt: connection.attempt,
       retryRemainingMs: null,
-      announcement: `Connection failed. ${detail}`,
+      announcement: resolve(msg("Connection failed. {detail}", { detail })),
     };
   }
 
-  const title = connection.phase === "connecting" ? "Connecting" : "Reconnecting";
+  const connecting = connection.phase === "connecting";
   const detail = savedContentDetail(
     projection,
-    connection.phase === "connecting"
-      ? "Loading this conversation after connecting."
-      : "Waiting to resume this conversation.",
+    connecting
+      ? resolve(msg("Loading this conversation after connecting."))
+      : resolve(msg("Waiting to resume this conversation.")),
+    resolve,
   );
   return {
     kind: "degraded",
-    title,
+    state: connecting ? "connecting" : "reconnecting",
+    title: connecting ? resolve(msg("Connecting")) : resolve(msg("Reconnecting")),
     detail,
     attempt: connection.attempt,
     retryRemainingMs: retryRemainingMs(connection, nowMs),
-    announcement: `${title}. ${detail}`,
+    announcement: connecting
+      ? resolve(msg("Connecting. {detail}", { detail }))
+      : resolve(msg("Reconnecting. {detail}", { detail })),
   };
 }
 
-export const RECOVERED_NETWORK_EXPERIENCE: TrainNetworkExperienceView = Object.freeze({
-  kind: "recovered",
-  title: "Connected",
-  detail: "Conversation is up to date.",
-  attempt: null,
-  retryRemainingMs: null,
-  announcement: "Connected. Conversation is up to date.",
-});
+export function recoveredNetworkExperience(
+  resolve: MessageResolver = m,
+): TrainNetworkExperienceView {
+  return {
+    kind: "recovered",
+    state: "connected",
+    title: resolve(msg("Connected")),
+    detail: resolve(msg("Conversation is up to date.")),
+    attempt: null,
+    retryRemainingMs: null,
+    announcement: resolve(msg("Connected. Conversation is up to date.")),
+  };
+}
 
-export function retryCountdownText(remainingMs: number | null): string | null {
+export function retryCountdownText(
+  remainingMs: number | null,
+  resolve: MessageResolver = m,
+): string | null {
   if (remainingMs === null) return null;
-  return `Retrying in ${Math.max(1, Math.ceil(remainingMs / 1_000))}s`;
+  return resolve(
+    msg("Retrying in {seconds}s", { seconds: Math.max(1, Math.ceil(remainingMs / 1_000)) }),
+  );
 }

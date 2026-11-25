@@ -9,6 +9,7 @@ import { captureHome } from "@t3tools/client-runtime/state/follow-ups";
 import type { EnvironmentId, FollowUpOrigin } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import * as Haptics from "expo-haptics";
+import { T, useGT, Var } from "gt-react-native";
 import { useRef, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
@@ -64,6 +65,7 @@ const noHomeAtom = Atom.make<EnvironmentId | null>(null).pipe(
 
 function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
   const { origin } = props;
+  const gt = useGT();
   const navigation = useNavigation();
   const routeKey = useRoute().key;
   const environments = useWorkspaceEnvironments();
@@ -100,9 +102,8 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
   const saved = useRef(false);
   const voice = useVoiceInputController({
     ownerKey: `follow-up-capture:${routeKey}`,
-    label: "New follow-up",
+    label: gt("New follow-up"),
     readDraftMessage: () => appAtomRegistry.get(textAtom),
-    subscribeToDraftChanges: (onChange) => appAtomRegistry.subscribe(textAtom, onChange),
     selection,
     onChangeDraftMessage: setText,
     onChangeSelection: setSelection,
@@ -125,7 +126,7 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
     inFlight.current = false;
     setSaving(false);
     const message = failureMessage(result);
-    if (message !== null) Dialog.alert("Could not save the follow-up", message);
+    if (message !== null) Dialog.alert(gt("Could not save the follow-up"), message);
     if (result._tag !== "Success") return;
     saved.current = true;
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -139,10 +140,10 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
     }
     if (saving) return;
     Dialog.confirm({
-      title: "Discard this follow-up?",
-      message: "What you wrote or dictated will be lost.",
-      confirmText: "Discard",
-      cancelText: "Keep editing",
+      title: gt("Discard this follow-up?"),
+      message: gt("What you wrote or dictated will be lost."),
+      confirmText: gt("Discard"),
+      cancelText: gt("Keep editing"),
       destructive: true,
       onConfirm: () => {
         if (voice.isBusy) voice.cancel();
@@ -154,30 +155,34 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
   const notice =
     origin !== null
       ? threadHome === null
-        ? "This thread's environment keeps no follow-ups."
+        ? gt("This thread's environment keeps no follow-ups.")
         : destination === null
-          ? `${label(threadHome)} keeps this thread's follow-ups but isn't connected.`
+          ? gt("{environment} keeps this thread's follow-ups but isn't connected.", {
+              environment: label(threadHome),
+            })
           : null
       : connectedHomes.length === 0
-        ? "No connected environment keeps follow-ups."
+        ? gt("No connected environment keeps follow-ups.")
         : null;
   const picking = origin === null && connectedHomes.length > 1;
   const destinationNotice =
     destination === null
       ? null
       : !canSave
-        ? `This device may not add follow-ups on ${label(destination)}.`
+        ? gt("This device may not add follow-ups on {environment}.", {
+            environment: label(destination),
+          })
         : homes.length > 1 && !picking
-          ? `Saves to ${label(destination)}.`
+          ? gt("Saves to {environment}.", { environment: label(destination) })
           : null;
 
   return (
     <View className="flex-1 bg-sheet">
       <SheetHeader
-        title="New follow-up"
+        title={gt("New follow-up")}
         onCancel={() => navigation.goBack()}
         confirm={{
-          label: "Save",
+          label: gt("Save"),
           onPress: () => void save(),
           disabled: !ready,
           loading: saving,
@@ -194,7 +199,13 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
             {origin !== null ? (
               <View className="gap-1.5 px-1">
                 <Text textRole="footnote" className="text-foreground-muted" numberOfLines={1}>
-                  From {origin.threadTitle ?? "a thread"}
+                  {origin.threadTitle !== null ? (
+                    <T>
+                      From <Var>{origin.threadTitle}</Var>
+                    </T>
+                  ) : (
+                    <T>From a thread</T>
+                  )}
                 </Text>
                 <View className="border-l-2 border-border pl-3">
                   <Text textRole="body" selectable className="text-foreground" numberOfLines={8}>
@@ -206,7 +217,7 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
             {picking ? (
               <View className="gap-2 px-1">
                 <Text textRole="footnote" className="text-foreground-muted">
-                  Save it to
+                  <T>Save it to</T>
                 </Text>
                 <View className="flex-row flex-wrap gap-2">
                   {connectedHomes.map((home) => (
@@ -227,8 +238,10 @@ function FollowUpCapture(props: { readonly origin: FollowUpOrigin | null }) {
                   autoFocus
                   multiline
                   scrollEnabled
-                  accessibilityLabel={origin === null ? "Follow-up" : "Title"}
-                  placeholder={origin === null ? "What's worth doing later?" : "Title (optional)"}
+                  accessibilityLabel={origin === null ? gt("Follow-up") : gt("Title")}
+                  placeholder={
+                    origin === null ? gt("What's worth doing later?") : gt("Title (optional)")
+                  }
                   placeholderTextColorClassName="accent-foreground-muted"
                   value={text}
                   onChangeText={setText}

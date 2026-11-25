@@ -69,12 +69,18 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("upgrades a database at exactly 77", () =>
+  it.effect("upgrades a database at exactly 77, then rechecks it without a write lock", () =>
     Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 77 });
       assert.deepStrictEqual(yield* runMigrations(), v2Migrations);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.isAbove(yield* v2TableCount, 0);
+
+      // query_only rejects BEGIN IMMEDIATE, which CLI startup would otherwise take on the live database.
+      yield* sql`PRAGMA query_only = ON`;
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
@@ -148,6 +154,36 @@ describe("runMigrations", () => {
       );
       assert.notInclude(String(exit), "80_AgentWatches");
       assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("keeps the migrations that finished before a later one failed", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 108 });
+      yield* sql`CREATE TABLE orchestration_v2_projection_turn_item_counts (thread_id TEXT)`;
+
+      const exit = yield* Effect.exit(runMigrations());
+
+      assert.isTrue(Exit.isFailure(exit));
+      assert.deepStrictEqual(
+        yield* history,
+        migrationManifest.filter(([id]) => id <= 119),
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("reapplies peer link migrations whose ledger rows are missing", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 98 });
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 96 AND 98`;
+
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id >= 96),
+      );
+      assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 

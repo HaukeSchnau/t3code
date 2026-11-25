@@ -1,6 +1,11 @@
+import { msg } from "gt-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
+import {
+  AttachmentUploadError,
+  attachmentUploadError,
+} from "@t3tools/client-runtime/state/attachment-uploads";
 import {
   deletePendingAttachmentUpload,
   runAttachmentUploadCycle,
@@ -24,10 +29,20 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { readFileAsDataUrl } from "./components/ChatView.logic";
 import { fileAttachmentCapabilityBlockReason } from "./components/chat/composerAttachmentFiles";
 import type { DurableComposerCommand, DurableComposerEntry } from "./durableCommandOutbox";
+import {
+  finalizePromotedDraftThreadByRef,
+  placedDraftThreadRef,
+  redirectPromotedDraftThread,
+} from "./composerDraftStore";
+import { toastManager } from "./components/ui/toast";
+import { m } from "./i18n/messages";
+import { readEnvironment } from "./state/environments";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { attachmentEnvironment } from "./state/attachments";
 import { readThreadShell } from "./state/entities";
@@ -36,6 +51,7 @@ import { readPreparedConnection } from "./state/session";
 import { threadEnvironment } from "./state/threads";
 
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
+const isAttachmentUploadError = Schema.is(AttachmentUploadError);
 
 /** Uploads happen before the command is sent, so their failures never make it ambiguous. */
 function uploadFailure(error: unknown): CommandOutboxDeliveryError {
@@ -46,17 +62,19 @@ function uploadFailure(error: unknown): CommandOutboxDeliveryError {
   });
 }
 
-// @effect-diagnostics-next-line extendsNativeError:off - a rejection inside the upload Promise, never an Effect failure.
+// @effect-diagnostics-next-line extendsNativeError:off - a fetch rejection the upload cycle returns as a value.
 class UploadRejectedError extends Error {
   constructor(readonly status: number) {
     super(`The environment refused the upload (${status}).`);
   }
 }
 
-function postBlob(url: string, blob: Blob, mimeType: string) {
+function postBlob(url: string, blob: Blob, mimeType: string, signal: AbortSignal) {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
-  const done = fetch(url, {
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(abort, UPLOAD_TIMEOUT_MS);
+  return fetch(url, {
     method: "POST",
     headers: { "Content-Type": mimeType },
     body: blob,
@@ -65,8 +83,10 @@ function postBlob(url: string, blob: Blob, mimeType: string) {
     .then((response) => {
       if (!response.ok) throw new UploadRejectedError(response.status);
     })
-    .finally(() => window.clearTimeout(timeout));
-  return { done, abort: () => controller.abort() };
+    .finally(() => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+    });
 }
 
 async function uploadAttachment(
@@ -75,23 +95,29 @@ async function uploadAttachment(
   blob: Blob,
 ): Promise<string> {
   const mimeType = attachment.mimeType.toLowerCase();
-  const result = await runAttachmentUploadCycle({
-    registry: appAtomRegistry,
-    createUploadUrl: attachmentEnvironment.createUploadUrl,
-    remove: attachmentEnvironment.remove,
-    environmentId,
-    upload: {
-      ...(attachment.type === "file" ? { type: "file" as const } : {}),
-      name: attachment.name,
-      mimeType,
-      sizeBytes: blob.size,
-    },
-    resolveUploadUrl: (relativeUrl) => {
-      const connection = readPreparedConnection(environmentId);
-      return connection ? resolveAssetUrl(connection.httpBaseUrl, relativeUrl) : null;
-    },
-    transport: (url) => postBlob(url, blob, mimeType),
-  });
+  const result = await Effect.runPromise(
+    runAttachmentUploadCycle({
+      registry: appAtomRegistry,
+      createUploadUrl: attachmentEnvironment.createUploadUrl,
+      remove: attachmentEnvironment.remove,
+      environmentId,
+      upload: {
+        ...(attachment.type === "file" ? { type: "file" as const } : {}),
+        name: attachment.name,
+        mimeType,
+        sizeBytes: blob.size,
+      },
+      resolveUploadUrl: (relativeUrl) => {
+        const connection = readPreparedConnection(environmentId);
+        return connection ? resolveAssetUrl(connection.httpBaseUrl, relativeUrl) : null;
+      },
+      transport: (url) =>
+        Effect.tryPromise({
+          try: (signal) => postBlob(url, blob, mimeType, signal),
+          catch: attachmentUploadError,
+        }),
+    }),
+  );
   if (result.status === "uploaded") return result.attachmentId;
   if (result.attachmentId !== null) {
     deletePendingAttachmentUpload({
@@ -101,15 +127,16 @@ async function uploadAttachment(
       attachmentId: result.attachmentId,
     });
   }
-  if (result.status === "failed" && result.error instanceof UploadRejectedError) {
-    const status = result.error.status;
+  const rejected = isAttachmentUploadError(result.error) ? result.error.cause : null;
+  if (rejected instanceof UploadRejectedError) {
+    const status = rejected.status;
     const retryable = status === 408 || status === 429 || status >= 500;
     throw new CommandOutboxDeliveryError({
       classification: retryable ? "transient" : "permanent",
-      message: `'${attachment.name}' could not upload: ${result.error.message}`,
+      message: `'${attachment.name}' could not upload: ${rejected.message}`,
     });
   }
-  throw uploadFailure(result.status === "failed" ? result.error : "Upload cancelled");
+  throw uploadFailure(result.error);
 }
 
 function throwOnFailure(result: AtomCommandResult<unknown, unknown>): void {
@@ -166,12 +193,50 @@ async function syncThreadSettings(command: DurableComposerCommand): Promise<void
   }
 }
 
+/**
+ * Where a queued message goes: a follow-up queued while its thread's Auto launch was in flight
+ * goes where placement put the thread. A launch itself goes where it was sent.
+ */
+export function placedFollowUpRef(command: DurableComposerCommand) {
+  return command.bootstrap === undefined ? placedDraftThreadRef(command) : null;
+}
+
 /** Uploads, settings, then the turn itself, all keyed to the frozen command id. */
 export async function deliverDurableComposerCommand(
   entry: DurableComposerEntry,
   record: (command: DurableComposerCommand) => Promise<void>,
 ): Promise<void> {
-  const { command } = entry;
+  // Its attachments upload again on the placed machine.
+  const placed = placedFollowUpRef(entry.command);
+  const command: DurableComposerCommand =
+    placed === null
+      ? entry.command
+      : {
+          ...entry.command,
+          environmentId: placed.environmentId,
+          threadId: placed.threadId,
+          attachments: entry.command.attachments.map(
+            ({ uploadedAttachmentId: _uploaded, ...attachment }) => attachment,
+          ),
+        };
+  // Recorded first, so a refusal below opens and retries at the placed thread, not the draft.
+  if (placed !== null) await record(command);
+  // An attachment kept only as an upload on the machine it was sent to cannot move with it.
+  const stranded =
+    placed === null
+      ? undefined
+      : entry.command.attachments.find(({ blob }) => blob === null)?.attachment.name;
+  if (stranded !== undefined) {
+    throw new CommandOutboxDeliveryError({
+      classification: "permanent",
+      message: m(
+        msg(
+          "The thread started on another machine, where ''{name}'' was never uploaded. Attach it again.",
+          { name: stranded },
+        ),
+      ),
+    });
+  }
   const config = appAtomRegistry.get(environmentServerConfigsAtom).get(command.environmentId);
   if (config === undefined) {
     throw new CommandOutboxDeliveryError({
@@ -256,13 +321,32 @@ export async function deliverDurableComposerCommand(
     interactionMode: command.interactionMode,
     dispatchMode: command.dispatchMode,
     ...(command.bootstrap ? { bootstrap: command.bootstrap } : {}),
+    ...(command.placement ? { placement: command.placement } : {}),
   };
-  throwOnFailure(
-    await runAtomCommand(
-      appAtomRegistry,
-      threadEnvironment.startTurn,
-      { environmentId: command.environmentId, input },
-      { reportFailure: false },
-    ),
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    threadEnvironment.startTurn,
+    { environmentId: command.environmentId, input },
+    { reportFailure: false },
   );
+  throwOnFailure(result);
+  // Placement may have started the thread on another machine: the sent draft follows it there.
+  if (command.placement && result._tag === "Success") {
+    const sentRef = { environmentId: command.environmentId, threadId: command.threadId };
+    const placedRef = redirectPromotedDraftThread(sentRef, result.value);
+    // A machine this client cannot reach never shows the thread, so the draft finalizes now.
+    const placed = readEnvironment(placedRef.environmentId);
+    if (placedRef !== sentRef && placed?.connection.phase !== "connected") {
+      finalizePromotedDraftThreadByRef(placedRef);
+      toastManager.add({
+        type: "info",
+        title: placed
+          ? m(msg("Started on {machine}", { machine: placed.label }))
+          : m(msg("Started on another machine")),
+        description: placed
+          ? m(msg("Reconnect to {machine} to open it.", { machine: placed.label }))
+          : m(msg("Add that machine in Settings → Environments to open it.")),
+      });
+    }
+  }
 }

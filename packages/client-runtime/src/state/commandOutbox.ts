@@ -1,7 +1,9 @@
 import type { CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-i18n";
 
 import { isTransportConnectionErrorMessage } from "../errors/transport.ts";
+import { MarkedText, messageFromError, translatableMessage } from "../errors/translatable.ts";
 
 const MAX_RETRY_DELAY_MS = 16_000;
 
@@ -18,6 +20,8 @@ export type CommandOutboxFailureClassification = typeof CommandOutboxFailureClas
 export const CommandOutboxFailure = Schema.Struct({
   classification: CommandOutboxFailureClassification,
   message: Schema.String,
+  /** The message as marked text, for clients that show it translated. Absent in older entries. */
+  i18nMessage: Schema.optional(MarkedText),
 });
 export type CommandOutboxFailure = typeof CommandOutboxFailure.Type;
 
@@ -60,12 +64,15 @@ export class CommandOutboxDeliveryError extends Schema.TaggedError<CommandOutbox
 
 const isCommandOutboxDeliveryError = Schema.is(CommandOutboxDeliveryError);
 
-function errorMessage(error: unknown): string {
+function errorMessage(error: unknown): Pick<CommandOutboxFailure, "message" | "i18nMessage"> {
   if (typeof error === "object" && error !== null && "message" in error) {
     const message = error.message;
-    if (typeof message === "string" && message.length > 0) return message;
+    if (typeof message === "string" && message.length > 0)
+      return messageFromError({ ...error, message });
   }
-  return typeof error === "string" ? error : "The message could not be sent.";
+  return typeof error === "string"
+    ? { message: error }
+    : translatableMessage(msg("The message could not be sent."));
 }
 
 /**
@@ -83,14 +90,14 @@ export function classifyCommandDeliveryFailure(error: unknown): CommandOutboxFai
       case "EnvironmentRpcUnavailableError":
       case "EnvironmentNotRegisteredError":
       case "ConnectionTransientError":
-        return { classification: "transient", message };
+        return { classification: "transient", ...message };
       case "RpcClientError":
-        return { classification: "ambiguous", message };
+        return { classification: "ambiguous", ...message };
     }
   }
   return {
-    classification: isTransportConnectionErrorMessage(message) ? "ambiguous" : "permanent",
-    message,
+    classification: isTransportConnectionErrorMessage(message.message) ? "ambiguous" : "permanent",
+    ...message,
   };
 }
 
@@ -346,7 +353,7 @@ export function createCommandOutboxController<C extends CommandOutboxCommand>(
                 retryAt: now(),
                 failure: {
                   classification: "ambiguous",
-                  message: "Sending stopped before the environment replied.",
+                  ...translatableMessage(msg("Sending stopped before the environment replied.")),
                 },
               },
             }
@@ -424,7 +431,9 @@ export function createCommandOutboxController<C extends CommandOutboxCommand>(
                 retryAt: now(),
                 failure: {
                   classification: "ambiguous",
-                  message: "The connection dropped before the environment replied.",
+                  ...translatableMessage(
+                    msg("The connection dropped before the environment replied."),
+                  ),
                 },
               }
             : { _tag: "Pending" },

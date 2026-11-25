@@ -21,9 +21,10 @@ MacBook and the iPhone without a tap.
 - Web (`apps/web/src/peerFanOut.ts`) signs in with `prompt=none` through top-level redirects, since
   a page cannot open a provider's page in the background. The queue lives in `sessionStorage`; each
   step returns to `/pair`, which pairs with the expected id and moves on, and the last step returns
-  to where the fan-out started. Tried peers are kept in `localStorage` for a day, so a browser the
-  provider does not recognize silently does not bounce through it on every load; when that write
-  fails, the fan-out does not start. The desktop renderer does not fan out.
+  to where the fan-out started. A step pairs without upstream's "Add this backend?" confirmation,
+  since the person started the fan-out by signing in. Tried peers are kept in `localStorage` for a
+  day, so a browser the provider does not recognize silently does not bounce through it on every
+  load; when that write fails, the fan-out does not start. The desktop renderer does not fan out.
 - Mobile runs the fan-out whenever the connected environments change, with a silent ephemeral sheet
   per peer, and keeps tried peers in SecureStore for a day. **Settings → Environments → Linked from
   … → Add to this device** signs in to one linked environment interactively, at an address that

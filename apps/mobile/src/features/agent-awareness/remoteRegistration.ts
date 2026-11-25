@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { AppState, Platform } from "react-native";
+import { msg } from "gt-react-native";
 import type {
   AgentAwarenessDeviceRegistrationInput,
   AgentAwarenessLiveActivityRegistrationInput,
@@ -24,20 +25,21 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
+import { m } from "../../i18n/messages";
 import { runtime } from "../../lib/runtime";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
-import type { Preferences } from "../../persistence/mobile-preferences";
+import { MobilePreferencesStore, type Preferences } from "../../persistence/mobile-preferences";
+import * as MobileStorage from "../../persistence/mobile-storage";
 import {
   clearAgentAwarenessRegistrationRecord,
-  loadAgentAwarenessDeviceId,
-  loadAgentAwarenessRegistrationRecord,
-  loadOrCreateAgentAwarenessDeviceId,
   loadPreferences,
-  saveAgentAwarenessRegistrationRecord,
 } from "../../persistence/imperative";
 import type { AgentActivityProps } from "../../widgets/AgentActivity";
-import type { AgentActivityWidgetSource } from "../../widgets/agentActivityWidgetTimeline";
+import {
+  agentActivityText,
+  type AgentActivityWidgetSource,
+} from "../../widgets/agentActivityWidgetTimeline";
 import { publishAgentActivityWidget } from "../../widgets/publishAgentActivityWidget";
 import {
   dismissEndedAgentLiveActivities,
@@ -96,6 +98,10 @@ export type AgentAwarenessRegistrationError =
   | AgentAwarenessOperationError
   | AgentAwarenessDeliveryUnavailableError;
 
+export type AgentAwarenessRegistrationServices =
+  | MobileStorage.MobileStorage
+  | MobilePreferencesStore;
+
 // ActivityKit returns new wrappers per id; serialize by id to prevent stale-token registration.
 const activityPushTokenLocks = new Map<string, Semaphore.Semaphore>();
 // Each accepted registration replays the server aggregate, repairing drifted or orphaned activities.
@@ -109,6 +115,9 @@ const registeredActivityPushTokens = new Map<string, number>();
 // repaint, so a slow older response never overwrites newer rows.
 let widgetSnapshotReads = 0;
 let androidDeviceReplayedAt: number | null = null;
+let lastNativePushToken: string | null = null;
+let registeredWithPushToken = false;
+let nativePushTokenRotations = 0;
 let pushTokenSubscription: { remove: () => void } | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 
@@ -116,11 +125,15 @@ export type AgentAwarenessRegistrationStatus = "unknown" | "pending" | "register
 let registrationStatus: AgentAwarenessRegistrationStatus = "unknown";
 const registrationStatusListeners = new Set<() => void>();
 
-function setRegistrationStatus(next: AgentAwarenessRegistrationStatus): void {
-  if (registrationStatus === next) {
+function setRegistrationStatus(
+  next: AgentAwarenessRegistrationStatus,
+  withPushToken = registeredWithPushToken,
+): void {
+  if (registrationStatus === next && registeredWithPushToken === withPushToken) {
     return;
   }
   registrationStatus = next;
+  registeredWithPushToken = withPushToken;
   for (const listener of registrationStatusListeners) {
     listener();
   }
@@ -128,6 +141,12 @@ function setRegistrationStatus(next: AgentAwarenessRegistrationStatus): void {
 
 export function getAgentAwarenessRegistrationStatus(): AgentAwarenessRegistrationStatus {
   return registrationStatus;
+}
+
+// Live Activities use their own push tokens, so device registration alone does not mean
+// the relay can deliver notifications.
+export function agentAwarenessNotificationsReady(): boolean {
+  return registrationStatus === "registered" && registeredWithPushToken;
 }
 
 export function subscribeAgentAwarenessRegistrationStatus(listener: () => void): () => void {
@@ -317,12 +336,15 @@ const nativePushTokenRegistration = Effect.fn("remoteRegistration.nativePushToke
           )
         : true);
     if (observedPushToken) {
+      lastNativePushToken = observedPushToken;
+      nativePushTokenRotations++;
       return {
         notificationsEnabled: alertsEnabled,
         pushToken: observedPushToken,
         notificationPermissionGranted: permissions.granted,
       };
     }
+    const rotationsBeforeLookup = nativePushTokenRotations;
     const token = yield* Effect.tryPromise({
       try: () => Notifications.getDevicePushTokenAsync(),
       catch: (cause) =>
@@ -338,12 +360,18 @@ const nativePushTokenRegistration = Effect.fn("remoteRegistration.nativePushToke
       ),
       Effect.orElseSucceed(() => null),
     );
-    const pushToken =
+    const lookedUpPushToken =
       token?.type === Platform.OS && typeof token.data === "string" && token.data.trim().length > 0
         ? token.data.trim()
         : null;
+    // A rotation observed while this lookup ran is newer than what the lookup returned.
+    if (lookedUpPushToken && rotationsBeforeLookup === nativePushTokenRotations) {
+      lastNativePushToken = lookedUpPushToken;
+    }
+    const pushToken = lastNativePushToken;
+    // A missing token must not disable notifications the relay accepted.
     return {
-      notificationsEnabled: alertsEnabled && pushToken !== null,
+      notificationsEnabled: alertsEnabled,
       pushToken,
       notificationPermissionGranted: permissions.granted,
     };
@@ -374,7 +402,7 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
   function* (
     body: AgentAwarenessDeviceRegistrationInput,
     expectedGeneration: number,
-  ): Effect.fn.Return<void, AgentAwarenessRegistrationError> {
+  ): Effect.fn.Return<void, AgentAwarenessRegistrationError, AgentAwarenessRegistrationServices> {
     if (expectedGeneration !== deviceRegistrationGeneration) {
       return;
     }
@@ -387,11 +415,14 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
     // Skip the request when this environment set already accepted an identical
     // payload. Pairing identity changes invalidate the record automatically.
     const identity = transport.identity;
-    const persisted = yield* Effect.tryPromise({
-      try: () => loadAgentAwarenessRegistrationRecord(),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({ operation: "load-registration-record", cause }),
-    }).pipe(Effect.orElseSucceed(() => null));
+    const storage = yield* MobileStorage.MobileStorage;
+    const persisted = yield* storage.loadAgentAwarenessRegistrationRecord.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentAwarenessOperationError({ operation: "load-registration-record", cause }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
     if (expectedGeneration !== deviceRegistrationGeneration) {
       // The paired environment set changed while the record loaded.
       return;
@@ -412,7 +443,7 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
       !needsAndroidReplay
     ) {
       deviceOwner = persisted.owner as EnvironmentId;
-      setRegistrationStatus("registered");
+      setRegistrationStatus("registered", Boolean(payload.pushToken));
       return;
     }
 
@@ -435,16 +466,16 @@ const registerDeviceWithEnvironment = Effect.fn("remoteRegistration.registerDevi
       androidDeviceReplayedAt = yield* Clock.currentTimeMillis;
     }
     deviceOwner = result.environmentId;
-    setRegistrationStatus("registered");
-    yield* Effect.promise(() =>
-      saveAgentAwarenessRegistrationRecord({
-        identity,
-        signature,
-        owner: result.environmentId,
-      }).catch((error: unknown) => {
-        logRegistrationError("persist registration record failed", error);
-      }),
-    );
+    setRegistrationStatus("registered", Boolean(payload.pushToken));
+    yield* storage
+      .saveAgentAwarenessRegistrationRecord({ identity, signature, owner: result.environmentId })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            logRegistrationError("persist registration record failed", error);
+          }),
+        ),
+      );
   },
 );
 
@@ -486,8 +517,9 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     }
     const nowIso = new Date(Date.now()).toISOString();
     const props = {
+      text: agentActivityText(1, m),
       title: "T3 Code",
-      subtitle: "Agent work in progress",
+      subtitle: m(msg("Agent work in progress")),
       activeCount: 1,
       updatedAt: nowIso,
       activities: [
@@ -498,7 +530,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
           threadTitle: input.threadTitle,
           modelTitle: "",
           phase: "starting",
-          status: "Connecting",
+          status: m(msg("Connecting", { $context: "agent status" })),
           updatedAt: nowIso,
           deepLink: "/",
         },
@@ -524,11 +556,13 @@ const deviceOwnerOf = Effect.fn("remoteRegistration.deviceOwnerOf")(function* (
   transport: AgentAwarenessEnvironmentTransport,
 ) {
   if (deviceOwner !== null) return deviceOwner;
-  const record = yield* Effect.tryPromise({
-    try: () => loadAgentAwarenessRegistrationRecord(),
-    catch: (cause) =>
-      new AgentAwarenessOperationError({ operation: "load-registration-record", cause }),
-  }).pipe(Effect.orElseSucceed(() => null));
+  const storage = yield* MobileStorage.MobileStorage;
+  const record = yield* storage.loadAgentAwarenessRegistrationRecord.pipe(
+    Effect.mapError(
+      (cause) => new AgentAwarenessOperationError({ operation: "load-registration-record", cause }),
+    ),
+    Effect.orElseSucceed(() => null),
+  );
   return record?.identity === transport.identity && record.owner !== undefined
     ? (record.owner as EnvironmentId)
     : null;
@@ -537,7 +571,7 @@ const deviceOwnerOf = Effect.fn("remoteRegistration.deviceOwnerOf")(function* (
 const readAgentActivitySnapshot: (
   /** Only from the owner, null while it is not known: the icon's count is the owner's alone. */
   ownerOnly?: boolean,
-) => Effect.Effect<AgentAwarenessSnapshot | null> = Effect.fn(
+) => Effect.Effect<AgentAwarenessSnapshot | null, never, MobileStorage.MobileStorage> = Effect.fn(
   "remoteRegistration.readAgentActivitySnapshot",
 )(
   function* (ownerOnly = false) {
@@ -577,7 +611,7 @@ const registerLiveActivityWithEnvironment = Effect.fn(
   "remoteRegistration.registerLiveActivityWithEnvironment",
 )(function* (
   body: AgentAwarenessLiveActivityRegistrationInput,
-): Effect.fn.Return<boolean, AgentAwarenessOperationError> {
+): Effect.fn.Return<boolean, AgentAwarenessOperationError, MobileStorage.MobileStorage> {
   const transport = environmentTransport;
   if (!transport) return false;
   const owner = yield* deviceOwnerOf(transport);
@@ -604,7 +638,7 @@ function logRegistrationError(context: string, error: unknown): void {
 }
 
 function runRegistrationInBackground<E>(
-  operation: Effect.Effect<unknown, E>,
+  operation: Effect.Effect<unknown, E, AgentAwarenessRegistrationServices>,
   context: string,
 ): void {
   void (async () => {
@@ -654,7 +688,8 @@ function startPendingDeviceRegistration(): void {
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       // Refresh failures leave the server's accepted registration intact; preserve registered status.
-      if (registrationStatus !== "registered") {
+      // A paired-environment change meanwhile owns the status, so an obsolete run leaves it alone.
+      if (generation === deviceRegistrationGeneration && registrationStatus !== "registered") {
         setRegistrationStatus("failed");
       }
       logRegistrationError(next.context, squashAtomCommandFailure(result));
@@ -686,7 +721,7 @@ function enqueueDeviceRegistration(input: DeviceRegistrationInput, context: stri
 const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* (
   input: RegisterDeviceInput = {},
   expectedGeneration = deviceRegistrationGeneration,
-): Effect.fn.Return<void, AgentAwarenessRegistrationError> {
+): Effect.fn.Return<void, AgentAwarenessRegistrationError, AgentAwarenessRegistrationServices> {
   if (!canRegisterPushNotifications()) {
     return;
   }
@@ -695,23 +730,27 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
     return;
   }
 
+  const storage = yield* MobileStorage.MobileStorage;
+  const preferencesStore = yield* MobilePreferencesStore;
   const [deviceId, storedPreferences] = yield* Effect.all([
-    Effect.tryPromise({
-      try: () => loadOrCreateAgentAwarenessDeviceId(),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({
-          operation: "load-device-registration-identifier",
-          cause,
-        }),
-    }),
-    Effect.tryPromise({
-      try: () => loadPreferences(),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({
-          operation: "load-device-registration-preferences",
-          cause,
-        }),
-    }),
+    storage.loadOrCreateAgentAwarenessDeviceId.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentAwarenessOperationError({
+            operation: "load-device-registration-identifier",
+            cause,
+          }),
+      ),
+    ),
+    preferencesStore.load.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentAwarenessOperationError({
+            operation: "load-device-registration-preferences",
+            cause,
+          }),
+      ),
+    ),
   ]);
   const preferences = mergeAgentAwarenessRegistrationPreferences(
     storedPreferences,
@@ -736,6 +775,7 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
       deviceId,
       label:
         Constants.deviceName?.trim() ||
+        // oxlint-disable-next-line t3code/no-untranslated-copy -- device label stored on the relay and shown to every client
         (Platform.OS === "android" ? "Android device" : "iOS device"),
       ...(Platform.OS === "android"
         ? {
@@ -761,13 +801,6 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
     expectedGeneration,
   );
 });
-
-function registerDeviceForCurrentEnvironment(): Effect.Effect<
-  void,
-  AgentAwarenessRegistrationError
-> {
-  return registerDevice(undefined);
-}
 
 function ensurePushTokenListener(): void {
   if (pushTokenSubscription || !canRegisterPushNotifications()) {
@@ -821,32 +854,42 @@ export function retryAgentAwarenessRegistration(): void {
   }
 }
 
-export function refreshAgentAwarenessRegistration(): Effect.Effect<void, never> {
-  return registerDeviceForCurrentEnvironment().pipe(
-    Effect.catch((error) =>
-      Effect.sync(() => {
-        if (registrationStatus !== "registered") {
-          setRegistrationStatus("failed");
-        }
-        logRegistrationError("device registration refresh failed", error);
-      }),
-    ),
-  );
+export function refreshAgentAwarenessRegistration(): Effect.Effect<
+  void,
+  never,
+  AgentAwarenessRegistrationServices
+> {
+  return Effect.suspend(() => {
+    const generation = deviceRegistrationGeneration;
+    return registerDevice(undefined, generation).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          if (generation === deviceRegistrationGeneration && registrationStatus !== "registered") {
+            setRegistrationStatus("failed");
+          }
+          logRegistrationError("device registration refresh failed", error);
+        }),
+      ),
+    );
+  });
 }
 
 export function updateAgentAwarenessRegistrationPreferences(
   preferencesOverride: Partial<Preferences>,
-): Effect.Effect<void, AgentAwarenessRegistrationError> {
-  return registerDevice({ preferencesOverride }).pipe(
-    Effect.tapError((error) =>
-      Effect.sync(() => {
-        if (registrationStatus !== "registered") {
-          setRegistrationStatus("failed");
-        }
-        logRegistrationError("device preference registration refresh failed", error);
-      }),
-    ),
-  );
+): Effect.Effect<void, AgentAwarenessRegistrationError, AgentAwarenessRegistrationServices> {
+  return Effect.suspend(() => {
+    const generation = deviceRegistrationGeneration;
+    return registerDevice({ preferencesOverride }, generation).pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          if (generation === deviceRegistrationGeneration && registrationStatus !== "registered") {
+            setRegistrationStatus("failed");
+          }
+          logRegistrationError("device preference registration refresh failed", error);
+        }),
+      ),
+    );
+  });
 }
 
 export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
@@ -863,8 +906,11 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
   registrationStatus = "unknown";
+  registeredWithPushToken = false;
   androidDeviceReplayedAt = null;
   deviceOwner = null;
+  lastNativePushToken = null;
+  nativePushTokenRotations = 0;
   registrationStatusListeners.clear();
   registeredActivityPushTokens.clear();
   activityPushTokenLocks.clear();
@@ -880,14 +926,16 @@ export async function unregisterAgentAwarenessDeviceFromEnvironment(
   unregister: (deviceId: string) => Promise<void>,
 ): Promise<void> {
   const operation = Effect.gen(function* () {
-    const deviceId = yield* Effect.tryPromise({
-      try: () => loadAgentAwarenessDeviceId(),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({
-          operation: "load-device-unregistration-identifier",
-          cause,
-        }),
-    });
+    const storage = yield* MobileStorage.MobileStorage;
+    const deviceId = yield* storage.loadAgentAwarenessDeviceId.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentAwarenessOperationError({
+            operation: "load-device-unregistration-identifier",
+            cause,
+          }),
+      ),
+    );
     if (!deviceId) {
       return;
     }
@@ -919,7 +967,7 @@ export const registerLiveActivityPushToken = Effect.fn(
   "remoteRegistration.registerLiveActivityPushToken",
 )(function* (input: {
   readonly activity: LiveActivity<AgentActivityProps>;
-}): Effect.fn.Return<boolean, AgentAwarenessOperationError> {
+}): Effect.fn.Return<boolean, AgentAwarenessOperationError, AgentAwarenessRegistrationServices> {
   if (!canRegisterRemoteLiveActivities()) {
     return false;
   }
@@ -967,7 +1015,7 @@ const registerLiveActivityPushTokenValue = Effect.fn(
   "remoteRegistration.registerLiveActivityPushTokenValue",
 )(function* (input: {
   readonly activityPushToken: string;
-}): Effect.fn.Return<boolean, AgentAwarenessOperationError> {
+}): Effect.fn.Return<boolean, AgentAwarenessOperationError, AgentAwarenessRegistrationServices> {
   const acceptedAt = registeredActivityPushTokens.get(input.activityPushToken);
   if (
     acceptedAt !== undefined &&
@@ -975,14 +1023,16 @@ const registerLiveActivityPushTokenValue = Effect.fn(
   ) {
     return true;
   }
-  const deviceId = yield* Effect.tryPromise({
-    try: () => loadOrCreateAgentAwarenessDeviceId(),
-    catch: (cause) =>
-      new AgentAwarenessOperationError({
-        operation: "load-live-activity-registration-identifier",
-        cause,
-      }),
-  });
+  const storage = yield* MobileStorage.MobileStorage;
+  const deviceId = yield* storage.loadOrCreateAgentAwarenessDeviceId.pipe(
+    Effect.mapError(
+      (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "load-live-activity-registration-identifier",
+          cause,
+        }),
+    ),
+  );
   const registered = yield* registerLiveActivityWithEnvironment({
     deviceId,
     activityPushToken: input.activityPushToken,
@@ -1034,7 +1084,7 @@ function scheduleActiveLiveActivityRegistrationRetry(): void {
 
 export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
   "remoteRegistration.refreshActiveLiveActivityRemoteRegistration",
-)(function* (): Effect.fn.Return<void, never> {
+)(function* (): Effect.fn.Return<void, never, AgentAwarenessRegistrationServices> {
   if (!canRegisterRemoteLiveActivities() || !environmentTransport) {
     return;
   }
@@ -1087,14 +1137,17 @@ export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
   // server never push-to-starts one because background wakes proved too unreliable. Asking the
   // server for the aggregate first keeps an idle open from creating an empty lock-screen card.
   if (activities.length === 0) {
-    const preferences = yield* Effect.tryPromise({
-      try: () => loadPreferences(),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({
-          operation: "load-live-activity-prime-preferences",
-          cause,
-        }),
-    }).pipe(Effect.orElseSucceed(() => null));
+    const preferencesStore = yield* MobilePreferencesStore;
+    const preferences = yield* preferencesStore.load.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentAwarenessOperationError({
+            operation: "load-live-activity-prime-preferences",
+            cause,
+          }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
     if (!isNewestRead()) {
       return;
     }
@@ -1115,6 +1168,14 @@ export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
           try: () =>
             startAgentLiveActivity(
               {
+                text: agentActivityText(
+                  Math.max(
+                    aggregate.activeCount,
+                    aggregate.activities.length,
+                    aggregate.attentionCount ?? 0,
+                  ),
+                  m,
+                ),
                 title: aggregate.title,
                 subtitle: aggregate.subtitle,
                 activeCount: aggregate.activeCount,

@@ -9,6 +9,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { memo, useEffect, useState } from "react";
+import { msg, T, useGT, useMessages } from "gt-react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import {
@@ -18,6 +19,7 @@ import {
   type DurableComposerEntry,
   type RestoredComposerContent,
 } from "../../durableCommandOutbox";
+import { m } from "../../i18n/messages";
 import { readThreadShell } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { cn, randomUUID } from "~/lib/utils";
@@ -45,9 +47,9 @@ export function DurableOutboxDelivery() {
     toastManager.add(
       stackedThreadToast({
         type: "error",
-        title: "A saved message was not delivered",
+        title: m(msg("A saved message was not delivered")),
         ...(entry.state._tag === "Rejected" ? { description: entry.state.failure.message } : {}),
-        actionProps: { children: "Open", onClick: open },
+        actionProps: { children: m(msg("Open", { $context: "verb" })), onClick: open },
       }),
     );
   };
@@ -69,7 +71,9 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   onRestore,
   className,
 }: DurableOutboxStripProps) {
-  const views = presentDurableOutboxEntries(entries, connected);
+  const gt = useGT();
+  const messages = useMessages();
+  const views = presentDurableOutboxEntries(entries, connected, messages);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [busyId, setBusyId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -91,7 +95,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
       await action();
     } catch (cause) {
       setActionError(
-        cause instanceof Error ? cause.message : "The saved message could not change.",
+        cause instanceof Error ? cause.message : gt("The saved message could not change."),
       );
     }
     setBusyId(null);
@@ -100,7 +104,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   return (
     <div
       data-durable-outbox-strip="true"
-      aria-label={`Messages waiting to send (${views.length})`}
+      aria-label={gt("Messages waiting to send ({count})", { count: views.length })}
       className={cn(
         "mx-auto mb-2 max-h-48 max-w-3xl space-y-1 overflow-y-auto rounded-xl border border-info/25 bg-info/6 px-3 py-2 text-xs shadow-xs",
         className,
@@ -109,7 +113,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
       {views.map((view) => {
         const { entry } = view;
         const busy = busyId === entry.id;
-        const countdown = retryCountdownText(view.retryAt, nowMs);
+        const countdown = retryCountdownText(view.retryAt, nowMs, messages);
         return (
           <div
             key={entry.id}
@@ -160,13 +164,13 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                     }
                   >
                     <PencilIcon className="size-3" aria-hidden="true" />
-                    Edit
+                    <T context="verb">Edit</T>
                   </Button>
                   <Button
                     type="button"
                     size="icon-xs"
                     variant="ghost"
-                    aria-label="Discard saved message"
+                    aria-label={gt("Discard saved message")}
                     disabled={busy}
                     onClick={() =>
                       void run(entry.id, async () => {

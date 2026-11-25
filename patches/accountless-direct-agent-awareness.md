@@ -118,11 +118,15 @@ The other mobile deltas live in upstream-owned files, so check each one survives
   feed upstream's home-screen widget from the environment snapshot
   (see `mobile-agent-activity-widget.md`).
 - `features/agent-awareness/liveActivityPreferences.ts`: toggling Live Activities updates the
-  registration without linking environments to T3 Connect. The file stays the fork's whole:
-  upstream's `canConfigureEnvironment` gate (#9786) only guards the T3 Connect link it replaces.
+  registration without linking environments to T3 Connect. Upstream's `canConfigureEnvironment`
+  gate (#9786) and per-environment link results only serve the T3 Connect link it replaces, so
+  the fork keeps only the registration update, plus upstream's `saveLocalPreference` step (#38913)
+  that restores the registration when the phone cannot save the setting.
 - `features/settings/SettingsNotificationsRouteScreen.tsx`: the direct APNs path. Upstream's
-  `canLinkEnvironmentToConnect` managed-policy gate (#27197) only guards T3 Connect links, so the
-  file stays the fork's.
+  `canLinkEnvironmentToConnect` managed-policy gate (#27197) and its sign-in and relay-link flows
+  only guard T3 Connect, so the screen keeps the fork's flow. Upstream's translations and its
+  notifications-ready check (#26557), which needs a push token as well as a registration, still
+  apply.
 - `features/settings/SettingsRouteScreen.tsx`: the Notifications row in `LocalSettingsRouteScreen`'s
   connections list.
 - `connection/migration.ts`: drops legacy relay-managed connections.

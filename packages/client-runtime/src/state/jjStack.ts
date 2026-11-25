@@ -1,4 +1,6 @@
 import type { JjChangeFlag, JjStackEntry, JjStatus } from "@t3tools/contracts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 export interface JjStackRow {
   readonly changeId: string;
@@ -37,11 +39,14 @@ export function formatJjTurns(turns: ReadonlyArray<number>): string | null {
   return consecutive ? `turns ${sorted[0]}-${sorted.at(-1)}` : `turns ${sorted.join(", ")}`;
 }
 
-function toRow(entry: JjStackEntry, threadId: string | null): JjStackRow {
+function toRow(entry: JjStackEntry, threadId: string | null, resolve: MFunctionType): JjStackRow {
   return {
     changeId: entry.changeId,
     shortChangeId: entry.changeId.slice(0, 8),
-    title: entry.description.length > 0 ? entry.description : "(no description)",
+    title:
+      entry.description.length > 0
+        ? entry.description
+        : resolve(msg("(no description)", { $context: "a jj change without a description" })),
     undescribed: entry.description.length === 0,
     empty: entry.empty,
     conflict: entry.conflict,
@@ -59,8 +64,12 @@ function toRow(entry: JjStackEntry, threadId: string | null): JjStackRow {
   };
 }
 
-export function buildJjStackView(status: JjStatus, threadId: string | null): JjStackView {
-  const rows = status.stack.map((entry) => toRow(entry, threadId));
+export function buildJjStackView(
+  status: JjStatus,
+  threadId: string | null,
+  resolve: MFunctionType = mFallback,
+): JjStackView {
+  const rows = status.stack.map((entry) => toRow(entry, threadId, resolve));
   const workingCopy = rows.find((row) => row.workingCopy) ?? null;
   const pushTarget =
     workingCopy !== null && !workingCopy.empty

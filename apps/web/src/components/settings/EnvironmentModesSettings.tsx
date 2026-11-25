@@ -1,9 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentMode } from "@t3tools/client-runtime/connection";
 import { PlusIcon, Trash2Icon } from "lucide-react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { environmentCatalog } from "~/connection/catalog";
 import { shortcutLabelForCommand } from "~/keybindings";
+import { m } from "~/i18n/messages";
 import { randomUUID } from "~/lib/utils";
 import type { EnvironmentPresentation } from "~/state/environments";
 import { primaryServerKeybindingsAtom } from "~/state/server";
@@ -13,15 +15,21 @@ import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
 import { Toggle } from "../ui/toggle";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
-const SUGGESTED_NAMES = ["Work", "Personal"];
+const SUGGESTED_NAMES = [
+  msg("Work", { $context: "default name of an environment mode" }),
+  msg("Personal", { $context: "default name of an environment mode" }),
+];
 
 export function EnvironmentModesSettings({
   environments,
 }: {
   readonly environments: ReadonlyArray<EnvironmentPresentation>;
 }) {
+  const searchableSetting = useSearchableSetting();
+  const gt = useGT();
+  const messages = useMessages();
   const modes = useAtomValue(environmentCatalog.modesValueAtom);
   const setModes = useAtomCommand(environmentCatalog.setModes, { reportFailure: false });
   const shortcutLabel = shortcutLabelForCommand(
@@ -36,7 +44,7 @@ export function EnvironmentModesSettings({
   ) =>
     void setModes(transform).then((result) => {
       if (result._tag === "Failure")
-        toastManager.add({ type: "error", title: "Could not save environment modes" });
+        toastManager.add({ type: "error", title: m(msg("Could not save environment modes")) });
     });
   const update = (id: string, change: (mode: EnvironmentMode) => EnvironmentMode) =>
     save((current) => current.map((mode) => (mode.id === id ? change(mode) : mode)));
@@ -46,13 +54,26 @@ export function EnvironmentModesSettings({
     <FoldedSettingsSection
       id={id}
       title={title}
-      summary={modes.length === 0 ? "None" : modes.map((mode) => mode.name).join(", ")}
+      summary={
+        modes.length === 0
+          ? gt("None", { $context: "no environment modes" })
+          : modes.map((mode) => mode.name).join(", ")
+      }
     >
       <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-        A mode turns its environments on and turns off environments that only other modes include.
-        Environments in no mode keep their switch. Switch modes from the sidebar
-        {shortcutLabel ? ` or cycle them with ${shortcutLabel}` : ""}. Modes apply only to this
-        device.
+        {shortcutLabel ? (
+          <T>
+            A mode turns its environments on and turns off environments that only other modes
+            include. Environments in no mode keep their switch. Switch modes from the sidebar or
+            cycle them with <Var>{shortcutLabel}</Var>. Modes apply only to this device.
+          </T>
+        ) : (
+          <T>
+            A mode turns its environments on and turns off environments that only other modes
+            include. Environments in no mode keep their switch. Switch modes from the sidebar. Modes
+            apply only to this device.
+          </T>
+        )}
       </p>
       {modes.map((mode) => (
         <div key={mode.id} className="flex flex-col gap-2 border-t px-3 py-2.5 sm:px-4">
@@ -61,7 +82,7 @@ export function EnvironmentModesSettings({
               size="sm"
               className="w-48"
               defaultValue={mode.name}
-              aria-label="Mode name"
+              aria-label={gt("Mode name")}
               onBlur={(event) => {
                 const name = event.currentTarget.value.trim();
                 if (name.length === 0) event.currentTarget.value = mode.name;
@@ -74,7 +95,7 @@ export function EnvironmentModesSettings({
             <Button
               size="icon-xs"
               variant="ghost-destructive"
-              aria-label={`Remove ${mode.name}`}
+              aria-label={gt("Remove {name}", { name: mode.name })}
               onClick={() =>
                 save((current) => current.filter((candidate) => candidate.id !== mode.id))
               }
@@ -113,14 +134,17 @@ export function EnvironmentModesSettings({
               ...current,
               {
                 id: randomUUID(),
-                name: SUGGESTED_NAMES[current.length] ?? `Mode ${current.length + 1}`,
+                name: messages(
+                  SUGGESTED_NAMES[current.length] ??
+                    msg("Mode {number}", { number: current.length + 1 }),
+                ),
                 environmentIds: [],
               },
             ])
           }
         >
           <PlusIcon />
-          Add mode
+          <T>Add mode</T>
         </Button>
       </div>
     </FoldedSettingsSection>

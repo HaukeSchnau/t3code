@@ -12,7 +12,7 @@ import {
   HTML_RENDER_UPDATE_TOOL_NAME,
 } from "@t3tools/shared/htmlRender";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as HtmlRender from "../../../htmlRender/HtmlRender.ts";
 import * as HtmlRenderIndex from "../../../htmlRender/HtmlRenderIndex.ts";
@@ -98,6 +98,7 @@ export const HtmlPreviewTool = Tool.make("html_preview", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Meta, { "anthropic/alwaysLoad": true });
 
 // These affect only the caller's thread, not its workspace, so read-only sandboxes and plan mode may use them.
@@ -126,6 +127,7 @@ const HtmlRenderTool = Tool.make(HTML_RENDER_TOOL_NAME, {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Meta, { "anthropic/alwaysLoad": true });
 
 const HtmlRenderUpdateTool = Tool.make(HTML_RENDER_UPDATE_TOOL_NAME, {
@@ -166,7 +168,8 @@ const HtmlRenderUpdateTool = Tool.make(HTML_RENDER_UPDATE_TOOL_NAME, {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const HtmlPreviewToolkit = Toolkit.make(HtmlPreviewTool);
 

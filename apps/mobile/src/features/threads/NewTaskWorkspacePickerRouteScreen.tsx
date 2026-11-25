@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { projectWorkspaceGroups } from "@t3tools/client-runtime/state/workspaces";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
+import { useGT } from "gt-react-native";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -26,6 +27,7 @@ const EMPTY_ENVIRONMENT_IDS: ReadonlyArray<EnvironmentId> = [];
  * through search or Show settled, which load archived threads on demand.
  */
 export function NewTaskWorkspacePickerRouteScreen() {
+  const gt = useGT();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -77,7 +79,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
 
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
-      <AppBar title="Workspace" hideBottomBorder onBack={() => navigation.goBack()} />
+      <AppBar title={gt("Workspace")} hideBottomBorder onBack={() => navigation.goBack()} />
       <ScreenContent>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
@@ -90,8 +92,8 @@ export function NewTaskWorkspacePickerRouteScreen() {
         >
           <PickerSurface>
             <SelectionRow
-              title="New workspace"
-              subtitle="A separate copy for this task"
+              title={gt("New workspace")}
+              subtitle={gt("A separate copy for this task")}
               selected={isNew && !isolated}
               onPress={() => {
                 appAtomRegistry.set(workspaceIsolatedAtom, false);
@@ -101,8 +103,8 @@ export function NewTaskWorkspacePickerRouteScreen() {
             />
             {managed?.isolated ? (
               <SelectionRow
-                title="New isolated workspace"
-                subtitle="A clean room that can't see your other projects"
+                title={gt("New isolated workspace")}
+                subtitle={gt("A clean room that can't see your other projects")}
                 selected={isNew && isolated}
                 onPress={() => {
                   appAtomRegistry.set(workspaceIsolatedAtom, true);
@@ -112,7 +114,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
               />
             ) : null}
             <SelectionRow
-              title="Project checkout"
+              title={gt("Project checkout")}
               selected={!isNew && flow.selectedWorktreePath === null}
               onPress={() => {
                 appAtomRegistry.set(workspaceIsolatedAtom, false);
@@ -132,8 +134,8 @@ export function NewTaskWorkspacePickerRouteScreen() {
             />
           </PickerSurface>
           <TextInput
-            accessibilityLabel="Find workspace"
-            placeholder="Find workspace…"
+            accessibilityLabel={gt("Find workspace")}
+            placeholder={gt("Find workspace…")}
             value={query}
             onChangeText={setQuery}
             autoCorrect={false}
@@ -145,13 +147,25 @@ export function NewTaskWorkspacePickerRouteScreen() {
               <SelectionRow
                 key={workspace.key}
                 title={workspace.label}
-                subtitle={`${workspace.threadCount} ${workspace.threadCount === 1 ? "thread" : "threads"}${
+                subtitle={
                   workspace.runningCount > 0
-                    ? ` · ${workspace.runningCount} running`
+                    ? gt(
+                        "{threadCount, plural, one {{threadCount} thread} other {{threadCount} threads}} · {runningCount} running",
+                        {
+                          threadCount: workspace.threadCount,
+                          runningCount: workspace.runningCount,
+                        },
+                      )
                     : workspace.settled
-                      ? " · Settled"
-                      : ""
-                }`}
+                      ? gt(
+                          "{threadCount, plural, one {{threadCount} thread} other {{threadCount} threads}} · Settled",
+                          { threadCount: workspace.threadCount },
+                        )
+                      : gt(
+                          "{threadCount, plural, one {{threadCount} thread} other {{threadCount} threads}}",
+                          { threadCount: workspace.threadCount },
+                        )
+                }
                 selected={!isNew && flow.selectedWorktreePath === workspace.path}
                 onPress={() => selectWorkspace(workspace.path, workspace.branch)}
                 isLast={index === workspaces.length - 1}
@@ -160,13 +174,17 @@ export function NewTaskWorkspacePickerRouteScreen() {
             {workspaces.length === 0 ? (
               <Text className="p-4 text-sm text-foreground-muted">
                 {archive.isLoading
-                  ? "Loading settled workspaces…"
-                  : (archive.error ?? "No matching workspaces.")}
+                  ? gt("Loading settled workspaces…")
+                  : (archive.error ?? gt("No matching workspaces."))}
               </Text>
             ) : null}
           </PickerSurface>
           <PickerSurface>
-            <ToggleRow title="Show settled" value={showSettled} onValueChange={setShowSettled} />
+            <ToggleRow
+              title={gt("Show settled")}
+              value={showSettled}
+              onValueChange={setShowSettled}
+            />
           </PickerSurface>
           {isNew && isolated ? (
             <>
@@ -176,7 +194,7 @@ export function NewTaskWorkspacePickerRouteScreen() {
                 className="px-4 py-2"
               >
                 <Text className="text-sm text-foreground-muted">
-                  {advanced ? "Hide clean room setup" : "Clean room setup"}
+                  {advanced ? gt("Hide clean room setup") : gt("Clean room setup")}
                 </Text>
               </Pressable>
               {advanced ? (
@@ -184,11 +202,15 @@ export function NewTaskWorkspacePickerRouteScreen() {
                   {(["familiar", "minimal"] as const).map((value) => (
                     <SelectionRow
                       key={value}
-                      title={value === "familiar" ? "Familiar" : "Minimal"}
+                      title={
+                        value === "familiar"
+                          ? gt("Familiar", { $context: "clean room setup profile" })
+                          : gt("Minimal", { $context: "clean room setup profile" })
+                      }
                       subtitle={
                         value === "familiar"
-                          ? "Keeps your global instructions and skills"
-                          : "Starts with the project's own instructions and tools"
+                          ? gt("Keeps your global instructions and skills")
+                          : gt("Starts with the project's own instructions and tools")
                       }
                       selected={profile === value}
                       onPress={() => appAtomRegistry.set(workspaceProfileAtom, value)}

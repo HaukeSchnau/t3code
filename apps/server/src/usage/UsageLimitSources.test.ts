@@ -1,9 +1,18 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { SecretProviderId, ServerConfigStreamEvent, UsageLimitSourceId } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  SecretProviderId,
+  ServerConfigStreamEvent,
+  UsageLimitSourceId,
+  type ServerProviderUsageWindow,
+  type UsageLimitSourceSnapshot,
+} from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -33,6 +42,15 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
       "hub.test:8317",
       "Usage limit source",
     ]);
+    // Only an http(s) hub URL names an endpoint an agent can be sent to.
+    expect(snapshots.map((source) => source.origin)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      "https://hub.test:8317",
+      undefined,
+    ]);
+    expect(snapshots[3]?.endpoint).toBe("https://hub.test:8317/team-a");
     expect(() =>
       encodeConfigEvent({
         version: 1,
@@ -73,7 +91,7 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
           },
           [UsageLimitSourceId.make("valid-hub")]: {
             kind: "cliproxy",
-            url: "https://hub.test:8317",
+            url: "https://hub.test:8317/team-a/management.html",
             managementKey: "",
             enabled: true,
           },
@@ -92,17 +110,18 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
       NodeCrypto.layer,
       testFiles,
     ]),
-    Effect.scoped,
   ),
 );
 
 /**
  * A hub with one Claude account whose quota reads answer with `statuses` in turn. Tests change
- * `authFile` to stand for the hub rewriting the account's auth file.
+ * `authFile` to stand for the hub rewriting the account's auth file, and `models` for the models
+ * the hub routes to it.
  */
 function hubDependencies(
   statuses: Array<{ status: number; retryAfter?: string; utilization?: number }>,
-  authFile: { modtime?: string } = {},
+  authFile: { modtime?: string; email?: string | undefined } = {},
+  models: Array<string> = [],
 ) {
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
@@ -120,6 +139,12 @@ function hubDependencies(
               },
             ],
           }),
+        );
+      }
+      if (request.url.includes("/auth-files/models")) {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({ models: models.map((id) => ({ id })) }),
         );
       }
       const next = statuses.shift()!;
@@ -159,10 +184,11 @@ function hubDependencies(
 
 function hubLayer(
   statuses: Array<{ status: number; retryAfter?: string }>,
-  authFile: { modtime?: string } = {},
+  authFile: { modtime?: string; email?: string | undefined } = {},
+  models: Array<string> = [],
 ) {
   return Layer.effect(UsageLimitSources.UsageLimitSources, UsageLimitSources.make).pipe(
-    Layer.provide(hubDependencies(statuses, authFile)),
+    Layer.provide(hubDependencies(statuses, authFile, models)),
   );
 }
 
@@ -198,6 +224,40 @@ it.effect("keeps a throttled account's last reading and waits out its Retry-Afte
     expect(statuses).toEqual([]);
     expect((yield* sources.current)[0]?.accounts[0]?.usageLimits.rateLimitedUntil).toBe(undefined);
   }).pipe(Effect.provide(hubLayer(statuses)));
+});
+
+it.effect("lends a failed read only the last reading of the same login", () => {
+  const statuses = [
+    { status: 200 },
+    { status: 429, retryAfter: "600" },
+    { status: 429, retryAfter: "1" },
+    { status: 200 },
+    { status: 429, retryAfter: "1" },
+  ];
+  const authFile: { email?: string | undefined } = { email: "first@x.test" };
+  const models = ["claude-opus-4-6"];
+  const unread = { windows: [], unavailable: { reason: "probeFailed" } };
+  return Effect.gen(function* () {
+    const sources = yield* UsageLimitSources.UsageLimitSources;
+    const read = Effect.gen(function* () {
+      yield* TestClock.adjust("31 seconds");
+      yield* sources.refresh;
+      return (yield* sources.current)[0]?.accounts[0];
+    });
+    const windows = (yield* firstSnapshot)[0]?.accounts[0]?.usageLimits.windows;
+    expect(windows).toHaveLength(1);
+    // Only the reading is lent; the model list is the one the hub routes to the account now.
+    models[0] = "claude-sonnet-4-6";
+    expect(yield* read).toMatchObject({ models: ["claude-sonnet-4-6"], usageLimits: { windows } });
+    // Auth file names can be reused: another login is read despite the last one's throttle.
+    authFile.email = "second@x.test";
+    expect(yield* read).toMatchObject({ email: "second@x.test", usageLimits: unread });
+    // A file that lists no login cannot show whether the next one is the same.
+    authFile.email = undefined;
+    expect((yield* read)?.usageLimits.windows).toHaveLength(1);
+    expect(yield* read).toMatchObject({ usageLimits: unread });
+    expect(statuses).toEqual([]);
+  }).pipe(Effect.provide(hubLayer(statuses, authFile, models)));
 });
 
 it.effect("reuses a hub read from the last 30 seconds", () => {
@@ -349,3 +409,217 @@ it.effect("measures an account's pace from readings kept across a restart", () =
     ),
   );
 });
+
+const NOW = Date.parse("2026-11-13T12:00:00.000Z");
+const at = (hours: number) => DateTime.formatIso(DateTime.makeUnsafe(NOW + hours * 3_600_000));
+const spent = (id: string, hours: number): ServerProviderUsageWindow => ({
+  id,
+  kind: "weekly",
+  label: id,
+  usedPercent: 100,
+  resetsAt: at(hours),
+});
+const hub = (
+  accounts: ReadonlyArray<{
+    driver?: string;
+    models?: ReadonlyArray<string>;
+    windows?: ReadonlyArray<ServerProviderUsageWindow>;
+    unavailable?: true;
+  }>,
+): UsageLimitSourceSnapshot => ({
+  id: UsageLimitSourceId.make("hub"),
+  kind: "cliproxy",
+  label: "hub",
+  checkedAt: at(0),
+  accounts: accounts.map((account, index) => ({
+    id: `account-${index}`,
+    driver: ProviderDriverKind.make(account.driver ?? "claudeAgent"),
+    ...(account.models ? { models: account.models } : {}),
+    usageLimits: {
+      checkedAt: at(0),
+      windows: account.windows ?? [],
+      ...(account.unavailable ? { unavailable: { reason: "probeFailed" as const } } : {}),
+    },
+  })),
+});
+
+it.each([
+  {
+    name: "earliest refill when every account is spent, each at its latest spent window",
+    accounts: [
+      { windows: [spent("five_hour", 1), spent("seven_day", 3)] },
+      { windows: [spent("five_hour", 2)] },
+      { driver: "codex", windows: [] },
+    ],
+    model: "claude-haiku-5-5",
+    expected: at(2),
+  },
+  {
+    name: "unknown while an account still has room",
+    accounts: [{ windows: [spent("five_hour", 1)] }, { windows: [] }],
+    model: "claude-haiku-5-5",
+    expected: null,
+  },
+  {
+    name: "unknown while an account could not be read",
+    accounts: [{ windows: [spent("five_hour", 1)] }, { unavailable: true as const }],
+    model: "claude-haiku-5-5",
+    expected: null,
+  },
+  {
+    name: "unknown when a spent window has no reset or already reset",
+    accounts: [{ windows: [{ ...spent("five_hour", 1), resetsAt: undefined }] }],
+    model: "claude-haiku-5-5",
+    expected: null,
+  },
+  {
+    name: "a model-scoped weekly window blocks only its own model",
+    accounts: [{ windows: [spent("seven_day_fable", 5)] }],
+    model: "claude-haiku-5-5",
+    expected: null,
+  },
+  {
+    name: "a model-scoped weekly window blocks its own model",
+    accounts: [{ windows: [spent("seven_day_fable", 5)] }],
+    model: "claude-fable-5-2",
+    expected: at(5),
+  },
+  {
+    name: "no account of the driver",
+    accounts: [{ driver: "codex", windows: [spent("five_hour", 1)] }],
+    model: "claude-haiku-5-5",
+    expected: null,
+  },
+  // regression: #30778 only the accounts the hub routes the model to can refill it
+  {
+    name: "an account of another driver the hub routes the model to counts",
+    accounts: [
+      { driver: "codex", models: ["gpt-5.6-sol"], windows: [spent("five_hour", 3)] },
+      { models: ["claude-sonnet-4-6"], windows: [] },
+    ],
+    model: "gpt-5.6-sol",
+    expected: at(3),
+  },
+  {
+    name: "an account that lists no models is left out of an alias",
+    accounts: [{ windows: [spent("five_hour", 1)] }, { models: [], windows: [] }],
+    model: "opus",
+    expected: at(1),
+  },
+  {
+    name: "a spent Gemini quota does not hold back Claude on Antigravity",
+    accounts: [
+      {
+        driver: "antigravity",
+        models: ["claude-opus-4-6-thinking"],
+        windows: [spent("3p-5h", 1), spent("gemini-5h", 24)],
+      },
+    ],
+    model: "claude-opus-4-6-thinking",
+    expected: at(1),
+  },
+  {
+    name: "a hub thinking suffix routes by its base model",
+    accounts: [
+      { driver: "codex", models: ["gpt-5.2"], windows: [spent("five_hour", 3)] },
+      { models: ["claude-sonnet-4-6"], windows: [] },
+    ],
+    model: "gpt-5.2(high)",
+    expected: at(3),
+  },
+  {
+    name: "a prefixed Gemini model is held back by the Gemini quota",
+    accounts: [
+      {
+        driver: "antigravity",
+        models: ["ag/gemini-3.1-pro-high"],
+        windows: [spent("3p-5h", 1), spent("gemini-5h", 24)],
+      },
+    ],
+    model: "ag/gemini-3.1-pro-high",
+    expected: at(24),
+  },
+  {
+    name: "an alias of unknown family is held back by every Antigravity quota",
+    accounts: [{ driver: "antigravity", models: ["fast"], windows: [spent("gemini-5h", 24)] }],
+    model: "fast",
+    expected: at(24),
+  },
+  {
+    name: "an own-driver account whose model list was unread still counts",
+    accounts: [
+      { windows: [spent("five_hour", 1)] },
+      {
+        driver: "antigravity",
+        models: ["claude-sonnet-4-6"],
+        windows: [spent("3p-5h", 8)],
+      },
+    ],
+    model: "claude-sonnet-4-6",
+    expected: at(1),
+  },
+  {
+    name: "an Argon model waits only for the Argon quota",
+    accounts: [
+      {
+        driver: "antigravity",
+        models: ["gemini-4-argon-high"],
+        windows: [spent("gemini-argon-5h", 2), spent("gemini-carbon-weekly", 96)],
+      },
+    ],
+    model: "gemini-4-argon-high",
+    expected: at(2),
+  },
+])("hub pool reset: $name", ({ accounts, model, expected }) => {
+  expect(
+    UsageLimitSources.hubPoolResetAt(
+      [hub(accounts)],
+      ProviderDriverKind.make("claudeAgent"),
+      model,
+      NOW,
+    ),
+  ).toBe(expected);
+});
+
+it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold the failure", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(NOW);
+    const roomLeft = { ...hub([{ windows: [spent("five_hour", 2)] }]), origin: "http://hub.test" };
+    const cached = {
+      ...roomLeft,
+      accounts: roomLeft.accounts.map((account) => ({
+        ...account,
+        usageLimits: {
+          ...account.usageLimits,
+          windows: account.usageLimits.windows.map((window) => ({ ...window, usedPercent: 99 })),
+        },
+      })),
+    };
+    let current: ReadonlyArray<UsageLimitSourceSnapshot> = [cached];
+    let refresh: Effect.Effect<void> = Effect.sync(() => {
+      current = [roomLeft];
+    });
+    const lookup = UsageLimitSources.UsageLimitResetFallback.pipe(
+      Effect.flatMap((fallback) =>
+        fallback.resetAt(ProviderDriverKind.make("claudeAgent"), "http://hub.test", null),
+      ),
+      Effect.provide(
+        UsageLimitSources.layerResetFallback.pipe(
+          Layer.provide(
+            Layer.mock(UsageLimitSources.UsageLimitSources)({
+              current: Effect.sync(() => current),
+              refresh: Effect.suspend(() => refresh),
+            }),
+          ),
+        ),
+      ),
+    );
+    // The last poll saw room; the account was spent after it.
+    expect(yield* lookup).toBe(at(2));
+    current = [cached];
+    refresh = Effect.never;
+    const stalled = yield* Effect.forkChild(lookup);
+    yield* TestClock.adjust("5 seconds");
+    expect(yield* Fiber.join(stalled)).toBeNull();
+  }),
+);

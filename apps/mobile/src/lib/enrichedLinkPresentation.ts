@@ -17,12 +17,14 @@ import {
   parseComposerContextHref,
 } from "@t3tools/shared/composerContextReferences";
 import {
+  EXTENSIONLESS_FILE_NAMES,
   INLINE_CODE_WEB_LINK_PATTERN,
   resolveInlineCodeWebLink,
 } from "@t3tools/shared/markdownLinks";
 import { hasThreadLinks, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import type { LinkedFollowUp } from "@t3tools/client-runtime/state/follow-ups";
 import { FOLLOW_UP_STATUS_LABELS } from "../features/follow-ups/followUpPresentation";
+import { m, type MessageResolver } from "../i18n/messages";
 
 export function enrichedContextLinkPresentation(
   href: string,
@@ -60,12 +62,13 @@ export function enrichedThreadLinkPresentation(
  */
 export function enrichedFollowUpLinkPresentation(
   linked: LinkedFollowUp | undefined,
+  resolve: MessageResolver = m,
 ): { accent?: string; icon: ContextChipIconRef; label?: string } | undefined {
   if (linked === undefined || linked.state === "missing") return undefined;
   const presentation = contextChipPresentation("follow-up");
   const label =
     linked.state === "found"
-      ? `${linked.title.trim()}${linked.status === "open" ? "" : ` · ${FOLLOW_UP_STATUS_LABELS[linked.status]}`}`
+      ? `${linked.title.trim()}${linked.status === "open" ? "" : ` · ${resolve(FOLLOW_UP_STATUS_LABELS[linked.status])}`}`
       : "";
   return {
     ...(presentation.accent ? { accent: presentation.accent } : {}),
@@ -117,12 +120,19 @@ export function enrichedLinkVariantPattern(url: string) {
   return `^${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
 }
 
-export const ENRICHED_INLINE_FILE_LINK_REGEX =
-  /^(?!\S*:\/\/)(?:(?:\.{1,2}[\\/]|~[\\/]|\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root|usr|bin|sbin|lib|lib64|srv|dev|proc|sys|run|boot|media|workspace|workspaces)\/|[A-Za-z]:[\\/])[^\s`]+|(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+(?::\d+|-\d+)?)?|[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+:\d+(?::\d+|-\d+)?)$/;
+const EXTENSIONLESS_FILE_NAME_PATTERN = [...EXTENSIONLESS_FILE_NAMES]
+  .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+
+export const ENRICHED_INLINE_FILE_LINK_REGEX = new RegExp(
+  String.raw`^(?!\S*:\/\/)(?:(?:\.{1,2}[\\/]|~[\\/]|\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root|usr|bin|sbin|lib|lib64|srv|dev|proc|sys|run|boot|media|workspace|workspaces)\/|[A-Za-z]:[\\/])[^\s\x60]+|(?:[\p{L}\p{M}\p{N}._-]+[\\/])+(?:[\p{L}\p{M}\p{N}._-]+\.[A-Za-z0-9_-]+|(?:${EXTENSIONLESS_FILE_NAME_PATTERN}))(?::\d+(?::\d+|-\d+)?)?|[\p{L}\p{M}\p{N}._-]+\.[A-Za-z0-9_-]+:\d+(?::\d+|-\d+)?)$`,
+  "u",
+);
 
 /** Inline-code spans that link: file paths, and web URLs (patches/inline-code-links.md). */
 export const ENRICHED_INLINE_CODE_LINK_REGEX = new RegExp(
   `${ENRICHED_INLINE_FILE_LINK_REGEX.source}|${INLINE_CODE_WEB_LINK_PATTERN.source}`,
+  ENRICHED_INLINE_FILE_LINK_REGEX.flags,
 );
 
 /** The matched span is the link's URL, so a bare web host gets the HTTPS scheme it opens with. */
@@ -140,17 +150,6 @@ export function enrichedSkillLinkRegex(skills?: ReadonlyArray<SelectableMarkdown
   return new RegExp(
     `(?<![A-Za-z0-9_-])(?<!\\p{Sc})\\p{Sc}(?:${alternatives.join("|")})(?![A-Za-z0-9_-])`,
     "u",
-  );
-}
-
-export function enrichedSkillDisplayName(skill: SelectableMarkdownSkill) {
-  return (
-    skill.displayName?.trim() ||
-    skill.name
-      .split(/[\s:_-]+/)
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ")
   );
 }
 
@@ -216,8 +215,9 @@ export function enrichedModelLinkRegex(models?: ReadonlyArray<SelectableMarkdown
     .map((model) => model.source)
     .sort((a, b) => b.length - a.length)
     .map((source) => source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // LRM and RLM can open a paragraph whose first word runs against the text direction.
   return new RegExp(
-    `(?<![^\\s,(\\["'])(?:${alternatives.join("|")})(?=$|[\\s,"']|[.;:!?\\)\\]]+(?=$|[\\s,"']))`,
+    `(?<![^\\s,(\\["'\\u200E\\u200F])(?:${alternatives.join("|")})(?=$|[\\s,"']|[.;:!?\\)\\]]+(?=$|[\\s,"']))`,
     "u",
   );
 }

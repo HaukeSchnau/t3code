@@ -7,6 +7,7 @@ import ChatMarkdown from "~/components/ChatMarkdown";
 import { artifactMarkdown } from "~/state/projects";
 import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
+import { T, useGT, Var } from "gt-react";
 
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -35,6 +36,7 @@ function PublishedMarkdown({
   documentUrl: string;
   threadRef: ScopedThreadRef;
 }) {
+  const gt = useGT();
   const result = useAtomValue(
     artifactMarkdown({ environmentId: threadRef.environmentId, input: { url } }),
   );
@@ -42,8 +44,10 @@ function PublishedMarkdown({
     const error = Cause.squash(result.cause);
     return (
       <div role="alert" className="p-6 text-sm text-muted-foreground">
-        {error instanceof Error ? error.message : "Could not load Markdown."} Reload or open
-        externally.
+        <T>
+          <Var>{error instanceof Error ? error.message : gt("Could not load Markdown.")}</Var>{" "}
+          Reload or open externally.
+        </T>
       </div>
     );
   }
@@ -51,7 +55,7 @@ function PublishedMarkdown({
   if (value._tag === "None") {
     return (
       <div role="status" className="p-6 text-sm text-muted-foreground">
-        Loading Markdown…
+        <T>Loading Markdown…</T>
       </div>
     );
   }
@@ -70,6 +74,7 @@ function PublishedMarkdown({
 
 /** Shows a published document beside its conversation. */
 export default function ArtifactPreviewPanel(props: ArtifactPreviewPanelProps) {
+  const gt = useGT();
   const [reloadRevision, setReloadRevision] = useState<number | null>(null);
   const pdf = isPdfUrl(props.url);
   const src = reloadRevision === null ? props.url : artifactReloadUrl(props.url, reloadRevision);
@@ -85,22 +90,22 @@ export default function ArtifactPreviewPanel(props: ArtifactPreviewPanelProps) {
           <TooltipPopup className="max-w-sm break-all">{props.url}</TooltipPopup>
         </Tooltip>
         <Button
-          aria-label="Reload artifact"
+          aria-label={gt("Reload artifact")}
           onClick={() => setReloadRevision(Date.now())}
           size="compact"
           variant="ghost-muted"
         >
           <RefreshCwIcon aria-hidden className="size-3" />
-          Reload
+          <T context="verb">Reload</T>
         </Button>
         <Button
-          aria-label="Open artifact externally"
+          aria-label={gt("Open artifact externally")}
           render={<a href={props.url} rel="noopener noreferrer" target="_blank" />}
           size="compact"
           variant="ghost-muted"
         >
           <ExternalLinkIcon aria-hidden className="size-3" />
-          Open externally
+          <T>Open externally</T>
         </Button>
       </div>
       {isPublishedMarkdownUrl(props.url) && props.threadRef ? (

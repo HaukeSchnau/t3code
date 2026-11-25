@@ -15,15 +15,24 @@ const state = vi.hoisted(() => ({
   mode: "notifications",
   inApp: false,
   toast: vi.fn(),
+  closeToast: vi.fn(),
   shells: null as unknown as { set: (id: string, value: unknown) => void },
   navigate: vi.fn(),
   sound: vi.fn(),
+  unlock: vi.fn(),
   badge: vi.fn(),
   settingsListeners: new Set<() => void>(),
 }));
 vi.mock(import("./ui/toast"), async (original) => {
   const actual = await original();
-  return { ...actual, toastManager: { ...actual.toastManager, add: state.toast as never } };
+  return {
+    ...actual,
+    toastManager: {
+      ...actual.toastManager,
+      add: state.toast as never,
+      close: state.closeToast as never,
+    },
+  };
 });
 vi.mock(import("../state/shell"), async (original) => {
   const actual = await original();
@@ -82,7 +91,7 @@ vi.mock(import("../hooks/useSettings"), async (original) => ({
 vi.mock(import("../threadNotifications"), async (original) => ({
   ...(await original()),
   playNotificationSound: state.sound,
-  unlockNotificationAudio: vi.fn(),
+  unlockNotificationAudio: state.unlock,
   setNotificationBadge: state.badge,
 }));
 
@@ -301,15 +310,25 @@ function setup() {
       .spyOn(document, "visibilityState", "get")
       .mockImplementation(() => visibility as DocumentVisibilityState),
   );
+  const routeListeners = new Set<() => void>();
+  const route = { params: {} as Record<string, string> };
   const router = {
-    state: { matches: [{ params: {} }] },
+    state: { matches: [route] },
     navigate: state.navigate,
+    subscribe: (_event: string, listener: () => void) => {
+      routeListeners.add(listener);
+      return () => routeListeners.delete(listener);
+    },
   } as unknown as AnyRouter;
   return {
     start: () => {
       stack.defer(startThreadNotifications(testRegistry, router));
     },
     setEnvironmentIds: (ids: ReadonlyArray<string>) => testRegistry.set(environmentIdsAtom, ids),
+    openThread: (environmentId: string, threadId: string) => {
+      route.params = { environmentId, threadId };
+      for (const listener of routeListeners) listener();
+    },
     changeSettings: () => {
       for (const listener of state.settingsListeners) listener();
     },
@@ -606,4 +625,51 @@ it("leaves a reminder, or an alert the browser would not show, to a tab that can
     "Input needed",
     "Still waiting for you",
   ]);
+});
+
+it.each([
+  { client: "desktop app", when: "at startup", bridge: {}, beforeGesture: 1 },
+  { client: "browser", when: "on the first gesture", bridge: undefined, beforeGesture: 0 },
+])("readies notification sound in the $client $when", async ({ bridge, beforeGesture }) => {
+  await using app = setup();
+  using _bridge = stubGlobal("desktopBridge", bridge);
+  state.mode = "sound";
+  app.start();
+  expect(state.unlock).toHaveBeenCalledTimes(beforeGesture);
+  document.dispatchEvent(new Event("pointerdown"));
+  expect(state.unlock).toHaveBeenCalledTimes(beforeGesture + 1);
+});
+
+it("opening a thread or removing its environment closes only its in-app toasts, and disabling notifications closes the rest", async () => {
+  await using app = setup();
+  state.inApp = true;
+  focused = true;
+  state.toast
+    .mockReturnValueOnce("one-completed")
+    .mockReturnValueOnce("one-approval")
+    .mockReturnValueOnce("one-other")
+    .mockReturnValueOnce("two-completed");
+  state.shells.set("one", shell({}, { id: "other" }));
+  app.start();
+  const completed = (id: string, version: number, threadId = "thread") =>
+    subject(id, version, { source: "run", kind: "completed", threadId: ThreadId.make(threadId) });
+  await publish(
+    "one",
+    completed("run:r", 1),
+    subject("request:q", 2, { kind: "approval" }),
+    completed("run:o", 3, "other"),
+  );
+  await publish("two", completed("run:r", 1));
+  expect(state.toast).toHaveBeenCalledTimes(4);
+
+  app.openThread("one", "thread");
+  expect(state.closeToast.mock.calls).toEqual([["one-completed"], ["one-approval"]]);
+
+  app.setEnvironmentIds(["one"]);
+  expect(state.closeToast.mock.calls.slice(2)).toEqual([["two-completed"]]);
+
+  state.mode = "off";
+  state.inApp = false;
+  app.changeSettings();
+  expect(state.closeToast.mock.calls.slice(3)).toEqual([["one-other"]]);
 });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ComposerContextId, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { MessageResolver } from "../i18n/messages";
 import {
+  enrichedFollowUpLinkPresentation,
   enrichedLinkUrl,
   enrichedLinkVariantPattern,
   buildEnrichedModelReferences,
@@ -37,6 +39,8 @@ describe("Enriched link presentation", () => {
       "https://example.com/app.tsx",
       "x + y",
       "README.md",
+      "Dockerfile",
+      "docker/Dockerfiles",
       "/app/settings",
     ]) {
       expect(ENRICHED_INLINE_FILE_LINK_REGEX.test(text), text).toBe(false);
@@ -92,6 +96,7 @@ describe("Enriched link presentation", () => {
       "Try (model:codex/gpt-6.1).",
       "Try [model:codex/gpt-6.1] next",
       '"model:codex/gpt-6.1"',
+      "‏model:codex/gpt-6.1 هذا شرح",
     ]) {
       const source = regex?.exec(text)?.[0];
       expect(source, text).toBe("model:codex/gpt-6.1");
@@ -140,6 +145,16 @@ describe("Enriched link presentation", () => {
     ]) {
       expect(enrichedThreadLinkPresentation(href), href).toBeUndefined();
     }
+  });
+
+  it("labels follow-up chips with the status in the UI language", () => {
+    const resolve = ((message: string) => `<${message}>`) as MessageResolver;
+    expect(
+      enrichedFollowUpLinkPresentation(
+        { state: "found", title: "Ship it", status: "done" },
+        resolve,
+      )?.label,
+    ).toBe("Ship it · <Done>");
   });
 
   it("finds each linked thread once and resolves thread records to their own environment", () => {

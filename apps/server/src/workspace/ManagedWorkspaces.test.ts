@@ -26,6 +26,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { copyOnWriteKind, fullCopyFallbackAllowed } from "./DirectoryCopyWorkspaces.ts";
 import * as ManagedWorkspaces from "./ManagedWorkspaces.ts";
+import * as TaskFolders from "./TaskFolders.ts";
 
 const projectId = ProjectId.make("project:workspaces");
 const tempDir = (prefix: string) =>
@@ -82,17 +83,29 @@ function shell(
   } as unknown as OrchestrationV2ThreadShell;
 }
 
-function harness(options: { readonly environment?: NodeJS.ProcessEnv } = {}) {
+function harness(
+  options: {
+    readonly environment?: NodeJS.ProcessEnv;
+    readonly taskFolderPlan?: TaskFolders.TaskFolderPlan;
+  } = {},
+) {
   const baseDir = tempDir("t3-workspaces-base-");
   const threads: Array<OrchestrationV2ThreadShell> = [];
   const removeWorktree = vi.fn(() => Effect.void);
-  const localStatus = () =>
-    Effect.succeed({ isRepo: true, refName: "main" } as unknown as VcsStatusLocalResult);
+  const plan = vi.fn(() => Effect.succeed(options.taskFolderPlan ?? null));
+  const localStatus = (input: { readonly cwd: string }) => {
+    const isRepo = NodeFS.existsSync(NodePath.join(input.cwd, ".git"));
+    return Effect.succeed({
+      isRepo,
+      refName: isRepo ? "main" : null,
+    } as unknown as VcsStatusLocalResult);
+  };
   const layer = ManagedWorkspaces.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         ServerConfig.layerTest(process.cwd(), baseDir),
         Layer.mock(GitWorkflowService.GitWorkflowService)({ removeWorktree, localStatus }),
+        Layer.mock(TaskFolders.TaskFolders)({ plan }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getShellSnapshot: (snapshotOptions) =>
             Effect.succeed({
@@ -127,7 +140,7 @@ function harness(options: { readonly environment?: NodeJS.ProcessEnv } = {}) {
       ),
     ),
   );
-  return { baseDir, threads, removeWorktree, layer };
+  return { baseDir, threads, removeWorktree, plan, layer };
 }
 
 const create = (projectRoot: string, threadId: string) =>
@@ -149,10 +162,11 @@ describe("ManagedWorkspaces", () => {
       const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const project = jjProject();
       assert.deepEqual(
-        yield* workspaces.resolveLaunchStrategy({
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
           projectRoot: project,
           strategy: { type: "worktree", baseRef: "main" },
-        }),
+        })).strategy,
         { type: "workspace", baseRef: "main" },
       );
 
@@ -214,7 +228,9 @@ describe("ManagedWorkspaces", () => {
           NodePath.join(project, "missing"),
           NodePath.join(locked, "notes"),
         ]) {
-          const unusable = yield* Effect.flip(workspaces.checkCopy({ projectRoot, strategy }));
+          const unusable = yield* Effect.flip(
+            workspaces.checkCopy({ projectId, projectRoot, strategy }),
+          );
           assert.equal(unusable._tag, "ManagedWorkspaceError");
         }
       }).pipe(Effect.ensuring(Effect.sync(() => NodeFS.chmodSync(locked, 0o700))));
@@ -234,7 +250,7 @@ describe("ManagedWorkspaces", () => {
       });
       const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const check = (strategy: Parameters<typeof workspaces.checkCopy>[0]["strategy"]) =>
-        Effect.exit(workspaces.checkCopy({ projectRoot: project, strategy }));
+        Effect.exit(workspaces.checkCopy({ projectId, projectRoot: project, strategy }));
       const expected = clone === null ? "Failure" : "Success";
       assert.equal((yield* check({ type: "worktree", baseRef: "main" }))._tag, expected);
       assert.equal((yield* check({ type: "root" }))._tag, "Success");
@@ -327,20 +343,89 @@ describe("ManagedWorkspaces", () => {
       const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
       const project = tempDir("t3-git-project-");
       run("git", ["init", "-q"], project);
+      // A Git project never needs a copy, so a scheduled task's save does not plan its folders.
+      yield* workspaces.checkCopy({
+        projectId,
+        projectRoot: project,
+        strategy: { type: "worktree", baseRef: "main" },
+      });
+      assert.equal(test.plan.mock.calls.length, 0);
       assert.deepEqual(
-        yield* workspaces.resolveLaunchStrategy({
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
           projectRoot: project,
           strategy: { type: "workspace", startFromOrigin: true },
-        }),
+        })).strategy,
         { type: "worktree", baseRef: "main", startFromOrigin: true },
       );
       const root = { type: "root" } as const;
       assert.equal(
-        yield* workspaces.resolveLaunchStrategy({ projectRoot: project, strategy: root }),
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
+          projectRoot: project,
+          strategy: root,
+        })).strategy,
         root,
       );
       yield* workspaces.removeWorktree({ cwd: project, path: "/elsewhere/feature" });
       assert.equal(test.removeWorktree.mock.calls.length, 1);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("gives a plain folder that tracks Git folders upstream's task folder", () => {
+    const folder = directoryProject();
+    const taskFolderPlan = {
+      projectId,
+      projectRoot: folder,
+      projectIsRepository: false,
+      anchor: folder,
+      repositories: [{ name: "api", path: NodePath.join(folder, "api") }],
+      trackedRepositories: [NodePath.join(folder, "api")],
+    };
+    const test = harness({ taskFolderPlan });
+    return Effect.gen(function* () {
+      const workspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
+      const worktree = {
+        type: "worktree",
+        baseRef: "main",
+        repositories: [{ path: NodePath.join(folder, "api") }],
+      } as const;
+      // Provisioning uses the plan the routing read.
+      assert.deepEqual(
+        yield* workspaces.resolveLaunchStrategy({
+          projectId,
+          projectRoot: folder,
+          strategy: worktree,
+        }),
+        { strategy: worktree, taskPlan: taskFolderPlan },
+      );
+      // Each repository then starts from its own default branch.
+      assert.deepEqual(
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
+          projectRoot: folder,
+          strategy: { type: "workspace" },
+        })).strategy,
+        { type: "worktree", baseRef: "HEAD" },
+      );
+      assert.equal(
+        (yield* workspaces.launchBackendFor({ projectId, projectRoot: folder })).backend,
+        "git",
+      );
+      // jj projects and explicit isolation keep their managed workspaces.
+      assert.deepEqual(
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
+          projectRoot: jjProject(),
+          strategy: worktree,
+        })).strategy,
+        { type: "workspace", baseRef: "main" },
+      );
+      assert.equal(
+        (yield* workspaces.launchBackendFor({ projectId, projectRoot: folder, isolated: true }))
+          .backend,
+        "isolated",
+      );
     }).pipe(Effect.provide(test.layer));
   });
 
@@ -385,17 +470,19 @@ if (args[0] === "fork") {
       assert.equal(yield* workspaces.backendFor(jjProject()), "jj");
       assert.equal(yield* workspaces.backendFor(project, { isolated: true }), "isolated");
       assert.deepEqual(
-        yield* workspaces.resolveLaunchStrategy({
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
           projectRoot: project,
           strategy: { type: "workspace", profile: "minimal" },
-        }),
+        })).strategy,
         { type: "workspace", baseRef: undefined },
       );
       assert.deepEqual(
-        yield* workspaces.resolveLaunchStrategy({
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
           projectRoot: project,
           strategy: { type: "workspace", isolated: true, profile: "minimal" },
-        }),
+        })).strategy,
         { type: "workspace", baseRef: undefined, isolated: true, profile: "minimal" },
       );
       const plain = yield* create(project, "thread:host");
@@ -419,11 +506,16 @@ if (args[0] === "fork") {
       assert.equal(yield* workspaces.backendFor(gitProject, { isolated: true }), "git");
       const worktree = { type: "worktree", baseRef: "main" } as const;
       assert.equal(
-        yield* workspaces.resolveLaunchStrategy({ projectRoot: gitProject, strategy: worktree }),
+        (yield* workspaces.resolveLaunchStrategy({
+          projectId,
+          projectRoot: gitProject,
+          strategy: worktree,
+        })).strategy,
         worktree,
       );
       const refused = yield* Effect.flip(
         workspaces.resolveLaunchStrategy({
+          projectId,
           projectRoot: gitProject,
           strategy: { type: "workspace", isolated: true },
         }),

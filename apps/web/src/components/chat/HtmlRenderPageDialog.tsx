@@ -6,8 +6,10 @@ import type {
 } from "@t3tools/contracts";
 import { HTML_RENDER_MIN_HEIGHT, htmlRenderFileName } from "@t3tools/shared/htmlRender";
 import { useEffect } from "react";
+import { msg } from "gt-react";
 
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
+import { m } from "~/i18n/messages";
 import { markHtmlRenderSeen } from "~/state/htmlRender";
 
 import { toastManager } from "../ui/toast";
@@ -62,8 +64,8 @@ export function HtmlRenderPageDialog(props: {
     if (!failed) return;
     toastManager.add({
       type: "error",
-      title: "Page unavailable",
-      description: "Reconnect to the environment and try again.",
+      title: m(msg("Page unavailable")),
+      description: m(msg("Reconnect to the environment and try again.")),
     });
     onClose();
   }, [failed, onClose]);

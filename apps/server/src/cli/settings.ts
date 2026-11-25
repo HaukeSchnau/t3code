@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
+  ClientServerSettingsPatch,
   EnvironmentHttpApi,
   requiredScopesForServerSettingsPatch,
   type ServerSettingsApplyInput,
@@ -368,7 +369,7 @@ const readInput = <A>(source: string, schema: Schema.Codec<A, string, never, nev
     ),
   );
 
-const decodePatchJson = Schema.fromJsonString(ServerSettingsPatch);
+const decodePatchJson = Schema.fromJsonString(ClientServerSettingsPatch);
 const decodeDocumentJson = Schema.fromJsonString(StoredSettingsDocument);
 
 const retryWhileBusy = <A, E, R>(

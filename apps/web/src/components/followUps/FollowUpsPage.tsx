@@ -2,12 +2,14 @@ import { isFollowUpClosed } from "@t3tools/client-runtime/state/follow-ups";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, FollowUp, FollowUpId, FollowUpType } from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { ListTodoIcon, PlugZapIcon } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
 
 import { isElectron } from "~/env";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useClientSettings } from "~/hooks/useSettings";
+import type { MessageResolver } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { useEnvironments } from "~/state/environments";
@@ -109,9 +111,10 @@ function FollowUpRow(props: {
   readonly onSelect: (id: FollowUpId) => void;
 }) {
   const { followUp } = props;
+  const m = useMessages();
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const nowMinute = useNowMinute();
-  const when = followUpWhenLabel(followUp, timestampFormat, Date.parse(`${nowMinute}:00.000Z`));
+  const when = followUpWhenLabel(followUp, timestampFormat, Date.parse(`${nowMinute}:00.000Z`), m);
   const origin = followUp.origin?.threadTitle ?? null;
   return (
     <button
@@ -141,18 +144,35 @@ function FollowUpRow(props: {
               {tag}
             </Badge>
           ))}
-          {origin !== null ? <span className="min-w-0 truncate">from {origin}</span> : null}
+          {origin !== null ? (
+            <span className="min-w-0 truncate">
+              <T>
+                from <Var>{origin}</Var>
+              </T>
+            </span>
+          ) : null}
         </span>
       ) : null}
     </button>
   );
 }
 
-function storeNote(store: FollowUpStore): string | null {
-  if (!store.connected) return `${store.label} is not connected, so its follow-ups are not shown.`;
+function storeNote(store: FollowUpStore, resolve: MessageResolver): string | null {
+  if (!store.connected) {
+    return resolve(
+      msg("{environment} is not connected, so its follow-ups are not shown.", {
+        environment: store.label,
+      }),
+    );
+  }
   return store.error === null
     ? null
-    : `Could not load follow-ups from ${store.label}: ${store.error}`;
+    : resolve(
+        msg("Could not load follow-ups from {environment}: {error}", {
+          environment: store.label,
+          error: store.error,
+        }),
+      );
 }
 
 /** The store's name when several show, and why it shows nothing. */
@@ -161,7 +181,8 @@ function FollowUpStoreHeader(props: {
   readonly showLabel: boolean;
 }) {
   const { store } = props;
-  const note = storeNote(store);
+  const m = useMessages();
+  const note = storeNote(store, m);
   return (
     <>
       {props.showLabel ? (
@@ -188,18 +209,19 @@ function FollowUpStoreList(props: {
   readonly onSelect: (id: FollowUpId) => void;
 }) {
   const { store } = props;
-  const sections = followUpSections(store.followUps, props.showClosed);
+  const m = useMessages();
+  const sections = followUpSections(store.followUps, props.showClosed, m);
   return (
     <section className="flex flex-col gap-3">
       <FollowUpStoreHeader store={store} showLabel={props.showLabel} />
-      {storeNote(store) !== null ? null : store.loading ? (
+      {storeNote(store, m) !== null ? null : store.loading ? (
         <div className="flex flex-col gap-2 px-3">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />
         </div>
       ) : sections.length === 0 ? (
         <p className="px-3 text-sm text-muted-foreground">
-          Nothing to follow up on. Agents add follow-ups here as they work.
+          <T>Nothing to follow up on. Agents add follow-ups here as they work.</T>
         </p>
       ) : (
         sections.map((section) => (
@@ -227,6 +249,8 @@ function FollowUpStoreList(props: {
 }
 
 export function FollowUpsPage() {
+  const gt = useGT();
+  const m = useMessages();
   const search = useSearch({ from: "/_chat/follow-ups" });
   const navigate = useNavigate({ from: "/follow-ups" });
   const showClosed = search.closed === true;
@@ -253,9 +277,11 @@ export function FollowUpsPage() {
         <EmptyMedia variant="icon">
           <ListTodoIcon />
         </EmptyMedia>
-        <EmptyTitle>No follow-up store connected</EmptyTitle>
+        <EmptyTitle>
+          <T>No follow-up store connected</T>
+        </EmptyTitle>
         <EmptyDescription>
-          None of the environments connected in this mode keeps follow-ups.
+          <T>None of the environments connected in this mode keeps follow-ups.</T>
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
@@ -277,7 +303,7 @@ export function FollowUpsPage() {
         ))}
       </div>
     );
-  const loadedStores = stores.filter((store) => !store.loading && storeNote(store) === null);
+  const loadedStores = stores.filter((store) => !store.loading && storeNote(store, m) === null);
   const graphHasNodes = loadedStores.some((store) =>
     store.followUps.some((followUp) => showClosed || !isFollowUpClosed(followUp)),
   );
@@ -315,7 +341,7 @@ export function FollowUpsPage() {
           </div>
         ) : (
           <p className="p-5 text-sm text-muted-foreground">
-            Nothing to follow up on. Agents add follow-ups here as they work.
+            <T>Nothing to follow up on. Agents add follow-ups here as they work.</T>
           </p>
         )}
       </>
@@ -336,9 +362,11 @@ export function FollowUpsPage() {
     ) : selectedMissing ? (
       <Empty size="compact">
         <EmptyHeader>
-          <EmptyTitle>Follow-up not found</EmptyTitle>
+          <EmptyTitle>
+            <T>Follow-up not found</T>
+          </EmptyTitle>
           <EmptyDescription>
-            It may live in an environment that is not connected in this mode.
+            <T>It may live in an environment that is not connected in this mode.</T>
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -353,7 +381,7 @@ export function FollowUpsPage() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="@container/follow-ups flex min-h-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="bg-background">
-          <WorkspaceBreadcrumb ariaLabel="Follow-ups breadcrumb">
+          <WorkspaceBreadcrumb ariaLabel={gt("Follow-ups breadcrumb")}>
             <WorkspaceBreadcrumbItem current={!detailOpen}>
               {detailOpen ? (
                 <Link
@@ -363,10 +391,14 @@ export function FollowUpsPage() {
                     ...(graph ? { view: "graph" as const } : {}),
                   }}
                 >
-                  <WorkspaceBreadcrumbText>Follow-ups</WorkspaceBreadcrumbText>
+                  <WorkspaceBreadcrumbText>
+                    <T>Follow-ups</T>
+                  </WorkspaceBreadcrumbText>
                 </Link>
               ) : (
-                <h1 className="truncate">Follow-ups</h1>
+                <h1 className="truncate">
+                  <T>Follow-ups</T>
+                </h1>
               )}
             </WorkspaceBreadcrumbItem>
             {selected !== null ? (
@@ -381,7 +413,7 @@ export function FollowUpsPage() {
           <div className="min-w-0 flex-1" />
           <div className="shrink-0 [-webkit-app-region:no-drag]">
             <ToggleGroup
-              aria-label="Follow-ups view"
+              aria-label={gt("Follow-ups view")}
               size="segmented"
               variant="segmented"
               value={[graph ? "graph" : "list"]}
@@ -398,8 +430,12 @@ export function FollowUpsPage() {
                 });
               }}
             >
-              <Toggle value="list">List</Toggle>
-              <Toggle value="graph">Graph</Toggle>
+              <Toggle value="list">
+                <T context="follow-ups shown as a list">List</T>
+              </Toggle>
+              <Toggle value="graph">
+                <T context="follow-ups shown as a graph">Graph</T>
+              </Toggle>
             </ToggleGroup>
           </div>
           <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground [-webkit-app-region:no-drag]">
@@ -417,7 +453,7 @@ export function FollowUpsPage() {
                 })
               }
             />
-            Show closed
+            <T>Show closed</T>
           </label>
         </WorkspacePageHeader>
         {graph ? (

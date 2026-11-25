@@ -1,5 +1,6 @@
 import { type MessageId } from "@t3tools/contracts";
 import { CornerDownLeftIcon, XIcon } from "lucide-react";
+import { T, useGT } from "gt-react";
 import {
   cloneElement,
   useEffect,
@@ -112,6 +113,7 @@ function InlineReplyEditor({
   reply: InlineReplyDraft;
   store: InlineReplyDraftStore;
 }) {
+  const gt = useGT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The textarea height is measured from the DOM after each edit.
@@ -137,22 +139,24 @@ function InlineReplyEditor({
     >
       <div className="relative rounded-md border border-border/65 focus-within:border-foreground/25">
         <span className="absolute -top-2 left-2.5 max-w-[calc(100%-2.75rem)] truncate bg-background px-1 text-3xs leading-4 text-muted-foreground">
-          {reply.anchorKind === "paragraph" ? "Whole paragraph" : `“${reply.quote}”`}
+          {reply.anchorKind === "paragraph" ? gt("Whole paragraph") : `“${reply.quote}”`}
         </span>
         <textarea
           ref={textareaRef}
           data-inline-reply-id={reply.id}
           rows={1}
           value={reply.text}
-          aria-label={`Reply to ${reply.anchorKind === "paragraph" ? "paragraph" : "selection"}`}
-          placeholder="Reply…"
+          aria-label={
+            reply.anchorKind === "paragraph" ? gt("Reply to paragraph") : gt("Reply to selection")
+          }
+          placeholder={gt("Reply…")}
           className="block min-h-9 max-h-40 w-full resize-none overflow-y-auto bg-transparent px-2.5 py-2 pr-8 text-sm leading-5 outline-none placeholder:text-muted-foreground/60"
           onChange={(event) => store.update(reply.id, event.target.value)}
           onKeyDown={onKeyDown}
         />
         <button
           type="button"
-          aria-label="Remove inline reply"
+          aria-label={gt("Remove inline reply")}
           className="absolute top-1.5 right-1.5 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/inline-editor:opacity-100"
           onClick={() => store.remove(reply.id)}
         >
@@ -176,6 +180,7 @@ function InlineReplyBlock({
   store: InlineReplyDraftStore;
   onParagraphReply: (blockId: string) => void;
 }) {
+  const gt = useGT();
   const getReplies = () => store.getForBlock(messageId, block.id);
   const replies = useSyncExternalStore(
     (listener) => store.subscribeToBlock(messageId, block.id, listener),
@@ -212,7 +217,7 @@ function InlineReplyBlock({
       data-inline-reply-ui
       data-thread-find-ignore
       data-inline-reply-hover-affordance
-      aria-label="Reply to this paragraph"
+      aria-label={gt("Reply to this paragraph")}
       className="absolute top-0 left-full z-10 flex h-6 w-7 items-center pl-1 opacity-0 group-hover/inline-reply-block:opacity-100 hover:opacity-100 focus-visible:opacity-100 max-sm:hidden"
       onClick={() => onParagraphReply(block.id)}
     >
@@ -400,7 +405,7 @@ export function AssistantInlineReplies({
               onClick={addSelectionReply}
             >
               <CornerDownLeftIcon className="size-3.5" />
-              Reply
+              <T context="verb">Reply</T>
             </button>,
             document.body,
           )

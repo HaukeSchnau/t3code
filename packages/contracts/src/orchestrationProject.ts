@@ -3,12 +3,15 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { ProjectScript, ReceivedProjectIcon } from "./project.ts";
+import { ProjectScript, ProjectTrackedFolders, ReceivedProjectIcon } from "./project.ts";
 import { WorldId } from "./world.ts";
 
 export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
+  // Set once someone renames the project. A folder-default title can equal the
+  // repository name, so grouped labels need this to tell a chosen name apart.
+  hasCustomTitle: Schema.optional(Schema.Boolean),
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
@@ -20,6 +23,8 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   /** Set for a fleet world's project: every thread in it gets its own thread world. */
   world: Schema.optional(Schema.NullOr(WorldId)),
+  // Absent from older servers; that means a single-folder project.
+  trackedFolders: Schema.optional(ProjectTrackedFolders),
   // Pinned projects lead project pickers; archived ones leave them. Optional so older servers decode.
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),

@@ -6,6 +6,7 @@ import {
 } from "@t3tools/shared/followUpLinks";
 import { Link } from "@tanstack/react-router";
 import { ListTodoIcon } from "lucide-react";
+import { T, useGT, useMessages } from "gt-react";
 
 import { linkedFollowUpAtom } from "~/state/followUps";
 import { ContextChip, ContextChipLabel } from "../ContextChip";
@@ -22,6 +23,8 @@ export function MarkdownFollowUpLink(props: {
   readonly label: string | null;
 }) {
   const { environmentId, followUpId } = props.link;
+  const gt = useGT();
+  const m = useMessages();
   const linked = useAtomValue(linkedFollowUpAtom(followUpLinkHref(props.link)));
   const search = { home: environmentId, id: followUpId };
   const written = props.label?.trim() || followUpId;
@@ -35,7 +38,7 @@ export function MarkdownFollowUpLink(props: {
   const title = linked.state === "found" ? linked.title.trim() || written : written;
   const status =
     linked.state === "found" && linked.status !== "open"
-      ? followUpStatusLabel(linked.status)
+      ? followUpStatusLabel(linked.status, m)
       : null;
   return (
     <Tooltip>
@@ -44,7 +47,11 @@ export function MarkdownFollowUpLink(props: {
           <ContextChip
             kind="follow-up"
             render={<Link to="/follow-ups" search={search} />}
-            aria-label={`Follow-up, ${title}${status === null ? "" : `, ${status}`}`}
+            aria-label={
+              status === null
+                ? gt("Follow-up, {title}", { title })
+                : gt("Follow-up, {title}, {status}", { title, status })
+            }
             data-markdown-copy={formatFollowUpLink(props.link, title)}
             className="no-underline"
           >
@@ -56,7 +63,9 @@ export function MarkdownFollowUpLink(props: {
           </ContextChip>
         }
       />
-      <TooltipPopup side="top">Open follow-up</TooltipPopup>
+      <TooltipPopup side="top">
+        <T>Open follow-up</T>
+      </TooltipPopup>
     </Tooltip>
   );
 }

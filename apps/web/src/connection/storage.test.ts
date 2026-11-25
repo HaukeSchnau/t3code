@@ -61,7 +61,7 @@ describe("ConnectionStorage.readDatabaseValueOnConnection", () => {
         const error = yield* Fiber.join(read);
 
         expect(error).toBeInstanceOf(ConnectionTransientError);
-        expect(error.message).toContain("read cache");
+        expect(error.message).toContain("Could not read the local connection cache");
         expect(abort).toHaveBeenCalledOnce();
       }).pipe(Effect.scoped),
   );
@@ -349,6 +349,6 @@ describe("browser GitHub routing permissions", () => {
         ConnectionTransientError,
       );
       expect(yield* second.get(entry)).toBe("off");
-    }).pipe(Effect.scoped),
+    }),
   );
 });

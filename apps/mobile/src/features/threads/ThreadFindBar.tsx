@@ -1,12 +1,14 @@
+import { msg, useGT, useMessages } from "gt-react-native";
 import { useEffect, useRef } from "react";
 import { Platform, Pressable, TextInput, type TextInputInstance, View } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
+import { m, type MessageResolver } from "../../i18n/messages";
 import { cn } from "../../lib/cn";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { ComposerSurface } from "./ThreadComposer";
+import { ComposerSurface } from "../../components/ComposerSurface";
 import type { ThreadFindSession } from "./use-thread-find";
 
 function FindIconButton(props: {
@@ -35,12 +37,18 @@ function FindIconButton(props: {
   );
 }
 
-function counterLabel(session: ThreadFindSession): string | null {
+function counterLabel(session: ThreadFindSession, resolve: MessageResolver = m): string | null {
   if (session.query.trim().length === 0) return null;
-  if (session.status === "error") return "Search failed";
-  if (session.status === "searching") return "Searching…";
-  if (session.matchCount === 0) return "No matches";
-  return `${session.activeIndex + 1} of ${session.matchCount}`;
+  if (session.status === "error") return resolve(msg("Search failed"));
+  if (session.status === "searching") return resolve(msg("Searching…"));
+  if (session.matchCount === 0) return resolve(msg("No matches"));
+  return resolve(
+    msg("{current} of {total}", {
+      current: session.activeIndex + 1,
+      total: session.matchCount,
+      $context: "find match position",
+    }),
+  );
 }
 
 /** Takes the composer's place while find is open. */
@@ -56,10 +64,12 @@ export function ThreadFindBar(props: {
   readonly onFocusChange: (focused: boolean) => void;
   readonly onDone: () => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const { session } = props;
   const inputRef = useRef<TextInputInstance>(null);
   const { themeVariables } = useAppearancePreferences();
-  const counter = counterLabel(session);
+  const counter = counterLabel(session, messages);
   const navigationDisabled = session.matchCount === 0 || session.status === "searching";
 
   // Only an explicit open request focuses and selects; typing must not reselect
@@ -111,8 +121,8 @@ export function ThreadFindBar(props: {
               />
               <TextInput
                 ref={inputRef}
-                accessibilityLabel="Find in thread"
-                placeholder="Find in thread"
+                accessibilityLabel={gt("Find in thread")}
+                placeholder={gt("Find in thread")}
                 placeholderTextColorClassName="accent-placeholder"
                 cursorColorClassName="accent-focus"
                 selectionColorClassName="accent-focus/32"
@@ -146,19 +156,19 @@ export function ThreadFindBar(props: {
               {session.status === "error" ? (
                 <FindIconButton
                   icon="arrow.clockwise"
-                  accessibilityLabel="Retry search"
+                  accessibilityLabel={gt("Retry search")}
                   onPress={session.retry}
                 />
               ) : null}
               <FindIconButton
                 icon="chevron.up"
-                accessibilityLabel="Previous match"
+                accessibilityLabel={gt("Previous match")}
                 disabled={navigationDisabled}
                 onPress={session.previous}
               />
               <FindIconButton
                 icon="chevron.down"
-                accessibilityLabel="Next match"
+                accessibilityLabel={gt("Next match")}
                 disabled={navigationDisabled}
                 onPress={session.next}
               />
@@ -167,12 +177,14 @@ export function ThreadFindBar(props: {
         </View>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Done"
+          accessibilityLabel={gt("Done", { $context: "closes find in thread" })}
           hitSlop={6}
           onPress={props.onDone}
           className="h-11 justify-center px-1.5"
         >
-          <Text className="font-t3-medium text-base text-foreground">Done</Text>
+          <Text className="font-t3-medium text-base text-foreground">
+            {gt("Done", { $context: "closes find in thread" })}
+          </Text>
         </Pressable>
       </View>
     </View>

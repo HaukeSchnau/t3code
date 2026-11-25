@@ -25,6 +25,8 @@ import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ModelManifest from "../provider/ModelManifest.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -36,6 +38,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import { layerNoTaskFolders } from "./ProviderTurnStartService.testkit.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -109,6 +112,13 @@ const TestLayer = Layer.mergeAll(
     }),
   ),
   Layer.provide(Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone })),
+  Layer.provide(
+    Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+      runForThread: () => Effect.succeed({ status: "no-script" }),
+    }),
+  ),
+  Layer.provide(layerNoTaskFolders),
+  Layer.provide(ModelManifest.layerTest),
   Layer.provide(PlatformTestLayer),
 );
 
@@ -239,14 +249,19 @@ const stoppedThread = Effect.fn("stoppedThread")(function* (input: {
 });
 
 it.layer(TestLayer)("Codex message-free continuation", (it) => {
-  it.effect.each(["interrupted", "serverOverloaded"] as const)(
-    "resumes a Codex run stopped by %s without a transcript message",
-    (stop) =>
+  // Upstream resumes every provider natively, so an empty Resume is not limited to Codex.
+  it.effect.each([
+    { instanceId: "codex", stop: "interrupted" },
+    { instanceId: "codex", stop: "serverOverloaded" },
+    { instanceId: "claude", stop: "interrupted" },
+  ] as const)(
+    "resumes a $instanceId run stopped by $stop without a transcript message",
+    ({ instanceId, stop }) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const { threadId, source, resume } = yield* stoppedThread({
-          name: `codex-${stop}`,
-          instanceId: "codex",
+          name: `${instanceId}-${stop}`,
+          instanceId,
           stop,
         });
         yield* resume("");
@@ -263,28 +278,5 @@ it.layer(TestLayer)("Codex message-free continuation", (it) => {
           ),
         );
       }),
-  );
-
-  it.effect("keeps other providers on the visible Continue message", () =>
-    Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const { threadId, resume } = yield* stoppedThread({
-        name: "claude-interrupted",
-        instanceId: "claude",
-        stop: "interrupted",
-      });
-      assert.equal((yield* resume("").pipe(Effect.exit))._tag, "Failure");
-      yield* resume("Continue where you left off.");
-      const projection = yield* orchestrator.getThreadProjection(threadId);
-      assert.lengthOf(projection.runs, 2);
-      assert.isTrue(
-        projection.turnItems.some(
-          (item) =>
-            item.type === "user_message" &&
-            item.runId === projection.runs[1]!.id &&
-            item.text === "Continue where you left off.",
-        ),
-      );
-    }),
   );
 });

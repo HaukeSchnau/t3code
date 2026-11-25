@@ -2,6 +2,7 @@ import { useAndroidFloatingTabs } from "../../settings/appearance/AppearancePref
 import { WorkspaceNoTabs } from "./WorkspaceNoTabs";
 import { useEnabledNavigationTabs } from "./navigation-tabs";
 import { NAVIGATION_TAB_ORDER } from "./navigation-tab-order";
+import { workspaceUsesColumns } from "./workspace-tabs-state";
 import { useNavigationState } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAndroidControlSizing } from "../../../components/ui/useAndroidControlSizing";
@@ -9,7 +10,9 @@ import { FLOATING_TABS } from "./floating-workspace-tabs";
 import { View } from "react-native";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { PullRequestsScreen } from "../../pull-requests/PullRequestsScreen";
-import { PullRequestToolbar } from "./PullRequestToolbar.android";
+import { ListSearchToolbar } from "./ListSearchToolbar.android";
+import { IssuesScreen } from "../../issues/IssuesScreen";
+import { selectedIssueKey } from "../../issues/issueParams";
 import { selectedPullRequestKey } from "../../pull-requests/pullRequestSelection";
 import { AndroidHomeFabLayout } from "../../home/AndroidHomeFab";
 import { useAdaptiveWorkspaceLayout } from "../adaptive-workspace-context";
@@ -18,7 +21,6 @@ import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { WorkspaceTabPanes } from "./WorkspaceTabPanes";
 import { WorkspaceThreadSidebar } from "./WorkspaceThreadSidebar";
 import { WorkspaceAppBarScope } from "../../../components/ui/WorkspaceAppBar.android";
-import { workspaceUsesColumns } from "./workspace-tabs-state";
 
 /** The Home route in the sidebar column: the selected tab's list. */
 export function AndroidWorkspaceSidebar() {
@@ -29,6 +31,7 @@ export function AndroidWorkspaceSidebar() {
   const { fabSize } = useAndroidControlSizing();
   const { revealPrimarySidebar, startNewTask } = useAdaptiveWorkspaceLayout();
   const selectedPullRequest = useNavigationState(selectedPullRequestKey);
+  const selectedIssue = useNavigationState(selectedIssueKey);
   // Settings and the one-page tabs cover the sidebar.
   const coveredByPage =
     (useAndroidWorkspaceRoot()?.settingsOpen ?? false) ||
@@ -48,8 +51,25 @@ export function AndroidWorkspaceSidebar() {
             <AndroidHomeFabLayout sidebar disabled={coveredByPage} onStartNewTask={startNewTask}>
               <WorkspaceThreadSidebar />
             </AndroidHomeFabLayout>
-          ) : tab !== "pullRequests" ? (
+          ) : tab === "usage" || tab === "workflows" || tab === "followUps" ? (
             <View className="flex-1 bg-screen" />
+          ) : tab === "issues" ? (
+            <WorkspaceTabsContext value={context}>
+              <IssuesScreen
+                sidebar
+                selectedIssueKey={selectedIssue}
+                renderFrame={(filters, list) => (
+                  <View className="flex-1 bg-header">
+                    <ListSearchToolbar
+                      tab="issues"
+                      filters={filters}
+                      onRequestVisibility={revealPrimarySidebar}
+                    />
+                    <ScreenContent insetHorizontal>{list}</ScreenContent>
+                  </View>
+                )}
+              />
+            </WorkspaceTabsContext>
           ) : (
             <WorkspaceTabsContext value={context}>
               <PullRequestsScreen
@@ -57,7 +77,8 @@ export function AndroidWorkspaceSidebar() {
                 selectedPullRequestKey={selectedPullRequest}
                 renderFrame={(filters, list) => (
                   <View className="flex-1 bg-header">
-                    <PullRequestToolbar
+                    <ListSearchToolbar
+                      tab="pullRequests"
                       filters={filters}
                       onRequestVisibility={revealPrimarySidebar}
                     />

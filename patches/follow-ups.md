@@ -76,12 +76,14 @@ that keeps a tidy list of open work with its origin.
 - Web: the inbox rows in `Sidebar.tsx`, `Sidebar.logic.ts` and `Sidebar.drag.ts` (a follow-up row
   kind that never drags but holds its place), the sidebar utility menu, `mainAppLocation.ts`, the
   command palette, and `CustomSnoozeDialog.tsx` (optional wording for Later).
-- Links: `packages/shared/src/markdownPipeline.ts` (the scheme passes sanitizing),
+- Links: `packages/shared/src/markdownHast.ts` (the scheme passes sanitizing),
   `mcp/McpInvocationContext.ts`, the web `ChatMarkdown.tsx` anchor and `ContextChip.tsx` (a
   `follow-up` kind and accent), and on mobile `ThreadFeed.tsx`, `enrichedLinkPresentation.ts`,
   `useEnrichedLinkVariants.ts` and a `list-todo` chip icon.
-- Mobile: a fourth workspace tab across `navigation-tab-order.ts`, `workspace-tabs-state.ts`, the
-  root screens, `WorkspaceExtraTab.tsx` and the native tab bars (`T3SidebarTabBarView.swift`,
+- Mobile: a Follow-ups workspace tab after upstream's shared Pull requests and Issues slot, so the
+  bar holds four tabs and Settings, across `navigation-tab-order.ts`, `workspace-tabs-state.ts`
+  (a one-page tab, like Usage and Workflows), the root screens, `WorkspaceExtraTab.tsx` and the
+  native tab bars (`T3SidebarTabBarView.swift`,
   `T3WorkspaceNavigationModule.kt`, so a new tab needs a native build); inbox rows in
   `threadListV2.ts`; the `FollowUp` route in `Stack.tsx`.
 - `packages/client-runtime/src/state/threadInbox.ts` (`inboxReturnTime`, shared by threads and

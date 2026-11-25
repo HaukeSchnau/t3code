@@ -41,7 +41,7 @@ per account when it is read too often, and upstream cannot tell that apart from 
   `label` names the provider in the error.
 - Hub Codex and Claude accounts decode with the same parsers as direct reads (`CodexUsage`,
   `ClaudeOauthUsage`), so both paths show the same windows, including upstream's monthly spend.
-- Limits notices (`collectLimitNotices` in `packages/shared/src/usageLimits.ts`) say which reads are
+- Limits notices (`collectLimitNotices` in `packages/shared/src/usageLimitsCopy.ts`) say which reads are
   rate-limited and when the next read happens. Clients no longer wait five minutes between
   automatic checks (`refreshUsageLimits` in `packages/client-runtime/src/state/usage.ts`).
 

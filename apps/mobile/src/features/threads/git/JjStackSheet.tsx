@@ -1,11 +1,13 @@
 import type { JjStackRow } from "@t3tools/client-runtime/state/vcs";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useMemo, useState } from "react";
-import { Platform, RefreshControl, View } from "react-native";
+import { T, useGT, useMessages } from "gt-react-native";
+import { Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppBar } from "../../../components/ui/AppBar";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
+import { RefreshControl } from "../../../components/ui/RefreshControl";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { cn } from "../../../lib/cn";
 import { NativeScrollView } from "../../../native/NativeScrollViewMarker";
@@ -24,6 +26,8 @@ type JjStackSheetProps = StaticScreenProps<{
 }>;
 
 export function JjStackSheet(props: JjStackSheetProps) {
+  const gt = useGT();
+  const messages = useMessages();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { selectedThread } = useThreadSelection();
@@ -47,8 +51,8 @@ export function JjStackSheet(props: JjStackSheetProps) {
     () => jjStackViewFromStatus(status.data, props.route.params.threadId),
     [props.route.params.threadId, status.data],
   );
-  const title = view ? jjBreadcrumb(view) : "Stack";
-  const subtitle = view ? jjPushState(view) : "Loading stack…";
+  const title = view ? jjBreadcrumb(view) : gt("Stack", { $context: "jj stack of changes" });
+  const subtitle = view ? jjPushState(view, messages) : gt("Loading stack…");
   const pushTarget = view?.pushTarget ?? null;
   const canCommit = !busy && view?.workingCopy != null && !view.workingCopy.empty;
 
@@ -105,21 +109,21 @@ export function JjStackSheet(props: JjStackSheetProps) {
 
       <View className="android:gap-3 android:rounded-[20px] android:bg-card android:p-4 ios:gap-2">
         <Text className="text-foreground android:text-base android:font-t3-medium ios:text-sm ios:font-t3-bold">
-          Commit message
+          <T>Commit message</T>
         </Text>
         <TextInput
           multiline
-          accessibilityLabel="Commit message"
+          accessibilityLabel={gt("Commit message")}
           value={commitMessage}
           onChangeText={setCommitMessage}
-          placeholder="Leave empty to auto-generate"
+          placeholder={gt("Leave empty to auto-generate")}
           textAlignVertical="top"
           className="min-h-[96px] px-4 py-3.5 android:rounded-xl android:bg-sheet-solid ios:rounded-[20px]"
         />
         <View className="flex-row">
           <SheetActionButton
             icon="checkmark.circle"
-            label="Commit"
+            label={gt("Commit", { $context: "verb, git action" })}
             tone="primary"
             disabled={!canCommit}
             onPress={commit}
@@ -131,7 +135,7 @@ export function JjStackSheet(props: JjStackSheetProps) {
         <View className="ios:flex-1">
           <SheetActionButton
             icon="arrow.up.circle"
-            label="Push"
+            label={gt("Push", { $context: "verb, git action" })}
             disabled={busy || pushTarget === null}
             onPress={() => push(false)}
           />
@@ -139,7 +143,7 @@ export function JjStackSheet(props: JjStackSheetProps) {
         <View className="ios:flex-1">
           <SheetActionButton
             icon="arrow.up.right.circle"
-            label="Push & create PR"
+            label={gt("Push & create PR")}
             disabled={busy || pushTarget === null}
             onPress={() => push(true)}
           />
@@ -156,7 +160,7 @@ export function JjStackSheet(props: JjStackSheetProps) {
         hideBottomBorder
         onClose={() => navigation.goBack()}
         refresh={{
-          accessibilityLabel: "Refresh stack",
+          accessibilityLabel: gt("Refresh stack"),
           disabled: busy || isPullRefreshing,
           onPress: () => void handlePullRefresh(),
         }}
@@ -167,6 +171,7 @@ export function JjStackSheet(props: JjStackSheetProps) {
 }
 
 function JjStackRowView(props: { readonly row: JjStackRow }) {
+  const gt = useGT();
   const { row } = props;
   return (
     <View className="flex-row items-start gap-3 py-3 android:px-4">
@@ -198,7 +203,9 @@ function JjStackRowView(props: { readonly row: JjStackRow }) {
             </View>
           ) : null}
           {row.conflict ? (
-            <Text className="text-2xs font-t3-bold text-warning-foreground">Conflict</Text>
+            <Text className="text-2xs font-t3-bold text-warning-foreground">
+              {gt("Conflict", { $context: "jj change has a conflict" })}
+            </Text>
           ) : null}
         </View>
       </View>

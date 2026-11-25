@@ -16,9 +16,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import * as SecureStore from "expo-secure-store";
+import { msg } from "gt-react-native";
 import * as WebBrowser from "expo-web-browser";
 
 import { readOidcSignInOffer, resolvePeerSignIn, runPeerFanOut } from "../../connection/onboarding";
+import { m } from "../../i18n/messages";
 import { whenProtectedDataAvailable } from "../../lib/protectedData";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { connectedEnvironmentIdsAtom } from "../../state/presentation";
@@ -99,7 +101,14 @@ export async function addLinkedEnvironment(link: PeerLinkSummary): Promise<Pairi
     reportFailure: false,
   });
   if (!AsyncResult.isSuccess(resolved) || Option.isNone(resolved.value)) {
-    return { ok: false, error: `${link.label} does not offer sign-in here. Pair it with a code.` };
+    return {
+      ok: false,
+      error: m(
+        msg("{environment} does not offer sign-in here. Pair it with a code.", {
+          environment: link.label,
+        }),
+      ),
+    };
   }
   const { origin } = resolved.value.value;
   const signedIn = await signInWithOidc(origin);

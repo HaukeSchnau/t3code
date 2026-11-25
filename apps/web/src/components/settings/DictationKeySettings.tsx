@@ -4,6 +4,7 @@ import type {
   DictationKey,
 } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
+import { T, useGT } from "gt-react";
 
 import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
 import { isMacPlatform } from "../../lib/utils";
@@ -11,7 +12,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 const KEY_LABELS: Record<DictationKey, string> = {
   off: "Off",
@@ -31,6 +32,8 @@ export function DictationKeySettings() {
 }
 
 function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationBridge }) {
+  const searchableSetting = useSearchableSetting();
+  const gt = useGT();
   const key = useClientSettings((settings) => settings.dictationKey);
   const inOtherApps = useClientSettings((settings) => settings.dictationInOtherApps);
   const readsField = useClientSettings((settings) => settings.dictationReadsField);
@@ -56,15 +59,19 @@ function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationB
 
   const globeWarning =
     key === "fn" && status && status.globeKey !== "none"
-      ? `macOS also acts on the Globe key. In System Settings › Keyboard, set "Press 🌐 key to" to "Do Nothing".`
+      ? gt(
+          'macOS also acts on the Globe key. In System Settings › Keyboard, set "Press 🌐 key to" to "Do Nothing".',
+        )
       : null;
 
   return (
     <>
       <SettingsRow
         {...searchableSetting("dictation-key")}
-        title="Dictation key"
-        description="Dictate with one key, in T3 and, if allowed, in other apps. It follows the shortcut mode above. Add Shift to save a new draft thread, or Control to speak an instruction that rewrites the selection."
+        title={gt("Dictation key")}
+        description={gt(
+          "Dictate with one key, in T3 and, if allowed, in other apps. It follows the shortcut mode above. Add Shift to save a new draft thread, or Control to speak an instruction that rewrites the selection.",
+        )}
         status={status?.message ?? globeWarning}
         control={
           <Select
@@ -78,7 +85,7 @@ function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationB
                 .catch(() => undefined);
             }}
           >
-            <SelectTrigger size="sm" aria-label="Dictation key" className="max-w-72">
+            <SelectTrigger size="sm" aria-label={gt("Dictation key")} className="max-w-72">
               <SelectValue>{KEY_LABELS[key]}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -94,11 +101,13 @@ function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationB
       {key === "off" ? null : (
         <SettingsRow
           {...searchableSetting("dictation-in-other-apps")}
-          title="Use the key in other apps"
-          description="Text lands where you started: pasted at the cursor of that app, or copied if you moved on. Keep T3's window open."
+          title={gt("Use the key in other apps")}
+          description={gt(
+            "Text lands where you started: pasted at the cursor of that app, or copied if you moved on. Keep T3's window open.",
+          )}
           status={
             inOtherApps && status && !status.accessibility
-              ? "T3 Code needs Accessibility permission to paste into other apps."
+              ? gt("T3 Code needs Accessibility permission to paste into other apps.")
               : null
           }
           control={
@@ -110,12 +119,12 @@ function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationB
                   size="sm"
                   onClick={() => void dictation.requestAccessibility()}
                 >
-                  Allow
+                  <T>Allow</T>
                 </Button>
               ) : null}
               <Switch
                 checked={inOtherApps}
-                aria-label="Use the dictation key in other apps"
+                aria-label={gt("Use the dictation key in other apps")}
                 onCheckedChange={(checked) =>
                   void updateClientSettings({ dictationInOtherApps: checked })
                 }
@@ -127,12 +136,14 @@ function DictationKeyRows({ dictation }: { readonly dictation: DesktopDictationB
       {key !== "off" && inOtherApps ? (
         <SettingsRow
           {...searchableSetting("dictation-reads-field")}
-          title="Read the text around the cursor"
-          description="Sends up to about 1 KB around your cursor in the other app to transcript cleanup. Mac apps share it; most browsers and Electron apps don't, and password fields never do."
+          title={gt("Read the text around the cursor")}
+          description={gt(
+            "Sends up to about 1 KB around your cursor in the other app to transcript cleanup. Mac apps share it; most browsers and Electron apps don't, and password fields never do.",
+          )}
           control={
             <Switch
               checked={readsField}
-              aria-label="Read the text around the cursor"
+              aria-label={gt("Read the text around the cursor")}
               onCheckedChange={(checked) =>
                 void updateClientSettings({ dictationReadsField: checked })
               }

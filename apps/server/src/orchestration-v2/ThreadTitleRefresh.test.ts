@@ -77,6 +77,7 @@ function makeHarness(
           ? Option.some({
               projectId,
               title: "Project",
+              hasCustomTitle: false,
               workspaceRoot: "/repo",
               defaultModelSelection: modelSelection,
               defaultThreadEnvMode: null,
@@ -84,6 +85,7 @@ function makeHarness(
               faviconPath: null,
               projectIcon: null,
               scripts: [],
+              trackedFolders: [],
               createdAt: "2026-06-20T00:00:00.000Z",
               updatedAt: "2026-06-20T00:00:00.000Z",
               pinnedAt: null,
@@ -108,7 +110,7 @@ function makeHarness(
   };
 }
 
-const createThread = (thread: string) =>
+const createThread = (thread: string, titleRenamed?: true) =>
   Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const threadId = ThreadId.make(thread);
@@ -118,6 +120,7 @@ const createThread = (thread: string) =>
       threadId,
       projectId,
       title: "Seed title",
+      ...(titleRenamed === undefined ? {} : { titleRenamed }),
       modelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -243,14 +246,17 @@ describe("ThreadTitleRefresh", () => {
     }),
   );
 
-  it.effect.each(["first turn", "manual title", "setting off"] as const)(
+  it.effect.each(["first turn", "manual title", "named at launch", "setting off"] as const)(
     "leaves the title alone: %s",
     (skipped) =>
       Effect.gen(function* () {
         const harness = makeHarness({ refreshGeneratedThreadTitles: skipped !== "setting off" });
         yield* Effect.gen(function* () {
           const refresh = yield* ThreadTitleRefresh.make;
-          const threadId = yield* createThread(`thread:skip:${skipped}`);
+          const threadId = yield* createThread(
+            `thread:skip:${skipped}`,
+            skipped === "named at launch" ? true : undefined,
+          );
           yield* sendUserMessage(threadId, "first");
           if (skipped !== "first turn") yield* sendUserMessage(threadId, "second");
           if (skipped === "manual title") yield* rename(threadId, "My title");

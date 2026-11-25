@@ -30,6 +30,7 @@ import {
 } from "@t3tools/shared/htmlRender";
 import * as Clipboard from "expo-clipboard";
 import * as Predicate from "effect/Predicate";
+import { msg, T, useGT } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Platform, Pressable, View, type ColorValue } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
@@ -39,9 +40,10 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useContentTopInset } from "../../components/ui/useBarInset";
 import { AppText as Text } from "../../components/ui/AppText";
+import { m } from "../../i18n/messages";
 import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { uuidv4 } from "../../lib/uuid";
+import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import { htmlRenderEnvironment, htmlRenderStateStore } from "../../state/htmlRender";
 import { useEnvironmentQuery } from "../../state/query";
@@ -52,11 +54,12 @@ import { useMarkHtmlRenderSeenInView } from "../pages/useHtmlRenderSeen";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 const ROW_BOTTOM_MARGIN = 8;
+const ACTION_ROW_HEIGHT = 32;
 const FULL_SCREEN_GUTTER = 16;
 const NO_STATE: HtmlRenderState = {};
 
 export function htmlRenderRowHeight(frameHeight: number) {
-  return frameHeight + ROW_BOTTOM_MARGIN;
+  return ACTION_ROW_HEIGHT + frameHeight + ROW_BOTTOM_MARGIN;
 }
 
 function useHtmlRenderTheme() {
@@ -92,8 +95,8 @@ const confirm = (title: string, message: string) =>
       title,
       message,
       [
-        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-        { text: "Allow", onPress: () => resolve(true) },
+        { text: m(msg("Cancel")), style: "cancel", onPress: () => resolve(false) },
+        { text: m(msg("Allow")), onPress: () => resolve(true) },
       ],
       // Android dismisses earlier alerts when showing another; a dismissed request is declined.
       { cancelable: true, onDismiss: () => resolve(false) },
@@ -187,6 +190,7 @@ function HtmlRenderPage(
   },
 ) {
   const theme = useHtmlRenderTheme();
+  const openLink = useOpenPullRequest();
   const [initialTheme] = useState(theme);
   const [pageState, setPageState] = useState(props.saved.read);
   const topInset = useContentTopInset();
@@ -268,7 +272,10 @@ function HtmlRenderPage(
               return result.value;
             },
             confirm: ({ page, tool, arguments: args }) =>
-              confirm(`Allow ${page} to run ${tool}?`, JSON.stringify(args, null, 2)),
+              confirm(
+                m(msg("Allow {page} to run {tool}?", { page, tool })),
+                JSON.stringify(args, null, 2),
+              ),
             saveState: (state) => live().save(state),
           }
         : undefined,
@@ -332,7 +339,7 @@ function HtmlRenderPage(
     const link = readHtmlRenderLinkRequest(message);
     if (link !== undefined) {
       // A page must not leave T3 on a timer; only a tap in it opens a link.
-      if (active) void tryOpenExternalUrl(link.url, "html-render");
+      if (active) void openLink(link.url);
       post(htmlRenderResult(link.id));
       return;
     }
@@ -407,6 +414,7 @@ export function ThreadHtmlRender(props: {
   /** Shown on a triage card: the page's sends, also full screen, wait their turn with the card's. */
   readonly triage?: boolean;
 }) {
+  const gt = useGT();
   const navigation = useNavigation();
   const last = props.versions.length - 1;
   const index = props.selected === undefined ? last : Math.min(props.selected, last);
@@ -466,46 +474,15 @@ export function ThreadHtmlRender(props: {
 
   return (
     <View style={{ marginBottom: ROW_BOTTOM_MARGIN }}>
-      <View style={{ height }}>
-        {uri !== null && !failed ? (
-          <HtmlRenderWebView
-            key={documentKey}
-            uri={uri}
-            title={title}
-            nested
-            bridge={bridge}
-            onContentHeight={(contentHeight) => props.onContentHeight(attachmentId, contentHeight)}
-            onFocusRect={props.onFocusRect}
-            onLoadError={handleLoadError}
-            onLoadedChange={(loaded) => setLoadedDocument(loaded ? documentKey : null)}
-          />
-        ) : failed || asset._tag === "Failure" ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Reload ${title}`}
-            className="flex-1 items-center justify-center"
-            onPress={() => {
-              retried.current = false;
-              setFailed(false);
-              if (uri === null) {
-                void refresh().then(
-                  (next) => next !== null && setLoadedUri({ attachmentId, uri: next }),
-                );
-              }
-            }}
-          >
-            <Text className="text-sm text-foreground-muted">Page unavailable</Text>
-          </Pressable>
-        ) : (
-          <View className="flex-1 items-center justify-center">
-            <AppActivityIndicator />
-          </View>
-        )}
+      <View
+        style={{ height: ACTION_ROW_HEIGHT }}
+        className="flex-row items-start justify-end gap-1"
+      >
         {last > 0 ? (
-          <View className="absolute right-10 top-1.5 flex-row items-center gap-1">
+          <View className="flex-row items-center gap-1">
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Previous version"
+              accessibilityLabel={gt("Previous version")}
               disabled={index === 0}
               hitSlop={8}
               className="h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card/80"
@@ -521,13 +498,13 @@ export function ThreadHtmlRender(props: {
             </Pressable>
             <View className="rounded-full border border-border/60 bg-card/80 px-2 py-0.5">
               <Text className="text-xs text-foreground">
-                {index + 1} of {last + 1}
+                {gt("{current} of {total}", { current: index + 1, total: last + 1 })}
               </Text>
             </View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={
-                index < last ? "Next version, a newer one exists" : "Next version"
+                index < last ? gt("Next version, a newer one exists") : gt("Next version")
               }
               disabled={index === last}
               hitSlop={8}
@@ -550,9 +527,9 @@ export function ThreadHtmlRender(props: {
         {uri !== null && !failed ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open ${title}`}
+            accessibilityLabel={gt("Open {title}", { title })}
             hitSlop={8}
-            className="absolute right-1.5 top-1.5 h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card/80"
+            className="h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card/80"
             onPress={() =>
               navigation.navigate("ThreadAttachment", {
                 environmentId: String(props.environmentId),
@@ -575,6 +552,44 @@ export function ThreadHtmlRender(props: {
             />
           </Pressable>
         ) : null}
+      </View>
+      <View style={{ height }}>
+        {uri !== null && !failed ? (
+          <HtmlRenderWebView
+            key={documentKey}
+            uri={uri}
+            title={title}
+            nested
+            bridge={bridge}
+            onContentHeight={(contentHeight) => props.onContentHeight(attachmentId, contentHeight)}
+            onFocusRect={props.onFocusRect}
+            onLoadError={handleLoadError}
+            onLoadedChange={(loaded) => setLoadedDocument(loaded ? documentKey : null)}
+          />
+        ) : failed || asset._tag === "Failure" ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={gt("Reload {title}", { title })}
+            className="flex-1 items-center justify-center"
+            onPress={() => {
+              retried.current = false;
+              setFailed(false);
+              if (uri === null) {
+                void refresh().then(
+                  (next) => next !== null && setLoadedUri({ attachmentId, uri: next }),
+                );
+              }
+            }}
+          >
+            <Text className="text-sm text-foreground-muted">
+              <T>Page unavailable</T>
+            </Text>
+          </Pressable>
+        ) : (
+          <View className="flex-1 items-center justify-center">
+            <AppActivityIndicator />
+          </View>
+        )}
       </View>
     </View>
   );

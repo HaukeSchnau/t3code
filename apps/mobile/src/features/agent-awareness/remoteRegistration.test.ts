@@ -2,20 +2,34 @@ import { beforeEach, vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
 import type { AgentAwarenessSnapshot, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
 import {
+  loadAgentAwarenessDeviceId,
+  loadOrCreateAgentAwarenessDeviceId,
+  saveAgentAwarenessRegistrationRecord,
   loadAgentAwarenessRegistrationRecord,
   loadPreferences,
 } from "../../persistence/imperative";
-import type { Preferences } from "../../persistence/mobile-preferences";
-import type { AgentAwarenessEnvironmentTransport } from "./remoteRegistration";
+import {
+  MobilePreferencesLoadError,
+  MobilePreferencesStore,
+  type Preferences,
+} from "../../persistence/mobile-preferences";
+import { MobileSecureStorageError } from "../../persistence/mobile-secure-storage";
+import * as MobileStorage from "../../persistence/mobile-storage";
+import type {
+  AgentAwarenessEnvironmentTransport,
+  AgentAwarenessRegistrationServices,
+} from "./remoteRegistration";
 import {
   __resetAgentAwarenessRemoteRegistrationForTest,
   AgentAwarenessDeliveryUnavailableError,
+  agentAwarenessNotificationsReady,
   armAgentAwarenessLiveActivityForLocalWork,
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
@@ -112,12 +126,20 @@ vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
 }));
 
-// The mock preserves the production runtime's Promise-returning boundary.
+vi.mock("expo-secure-store", () => ({
+  deleteItemAsync: vi.fn(),
+  getItemAsync: vi.fn(),
+  setItemAsync: vi.fn(),
+}));
+
+// The mock preserves the production runtime's Promise-returning boundary and its persistence.
 // oxlint-disable t3code/no-manual-effect-runtime-in-tests
 vi.mock("../../lib/runtime", () => ({
   runtime: {
-    runPromiseExit: <A, E>(operation: Effect.Effect<A, E>) => Effect.runPromiseExit(operation),
-    runPromise: <A, E>(operation: Effect.Effect<A, E>) => Effect.runPromise(operation),
+    runPromiseExit: <A, E>(operation: Effect.Effect<A, E, AgentAwarenessRegistrationServices>) =>
+      Effect.runPromiseExit(Effect.provide(operation, layerPersistenceTest)),
+    runPromise: <A, E>(operation: Effect.Effect<A, E, AgentAwarenessRegistrationServices>) =>
+      Effect.runPromise(Effect.provide(operation, layerPersistenceTest)),
   },
 }));
 // oxlint-enable t3code/no-manual-effect-runtime-in-tests
@@ -156,6 +178,50 @@ function transport(
     ...overrides,
   };
 }
+
+const storageFailure = (cause: unknown) =>
+  new MobileSecureStorageError({ operation: "read", key: "test", cause });
+const unexpectedStorage = () => Effect.die("Unexpected storage request");
+
+// Delegates to the persistence/imperative mocks so each test steers both paths the same way.
+const layerPersistenceTest = Layer.merge(
+  Layer.succeed(
+    MobileStorage.MobileStorage,
+    MobileStorage.MobileStorage.of({
+      loadOrCreateAgentAwarenessDeviceId: Effect.tryPromise({
+        try: () => loadOrCreateAgentAwarenessDeviceId(),
+        catch: storageFailure,
+      }),
+      loadAgentAwarenessDeviceId: Effect.tryPromise({
+        try: () => loadAgentAwarenessDeviceId(),
+        catch: storageFailure,
+      }),
+      loadAgentAwarenessRegistrationRecord: Effect.tryPromise({
+        try: () => loadAgentAwarenessRegistrationRecord(),
+        catch: storageFailure,
+      }),
+      saveAgentAwarenessRegistrationRecord: (record) =>
+        Effect.tryPromise({
+          try: () => saveAgentAwarenessRegistrationRecord(record),
+          catch: storageFailure,
+        }),
+      clearAgentAwarenessRegistrationRecord: unexpectedStorage(),
+      loadRecentThreadShortcuts: unexpectedStorage(),
+      saveRecentThreadShortcuts: unexpectedStorage,
+    }),
+  ),
+  Layer.succeed(
+    MobilePreferencesStore,
+    MobilePreferencesStore.of({
+      load: Effect.tryPromise({
+        try: () => loadPreferences(),
+        catch: (cause) => new MobilePreferencesLoadError({ cause }),
+      }),
+      savePatch: unexpectedStorage,
+      update: unexpectedStorage,
+    }),
+  ),
+);
 
 describe("accountless agent awareness registration", () => {
   beforeEach(() => {
@@ -196,6 +262,24 @@ describe("accountless agent awareness registration", () => {
       }),
     );
     expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+  });
+
+  it("reports notifications ready only once the device registered with a push token", async () => {
+    vi.mocked(Notifications.getDevicePushTokenAsync).mockRejectedValue(new Error("no APNs token"));
+    const environment = transport();
+    setAgentAwarenessEnvironmentTransport(environment);
+
+    // Live Activities register with their own tokens, so the device stays registered.
+    await vi.waitFor(() => expect(getAgentAwarenessRegistrationStatus()).toBe("registered"));
+    expect(agentAwarenessNotificationsReady()).toBe(false);
+    expect(environment.registerDevice).toHaveBeenCalledWith(
+      expect.not.objectContaining({ pushToken: expect.anything() }),
+    );
+
+    const listener = vi.mocked(Notifications.addPushTokenListener).mock.calls.at(-1)![0];
+    listener({ type: "ios", data: "apns-token" } as never);
+
+    await vi.waitFor(() => expect(agentAwarenessNotificationsReady()).toBe(true));
   });
 
   it("keeps reading the count from the server that took the registration after a relaunch", async () => {
@@ -367,7 +451,7 @@ describe("accountless agent awareness registration", () => {
       expect((error as Error).message).toBe(
         "The paired server has no APNs provider credentials configured.",
       );
-    });
+    }).pipe(Effect.provide(layerPersistenceTest));
   });
 
   it.effect("registers a Live Activity token with the paired environment", () => {
@@ -386,7 +470,7 @@ describe("accountless agent awareness registration", () => {
         { deviceId: "device-1", activityPushToken: "activity-token" },
         null,
       );
-    });
+    }).pipe(Effect.provide(layerPersistenceTest));
   });
 
   it.effect("registers a Live Activity push token that rotates after registration", () => {
@@ -415,7 +499,7 @@ describe("accountless agent awareness registration", () => {
         { deviceId: "device-1", activityPushToken: "rotated-activity-token" },
       ]);
       expect(activity.addPushTokenListener).toHaveBeenCalledTimes(1);
-    });
+    }).pipe(Effect.provide(layerPersistenceTest));
   });
 
   it("skips the Live Activity seed when the environment reports publishing disabled", async () => {
@@ -537,7 +621,7 @@ describe("accountless agent awareness registration", () => {
           [{ kind: "snapshot", aggregate }],
           [{ kind: "snapshot", aggregate: null }],
         ]);
-      }),
+      }).pipe(Effect.provide(layerPersistenceTest)),
     );
 
     it.effect("keeps the newest rows when an older overlapping read finishes last", () =>
@@ -565,7 +649,7 @@ describe("accountless agent awareness registration", () => {
         yield* Fiber.join(older);
 
         expect(publishWidgetMock.mock.calls).toEqual([[{ kind: "snapshot", aggregate: newer }]]);
-      }),
+      }).pipe(Effect.provide(layerPersistenceTest)),
     );
 
     it.effect("does not prime a Live Activity from a read a newer one replaced", () =>
@@ -593,7 +677,7 @@ describe("accountless agent awareness registration", () => {
         yield* Fiber.join(older);
 
         expect(activityMocks.start).not.toHaveBeenCalled();
-      }),
+      }).pipe(Effect.provide(layerPersistenceTest)),
     );
   });
 });

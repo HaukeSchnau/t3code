@@ -5,6 +5,7 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import { CheckCircle2Icon, LoaderCircleIcon, WifiOffIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { T, useMessages, Var } from "gt-react";
 
 import { environmentCatalog } from "~/connection/catalog";
 import { cn } from "~/lib/utils";
@@ -16,7 +17,7 @@ import {
   deriveTrainNetworkExperience,
   NETWORK_DEGRADATION_HOLD_MS,
   NETWORK_RECOVERY_HOLD_MS,
-  RECOVERED_NETWORK_EXPERIENCE,
+  recoveredNetworkExperience,
   retryCountdownText,
   type TrainNetworkExperienceView,
 } from "./trainNetworkExperience";
@@ -63,8 +64,9 @@ export function TrainNetworkStatus({
   onReconnect,
   onOpenConnections,
 }: TrainNetworkStatusProps) {
+  const m = useMessages();
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const nextView = projection === null ? null : deriveTrainNetworkExperience(projection, nowMs);
+  const nextView = projection === null ? null : deriveTrainNetworkExperience(projection, nowMs, m);
   const fullyRecovered =
     projection?.connection.phase === "connected" && projection.snapshot.status === "live";
   const [displayedView, setDisplayedView] = useState<TrainNetworkExperienceView | null>(() =>
@@ -101,7 +103,8 @@ export function TrainNetworkStatus({
     }
 
     previouslyDegradedRef.current = false;
-    setDisplayedView(RECOVERED_NETWORK_EXPERIENCE);
+    // Resolved here, outside render, with the active language; the view shows for half a second.
+    setDisplayedView(recoveredNetworkExperience());
     const timeout = window.setTimeout(() => setDisplayedView(null), NETWORK_RECOVERY_HOLD_MS);
     return () => window.clearTimeout(timeout);
   }, [fullyRecovered, immediate, nextView]);
@@ -115,13 +118,13 @@ export function TrainNetworkStatus({
 
   if (displayedView === null) return null;
 
-  const retryText = retryCountdownText(displayedView.retryRemainingMs);
+  const retryText = retryCountdownText(displayedView.retryRemainingMs, m);
   const recovered = displayedView.kind === "recovered";
   const canReconnect =
     displayedView.kind === "degraded" &&
-    (displayedView.title === "Not connected" ||
-      displayedView.title === "Offline" ||
-      displayedView.title === "Connection failed");
+    (displayedView.state === "not-connected" ||
+      displayedView.state === "offline" ||
+      displayedView.state === "connection-failed");
 
   return (
     <div
@@ -137,7 +140,7 @@ export function TrainNetworkStatus({
     >
       {recovered ? (
         <CheckCircle2Icon className="size-4 shrink-0" aria-hidden="true" />
-      ) : displayedView.title === "Offline" || displayedView.title === "Connection failed" ? (
+      ) : displayedView.state === "offline" || displayedView.state === "connection-failed" ? (
         <WifiOffIcon className="size-4 shrink-0 text-warning" aria-hidden="true" />
       ) : (
         <LoaderCircleIcon
@@ -156,7 +159,11 @@ export function TrainNetworkStatus({
           className="ml-6 shrink-0 tabular-nums text-muted-foreground sm:ml-0"
           aria-hidden="true"
         >
-          {displayedView.attempt !== null ? `Attempt ${displayedView.attempt}` : null}
+          {displayedView.attempt !== null ? (
+            <T>
+              Attempt <Var>{displayedView.attempt}</Var>
+            </T>
+          ) : null}
           {displayedView.attempt !== null && retryText !== null ? " · " : null}
           {retryText}
         </span>
@@ -165,12 +172,12 @@ export function TrainNetworkStatus({
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {onReconnect ? (
             <Button type="button" size="xs" onClick={onReconnect}>
-              Reconnect
+              <T>Reconnect</T>
             </Button>
           ) : null}
           {onOpenConnections ? (
             <Button type="button" size="xs" variant="ghost" onClick={onOpenConnections}>
-              Connections
+              <T>Connections</T>
             </Button>
           ) : null}
         </div>

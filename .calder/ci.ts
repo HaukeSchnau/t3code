@@ -153,6 +153,7 @@ const aliases = {
 const setupFiles = [
   "packages/shared/src/testing/longTempDir.ts",
   "packages/shared/src/testing/providerEnv.ts",
+  "packages/shared/src/testing/gitEnv.ts",
 ];
 
 /** Suites besides the server's leave room for the tasks running beside them. */
@@ -520,15 +521,19 @@ const nativeClients = Task.make("native-clients", {
 
 const desktopLaunchInputs = Files.union(
   Files.workspace("apps/desktop", "apps/server", "apps/web"),
-  Files.imports(["scripts/build-desktop-artifact.ts", "scripts/smoke-desktop-app.ts"]),
+  // electron-builder loads the afterPack hooks by path, so the import walk starts at them too.
+  Files.imports([
+    "scripts/build-desktop-artifact.ts",
+    "scripts/smoke-desktop-app.ts",
+    "scripts/linux-after-pack.ts",
+  ]),
   Files.of(
     "assets",
     "native",
     "scripts/fixtures/desktop-launch",
     // The web Vite config imports scripts/lib, which Files.workspace doesn't follow.
     "scripts/lib",
-    // electron-builder loads the afterPack hooks by path, which Files.imports doesn't follow.
-    "scripts/linux-after-pack.ts",
+    // linux-after-pack.ts loads it through createRequire, which Files.imports doesn't follow.
     "scripts/prepare-server-compile-cache.cjs",
     "third-party-licenses",
     "third-party-licenses.config.json",
@@ -570,6 +575,8 @@ const desktopLaunchLinux = Task.make("desktop-launch-linux", {
     'xvfb-run -a -s "-screen 0 1280x1024x24" node scripts/smoke-desktop-app.ts ' +
     '--executable "$(echo "$PWD"/desktop-launch-app/linux*-unpacked/t3code)"'
   }`,
+  // node-pty compiles against the FHS environment's glibc, newer than upstream's Ubuntu ceiling.
+  env: { T3CODE_DESKTOP_GLIBC_WITHOUT_CEILING: "1" },
 }).pipe(Step.timeout("30 minutes"));
 
 /**

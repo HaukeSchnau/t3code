@@ -22,7 +22,18 @@ held.
 The server picks the backend from the project and the launch (`workspace/ManagedWorkspaces.ts`):
 
 1. Upstream's Git worktree when the nearest repository marker is `.git`, on every host. A Git
-   launch that asks for isolation fails instead of silently getting a worktree.
+   launch that asks for isolation fails instead of silently getting a worktree. A plain directory
+   gets upstream's task folder instead of a copy when upstream's planner (`TaskFolders.plan`)
+   returns a plan for it, which it does when the folder tracks Git folders or has a
+   `worktreeLayout` command. The launch's `repositories` choice goes to the planner, which fails
+   the launch when it refuses that choice. `ManagedWorkspaces.launchBackendFor` makes this decision
+   for launches, their preflight and `t3_worktree_handoff`, so they apply the same rules. It
+   returns the plan it read, and each phase works from that one plan. The preflight and the
+   background preparation are separate phases with separate plans, so if the last tracked
+   repository disappears between them, the preflight can pass a task folder that preparation
+   then builds as a copy. Neither phase ever mixes two plans. A jj
+   project's tracked folders do not change its backend, and `isolated: true` or a separate
+   project still gets rule 2's isolated runtime.
 2. An isolated runtime for a jj or directory project when the launch sets `isolated: true`. It
    needs a Linux host with the launcher and forks through `agent-exec fork`, with Familiar as the
    default profile. Deletion retires the runtime with `--remove-checkout`, which also removes the
@@ -57,12 +68,12 @@ Setup scripts run in the workspace terminal as upstream does. Inside an isolated
 `T3CODE_PROJECT_ROOT` and `T3CODE_WORKTREE_PATH` name the workspace's visible root, because the
 source checkout is not mounted there.
 
-`checkpoint.rollback` with `restoreFiles: false` accepts `missing` and `error` checkpoints, so
-"Edit from here" rewinds the conversation in folders without Git. On web, `ChatView.tsx` offers it
-for a first message whose starting checkpoint has no files, and the revert dialog in
-`chat/ChatOverlayHosts.tsx` shows "Revert files too" only when `canRestoreFiles` says files can be
-restored. jj workspaces have checkpoints
-and thread-scoped file restore through the jj driver (see `jujutsu.md`).
+Upstream's `checkpoint.rollback` with `restoreFiles: false` accepts `missing` and `error`
+checkpoints, so "Edit from here" rewinds the conversation in folders without Git. Upstream's web client now offers
+that rewind and decides when "Revert files too" applies (`findRevertCheckpoint`,
+`rewindFileRestore`). Upstream offers file restore only in a worktree; the revert dialog in
+`chat/ChatOverlayHosts.tsx` also offers it in a jj working copy (`jjWorkingCopy`), which jj
+workspaces get through thread-scoped file restore in the jj driver (see `jujutsu.md`).
 
 ## Contract
 
@@ -72,7 +83,8 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
   isolation. The server also routes a
   plain `worktree` launch on a jj or directory project to the same backends, so upstream clients
   and agents never create Git worktrees there. A `workspace` launch on a Git project becomes
-  upstream's `worktree` launch from the given or current branch.
+  upstream's `worktree` launch from the given or current branch. On a plain folder that gets a
+  task folder it starts from `HEAD`, so each repository starts from its own default branch.
 - `ExecutionEnvironmentCapabilities.managedWorkspaces = { isolated }` tells clients to offer
   managed workspaces, and whether to offer **New isolated workspace** with its profile choice.
   Web and mobile keep that choice in memory for the next send only. The capability is per server; clients apply
@@ -93,28 +105,30 @@ and thread-scoped file restore through the jj driver (see `jujutsu.md`).
   the thread's title). `prepareInBackground` resolves the strategy, tracks a `workspace` like a
   worktree, creates the managed workspace in its own block, and discards it when a cancelled or
   failed preparation abandons it. `schedulePreparation` races a `workspace` preparation against
-  run cancellation, as it does for worktrees.
-- `orchestration-v2/Orchestrator.ts`, `CheckpointRollbackService.ts`: conversation-only rollback
-  without a ready checkpoint.
+  run cancellation, as it does for worktrees. `checkWorktreeBase` asks `launchBackendFor` before
+  upstream's Git checks, so a `worktree` request that gets a managed workspace is not refused as
+  "not a Git repository".
+- shared `orchestrationV2ThreadError.ts`: `preparesWorktree` treats an unfinished `workspace`
+  preparation like a worktree's. The orchestrator's queue holds and the side-chat guard on server,
+  web and mobile use it, so neither queued messages nor side chats start in the project checkout.
 - `ws.ts`: `vcs.removeWorktree` goes through `ManagedWorkspaces.removeWorktree`.
 - `server.ts`: provides the layer. `environment/ServerEnvironment.ts`: advertises the capability.
 - `project/ProjectSetupScriptRunner.ts`: visible setup paths.
 - `mcp/WorktreeMcpService.ts`: `t3_worktree_handoff` delegates to `mcp/ManagedWorkspaceHandoff.ts`
-  for non-Git backends. `t3_thread_launch` takes the new strategy through the schema. The
+  when `launchBackendFor` picks a managed backend. `t3_thread_launch` takes the new strategy through the schema. The
   `workspace` sentences in `mcp/toolkits/project/tools.ts` and `mcp/toolkits/worktree/tools.ts`
   describe it to agents.
 - `packages/provider-core/src/server/orchestrationInstructions.ts`: one sentence in the
   `t3_thread_launch` bullet points agents at `{"type":"workspace"}` and at `isolated:true` for
   clean rooms the user asks for.
 - `jj/JjTurnHooks.ts`: a fork gets its own jj workspace unless its source is an isolated one.
-- client-runtime `operations/commands.ts`: `bootstrap.prepareWorkspace` and the conversation-only
-  revert. `state/workspaces.ts` is fork-owned.
+- client-runtime `operations/commands.ts`: `bootstrap.prepareWorkspace`. Its conversation-only
+  revert check is upstream's since #18379. `state/workspaces.ts` is fork-owned.
 - web `ChatView.tsx` computes the per-project capability once and passes it to `BranchToolbar`
   and `useComposerSend`; mobile `new-task-flow-provider.tsx` exposes it as
   `flow.managedWorkspaces`.
 - web `BranchToolbar.tsx`, `ChatView.tsx`, `ChatView.logic.ts` (`planComposerTurn` returns
   `shouldCreateWorktree`), `chat/useComposerSend.ts` (the `prepareWorkspace` bootstrap),
-  `session-logic.ts`,
   `settings/scheduledTasksSettings.logic.ts`, `settings/ScheduledTasksSettings.tsx`; fork-owned `ManagedWorkspaceSelector.tsx` and
   `lib/managedWorkspaces.ts`.
 - mobile `Stack.tsx` (the `NewTaskWorkspace` root route), `layout/workspace-overlay-routes.ts`,

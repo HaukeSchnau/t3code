@@ -24,9 +24,10 @@ Upstream's OpenCode driver only reads OpenCode Go.
   unreadable provider list and a lookup and quota read that take over five seconds.
 - Only OpenCode 1.x instances look the plan up, after the status probe, because the lookup lists
   providers through a 1.x server. An OpenCode 2 instance never starts one.
-- The windows refresh only when the status probe runs. Upstream's Go usage recovery
-  (`checkUsageLimits`) reads Go alone. The orchestration v2 OpenCode adapters have no Z.AI code, so
-  there is no refresh between probes, and a Z.AI 429 carries no retry time from the plan's reset.
+- The windows refresh only when the status probe runs. Upstream's usage recovery
+  (`checkUsageLimits`) reads OpenCode Go or OpenCode 2 workspace usage alone. The orchestration v2
+  OpenCode adapters have no Z.AI code, so there is no refresh between probes, and a Z.AI 429
+  carries no retry time from the plan's reset.
 
 ## Surfaces
 

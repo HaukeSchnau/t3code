@@ -7,6 +7,8 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
 
@@ -70,9 +72,12 @@ export function activeEnvironmentMode(
 export function environmentModeLabel(
   modes: ReadonlyArray<EnvironmentMode>,
   selection: EnvironmentModeSelection | "custom",
+  resolve: MFunctionType = mFallback,
 ): string {
-  if (selection === "custom") return "Custom";
-  return modes.find((mode) => mode.id === selection)?.name ?? "All environments";
+  if (selection === "custom") {
+    return resolve(msg("Custom", { $context: "an environment mode the user picked by hand" }));
+  }
+  return modes.find((mode) => mode.id === selection)?.name ?? resolve(msg("All environments"));
 }
 
 /** The next mode in the cycle that changes a switch, so modes with identical sets never trap it. */

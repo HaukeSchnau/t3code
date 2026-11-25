@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- workspace kinds are recognised from on-disk markers.
 /**
- * The fork's workspaces next to upstream's Git worktrees (patches/workspaces.md). The project
- * picks the backend: plain Git projects keep upstream's worktrees; jj repositories get a jj
- * workspace and plain directories a guarded copy. A launch can opt a jj or directory project
- * into an isolated agent-exec runtime on Linux hosts with the launcher.
+ * The fork's workspaces next to upstream's Git worktrees (patches/workspaces.md). Git projects and
+ * plain directories that track Git folders keep upstream's worktrees; jj repositories get a jj
+ * workspace and other directories a guarded copy. A launch can opt a jj or directory project into
+ * an isolated agent-exec runtime on Linux hosts with the launcher.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -14,6 +14,7 @@ import {
   type ManagedWorkspaceLaunchStrategy,
   type OrchestrationV2ThreadShell,
   type ProjectId,
+  type TaskFolderError,
   type ThreadId,
   type VcsRemoveWorktreeInput,
 } from "@t3tools/contracts";
@@ -49,6 +50,7 @@ import {
   worldThreadKey,
 } from "../world/threadWorldPaths.ts";
 import { createJjWorkspace, deleteJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
+import * as TaskFolders from "./TaskFolders.ts";
 import { ManagedWorkspaceError, removeWorkspaceDirectory } from "./WorkspaceCommand.ts";
 import {
   fallbackWorkspaceSeed,
@@ -76,8 +78,16 @@ type LaunchWorkspaceStrategy =
       readonly baseRef: string;
       readonly branch?: string | undefined;
       readonly startFromOrigin?: boolean | undefined;
+      readonly repositories?: ReadonlyArray<{ readonly path: string }> | undefined;
     }
   | ManagedWorkspaceStrategy;
+
+/** A launch's backend, with the plan that upstream's worktrees (`git`) are provisioned from. */
+export interface LaunchBackend {
+  readonly backend: WorkspaceBackend;
+  /** Null unless `git` gives the project a task folder. */
+  readonly taskPlan: TaskFolders.TaskFolderPlan | null;
+}
 
 export interface CreateManagedWorkspaceInput {
   readonly projectId: ProjectId;
@@ -102,26 +112,43 @@ export class ManagedWorkspaces extends Context.Service<
       projectRoot: string,
       options?: { readonly isolated?: boolean | undefined },
     ) => Effect.Effect<WorkspaceBackend>;
+    /**
+     * The backend a new thread workspace gets, which launches and handoffs share: `backendFor`,
+     * except that a plain directory with a task-folder plan gets upstream's worktrees (`git`).
+     * Callers provision from the returned plan, so the folders cannot change in between.
+     */
+    readonly launchBackendFor: (input: {
+      readonly projectId: ProjectId;
+      readonly projectRoot: string;
+      readonly isolated?: boolean | undefined;
+      readonly repositories?: ReadonlyArray<{ readonly path: string }> | undefined;
+    }) => Effect.Effect<LaunchBackend, TaskFolderError>;
     /** Whether threads in the project at `projectRoot` each get their own thread world. */
     readonly isWorldProject: (projectRoot: string) => Effect.Effect<boolean>;
     /** Whether `path` lies inside an agent-exec registration (isolated workspace or separate project). */
     readonly isIsolated: (path: string) => Effect.Effect<boolean, ManagedWorkspaceError>;
     /**
-     * New workspaces on jj and directory projects become `workspace` launches;
-     * a `workspace` launch on a plain Git project becomes upstream's `worktree`
-     * launch from the given or current branch.
+     * New workspaces that `launchBackendFor` gives a managed backend become `workspace`
+     * launches; a `workspace` launch it gives upstream's worktrees becomes a `worktree` launch
+     * from the given or current branch. `taskPlan` is the task folder a `worktree` result gets.
      */
     readonly resolveLaunchStrategy: <S extends LaunchWorkspaceStrategy>(input: {
+      readonly projectId: ProjectId;
       readonly projectRoot: string;
       readonly strategy: S;
     }) => Effect.Effect<
-      | S
-      | Extract<LaunchWorkspaceStrategy, { readonly type: "worktree" }>
-      | ManagedWorkspaceStrategy,
-      ManagedWorkspaceError
+      {
+        readonly strategy:
+          | S
+          | Extract<LaunchWorkspaceStrategy, { readonly type: "worktree" }>
+          | ManagedWorkspaceStrategy;
+        readonly taskPlan: TaskFolders.TaskFolderPlan | null;
+      },
+      ManagedWorkspaceError | TaskFolderError
     >;
     /** Fails now when `strategy` would need a directory copy that `create` would refuse. */
     readonly checkCopy: (input: {
+      readonly projectId: ProjectId;
       readonly projectRoot: string;
       readonly strategy: LaunchWorkspaceStrategy;
     }) => Effect.Effect<void, ManagedWorkspaceError>;
@@ -161,6 +188,7 @@ export function keepsWorkspace(thread: OrchestrationV2ThreadShell): boolean {
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const git = yield* GitWorkflowService.GitWorkflowService;
+  const taskFolders = yield* TaskFolders.TaskFolders;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -204,23 +232,51 @@ const make = Effect.gen(function* () {
     return separate ? "isolated" : kind;
   });
 
+  const launchBackendFor: ManagedWorkspaces["Service"]["launchBackendFor"] = Effect.fn(
+    "ManagedWorkspaces.launchBackendFor",
+  )(function* (input) {
+    const backend = yield* backendFor(input.projectRoot, { isolated: input.isolated });
+    if (backend !== "git" && backend !== "directory") return { backend, taskPlan: null };
+    const taskPlan = yield* taskFolders.plan({
+      projectId: input.projectId,
+      repositories: input.repositories,
+    });
+    return { backend: taskPlan === null ? backend : "git", taskPlan };
+  });
+
+  const strategyBackend = (input: {
+    readonly projectId: ProjectId;
+    readonly projectRoot: string;
+    readonly strategy: LaunchWorkspaceStrategy & { readonly type: "worktree" | "workspace" };
+  }) =>
+    launchBackendFor({
+      projectId: input.projectId,
+      projectRoot: input.projectRoot,
+      isolated: input.strategy.type === "workspace" && input.strategy.isolated === true,
+      repositories: input.strategy.type === "worktree" ? input.strategy.repositories : undefined,
+    });
+
   const resolveLaunchStrategy: ManagedWorkspaces["Service"]["resolveLaunchStrategy"] = Effect.fn(
     "ManagedWorkspaces.resolveLaunchStrategy",
   )(function* (input) {
     const strategy: LaunchWorkspaceStrategy = input.strategy;
-    if (strategy.type !== "worktree" && strategy.type !== "workspace") return input.strategy;
+    if (strategy.type !== "worktree" && strategy.type !== "workspace")
+      return { strategy: input.strategy, taskPlan: null };
     const isolated = strategy.type === "workspace" && strategy.isolated === true;
-    const backend = yield* backendFor(input.projectRoot, { isolated });
+    const { backend, taskPlan } = yield* strategyBackend({ ...input, strategy });
     if (backend !== "git") {
       return {
-        type: "workspace" as const,
-        baseRef: strategy.baseRef,
-        ...(strategy.startFromOrigin === undefined
-          ? {}
-          : { startFromOrigin: strategy.startFromOrigin }),
-        ...(isolated ? { isolated: true } : {}),
-        ...(isolated && strategy.profile !== undefined ? { profile: strategy.profile } : {}),
-      } satisfies ManagedWorkspaceStrategy;
+        strategy: {
+          type: "workspace" as const,
+          baseRef: strategy.baseRef,
+          ...(strategy.startFromOrigin === undefined
+            ? {}
+            : { startFromOrigin: strategy.startFromOrigin }),
+          ...(isolated ? { isolated: true } : {}),
+          ...(isolated && strategy.profile !== undefined ? { profile: strategy.profile } : {}),
+        } satisfies ManagedWorkspaceStrategy,
+        taskPlan: null,
+      };
     }
     if (isolated) {
       return yield* fail(
@@ -228,11 +284,12 @@ const make = Effect.gen(function* () {
         "Isolated workspaces are for jj and non-Git projects. Git projects get worktrees.",
       );
     }
-    if (strategy.type === "worktree") return input.strategy;
+    if (strategy.type === "worktree") return { strategy: input.strategy, taskPlan };
     const baseRef =
       strategy.baseRef ??
       (yield* git.localStatus({ cwd: input.projectRoot }).pipe(
-        Effect.map((status) => status.refName ?? undefined),
+        // `HEAD` starts each repository of a plain folder from its own default branch.
+        Effect.map((status) => (status.isRepo ? (status.refName ?? undefined) : "HEAD")),
         Effect.mapError((cause) =>
           fail(
             "ManagedWorkspaces.resolveLaunchStrategy",
@@ -248,11 +305,14 @@ const make = Effect.gen(function* () {
       );
     }
     return {
-      type: "worktree" as const,
-      baseRef,
-      ...(strategy.startFromOrigin === undefined
-        ? {}
-        : { startFromOrigin: strategy.startFromOrigin }),
+      strategy: {
+        type: "worktree" as const,
+        baseRef,
+        ...(strategy.startFromOrigin === undefined
+          ? {}
+          : { startFromOrigin: strategy.startFromOrigin }),
+      },
+      taskPlan,
     };
   });
 
@@ -328,10 +388,17 @@ const make = Effect.gen(function* () {
 
   const checkCopy: ManagedWorkspaces["Service"]["checkCopy"] = Effect.fn(
     "ManagedWorkspaces.checkCopy",
-  )(function* ({ projectRoot, strategy }) {
+  )(function* ({ projectId, projectRoot, strategy }) {
     if (strategy.type !== "worktree" && strategy.type !== "workspace") return;
+    // Only a plain directory can need a copy, so no other backend asks the planner.
     const isolated = strategy.type === "workspace" && strategy.isolated === true;
     if ((yield* backendFor(projectRoot, { isolated })) !== "directory") return;
+    const backend = yield* strategyBackend({ projectId, projectRoot, strategy }).pipe(
+      Effect.map((launch) => launch.backend),
+      // A repository choice the plan refuses fails the launch itself, with the plan's reason.
+      Effect.orElseSucceed(() => "git" as const),
+    );
+    if (backend !== "directory") return;
     yield* checkDirectoryCopy({
       source: projectRoot,
       destinationParent: workspaceParent(projectRoot),
@@ -502,6 +569,7 @@ const make = Effect.gen(function* () {
   return ManagedWorkspaces.of({
     isWorldProject,
     backendFor,
+    launchBackendFor,
     isIsolated,
     resolveLaunchStrategy,
     checkCopy,

@@ -9,7 +9,9 @@ import { DEFAULT_SERVER_SETTINGS, type EnvironmentId, type FollowUp } from "@t3t
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 import { useNavigate } from "@tanstack/react-router";
+import { msg } from "gt-react";
 
+import { m } from "~/i18n/messages";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -57,8 +59,10 @@ export function useStartFollowUpThread() {
     if (modelSelection === null) {
       toastManager.add({
         type: "error",
-        title: "Could not start a thread",
-        description: "No model is ready for this project. Set one up in Settings, Providers.",
+        title: m(msg("Could not start a thread")),
+        description: m(
+          msg("No model is ready for this project. Set one up in Settings, Providers."),
+        ),
       });
       return false;
     }
@@ -81,7 +85,7 @@ export function useStartFollowUpThread() {
         bootstrap: {
           createThread: {
             projectId: project.id,
-            title: followUp.title.trim() || "Follow-up",
+            title: followUp.title.trim() || m(msg("Follow-up", { $context: "noun" })),
             modelSelection,
             runtimeMode,
             interactionMode: DEFAULT_INTERACTION_MODE,
@@ -97,8 +101,11 @@ export function useStartFollowUpThread() {
       if (!isAtomCommandInterrupted(started)) {
         toastManager.add({
           type: "error",
-          title: "Could not start a thread",
-          description: failureMessage(squashAtomCommandFailure(started), "An error occurred."),
+          title: m(msg("Could not start a thread")),
+          description: failureMessage(
+            squashAtomCommandFailure(started),
+            m(msg("An error occurred.")),
+          ),
         });
       }
       return false;
@@ -114,8 +121,11 @@ export function useStartFollowUpThread() {
     if (pickedUp._tag === "Failure" && !isAtomCommandInterrupted(pickedUp)) {
       toastManager.add({
         type: "warning",
-        title: "The thread started, but the follow-up is still open",
-        description: failureMessage(squashAtomCommandFailure(pickedUp), "An error occurred."),
+        title: m(msg("The thread started, but the follow-up is still open")),
+        description: failureMessage(
+          squashAtomCommandFailure(pickedUp),
+          m(msg("An error occurred.")),
+        ),
       });
     }
     await navigate({

@@ -19,5 +19,11 @@ module.exports = {
     // Native sources outside ios/ that prebuild links in. Without them in the fingerprint, a change
     // to the watch app alone would keep the runtime version, so no new TestFlight build would ship.
     { type: "dir", filePath: "targets", reasons: ["@bacons/apple-targets"] },
+    // Expo skips symlinks when hashing local modules.
+    {
+      type: "file",
+      filePath: "../../native/apple-speech/AppleSpeechEngine.swift",
+      reasons: ["appleSpeech"],
+    },
   ],
 };

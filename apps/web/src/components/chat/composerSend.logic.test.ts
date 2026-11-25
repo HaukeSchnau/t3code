@@ -1,60 +1,57 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, TRIAGE_PROMPT_FILE_NAME } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { describe, expect, it } from "vite-plus/test";
-import { formatInlineContextReference } from "../../lib/composerContextReferences";
-import { threadContextReference } from "../../lib/composerContextRecords";
+import type { ComposerThreadDraftState } from "../../composerDraftStore";
 import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import {
   approvalRedirectNotice,
-  loadBalancingSendWarning,
+  composerDraftContentChanged,
   multipleModelSendBlock,
-  referencedThreadContexts,
+  sendPlacesThread,
 } from "./composerSend.logic";
 
 const local = EnvironmentId.make("local");
-const remote = EnvironmentId.make("remote");
 const localThread = threadContextRecord(scopeThreadRef(local, ThreadId.make("a")), "Local");
-const remoteThread = threadContextRecord(scopeThreadRef(remote, ThreadId.make("b")), "Remote");
 
-describe("referencedThreadContexts", () => {
-  it("keeps only the attached threads the prompt still links", () => {
-    const prompt = `see ${formatInlineContextReference(threadContextReference(remoteThread))}`;
-    expect(
-      referencedThreadContexts({ prompt, threadContexts: [localThread, remoteThread] }),
-    ).toEqual([remoteThread]);
-  });
-});
-
-describe("loadBalancingSendWarning", () => {
-  it("asks the user to wait while resource checks run", () => {
-    expect(
-      loadBalancingSendWarning({
-        pending: true,
-        threadContexts: [localThread, remoteThread],
-        candidateEnvironmentIds: [],
-      }).title,
-    ).toBe("Checking machine resources");
-  });
-
-  it("blames the attached threads when no machine can read all of them", () => {
-    expect(
-      loadBalancingSendWarning({
-        pending: false,
-        threadContexts: [localThread, remoteThread],
-        candidateEnvironmentIds: [local, remote],
-      }).description,
-    ).toMatch(/No machine can read every attached thread/);
-  });
-
-  it("blames resources when one machine can read every attached thread", () => {
-    expect(
-      loadBalancingSendWarning({
-        pending: false,
-        threadContexts: [localThread],
-        candidateEnvironmentIds: [remote, local],
-      }).description,
-    ).toMatch(/No eligible machine has available resources/);
-  });
+it("detects draft edits during upload preparation without treating upload metadata as an edit", () => {
+  const draft: ComposerThreadDraftState = {
+    prompt: "before",
+    images: [],
+    files: [
+      {
+        type: "file",
+        id: "file",
+        name: "a.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        file: null,
+      },
+    ],
+    nonPersistedImageIds: [],
+    persistedAttachments: [],
+    terminalContexts: [],
+    previewAnnotations: [],
+    reviewComments: [],
+    threadContexts: [],
+    environmentContexts: [],
+    inlineReplies: [],
+    replyTo: null,
+    modelSelectionByProvider: {},
+    activeProvider: null,
+    runtimeMode: null,
+    interactionMode: null,
+  };
+  expect(
+    composerDraftContentChanged(draft, {
+      ...draft,
+      files: [{ ...draft.files[0]!, uploadedAttachmentId: "upload", uploadEnvironmentId: local }],
+    }),
+  ).toBe(false);
+  expect(composerDraftContentChanged(draft, { ...draft, prompt: "after" })).toBe(true);
+  expect(composerDraftContentChanged(draft, { ...draft, files: [] })).toBe(true);
+  expect(composerDraftContentChanged(draft, { ...draft, threadContexts: [localThread] })).toBe(
+    true,
+  );
 });
 
 describe("multipleModelSendBlock", () => {
@@ -122,5 +119,55 @@ describe("approvalRedirectNotice", () => {
   it("stays quiet when the decline failed or the user left the thread", () => {
     expect(approvalRedirectNotice({ ...settled, declined: false })).toBeNull();
     expect(approvalRedirectNotice(settled)).toBeNull();
+  });
+});
+
+describe("sendPlacesThread", () => {
+  it.each([
+    {
+      name: "places a plain Auto send",
+      autoPlacement: true,
+      repositories: undefined,
+      prompt: "Fix it",
+      placed: true,
+    },
+    {
+      name: "keeps a manual send here",
+      autoPlacement: false,
+      repositories: undefined,
+      prompt: "Fix it",
+      placed: false,
+    },
+    {
+      name: "keeps a repository choice, which names this machine's paths, here",
+      autoPlacement: true,
+      repositories: [{ path: "/work/api" }],
+      prompt: "Fix it",
+      placed: false,
+    },
+    {
+      name: "keeps a triage prompt, which links this machine's playbook, here",
+      autoPlacement: true,
+      repositories: undefined,
+      prompt: `[${TRIAGE_PROMPT_FILE_NAME}](/tmp/triage/${TRIAGE_PROMPT_FILE_NAME}) and triage`,
+      placed: false,
+    },
+    {
+      name: "keeps a checked-out pull request, which is this machine's checkout, here",
+      autoPlacement: true,
+      repositories: undefined,
+      prompt: "Fix it",
+      placed: false,
+      checksOutPullRequest: true,
+    },
+  ])("$name", ({ autoPlacement, repositories, prompt, placed, checksOutPullRequest = false }) => {
+    expect(
+      sendPlacesThread({
+        autoPlacement,
+        worktreeRepositories: repositories,
+        prompt,
+        checksOutPullRequest,
+      }),
+    ).toBe(placed);
   });
 });

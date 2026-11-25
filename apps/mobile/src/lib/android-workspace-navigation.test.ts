@@ -86,13 +86,12 @@ function names(state: ReturnType<typeof router.getInitialState>) {
 }
 
 describe("Android workspace navigation", () => {
-  it("returns to a distinct previous thread, otherwise to the workspace list", () => {
+  it("returns to the previous page, otherwise to the workspace list", () => {
     const parent = withThread();
     let state = apply(
       parent,
       StackActions.push("Thread", { ...thread.params, threadId: "child-a" }),
     );
-    let listSelected = false;
     const navigation = {
       dispatch: (action: RootStackResetAction) => {
         state = apply(state, action);
@@ -103,64 +102,57 @@ describe("Android workspace navigation", () => {
         state = apply(state, StackActions.pop());
       },
     };
-    const back = () =>
-      returnToAndroidWorkspaceList(navigation, () => {
-        listSelected = true;
-      });
+    const back = () => returnToAndroidWorkspaceList(navigation);
 
     back();
     expect(state.routes).toEqual(parent.routes);
     expect(state.index).toBe(parent.index);
-    expect(listSelected).toBe(false);
 
     back();
     expect(state.routes).toEqual([parent.routes[0]]);
     expect(state.index).toBe(0);
-    expect(listSelected).toBe(true);
 
     state = apply(
       parent,
       StackActions.push("Thread", { ...thread.params, environmentId: "environment-b" }),
     );
-    listSelected = false;
     back();
     expect(state.routes).toEqual(parent.routes);
     expect(state.index).toBe(parent.index);
-    expect(listSelected).toBe(false);
+
+    const pullRequestOverThread = legacyHistory();
+    state = pullRequestOverThread;
+    back();
+    expect(state.routes).toEqual(pullRequestOverThread.routes.slice(0, 2));
 
     // Confirming a Git action from the inline inspector can duplicate the current thread.
     state = apply(parent, StackActions.push("Thread", thread.params));
     back();
-    expect({ routes: names(state), index: state.index, listSelected }).toEqual({
-      routes: ["Home"],
-      index: 0,
-      listSelected: true,
-    });
+    expect({ routes: names(state), index: state.index }).toEqual({ routes: ["Home"], index: 0 });
+
+    const child = { ...thread.params, threadId: "child-a" };
+    state = apply(
+      apply(parent, StackActions.push("Thread", child)),
+      StackActions.push("Thread", child),
+    );
+    back();
+    expect(state.routes).toEqual(parent.routes);
   });
 
   it("returns from a thread opened in triage to the triage deck", () => {
     let state = apply(router.getInitialState(options), StackActions.push("Triage"));
     state = apply(state, StackActions.push(thread.name, thread.params));
-    let listSelected = false;
-    returnToAndroidWorkspaceList(
-      {
-        dispatch: (action: RootStackResetAction) => {
-          state = apply(state, action);
-        },
-        getParent: () => undefined,
-        getState: () => state,
-        goBack: () => {
-          state = apply(state, StackActions.pop());
-        },
+    returnToAndroidWorkspaceList({
+      dispatch: (action: RootStackResetAction) => {
+        state = apply(state, action);
       },
-      () => {
-        listSelected = true;
+      getParent: () => undefined,
+      getState: () => state,
+      goBack: () => {
+        state = apply(state, StackActions.pop());
       },
-    );
-    expect({ routes: names(state), listSelected }).toEqual({
-      routes: ["Home", "Triage"],
-      listSelected: false,
     });
+    expect(names(state)).toEqual(["Home", "Triage"]);
   });
 
   it("opens a linked thread above the current one so Back returns to it", () => {
