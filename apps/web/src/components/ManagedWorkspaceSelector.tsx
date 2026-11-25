@@ -2,7 +2,6 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { projectWorkspaceGroups, workspaceLabel } from "@t3tools/client-runtime/state/workspaces";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
-  CheckIcon,
   ChevronDownIcon,
   FlaskConicalIcon,
   FolderGit2Icon,
@@ -10,7 +9,7 @@ import {
   FolderIcon,
 } from "lucide-react";
 import { T, useGT } from "gt-react";
-import { memo, type ReactNode, useState } from "react";
+import { memo, useState } from "react";
 
 import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 import {
@@ -23,10 +22,22 @@ import type { EnvMode } from "./BranchToolbar.logic";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { ComposerControl } from "./chat/ComposerControl";
 import { useComposerMenuProps } from "./chat/composerEventScope";
-import { Checkbox } from "./ui/checkbox";
-import { Input } from "./ui/input";
-import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
-import { Radio, RadioGroup } from "./ui/radio-group";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuItemDetail,
+  MenuItemLabel,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSearchInput,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const EMPTY_ENVIRONMENT_IDS: ReadonlyArray<EnvironmentId> = [];
 
@@ -43,31 +54,6 @@ interface ManagedWorkspaceSelectorProps {
   readonly onSelectWorkspace?:
     | ((workspace: { readonly path: string; readonly branch: string | null } | null) => void)
     | undefined;
-}
-
-function Row(props: {
-  readonly icon?: ReactNode;
-  readonly title: string;
-  readonly detail?: string | undefined;
-  readonly selected: boolean;
-  readonly onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
-      onClick={props.onSelect}
-    >
-      {props.icon}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate">{props.title}</span>
-        {props.detail ? (
-          <span className="block truncate text-muted-foreground text-xs">{props.detail}</span>
-        ) : null}
-      </span>
-      {props.selected ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-    </button>
-  );
 }
 
 /**
@@ -117,163 +103,192 @@ export const ManagedWorkspaceSelector = memo(function ManagedWorkspaceSelector(
         ? FlaskConicalIcon
         : FolderGit2Icon
       : FolderIcon;
-  const content = (
-    <>
-      <Icon className="size-3 shrink-0" />
-      <ComposerContextLabel>{label}</ComposerContextLabel>
-    </>
-  );
+  const icon = <Icon aria-hidden className="size-3 shrink-0" />;
 
   if (props.envLocked || props.forceNewWorktree) {
     return (
-      <span
-        className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-1.75 font-normal text-muted-foreground/70 text-xs sm:h-6"
-        data-composer-context-control
-      >
-        {content}
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              // The chips' 12px medium label at every size, as upstream's locked workspace chip.
+              className="inline-flex h-7 min-w-0 shrink-0 items-center gap-1.25 border border-transparent px-2 text-caption text-muted-foreground sm:h-5.5 sm:text-meta"
+              data-composer-context-control
+              aria-label={label}
+            />
+          }
+        >
+          {icon}
+          <ComposerContextLabel>{label}</ComposerContextLabel>
+        </TooltipTrigger>
+        <TooltipPopup>{label}</TooltipPopup>
+      </Tooltip>
     );
   }
 
-  const choose = (action: () => void, isolated = false) => {
-    setIsolatedWorkspaceChoice(isolated);
-    action();
-    setOpen(false);
+  const mode = isNew
+    ? isolatedChoice
+      ? "isolated"
+      : "new"
+    : props.activeWorktreePath === null
+      ? "checkout"
+      : "";
+  const chooseMode = (value: string) => {
+    setIsolatedWorkspaceChoice(value === "isolated");
+    if (value !== "checkout") props.onEnvModeChange("worktree");
+    else if (props.onSelectWorkspace !== undefined) props.onSelectWorkspace(null);
+    else props.onEnvModeChange("local");
+  };
+  const chooseWorkspace = (path: string) => {
+    const workspace = workspaces.find((candidate) => candidate.path === path);
+    if (!workspace) return;
+    setIsolatedWorkspaceChoice(false);
+    props.onSelectWorkspace?.({ path: workspace.path, branch: workspace.branch });
   };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={<ComposerControl size="xs" />}
-        aria-label={gt("Workspace")}
-        className="min-w-0 shrink"
-        data-composer-shortcut="composer.workspace"
-        data-composer-context-control
-      >
-        {content}
-        <ChevronDownIcon className="size-3 shrink-0 opacity-50" data-composer-control-chevron />
-      </PopoverTrigger>
-      <PopoverPopup
+    <Menu open={open} onOpenChange={setOpen} modal={false}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={<ComposerControl size="xs" />}
+              data-pressed={open ? "" : undefined}
+              className="min-w-0 shrink ps-2"
+              aria-label={gt("Workspace: {workspace}", { workspace: label })}
+              data-composer-context-control
+              data-composer-shortcut="composer.workspace"
+            />
+          }
+        >
+          {icon}
+          <ComposerContextLabel>{label}</ComposerContextLabel>
+          <ChevronDownIcon
+            aria-hidden
+            data-composer-chevron
+            className="size-2.5 shrink-0 text-muted-foreground"
+          />
+        </TooltipTrigger>
+        <TooltipPopup>{label}</TooltipPopup>
+      </Tooltip>
+      <MenuPopup
+        spacing="relaxed"
         align="start"
         side="top"
-        width="md"
-        padding="compact"
+        // Workspace choices and names need a consistent width regardless of the chip label.
+        className="w-90"
         {...composerFloatingLayerProps}
+        data-composer-run-context
       >
-        <div className="px-2 pb-1 font-medium text-xs">
-          <T>Workspace</T>
-        </div>
-        <Row
-          icon={<FolderGit2Icon className="size-4 shrink-0" />}
-          title={gt("New workspace")}
-          detail={gt("A separate copy for this task")}
-          selected={isNew && !isolatedChoice}
-          onSelect={() => choose(() => props.onEnvModeChange("worktree"))}
-        />
-        {props.isolated ? (
-          <Row
-            icon={<FlaskConicalIcon className="size-4 shrink-0" />}
-            title={gt("New isolated workspace")}
-            detail={gt("A clean room that can't see your other projects")}
-            selected={isNew && isolatedChoice}
-            onSelect={() => choose(() => props.onEnvModeChange("worktree"), true)}
-          />
-        ) : null}
-        <Row
-          icon={<FolderIcon className="size-4 shrink-0" />}
-          title={gt("Project checkout")}
-          selected={!isNew && props.activeWorktreePath === null}
-          onSelect={() =>
-            choose(() =>
-              props.onSelectWorkspace !== undefined
-                ? props.onSelectWorkspace(null)
-                : props.onEnvModeChange("local"),
-            )
-          }
-        />
+        <MenuGroup>
+          <MenuGroupLabel>
+            <T>Workspace</T>
+          </MenuGroupLabel>
+          <MenuRadioGroup value={mode} onValueChange={(value) => chooseMode(String(value))}>
+            <MenuRadioItem value="new" closeOnClick>
+              <FolderGit2Icon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="shrink-0">{gt("New workspace")}</span>
+              <span className="min-w-0 truncate text-meta text-dim-foreground">
+                {gt("A separate copy for this task")}
+              </span>
+            </MenuRadioItem>
+            {props.isolated ? (
+              <MenuRadioItem value="isolated" closeOnClick>
+                <FlaskConicalIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="shrink-0">{gt("New isolated workspace")}</span>
+                <span className="min-w-0 truncate text-meta text-dim-foreground">
+                  {gt("A clean room that can't see your other projects")}
+                </span>
+              </MenuRadioItem>
+            ) : null}
+            <MenuRadioItem value="checkout" closeOnClick>
+              <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="shrink-0">{gt("Project checkout")}</span>
+            </MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuGroup>
         {props.onSelectWorkspace !== undefined ? (
           <>
-            <Input
+            <MenuSeparator />
+            <MenuSearchInput
               aria-label={gt("Find workspace")}
               placeholder={gt("Find workspace…")}
-              size="compact"
-              type="search"
-              className="my-1.5"
               value={query}
-              onValueChange={setQuery}
+              onChange={(event) => setQuery(event.currentTarget.value)}
             />
-            <div className="max-h-60 overflow-y-auto">
-              {workspaces.map((workspace) => (
-                <Row
-                  key={workspace.key}
-                  title={workspace.label}
-                  detail={[
-                    gt("{count, plural, one {{count} thread} other {{count} threads}}", {
-                      count: workspace.threadCount,
-                    }),
-                    ...(workspace.runningCount > 0
-                      ? [gt("{count} running", { count: workspace.runningCount })]
-                      : workspace.settled
-                        ? [gt("Settled", { $context: "workspace whose threads are all settled" })]
-                        : []),
-                  ].join(" · ")}
-                  selected={props.activeWorktreePath === workspace.path}
-                  onSelect={() =>
-                    choose(() =>
-                      props.onSelectWorkspace?.({
-                        path: workspace.path,
-                        branch: workspace.branch,
-                      }),
-                    )
-                  }
-                />
-              ))}
+            <MenuGroup className="max-h-60 overflow-y-auto">
+              <MenuRadioGroup
+                value={props.activeWorktreePath ?? ""}
+                onValueChange={(value) => chooseWorkspace(String(value))}
+              >
+                {workspaces.map((workspace) => (
+                  <MenuRadioItem key={workspace.key} value={workspace.path} closeOnClick>
+                    <FolderGitIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <MenuItemLabel>{workspace.label}</MenuItemLabel>
+                    <MenuItemDetail>
+                      {gt("{count, plural, one {{count} thread} other {{count} threads}}", {
+                        count: workspace.threadCount,
+                      })}
+                    </MenuItemDetail>
+                    {workspace.runningCount > 0 ? (
+                      <span className="shrink-0 text-meta text-dim-foreground">
+                        {gt("{count} running", { count: workspace.runningCount })}
+                      </span>
+                    ) : workspace.settled ? (
+                      <span className="shrink-0 text-meta text-dim-foreground">
+                        {gt("Settled", { $context: "workspace whose threads are all settled" })}
+                      </span>
+                    ) : null}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
               {archive.isLoading ? (
-                <p className="px-2 py-1.5 text-muted-foreground text-xs">
+                <MenuItem disabled>
                   <T>Loading settled workspaces…</T>
-                </p>
+                </MenuItem>
               ) : workspaces.length === 0 ? (
-                <p className="px-2 py-1.5 text-muted-foreground text-xs">
-                  {archive.error ?? gt("No matching workspaces.")}
-                </p>
+                <MenuItem disabled>{archive.error ?? gt("No matching workspaces.")}</MenuItem>
               ) : null}
-            </div>
-            <label className="flex items-center gap-2 px-2 py-1.5 text-muted-foreground text-xs">
-              <Checkbox checked={showSettled} onCheckedChange={setShowSettled} />
+            </MenuGroup>
+            <MenuCheckboxItem
+              checked={showSettled}
+              closeOnClick={false}
+              onCheckedChange={setShowSettled}
+            >
               <T>Show settled</T>
-            </label>
+            </MenuCheckboxItem>
           </>
         ) : null}
         {isolatedChoice && isNew ? (
-          <details className="mt-1 border-t px-2 pt-1.5 text-xs">
-            <summary className="cursor-pointer text-muted-foreground">
-              <T>Clean room setup</T>
-            </summary>
-            <div className="py-2">
-              <RadioGroup
+          <>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>
+                <T>Clean room setup</T>
+              </MenuGroupLabel>
+              <MenuRadioGroup
                 aria-label={gt("Agent setup")}
                 value={profile}
                 onValueChange={(value) => setProfile(value === "minimal" ? "minimal" : "familiar")}
               >
                 {(["familiar", "minimal"] as const).map((value) => (
-                  <label key={value} className="flex items-start gap-2">
-                    <Radio value={value} className="mt-0.5" />
-                    <span>
+                  <MenuRadioItem key={value} value={value} closeOnClick={false}>
+                    <span className="shrink-0">
                       {value === "familiar"
                         ? gt("Familiar", { $context: "clean room agent setup" })
                         : gt("Minimal", { $context: "clean room agent setup" })}
-                      <span className="block text-muted-foreground">
-                        {value === "familiar"
-                          ? gt("Keeps your global instructions and skills")
-                          : gt("Starts with the project's own instructions and tools")}
-                      </span>
                     </span>
-                  </label>
+                    <span className="min-w-0 truncate text-meta text-dim-foreground">
+                      {value === "familiar"
+                        ? gt("Keeps your global instructions and skills")
+                        : gt("Starts with the project's own instructions and tools")}
+                    </span>
+                  </MenuRadioItem>
                 ))}
-              </RadioGroup>
-            </div>
-          </details>
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
         ) : null}
-      </PopoverPopup>
-    </Popover>
+      </MenuPopup>
+    </Menu>
   );
 });

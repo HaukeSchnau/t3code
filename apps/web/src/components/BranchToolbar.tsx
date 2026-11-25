@@ -1356,12 +1356,17 @@ export const BranchToolbar = memo(function BranchToolbar({
     !envModeLocked &&
     (activeProject.trackedFolders?.length ?? 0) > 0;
 
+  // A thread in a managed workspace without Git still names it (patches/workspaces.md).
+  const namesWorkspace =
+    showGitControls ||
+    (activeWorktreePath !== null && !isScratchProject(activeProject, scratchWorkspaceRoot));
+
   if (layout === "panel") {
     return (
       <div className="flex w-full flex-col" data-thread-panel-run-context>
         {panelSection !== "branch"
           ? // Without Git there is no worktree to make, so only the machine row is left.
-            (showGitControls ? (["machine", "workspace"] as const) : (["machine"] as const)).map(
+            (namesWorkspace ? (["machine", "workspace"] as const) : (["machine"] as const)).map(
               (section) => (
                 <RunContextSelector
                   key={section}

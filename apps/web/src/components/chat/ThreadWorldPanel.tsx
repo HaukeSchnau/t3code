@@ -68,16 +68,14 @@ export function ThreadWorldPanel(props: { environmentId: EnvironmentId; cwd: str
 
 function Row(props: { icon: ReactNode; title: string; detail: string; warn?: boolean }) {
   return (
-    <li className="flex min-w-0 items-start gap-2.5 px-2.5 py-1.5">
-      <span className="pt-px">{props.icon}</span>
+    <li className="flex min-h-9 min-w-0 items-center gap-2.5 ps-2.5 pe-1 py-1.5">
+      {props.icon}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-sm font-medium leading-4 text-foreground/85">
-          {props.title}
-        </span>
+        <span className="truncate text-label leading-4 text-foreground">{props.title}</span>
         <span
           className={cn(
-            "text-2xs leading-4 [overflow-wrap:anywhere]",
-            props.warn ? "text-warning" : "text-muted-foreground",
+            "text-caption leading-4 [overflow-wrap:anywhere]",
+            props.warn ? "text-warning-foreground" : "text-muted-foreground",
           )}
         >
           {props.detail}
