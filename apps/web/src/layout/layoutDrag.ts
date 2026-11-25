@@ -538,6 +538,8 @@ function openLayoutDragSurface(threadRef: ScopedThreadRef, surface: LayoutDragSu
       return panels.openThread(threadRef, surface.threadId);
     case "linked-thread":
       return panels.openLinkedThread(threadRef, surface);
+    case "artifact":
+      return panels.openArtifact(threadRef, surface.url, surface.title);
   }
 }
 

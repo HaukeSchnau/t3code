@@ -1821,7 +1821,9 @@ export function useLayoutTabLabel(tab: LayoutTab): {
         ? preview.navStatus.url
         : surface?.kind === "preview" && surface.resourceId
           ? surface.url
-          : surface?.kind === "pull-request" || surface?.kind === "issue"
+          : surface?.kind === "pull-request" ||
+              surface?.kind === "issue" ||
+              surface?.kind === "artifact"
             ? (surface.url ?? null)
             : null;
     const status =

@@ -104,6 +104,17 @@ describe("closedViewStore", () => {
       // Saved before a side chat's tab became a `thread` surface.
       surface: { id: "side-chat:side", kind: "side-chat", threadId: "side" } as never,
     });
+    const artifactUrl = "https://files.schnau.dev/report.md";
+    const artifactId = store.remember({
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: {
+        id: `artifact:${artifactUrl}`,
+        kind: "artifact",
+        url: artifactUrl,
+        title: "Report",
+      },
+    });
     const publicId = store.remember(diff(refA));
     const browserId = store.remember({
       kind: "browser",
@@ -134,6 +145,7 @@ describe("closedViewStore", () => {
     expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([
       browserId,
       publicId,
+      artifactId,
       sideChatId,
     ]);
     expect(useClosedViewStore.getState().entries.at(-1)).toMatchObject({

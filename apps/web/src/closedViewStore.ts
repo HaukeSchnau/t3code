@@ -106,6 +106,8 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         Number.isSafeInteger(surface.revealRequestId) &&
         (surface.attachment === undefined || isAttachment(surface.attachment))
       );
+    case "artifact":
+      return typeof surface.url === "string" && typeof surface.title === "string";
     case "device":
       return (
         (surface.title === undefined || typeof surface.title === "string") &&
