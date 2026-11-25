@@ -97,15 +97,16 @@ export function TriagePage() {
   return (
     <AppRouteModal
       label={gt("Triage", { $context: "noun, the screen that goes through threads that need you" })}
+      variant="app-panel"
       escapeCloses={(event) => triageEscapeCloses(event, triageKeyTarget(event.target))}
     >
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex min-h-12 shrink-0 items-center gap-1 border-b ps-5 pe-2">
-          <h1 className="min-w-0 truncate font-medium text-sm">
+      <div data-app-modal-pane="" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex min-h-12 shrink-0 items-center gap-1 border-b border-divider ps-5 pe-2">
+          <h1 className="min-w-0 truncate text-label">
             <T>Needs you</T>
           </h1>
           {thread !== null ? (
-            <span className="ms-1 text-muted-foreground text-sm tabular-nums">
+            <span className="ms-1 text-body text-muted-foreground tabular-nums">
               <T>
                 <Var>{index + 1}</Var> of <Var>{cards.length}</Var>
               </T>

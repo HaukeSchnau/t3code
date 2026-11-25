@@ -200,20 +200,23 @@ export function TriageCard(props: {
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-6">
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="truncate text-muted-foreground text-xs">
-              {project?.isScratch ? gt("No project") : (project?.title ?? gt("Project"))}
-              {" · "}
-              {kindLabel}
-              {waited === null
-                ? null
-                : waited.suffix === null
-                  ? ` · ${gt("just now")}`
-                  : ` · ${gt("waiting {duration}", { duration: waited.value })}`}
+            <p className="flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
+              <span className="min-w-0 truncate">
+                {project?.isScratch ? gt("No project") : (project?.title ?? gt("Project"))}
+              </span>
+              <span className="shrink-0">{kindLabel}</span>
+              {waited === null ? null : (
+                <span className="shrink-0 tabular-nums">
+                  {waited.suffix === null
+                    ? gt("just now")
+                    : gt("waiting {duration}", { duration: waited.value })}
+                </span>
+              )}
             </p>
-            <h2 className="font-semibold text-lg leading-snug">{thread.title}</h2>
+            <h2 className="text-title">{thread.title}</h2>
           </div>
           {need.text !== null ? (
-            <p className="rounded-lg border bg-card px-4 py-3 font-medium text-base">{need.text}</p>
+            <p className="rounded-card surface-card px-4 py-3 text-label">{need.text}</p>
           ) : null}
           {need.kind === "page" ? (
             pageFrame !== null ? (
@@ -229,7 +232,7 @@ export function TriageCard(props: {
                 }
               />
             ) : structure !== null && (indexedPages.isSuccess || indexedPages.error !== null) ? (
-              <p className="text-muted-foreground text-sm">
+              <p className="text-body text-muted-foreground">
                 <T>The page is further back in the thread. Open the thread to see it.</T>
               </p>
             ) : (
@@ -238,7 +241,7 @@ export function TriageCard(props: {
           ) : null}
           {question !== null ? (
             <section className="flex flex-col gap-2" aria-label={gt("Question")}>
-              <p className="font-medium text-sm">{question.question}</p>
+              <p className="text-label">{question.question}</p>
               <div className="flex flex-col gap-1.5">
                 {question.options.map((option) => (
                   <Button
@@ -250,8 +253,8 @@ export function TriageCard(props: {
                     onClick={() => pickOption(option.value ?? option.label)}
                   >
                     <span className="flex min-w-0 flex-col items-start text-start">
-                      <span className="font-medium">{option.label}</span>
-                      <span className="text-muted-foreground text-xs">{option.description}</span>
+                      <span className="text-body">{option.label}</span>
+                      <span className="text-caption text-dim-foreground">{option.description}</span>
                     </span>
                   </Button>
                 ))}
@@ -259,18 +262,18 @@ export function TriageCard(props: {
             </section>
           ) : null}
           {waitingOn.length > 0 ? (
-            <ul className="flex flex-col gap-1.5 rounded-lg border bg-card px-4 py-3 font-medium text-sm">
+            <ul className="flex flex-col gap-1.5 rounded-card surface-card px-4 py-3 text-label">
               {waitingOn.map((text) => (
                 <li key={text}>{text}</li>
               ))}
             </ul>
           ) : null}
           <section className="flex min-w-0 flex-col gap-2" aria-label={gt("Last message")}>
-            <h3 className="text-muted-foreground text-xs">
+            <h3 className="text-meta text-muted-foreground">
               <T>Last message</T>
             </h3>
             {latest !== null ? (
-              <div className="min-w-0 rounded-lg border px-4 py-3">
+              <div className="min-w-0 rounded-card surface-card px-4 py-3">
                 <ChatMarkdown
                   text={latest.text}
                   cwd={cwd}
@@ -280,20 +283,20 @@ export function TriageCard(props: {
                 />
               </div>
             ) : structure !== null ? (
-              <p className="text-muted-foreground text-sm">
+              <p className="text-body text-muted-foreground">
                 <T>The agent has not written yet.</T>
               </p>
             ) : connected ? (
               <Skeleton className="h-24 w-full" />
             ) : (
-              <p className="text-muted-foreground text-sm">
+              <p className="text-body text-muted-foreground">
                 <T>Its environment is not connected.</T>
               </p>
             )}
           </section>
         </div>
       </div>
-      <footer className="shrink-0 border-t px-5 py-3">
+      <footer className="shrink-0 border-t border-divider px-5 py-3">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
           {replyMode !== null ? (
             <div className="flex items-end gap-2">
@@ -327,18 +330,22 @@ export function TriageCard(props: {
             </div>
           ) : null}
           <div className="flex flex-wrap items-center gap-1.5">
-            <Button size="sm" variant={answersHere ? "ghost" : "default"} onClick={openThread}>
+            <Button
+              size="standard"
+              variant={answersHere ? "ghost" : "default"}
+              onClick={openThread}
+            >
               <ArrowUpRightIcon />
               {answersHere ? gt("Open thread") : gt("Open thread to answer")}
               <Kbd>O</Kbd>
             </Button>
-            <Button size="sm" variant="ghost" disabled={!snoozable} onClick={snooze}>
+            <Button size="standard" variant="ghost" disabled={!snoozable} onClick={snooze}>
               <AlarmClockIcon />
               <T>Snooze 1 h</T>
               <Kbd>S</Kbd>
             </Button>
             {hasOpenAsks ? (
-              <Button size="sm" variant="ghost" onClick={dismiss}>
+              <Button size="standard" variant="ghost" onClick={dismiss}>
                 <MessageCircleOffIcon />
                 <T>No reply needed</T>
                 <Kbd>X</Kbd>
