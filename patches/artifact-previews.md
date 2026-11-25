@@ -10,10 +10,14 @@ work without the desktop-only integrated browser or a server-side browser sessio
 
 - `apps/web/src/lib/artifactLink.ts` recognizes the exact HTTPS origin and document
   paths, preserving queries and fragments. Media and downloads keep existing actions.
-- `ChatMarkdown`'s link renderer routes ordinary clicks to URL-backed, thread-scoped right-panel
-  tabs. Modified clicks remain normal links; the context menu offers both destinations.
-  `chat/RightPanelSurfaceContent.tsx` renders the `artifact` surface with the lazy
-  `files/ArtifactPreviewPanel.tsx`, and `reopenClosedView.ts` reopens a closed one.
+- `ChatMarkdown`'s link renderer routes ordinary clicks to URL-backed, thread-scoped surfaces,
+  which open as workspace pane tabs. Modified clicks remain normal links; the context menu offers
+  both destinations. The fork's UI is the lazy `files/ArtifactPreviewPanel.tsx`, built from the
+  file surface chrome. Upstream files carry one `artifact` case each: `ThreadSurfaceTab.tsx`
+  mounts the panel, `layout/surfaceTabLabels.ts` and `SurfaceTabIcon.tsx` give the tab its title
+  and icon, `layout/PaneTabs.tsx` puts the URL in the tab tooltip, `layout/layoutDrag.ts` reopens
+  a dragged tab, `reopenClosedView.ts` reopens a closed one, and `closedViewStore.ts` keeps closed
+  ones across reloads.
 - Markdown documents use the existing chat renderer, including Mermaid and tables, through its
   `documentUrl` prop. That passes a `urlTransform` to `MarkdownSource`, which then builds its own
   renderer instead of upstream's cached shared one.
@@ -31,8 +35,7 @@ work without the desktop-only integrated browser or a server-side browser sessio
 - `rightPanelStore.ts` adds the `artifact` surface kind and re-parses persisted
   artifact URLs in the shared migration, dropping ones that no longer match. It
   uses upstream's storage version (14) and adds no version of its own.
-- Native mobile keeps its existing link behavior. Web on small screens uses the
-  existing right-panel sheet.
+- Native mobile keeps its existing link behavior.
 
 ## Hosting constraints
 

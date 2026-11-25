@@ -149,6 +149,7 @@ const DevicePanel = lazy(() =>
   import("./device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+const ArtifactPreviewPanel = lazy(() => import("./files/ArtifactPreviewPanel"));
 const PullRequestDetailPanel = lazy(() =>
   import("./pullRequest/PullRequestDetailPanel").then((module) => ({
     default: module.PullRequestDetailPanel,
@@ -955,6 +956,17 @@ function ThreadSurfaceContent({
 
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
+    case "artifact":
+      return (
+        <Suspense fallback={null}>
+          <ArtifactPreviewPanel
+            key={surface.url}
+            threadRef={threadRef}
+            url={surface.url}
+            title={surface.title}
+          />
+        </Suspense>
+      );
     case "device":
       return (
         <Suspense fallback={null}>

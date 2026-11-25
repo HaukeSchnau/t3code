@@ -5,13 +5,20 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { artifactMarkdown } from "~/state/projects";
-import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
+import { ChevronRightIcon, ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
-import { T, useGT, Var } from "gt-react";
+import { useGT } from "gt-react";
 
 import { Button } from "~/components/ui/button";
+import { ScrollArea } from "~/components/ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { artifactReloadUrl } from "~/lib/artifactLink";
+import {
+  FILE_SURFACE_SUBHEADER_CLASS,
+  FileSurfaceAction,
+  FileSurfaceFailure,
+  FileSurfaceLoading,
+} from "./fileSurfaceChrome";
 
 interface ArtifactPreviewPanelProps {
   readonly threadRef: ScopedThreadRef | null;
@@ -31,10 +38,12 @@ function PublishedMarkdown({
   url,
   documentUrl,
   threadRef,
+  onReload,
 }: {
   url: string;
   documentUrl: string;
   threadRef: ScopedThreadRef;
+  onReload: () => void;
 }) {
   const gt = useGT();
   const result = useAtomValue(
@@ -43,24 +52,16 @@ function PublishedMarkdown({
   if (result._tag === "Failure") {
     const error = Cause.squash(result.cause);
     return (
-      <div role="alert" className="p-6 text-sm text-muted-foreground">
-        <T>
-          <Var>{error instanceof Error ? error.message : gt("Could not load Markdown.")}</Var>{" "}
-          Reload or open externally.
-        </T>
-      </div>
+      <FileSurfaceFailure
+        message={error instanceof Error ? error.message : gt("Could not load Markdown.")}
+        onRetry={onReload}
+      />
     );
   }
   const value = AsyncResult.value(result);
-  if (value._tag === "None") {
-    return (
-      <div role="status" className="p-6 text-sm text-muted-foreground">
-        <T>Loading Markdown…</T>
-      </div>
-    );
-  }
+  if (value._tag === "None") return <FileSurfaceLoading />;
   return (
-    <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-auto">
+    <ScrollArea className="min-h-0 flex-1">
       <ChatMarkdown
         text={value.value.contents}
         cwd={undefined}
@@ -68,7 +69,7 @@ function PublishedMarkdown({
         documentUrl={documentUrl}
         className="mx-auto max-w-4xl px-6 py-5"
       />
-    </div>
+    </ScrollArea>
   );
 }
 
@@ -78,35 +79,43 @@ export default function ArtifactPreviewPanel(props: ArtifactPreviewPanelProps) {
   const [reloadRevision, setReloadRevision] = useState<number | null>(null);
   const pdf = isPdfUrl(props.url);
   const src = reloadRevision === null ? props.url : artifactReloadUrl(props.url, reloadRevision);
+  const reload = () => setReloadRevision(Date.now());
+  const openExternallyLabel = gt("Open artifact externally");
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background" data-artifact-preview>
-      <div className="flex min-h-10 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-artifact-preview>
+      <div className={FILE_SURFACE_SUBHEADER_CLASS} data-surface-subheader>
         <Tooltip>
-          <TooltipTrigger render={<div className="min-w-0 flex-1 leading-tight" />}>
-            <div className="truncate text-xs font-medium text-foreground">{props.title}</div>
-            <div className="truncate text-3xs text-muted-foreground">{props.url}</div>
+          <TooltipTrigger render={<div className="flex min-w-0 flex-1 items-center text-meta" />}>
+            <span className="shrink-0 px-0.5 text-muted-foreground">{new URL(props.url).host}</span>
+            <ChevronRightIcon aria-hidden className="mx-1 size-3.5 shrink-0 text-dim-foreground" />
+            <span aria-current="page" className="min-w-0 truncate px-0.5 text-foreground">
+              {props.title}
+            </span>
           </TooltipTrigger>
-          <TooltipPopup className="max-w-sm break-all">{props.url}</TooltipPopup>
+          <TooltipPopup side="top" className="max-w-sm break-all">
+            {props.url}
+          </TooltipPopup>
         </Tooltip>
-        <Button
-          aria-label={gt("Reload artifact")}
-          onClick={() => setReloadRevision(Date.now())}
-          size="compact"
-          variant="ghost-muted"
-        >
-          <RefreshCwIcon aria-hidden className="size-3" />
-          <T context="verb">Reload</T>
-        </Button>
-        <Button
-          aria-label={gt("Open artifact externally")}
-          render={<a href={props.url} rel="noopener noreferrer" target="_blank" />}
-          size="compact"
-          variant="ghost-muted"
-        >
-          <ExternalLinkIcon aria-hidden className="size-3" />
-          <T>Open externally</T>
-        </Button>
+        <FileSurfaceAction label={gt("Reload artifact")} onPress={reload}>
+          <RefreshCwIcon className="size-3.5" />
+        </FileSurfaceAction>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                aria-label={openExternallyLabel}
+                className="shrink-0"
+                render={<a href={props.url} rel="noopener noreferrer" target="_blank" />}
+                size="icon-sm"
+                variant="ghost"
+              />
+            }
+          >
+            <ExternalLinkIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup>{openExternallyLabel}</TooltipPopup>
+        </Tooltip>
       </div>
       {isPublishedMarkdownUrl(props.url) && props.threadRef ? (
         <PublishedMarkdown
@@ -114,6 +123,7 @@ export default function ArtifactPreviewPanel(props: ArtifactPreviewPanelProps) {
           url={src}
           documentUrl={props.url}
           threadRef={props.threadRef}
+          onReload={reload}
         />
       ) : (
         /* The validated external origin needs module, fetch, and storage access. PDFs use the browser viewer. */

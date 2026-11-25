@@ -19,7 +19,15 @@ import type {
 } from "@t3tools/contracts";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import { surfaceTabTitle } from "../layout/surfaceTabLabels";
-import { FileDiff, Files, Globe2, MessagesSquare, Smartphone, TerminalSquare } from "lucide-react";
+import {
+  FileDiff,
+  Files,
+  FileText,
+  Globe2,
+  MessagesSquare,
+  Smartphone,
+  TerminalSquare,
+} from "lucide-react";
 
 import { AndroidIcon, AppleIcon } from "~/components/Icons";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
@@ -137,6 +145,10 @@ export function SurfaceIcon({
           theme={theme}
           className="size-3.5"
         />
+      );
+    case "artifact":
+      return (
+        <FileText className="size-3.5 shrink-0 group-data-[active-tab=true]/tab:text-foreground" />
       );
     case "terminal":
       return (

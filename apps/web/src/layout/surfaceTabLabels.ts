@@ -35,6 +35,8 @@ export function surfaceTabTitle(
       return surface.relativePath.slice(
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
       );
+    case "artifact":
+      return surface.title;
     case "terminal":
       return terminalTabTitle(surface.activeTerminalId, terminalLabel, resolve);
     case "pull-request":
