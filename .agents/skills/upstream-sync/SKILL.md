@@ -11,7 +11,7 @@ The goal is a merge where nothing is silently lost. Every upstream change surviv
 
 ## Shape of a sync
 
-- Start from the remotes, not a local `main`: fetch `origin` and `upstream`. If `main@origin` already contains `main@upstream`, there is nothing to sync. If an open `sync/upstream-*` PR exists, resume it instead of starting a second one.
+- Start from the remotes, not a local `main`: fetch `origin` and `upstream`. If `main@origin` already contains `main@upstream`, there is nothing to merge: skip to "After the sync", which can still have work. If an open `sync/upstream-*` PR exists, resume it instead of starting a second one.
 - Work in a fresh `jj workspace` next to the main checkout: `jj new main@origin main@upstream`, with `--config ui.conflict-marker-style=git` so the markers carry the base. Resolve manifests first, then regenerate the lockfile with `pnpm run fork:lockfile`.
 - Hand large conflict sets to subagents by area, balanced by conflict lines, not file counts. [brief.md](brief.md) is the brief that worked. The lead keeps the cross-cutting files: manifests, `Migrations.ts`, root configs, `flake.nix`.
 - After the resolvers finish, typecheck every touched package and send each agent the errors in its area. It keeps its context, so it fixes faster than a fresh one.
@@ -41,4 +41,4 @@ The goal is a merge where nothing is silently lost. Every upstream change surviv
 
 ## After the sync
 
-If `patches/redesign-integration.md` exists, refresh the `redesign` bookmark it describes in the same run. The fork owns that bookmark and rewrites it on every refresh. Rebase its merge commit onto the new `main@origin` and Maria's current stack head, as the doc says; jj carries the earlier resolutions over. Run the same proof on it, and push it only once the proof passes. Then follow Calder's `push to redesign` run until `calder projects` shows the pushed commit deployed.
+If `patches/redesign-integration.md` exists, refresh the `redesign` bookmark it describes whenever `redesign@origin` lacks `main@origin` or Maria's current stack head, even in a run that merged nothing. Fork features merged to `main` reach production only through this refresh. The fork owns that bookmark and rewrites it on every refresh. Rebase its merge commit onto the new `main@origin` and Maria's current stack head, as the doc says; jj carries the earlier resolutions over. Run the same proof on it, and push it only once the proof passes. While `.calder/ci.ts` names `redesign` as `defaultBranch`, follow Calder's `push to redesign` run until `calder projects` shows the pushed commit deployed.
