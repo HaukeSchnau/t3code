@@ -13,6 +13,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { environmentShell } from "~/state/shell";
 import { Button } from "../ui/button";
+import { ComposerBanner } from "./ComposerBanner";
 import {
   deriveTrainNetworkExperience,
   NETWORK_DEGRADATION_HOLD_MS,
@@ -126,65 +127,61 @@ export function TrainNetworkStatus({
       displayedView.state === "offline" ||
       displayedView.state === "connection-failed");
 
+  const reconnectActions =
+    canReconnect && (onReconnect !== undefined || onOpenConnections !== undefined);
+
   return (
-    <div
+    <ComposerBanner.Root
       data-train-network-status={displayedView.kind}
-      className={cn(
-        "mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2.5 rounded-xl border px-3 py-2 text-xs shadow-xs sm:flex-nowrap",
-        "transition-[opacity,background-color,border-color] duration-150 motion-reduce:transition-none",
-        recovered
-          ? "border-success/25 bg-success/8 text-success"
-          : "border-warning/30 bg-warning/8 text-foreground",
-        className,
-      )}
+      variant={recovered ? "success" : "warning"}
+      detached
+      density="comfortable"
+      className={cn("mb-2", className)}
     >
-      {recovered ? (
-        <CheckCircle2Icon className="size-4 shrink-0" aria-hidden="true" />
-      ) : displayedView.state === "offline" || displayedView.state === "connection-failed" ? (
-        <WifiOffIcon className="size-4 shrink-0 text-warning" aria-hidden="true" />
-      ) : (
-        <LoaderCircleIcon
-          className="size-4 shrink-0 animate-spin text-warning motion-reduce:animate-none"
-          aria-hidden="true"
-        />
-      )}
-      <div className="min-w-0 flex-1 basis-[calc(100%-2rem)] sm:flex sm:basis-auto sm:items-baseline sm:gap-2">
-        <span className="font-medium">{displayedView.title}</span>
-        <span className="block truncate text-muted-foreground sm:inline">
-          {displayedView.detail}
-        </span>
-      </div>
-      {displayedView.attempt !== null || retryText !== null ? (
-        <span
-          className="ml-6 shrink-0 tabular-nums text-muted-foreground sm:ml-0"
-          aria-hidden="true"
-        >
-          {displayedView.attempt !== null ? (
-            <T>
-              Attempt <Var>{displayedView.attempt}</Var>
-            </T>
-          ) : null}
-          {displayedView.attempt !== null && retryText !== null ? " · " : null}
-          {retryText}
-        </span>
-      ) : null}
-      {canReconnect ? (
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          {onReconnect ? (
-            <Button type="button" size="xs" onClick={onReconnect}>
-              <T>Reconnect</T>
-            </Button>
-          ) : null}
-          {onOpenConnections ? (
-            <Button type="button" size="xs" variant="ghost" onClick={onOpenConnections}>
-              <T>Connections</T>
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+      <ComposerBanner.Row layout="wrap-actions">
+        <ComposerBanner.Icon>
+          {recovered ? (
+            <CheckCircle2Icon />
+          ) : displayedView.state === "offline" || displayedView.state === "connection-failed" ? (
+            <WifiOffIcon />
+          ) : (
+            <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+          )}
+        </ComposerBanner.Icon>
+        <ComposerBanner.Content className="items-baseline whitespace-nowrap">
+          <span className="min-w-0 truncate text-foreground">{displayedView.title}</span>
+          <span className="w-0 min-w-0 grow truncate text-muted-foreground @max-[400px]:sr-only">
+            {displayedView.detail}
+          </span>
+        </ComposerBanner.Content>
+        {displayedView.attempt !== null || retryText !== null || reconnectActions ? (
+          <ComposerBanner.Actions>
+            {displayedView.attempt !== null ? (
+              <ComposerBanner.Count aria-hidden="true">
+                <T>
+                  Attempt <Var>{displayedView.attempt}</Var>
+                </T>
+              </ComposerBanner.Count>
+            ) : null}
+            {retryText !== null ? (
+              <ComposerBanner.Count aria-hidden="true">{retryText}</ComposerBanner.Count>
+            ) : null}
+            {canReconnect && onReconnect ? (
+              <Button type="button" size="xs" onClick={onReconnect}>
+                <T>Reconnect</T>
+              </Button>
+            ) : null}
+            {canReconnect && onOpenConnections ? (
+              <Button type="button" size="xs" variant="ghost" onClick={onOpenConnections}>
+                <T>Connections</T>
+              </Button>
+            ) : null}
+          </ComposerBanner.Actions>
+        ) : null}
+      </ComposerBanner.Row>
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {displayedView.announcement}
       </span>
-    </div>
+    </ComposerBanner.Root>
   );
 }
