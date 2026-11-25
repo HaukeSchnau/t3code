@@ -245,7 +245,7 @@ export function TriageCard(props: {
                     key={option.value ?? option.label}
                     className="w-full justify-start"
                     size="multiline"
-                    variant="outline"
+                    variant="secondary"
                     disabled={sending}
                     onClick={() => pickOption(option.value ?? option.label)}
                   >

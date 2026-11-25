@@ -264,7 +264,7 @@ function PagesChunk(props: {
         <PagesChunk {...props} cursor={nextCursor} remaining={props.remaining - 1} />
       ) : (
         <div className="px-3 pt-2">
-          <Button size="sm" variant="outline" onClick={props.onMore}>
+          <Button size="sm" variant="secondary" onClick={props.onMore}>
             <T>Load more</T>
           </Button>
         </div>

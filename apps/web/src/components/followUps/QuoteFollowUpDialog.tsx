@@ -152,7 +152,7 @@ export function QuoteFollowUpDialog(props: {
             </div>
           </DialogPanel>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={props.onClose}>
+            <Button type="button" variant="secondary" onClick={props.onClose}>
               <T>Cancel</T>
             </Button>
             <Button type="submit" disabled={!canSave || saving || title.trim() === ""}>

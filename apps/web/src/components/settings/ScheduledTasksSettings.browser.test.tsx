@@ -285,7 +285,8 @@ describe("ScheduledTasksSettings", () => {
       await page.getByRole("button", { name: "GPT-5.4", exact: true }).click();
       await page.getByRole("option", { name: /GPT-5.4/ }).click();
       await expect.element(page.getByRole("button", { name: "High", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: editing ? "Save task" : "Create task" }).click();
+      // The button's name also carries its shortcut hint.
+      await page.getByRole("button", { name: editing ? /^Save task/ : /^Create task/ }).click();
       await vi.waitFor(() =>
         expect(state.upsert).toHaveBeenLastCalledWith(expect.anything(), {
           environmentId,
@@ -302,7 +303,7 @@ describe("ScheduledTasksSettings", () => {
     await page.getByRole("button", { name: "High", exact: true }).click();
     await page.getByRole("menuitemradio", { name: /^Low/ }).click();
     await expect.element(page.getByRole("button", { name: "Low", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Save task" }).click();
+    await page.getByRole("button", { name: /^Save task/ }).click();
     await vi.waitFor(() =>
       expect(state.upsert).toHaveBeenLastCalledWith(expect.anything(), {
         environmentId,
@@ -320,7 +321,7 @@ describe("ScheduledTasksSettings", () => {
     await page.getByRole("button", { name: "GPT-5.4", exact: true }).click();
     await page.getByRole("option", { name: /Plain model/ }).click();
     expect(page.getByRole("button", { name: "High", exact: true }).query()).toBeNull();
-    await page.getByRole("button", { name: "Save task" }).click();
+    await page.getByRole("button", { name: /^Save task/ }).click();
     await vi.waitFor(() =>
       expect(state.upsert).toHaveBeenLastCalledWith(expect.anything(), {
         environmentId,

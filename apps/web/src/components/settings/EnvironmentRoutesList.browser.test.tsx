@@ -8,7 +8,7 @@ import {
 import { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 vi.mock(import("~/state/session"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -107,7 +107,8 @@ it("does not offer to remove the only route a found-automatically route depends 
     allowInsecure: true,
   })!;
   await using screen = await render(routesList(learned));
-  await expect.element(screen.getByText(/found automatically/)).toBeVisible();
+  await userEvent.hover(screen.getByText(/desk\.tail1234\.ts\.net/));
+  await expect.element(page.getByText("Found automatically")).toBeVisible();
 
   expect(screen.getByRole("button", { name: "Remove LAN route" }).elements()).toHaveLength(0);
 });

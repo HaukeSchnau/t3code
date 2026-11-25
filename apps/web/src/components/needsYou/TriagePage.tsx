@@ -145,7 +145,7 @@ export function TriagePage() {
                 <T>Threads that wait for an answer, a decision or a review show up here.</T>
               </EmptyDescription>
             </EmptyHeader>
-            <DialogPrimitive.Close render={<Button variant="outline" />}>
+            <DialogPrimitive.Close render={<Button variant="secondary" />}>
               <T>Close</T>
             </DialogPrimitive.Close>
           </Empty>

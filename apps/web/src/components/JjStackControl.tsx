@@ -138,7 +138,7 @@ export function JjStackControl({
         >
           {isPanel ? (
             <PopoverTrigger
-              render={<ThreadDetailsControl part="select" />}
+              render={<ThreadDetailsControl part="row" />}
               className="min-w-0 max-w-full"
             >
               <LayersIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
@@ -360,12 +360,12 @@ function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
       )}
       <div className="flex flex-wrap gap-1 border-t px-1 pt-2">
         {props.onOpenChanges ? (
-          <Button size="xs" variant="outline" onClick={props.onOpenChanges}>
+          <Button size="xs" variant="secondary" onClick={props.onOpenChanges}>
             <T>View changes</T>
           </Button>
         ) : null}
         {props.canAssign ? (
-          <Button size="xs" variant="outline" onClick={() => props.onDialog({ kind: "work" })}>
+          <Button size="xs" variant="secondary" onClick={() => props.onDialog({ kind: "work" })}>
             <T>Work in other repositories</T>
           </Button>
         ) : null}
@@ -373,7 +373,7 @@ function JjStackPopoverBody(props: JjStackPopoverBodyProps) {
           <Button
             key={label}
             size="xs"
-            variant="outline"
+            variant="secondary"
             disabled={pending || disabled}
             onClick={() => props.onRun(action)}
           >
@@ -485,7 +485,7 @@ function JjStackRowItem({
             {canAssign ? (
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 className="self-start"
                 disabled={pending}
                 onClick={() => onAssign(view.unattributed)}
@@ -498,7 +498,7 @@ function JjStackRowItem({
         {row.workingCopy && !row.empty ? (
           <Button
             size="xs"
-            variant="outline"
+            variant="secondary"
             className="self-start"
             disabled={pending}
             onClick={() => onDialog({ kind: "commit" })}
@@ -604,7 +604,7 @@ function JjDialogPopup({
                   <code className="min-w-0 flex-1 truncate text-sm">{bookmark}</code>
                   <Button
                     size="xs"
-                    variant="outline"
+                    variant="secondary"
                     disabled={value.length === 0 || value === bookmark}
                     onClick={() =>
                       onSubmit({
@@ -632,7 +632,7 @@ function JjDialogPopup({
           ) : null}
         </DialogPanel>
         <DialogFooter variant="bare">
-          <Button variant="outline" size="sm" onClick={onCancel}>
+          <Button variant="secondary" size="sm" onClick={onCancel}>
             <T>Cancel</T>
           </Button>
           <Button size="sm" disabled={value.length === 0} onClick={setBookmark}>
@@ -676,7 +676,7 @@ function JjDialogPopup({
         />
       </DialogPanel>
       <DialogFooter variant="bare">
-        <Button variant="outline" size="sm" onClick={onCancel}>
+        <Button variant="secondary" size="sm" onClick={onCancel}>
           <T>Cancel</T>
         </Button>
         <Button size="sm" onClick={() => onSubmit(copy.action)}>

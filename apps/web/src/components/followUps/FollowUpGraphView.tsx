@@ -133,7 +133,7 @@ function GraphControl(props: {
         render={
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="secondary"
             aria-label={props.label}
             onClick={props.onClick}
           />

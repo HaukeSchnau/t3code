@@ -105,6 +105,7 @@ describe("ThemeImportDialog", () => {
         onImportedMany={() => {}}
       />,
     );
+    await userEvent.click(page.getByRole("button", { name: "Search community themes" }));
     const search = page.getByRole("searchbox", { name: "Search Open VSX themes" });
     await expect.element(search).toHaveAttribute("type", "text");
     await userEvent.fill(search, "nord");
