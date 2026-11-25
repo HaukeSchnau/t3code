@@ -99,9 +99,10 @@ export function continuePeerFanOut(step: PeerFanOut.PeerSignIn): void {
 
 /**
  * Adds the environments the connected ones link to, by signing in to each without a click while
- * the provider recognizes this device. Each step leaves the page and returns to `/pair`.
+ * the provider recognizes this device. Each step leaves the page and returns to `/pair`. It waits
+ * while `enabled` is false, such as during onboarding, which a step would leave.
  */
-export function usePeerFanOut(): void {
+export function usePeerFanOut(enabled: boolean): void {
   const connectedKey = useConnectedEnvironmentIds().join(",");
   const find = useAtomCommand(findPeerSignIns, { reportFailure: false });
   const fanOut = useEffectEvent((connected: ReadonlyArray<EnvironmentId>) => {
@@ -123,7 +124,10 @@ export function usePeerFanOut(): void {
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the connected environments for their links whenever another one connects
   useEffect(
-    () => fanOut(connectedKey === "" ? [] : (connectedKey.split(",") as Array<EnvironmentId>)),
-    [connectedKey],
+    () =>
+      enabled
+        ? fanOut(connectedKey === "" ? [] : (connectedKey.split(",") as Array<EnvironmentId>))
+        : undefined,
+    [connectedKey, enabled],
   );
 }

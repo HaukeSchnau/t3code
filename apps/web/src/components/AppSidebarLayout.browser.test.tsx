@@ -19,6 +19,9 @@ vi.mock(import("./Sidebar"), () => ({ default: (() => null) as never }));
 vi.mock(import("../layout/WorkspacePlane"), () => ({
   WorkspacePlane: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
+// The session services the shell starts (message delivery, linked sign-ins) are outside it too.
+vi.mock(import("./chat/DurableOutboxStrip"), () => ({ DurableOutboxDelivery: () => null }));
+vi.mock(import("../peerFanOut"), () => ({ usePeerFanOut: () => undefined }));
 
 import { AppSidebarLayout } from "./AppSidebarLayout";
 

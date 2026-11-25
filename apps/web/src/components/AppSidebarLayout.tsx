@@ -606,7 +606,7 @@ export function AppSidebarLayout({
   showSidebar?: boolean;
 }) {
   const gt = useGT();
-  usePeerFanOut();
+  usePeerFanOut(showSidebar);
   const sidebarArea = workspaceAreaProps("sidebar", 0, gt("Threads"));
   const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
     observedKey: null,
@@ -781,7 +781,7 @@ export function AppSidebarLayout({
               </Sidebar>
             </>
           ) : null}
-          <DurableOutboxDelivery />
+          {showSidebar ? <DurableOutboxDelivery /> : null}
           <WorkspacePlane>{children}</WorkspacePlane>
           <BackgroundThreadAnnouncer />
           {isElectron ? (

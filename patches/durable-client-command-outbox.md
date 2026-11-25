@@ -73,6 +73,8 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
 - The first message of a draft stores its launch and marks the draft as promoting. The draft then
   survives reloads, and new-thread actions open a fresh draft. Later sends from that draft join the
   thread as follow-ups. Editing the launch message reopens the draft.
+- `components/chat/DurableOutboxStrip.tsx` lists the thread's waiting entries above the composer, one
+  `ComposerBanner` line each in a detached card.
 - Sends that are not replayable keep their online requirement: starts with several models, edits
   of a queued run, answers to pending questions, side chats (`/side`), compact, and resume.
 
@@ -102,7 +104,7 @@ small delivery state machine in `packages/client-runtime/src/state/commandOutbox
 - `apps/web/src/components/AppSidebarLayout.tsx`: mounts `DurableOutboxDelivery`, which starts
   delivery for the session and shows a toast with an Open action when a message is rejected. It
   sits in the app shell because workspace panes replace the chat route's outlet while a thread is
-  open.
+  open, and starts only once the shell leaves `/welcome`.
 - `packages/client-runtime/package.json`: the `./state/command-outbox` export.
 
 ## Known limits

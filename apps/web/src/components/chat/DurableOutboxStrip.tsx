@@ -25,6 +25,8 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import { cn, randomUUID } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { ComposerBanner } from "./ComposerBanner";
+import { NoticeText } from "./ComposerBannerStack";
 import { presentDurableOutboxEntries, retryCountdownText } from "./durableOutboxPresentation";
 
 /** Delivers saved messages for the whole session and reports rejections wherever the user is. */
@@ -102,98 +104,109 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   };
 
   return (
-    <div
+    <ComposerBanner.Surface
+      detached
       data-durable-outbox-strip="true"
       aria-label={gt("Messages waiting to send ({count})", { count: views.length })}
-      className={cn(
-        "mx-auto mb-2 max-h-48 max-w-3xl space-y-1 overflow-y-auto rounded-xl border border-info/25 bg-info/6 px-3 py-2 text-xs shadow-xs",
-        className,
-      )}
+      className={cn("mb-2", className)}
     >
-      {views.map((view) => {
-        const { entry } = view;
-        const busy = busyId === entry.id;
-        const countdown = retryCountdownText(view.retryAt, nowMs, messages);
-        return (
-          <div
-            key={entry.id}
-            data-outbox-state={entry.state._tag}
-            className="flex min-w-0 items-center gap-2.5"
-          >
-            {view.rejected ? (
-              <CircleAlertIcon className="size-4 shrink-0 text-destructive" aria-hidden="true" />
-            ) : (
-              <CloudUploadIcon className="size-4 shrink-0 text-info" aria-hidden="true" />
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-medium text-foreground">{view.preview}</div>
-              <div className={view.rejected ? "text-destructive" : "text-muted-foreground"}>
-                {view.status}
-                {countdown === null ? null : ` ${countdown}.`}
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              {view.retryLabel === null ? null : (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant={view.rejected ? "secondary" : "ghost"}
-                  disabled={busy}
-                  onClick={() =>
-                    void run(entry.id, () =>
-                      durableCommandOutbox().retry(entry.id, CommandId.make(randomUUID())),
-                    )
-                  }
-                >
-                  <RotateCwIcon className="size-3" aria-hidden="true" />
-                  {view.retryLabel}
-                </Button>
-              )}
-              {view.canTakeBack ? (
-                <>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(entry.id, async () => {
-                        const removed = await durableCommandOutbox().discard(entry.id);
-                        if (removed) onRestore(restoredComposerContent(removed));
-                      })
-                    }
+      <ComposerBanner.Scroll>
+        {views.map((view) => {
+          const { entry } = view;
+          const busy = busyId === entry.id;
+          const countdown = retryCountdownText(view.retryAt, nowMs, messages);
+          return (
+            <ComposerBanner.Root
+              key={entry.id}
+              data-outbox-state={entry.state._tag}
+              variant={view.rejected ? "error" : "info"}
+            >
+              <ComposerBanner.Row layout="wrap-actions">
+                <ComposerBanner.Icon>
+                  {view.rejected ? <CircleAlertIcon /> : <CloudUploadIcon />}
+                </ComposerBanner.Icon>
+                <ComposerBanner.Content className="items-baseline whitespace-nowrap">
+                  <NoticeText
+                    detailsLabel={gt("Show the saved message")}
+                    className="min-w-0 truncate text-foreground"
                   >
-                    <PencilIcon className="size-3" aria-hidden="true" />
-                    <T context="verb">Edit</T>
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label={gt("Discard saved message")}
-                    disabled={busy}
-                    onClick={() =>
-                      void run(entry.id, async () => {
-                        await durableCommandOutbox().discard(entry.id);
-                      })
-                    }
+                    {view.preview}
+                  </NoticeText>
+                  <NoticeText
+                    detailsLabel={gt("Show why it is waiting")}
+                    className={cn(
+                      "w-0 min-w-0 grow truncate @max-[400px]:sr-only",
+                      view.rejected ? "text-destructive-foreground" : "text-muted-foreground",
+                    )}
                   >
-                    <Trash2Icon className="size-3.5" aria-hidden="true" />
-                  </Button>
-                </>
-              ) : null}
-            </div>
-          </div>
-        );
-      })}
+                    {view.status}
+                    {countdown === null ? null : ` ${countdown}.`}
+                  </NoticeText>
+                </ComposerBanner.Content>
+                <ComposerBanner.Actions>
+                  {view.retryLabel === null ? null : (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={view.rejected ? "secondary" : "ghost"}
+                      disabled={busy}
+                      onClick={() =>
+                        void run(entry.id, () =>
+                          durableCommandOutbox().retry(entry.id, CommandId.make(randomUUID())),
+                        )
+                      }
+                    >
+                      <RotateCwIcon aria-hidden="true" />
+                      {view.retryLabel}
+                    </Button>
+                  )}
+                  {view.canTakeBack ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(entry.id, async () => {
+                            const removed = await durableCommandOutbox().discard(entry.id);
+                            if (removed) onRestore(restoredComposerContent(removed));
+                          })
+                        }
+                      >
+                        <PencilIcon aria-hidden="true" />
+                        <T context="verb">Edit</T>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label={gt("Discard saved message")}
+                        disabled={busy}
+                        onClick={() =>
+                          void run(entry.id, async () => {
+                            await durableCommandOutbox().discard(entry.id);
+                          })
+                        }
+                      >
+                        <Trash2Icon aria-hidden="true" />
+                      </Button>
+                    </>
+                  ) : null}
+                </ComposerBanner.Actions>
+              </ComposerBanner.Row>
+            </ComposerBanner.Root>
+          );
+        })}
+      </ComposerBanner.Scroll>
       {actionError ? (
-        <p className="text-destructive" role="alert">
+        <p className="px-3.5 pb-2.5 text-meta text-destructive-foreground" role="alert">
           {actionError}
         </p>
       ) : null}
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {views.map((view) => `${view.preview}: ${view.status}`).join(" ")}
       </span>
-    </div>
+    </ComposerBanner.Surface>
   );
 });
