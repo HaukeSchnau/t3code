@@ -1,4 +1,11 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, WorkflowIcon } from "lucide-react";
+import {
+  AppWindowIcon,
+  ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
+  ListTodoIcon,
+  SettingsIcon,
+  WorkflowIcon,
+} from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
@@ -282,6 +289,18 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                   onPointerDown={(event) => beginLayoutContentDrag(event, { kind: "workflows" })}
                 />
               ) : null}
+              <SidebarUtilityItem
+                icon={<ListTodoIcon className="size-4" />}
+                label={gt("Follow-ups")}
+                onClick={handleFollowUpsClick}
+              />
+              <SidebarUtilityItem
+                icon={<AppWindowIcon className="size-4" />}
+                label={gt("Pages", {
+                  $context: "sidebar link to the list of pages agents published",
+                })}
+                onClick={handlePagesClick}
+              />
               <SidebarUtilityItem
                 icon={<ChartNoAxesColumnIcon className="size-4" />}
                 label={gt("Usage")}

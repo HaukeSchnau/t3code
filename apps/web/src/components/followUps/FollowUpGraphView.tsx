@@ -12,6 +12,8 @@ import { cn } from "~/lib/utils";
 import { useQuietThreadShells } from "~/state/entities";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Button } from "../ui/button";
+import { FloatingToolbar } from "../ui/floating-toolbar";
+import { Separator } from "../ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { buildFollowUpGraph, type FollowUpGraph, type FollowUpGraphNode } from "./followUps.logic";
 
@@ -131,12 +133,7 @@ function GraphControl(props: {
     <Tooltip>
       <TooltipTrigger
         render={
-          <Button
-            size="icon-xs"
-            variant="secondary"
-            aria-label={props.label}
-            onClick={props.onClick}
-          />
+          <Button size="icon-xs" variant="ghost" aria-label={props.label} onClick={props.onClick} />
         }
       >
         {props.children}
@@ -146,10 +143,13 @@ function GraphControl(props: {
   );
 }
 
-function LegendSwatch(props: { readonly className: string; readonly label: string }) {
+/** A legend entry drawn with the same SVG mark as the graph's node. */
+function LegendSwatch(props: { readonly mark: ReactNode; readonly label: string }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span aria-hidden className={cn("size-2.5 shrink-0", props.className)} />
+      <svg aria-hidden viewBox="-5 -5 10 10" className="size-2.5 shrink-0 overflow-visible">
+        {props.mark}
+      </svg>
       {props.label}
     </span>
   );
@@ -384,7 +384,7 @@ export function FollowUpGraphView(props: {
                   strokeWidth={3}
                   className={cn(
                     LABEL_SCALE_CLASS,
-                    "pointer-events-none origin-center fill-muted-foreground stroke-background text-3xs [paint-order:stroke]",
+                    "pointer-events-none origin-center fill-muted-foreground stroke-background text-micro [paint-order:stroke]",
                     labelVisibility,
                   )}
                 >
@@ -469,10 +469,10 @@ export function FollowUpGraphView(props: {
                     LABEL_SCALE_CLASS,
                     "origin-left stroke-background [paint-order:stroke]",
                     node.kind === "thread"
-                      ? "fill-muted-foreground text-3xs"
+                      ? "fill-muted-foreground text-micro"
                       : isFollowUpClosed(node.followUp)
-                        ? "fill-muted-foreground text-2xs"
-                        : "fill-foreground text-2xs font-medium",
+                        ? "fill-muted-foreground text-caption"
+                        : "fill-foreground text-caption",
                     labelVisibility,
                   )}
                 >
@@ -484,40 +484,58 @@ export function FollowUpGraphView(props: {
         </g>
       </svg>
       <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-background/85 px-2 py-1 text-xs text-muted-foreground">
-          <LegendSwatch
-            className="rounded-full bg-primary"
-            label={gt("Open", { $context: "follow-up status" })}
-          />
-          <LegendSwatch className="rounded-full bg-warning" label={gt("Back now")} />
-          <LegendSwatch className="rounded-full border-2 border-primary" label={gt("Picked up")} />
-          {props.showClosed ? (
-            <>
-              <LegendSwatch
-                className="rounded-full bg-success/60"
-                label={gt("Done", { $context: "follow-up status" })}
-              />
-              <LegendSwatch
-                className="rounded-full bg-muted-foreground/45"
-                label={gt("Dropped", { $context: "follow-up status" })}
-              />
-            </>
-          ) : null}
-          <LegendSwatch
-            className="rounded-xs bg-muted-foreground/70"
-            label={gt("Thread", { $context: "noun" })}
-          />
-        </div>
-        <div className="pointer-events-auto flex shrink-0 gap-1">
-          <GraphControl label={gt("Zoom out")} onClick={() => zoomBy(1 / 1.4)}>
-            <MinusIcon />
-          </GraphControl>
-          <GraphControl label={gt("Zoom in")} onClick={() => zoomBy(1.4)}>
-            <PlusIcon />
-          </GraphControl>
-          <GraphControl label={gt("Fit to view")} onClick={fit}>
-            <MaximizeIcon />
-          </GraphControl>
+        <FloatingToolbar density="compact" className="min-w-0">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1.5 py-0.5 text-meta text-muted-foreground">
+            <LegendSwatch
+              mark={<circle r={5} className="fill-primary" />}
+              label={gt("Open", { $context: "follow-up status" })}
+            />
+            <LegendSwatch mark={<circle r={5} className="fill-warning" />} label={gt("Back now")} />
+            <LegendSwatch
+              mark={<circle r={4} strokeWidth={2} className="fill-background stroke-primary" />}
+              label={gt("Picked up")}
+            />
+            {props.showClosed ? (
+              <>
+                <LegendSwatch
+                  mark={<circle r={5} className="fill-success/60" />}
+                  label={gt("Done", { $context: "follow-up status" })}
+                />
+                <LegendSwatch
+                  mark={<circle r={5} className="fill-muted-foreground/45" />}
+                  label={gt("Dropped", { $context: "follow-up status" })}
+                />
+              </>
+            ) : null}
+            <LegendSwatch
+              mark={
+                <rect
+                  x={-5}
+                  y={-5}
+                  width={10}
+                  height={10}
+                  rx={1.5}
+                  className="fill-muted-foreground/70"
+                />
+              }
+              label={gt("Thread", { $context: "noun" })}
+            />
+          </span>
+        </FloatingToolbar>
+        <div className="pointer-events-auto flex shrink-0">
+          <FloatingToolbar density="compact">
+            <GraphControl label={gt("Zoom out")} onClick={() => zoomBy(1 / 1.4)}>
+              <MinusIcon />
+            </GraphControl>
+            <Separator orientation="vertical" className="h-3.5" />
+            <GraphControl label={gt("Zoom in")} onClick={() => zoomBy(1.4)}>
+              <PlusIcon />
+            </GraphControl>
+            <Separator orientation="vertical" className="h-3.5" />
+            <GraphControl label={gt("Fit to view")} onClick={fit}>
+              <MaximizeIcon />
+            </GraphControl>
+          </FloatingToolbar>
         </div>
       </div>
     </div>

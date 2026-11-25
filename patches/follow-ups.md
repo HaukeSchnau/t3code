@@ -75,7 +75,10 @@ that keeps a tidy list of open work with its origin.
 - `packages/provider-core/src/server/orchestrationInstructions.ts` (the loose-ends line).
 - Web: the inbox rows in `Sidebar.tsx`, `Sidebar.logic.ts` and `Sidebar.drag.ts` (a follow-up row
   kind that never drags but holds its place), the sidebar utility menu, `mainAppLocation.ts`, the
-  command palette, and `CustomSnoozeDialog.tsx` (optional wording for Later).
+  command palette, and `CustomSnoozeDialog.tsx` (optional wording for Later). The fork's own
+  components borrow upstream's design system pieces: the Follow-ups page rows use the pull request
+  page's row (`PullRequestRowLines`, `PULL_REQUEST_ROW_CLASS` and the `PAGE_ROW_*` classes), and the
+  inbox row is a `SidebarMenuButton`, so a sync that renames those breaks only fork files.
 - Links: `packages/shared/src/markdownHast.ts` (the scheme passes sanitizing),
   `mcp/McpInvocationContext.ts`, the web `ChatMarkdown.tsx` anchor and `ContextChip.tsx` (a
   `follow-up` kind and accent), and on mobile `ThreadFeed.tsx`, `enrichedLinkPresentation.ts`,
@@ -88,7 +91,8 @@ that keeps a tidy list of open work with its origin.
   `threadListV2.ts`; the `FollowUp` route in `Stack.tsx`.
 - `packages/client-runtime/src/state/threadInbox.ts` (`inboxReturnTime`, shared by threads and
   follow-ups in the inbox order).
-- Quote to follow-up: `AssistantSelectionToolbar.tsx` on web; on mobile `ThreadFeed.tsx`,
+- Quote to follow-up: on web `followUps/QuoteFollowUpAction.tsx`, which
+  `AssistantSelectionToolbar.tsx` mounts beside Copy; on mobile `ThreadFeed.tsx`,
   `EnrichedMarkdownText.tsx` and `SelectableMarkdownText.types.ts` pass a selection menu item to
   the markdown library.
 - Phone capture: the `FollowUpCapture` route in `Stack.tsx`, the app shortcuts (iOS now publishes
