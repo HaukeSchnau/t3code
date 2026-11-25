@@ -88,7 +88,9 @@ handling, because the maintainer and their agents work in jj repositories.
 - Provider adapters: complete file paths and command cwd, per-thread environment.
 - `textGeneration/commitMessageText.ts` holds helpers moved out of `GitManager`.
 - Contracts: `jj.ts`, `kind` and `jj` on the local status, `cwd` on `command_execution`, two
-  project settings. Web `JjStackControl`, mobile `JjStackSheet`.
+  project settings. Web `JjStackControl`, mobile `JjStackSheet`. Web
+  `settings/ProjectDefaultsSettings.tsx` mounts the trailer settings' rows
+  (`settings/JjCommitTrailerSettings.tsx`) after the source control defaults.
 - Web: `ChatView.tsx` reads `kind` from upstream's narrowed `chatGitStatusAtom` (`state/vcs.ts`),
   `BranchToolbar.tsx` takes `jjCwd` and shows `JjStackControl` in place of the composer's branch
   chip, and `chat/ThreadDetailsPanel.tsx` shows it in place of the details card's branch, git and

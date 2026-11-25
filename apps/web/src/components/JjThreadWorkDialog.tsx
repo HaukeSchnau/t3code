@@ -66,22 +66,24 @@ export function JjThreadWorkDialogPopup(props: {
       </DialogHeader>
       <DialogPanel>
         {state.kind === "loading" ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 text-body text-muted-foreground">
             <Spinner size="sm" tone="muted" /> <T>Searching repositories…</T>
           </div>
         ) : state.kind === "failed" ? (
-          <p className="text-sm text-destructive">{state.message}</p>
+          <p className="text-body text-destructive">{state.message}</p>
         ) : state.repositories.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             <T>No jj changes from this thread yet.</T>
           </p>
         ) : (
           <ul className="flex flex-col gap-3">
             {state.repositories.map((repository) => (
               <li key={repository.root} className="flex flex-col gap-1">
-                <code className="truncate text-xs text-muted-foreground">{repository.root}</code>
+                <code className="truncate font-mono text-meta text-muted-foreground">
+                  {repository.root}
+                </code>
                 {repository.changes.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-body text-muted-foreground">
                     <T>
                       No changes yet; the agent ran <Var>{repository.taggedOperations}</Var> jj
                       operations here.
@@ -91,10 +93,10 @@ export function JjThreadWorkDialogPopup(props: {
                   <ul className="flex flex-col">
                     {repository.changes.map((change) => (
                       <li key={change.changeId} className="flex items-center gap-2 py-0.5">
-                        <code className="shrink-0 text-xs text-muted-foreground">
+                        <code className="shrink-0 font-mono text-meta text-muted-foreground">
                           {change.changeId.slice(0, 8)}
                         </code>
-                        <span className="min-w-0 flex-1 truncate text-sm">
+                        <span className="min-w-0 flex-1 truncate text-body">
                           {change.description || gt("(no description)")}
                         </span>
                         {formatJjTurns(change.turns) ? (
