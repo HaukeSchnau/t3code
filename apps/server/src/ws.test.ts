@@ -2141,6 +2141,66 @@ it.effect("a git action that fails partway still refreshes the repository status
   ),
 );
 
+it.effect.each([
+  { scopes: [AuthOrchestrationReadScope], mayClone: false },
+  { scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope], mayClone: true },
+])("placement lets a session clone on a peer only with source-control write ($mayClone)", (case_) =>
+  Effect.gen(function* () {
+    const asked = yield* Queue.unbounded<boolean>();
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(Placement.Placement)({
+        preview: (request) => Queue.offer(asked, request.mayClone).pipe(Effect.as(null)),
+      }),
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+    );
+    const server = yield* RpcServer.makeNoSerialization(UpstreamWsRpcGroup, {
+      ...WS_RPC_SERVER_OPTIONS,
+      onFromServer: () => Effect.void,
+    }).pipe(
+      Effect.provide(
+        layerWsRpc(
+          {
+            sessionId: AuthSessionId.make("placement-test"),
+            subject: "placement-test",
+            method: "browser-session-cookie",
+            scopes: case_.scopes,
+          },
+          {},
+          yield* ServerBrowser.ServerBrowser,
+          () => Effect.void,
+          { secretReferences: true },
+        ).pipe(Layer.provide(services), Layer.merge(RpcAuthorization.layer(case_.scopes))),
+      ),
+    );
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("preview"),
+      tag: WS_METHODS.placementPreview,
+      payload: { projectId: ProjectId.make("project-1") },
+      headers: Headers.empty,
+    });
+    assert.equal(yield* Queue.take(asked), case_.mayClone);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.fresh(layerConfigSources),
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+        Layer.mock(ServerBrowser.ServerBrowser)({}),
+      ),
+    ),
+    Effect.scoped,
+  ),
+);
+
 it.effect("a publish whose push fails still refreshes the new remote", () =>
   Effect.gen(function* () {
     const refreshes = yield* Queue.unbounded<string>();

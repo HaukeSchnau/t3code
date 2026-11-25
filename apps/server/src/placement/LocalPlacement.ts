@@ -5,10 +5,12 @@
 import {
   CommandId,
   OrchestrationV2CreationSource,
-  type PlacementMatch,
   PlacementError,
+  type PlacementHydrateRequest,
+  type PlacementHydrateResult,
+  type PlacementMatch,
   type PlacementReport,
-  type ProjectId,
+  ProjectId,
   repositoryGroupingKeyOf,
   type ThreadId,
   type ThreadPlacement,
@@ -16,7 +18,9 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { freeAgentSlots } from "@t3tools/shared/placement";
 import * as Context from "effect/Context";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -31,6 +35,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -40,10 +45,34 @@ import { isolatedWorkspacesAvailable } from "../workspace/IsolatedWorkspaces.ts"
 
 /** How often a waiting thread checks for room. */
 const ROOM_CHECK_INTERVAL = "3 seconds";
+/** Where infra keeps every world's repositories (patches/worldfs.md). */
+const WORLDS_CACHE = "/var/lib/worlds";
+// A clone that borrows a mirror's objects takes seconds; a cold one of a large repository minutes.
+const CLONE_TIMEOUT = "15 minutes";
+const decodeCatalog = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      repos: Schema.Array(Schema.Struct({ name: Schema.String, mirror: Schema.String })),
+    }),
+  ),
+);
 
 interface Waiter {
   readonly since: number;
   readonly release: Deferred.Deferred<void>;
+}
+
+/** `relative` inside `root`, or nothing when it would leave it or touch `.git`. */
+export function pathInside(path: Path.Path, root: string, relative: string): string | undefined {
+  const target = path.resolve(root, relative);
+  const fromRoot = path.relative(root, target);
+  return fromRoot === "" ||
+    fromRoot === ".." ||
+    fromRoot.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(fromRoot) ||
+    fromRoot.split(path.sep)[0] === ".git"
+    ? undefined
+    : target;
 }
 
 export class LocalPlacement extends Context.Service<
@@ -64,6 +93,13 @@ export class LocalPlacement extends Context.Service<
     readonly awaitRoom: (threadId: ThreadId, since: number) => Effect.Effect<void>;
     /** Starts a waiting thread now, whatever the load. */
     readonly startNow: (threadId: ThreadId) => Effect.Effect<void, PlacementError>;
+    /**
+     * A project for a repository this host lacks: a clone that borrows objects
+     * from the worlds mirror when one has the repository, with the sender's ignored files.
+     */
+    readonly hydrate: (
+      input: PlacementHydrateRequest,
+    ) => Effect.Effect<PlacementHydrateResult, PlacementError>;
   }
 >()("t3/placement/LocalPlacement") {}
 
@@ -77,6 +113,9 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const platform = yield* HostProcess.Platform;
+  const fs = yield* FileSystem.FileSystem;
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const random = yield* SecureRandom.SecureRandom;
   const path = yield* Path.Path;
   const servesWorlds = isolatedWorkspacesAvailable(platform, yield* HostProcess.Environment);
   const waiters = yield* Ref.make<ReadonlyMap<ThreadId, Waiter>>(new Map());
@@ -89,7 +128,11 @@ const make = Effect.gen(function* () {
     WHERE status IN ('preparing', 'starting', 'running', 'waiting')
   `;
 
-  const projectFor = Effect.fn("LocalPlacement.projectFor")(function* (match: PlacementMatch) {
+  const projectFor = Effect.fn("LocalPlacement.projectFor")(function* (
+    match: PlacementMatch,
+    // Only the project at that folder, not the repository's root in its place.
+    exact = false,
+  ) {
     switch (match.kind) {
       case "scratch":
         return null;
@@ -120,7 +163,7 @@ const make = Effect.gen(function* () {
               path.relative(identity.rootPath ?? project.workspaceRoot, project.workspaceRoot),
             );
             if (folder === repositoryFolder(match.path ?? "")) return project.id;
-            if (folder === "" && root === null) root = project.id;
+            if (folder === "" && root === null && !exact) root = project.id;
           }
           cursor = page.nextCursor;
         }
@@ -157,6 +200,12 @@ const make = Effect.gen(function* () {
         launchesInFlight: preparing + (yield* Ref.get(admitted)),
         waiting: queued.size,
         worlds: servesWorlds ? Object.keys(settings.worlds) : [],
+        // The hydrate route refuses below full access, so a host under a lower ceiling says so.
+        // Cold clones and their env-file guards are built for POSIX hosts only.
+        canClone:
+          platform !== "win32" &&
+          (settingsService.managedPolicy?.limits?.maxRuntimeMode ?? "full-access") ===
+            "full-access",
         providers: (yield* providerRegistry.getProviders).flatMap((provider) =>
           provider.enabled && provider.installed ? [provider.instanceId] : [],
         ),
@@ -280,10 +329,395 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return LocalPlacement.of({ report, admit, awaitRoom, startNow });
+  const failure = (message: string) => new PlacementError({ message });
+
+  /** The worlds mirror of `repository`, whose objects a clone borrows so it takes seconds. */
+  const mirrorFor = Effect.fn("LocalPlacement.mirrorFor")(function* (repository: string) {
+    const worlds = yield* fs.readDirectory(WORLDS_CACHE).pipe(Effect.orElseSucceed(() => []));
+    for (const world of worlds) {
+      const catalog = Option.getOrUndefined(
+        decodeCatalog(
+          yield* fs
+            .readFileString(path.join(WORLDS_CACHE, world, "catalog.json"))
+            .pipe(Effect.orElseSucceed(() => "")),
+        ),
+      );
+      const found = catalog?.repos.find(
+        (repo) => repo.name.toLowerCase() === repository.toLowerCase(),
+      );
+      if (
+        found !== undefined &&
+        (yield* fs.exists(found.mirror).pipe(Effect.orElseSucceed(() => false)))
+      ) {
+        return found.mirror;
+      }
+    }
+    return undefined;
+  });
+
+  const inside = (root: string, relative: string) => pathInside(path, root, relative);
+
+  // One clone at a time: two launches for one repository must not clone it twice.
+  const cloning = yield* Semaphore.make(1);
+
+  const hydrate: LocalPlacement["Service"]["hydrate"] = Effect.fn("LocalPlacement.hydrate")(
+    function* (input) {
+      if (platform === "win32") {
+        return yield* failure("This machine does not clone repositories for placement.");
+      }
+      return yield* cloning.withPermits(1)(
+        Effect.gen(function* () {
+          const existing = yield* projectFor(
+            { kind: "repo", repository: input.repository, path: input.path },
+            true,
+          ).pipe(Effect.orElseSucceed(() => null));
+          if (existing !== null) return { projectId: existing };
+          const segments = input.repository
+            .split("/")
+            .filter((segment) => segment !== "" && segment !== "." && segment !== "..");
+          const repoRoot = path.join(config.baseDir, "placement", "repos", ...segments);
+          const workspaceRoot = input.path === "" ? repoRoot : inside(repoRoot, input.path);
+          if (workspaceRoot === undefined)
+            return yield* failure("The project path leaves its repository.");
+          const git = (args: ReadonlyArray<string>) =>
+            processRunner
+              .run({
+                command: "git",
+                args,
+                env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+                timeout: CLONE_TIMEOUT,
+                timeoutBehavior: "timedOutResult",
+              })
+              .pipe(
+                Effect.mapError(() => failure(`Could not run git for ${input.repository}.`)),
+                Effect.flatMap((result) =>
+                  result.timedOut || result.code !== 0
+                    ? // Git's output names this machine's folders, so it stays in the log.
+                      Effect.logWarning("Placement's git failed", {
+                        repository: input.repository,
+                        command: args[0] === "-C" ? args[2] : args[0],
+                        code: result.code,
+                        timedOut: result.timedOut,
+                      }).pipe(
+                        Effect.andThen(Effect.fail(failure(`Cloning ${input.repository} failed.`))),
+                      )
+                    : Effect.succeed(result.stdout.trim()),
+                ),
+              );
+          const cloned = yield* fs.exists(repoRoot).pipe(Effect.orElseSucceed(() => false));
+          if (cloned) {
+            // Only a checkout of this repository at exactly this folder is reused.
+            const realRepoRoot = yield* fs
+              .realPath(repoRoot)
+              .pipe(Effect.mapError(() => failure("Could not read the clone's folder.")));
+            const checkout = yield* Effect.all([
+              git(["-C", repoRoot, "rev-parse", "--show-toplevel"]),
+              // As configured: `remote get-url` applies this machine's `insteadOf` rewrites. Git
+              // fetches from the first of several, so only a single one is trusted.
+              git(["-C", repoRoot, "config", "--null", "--get-all", "remote.origin.url"]),
+            ]).pipe(Effect.option);
+            // A linked worktree's `.git` is a file pointing elsewhere, and a symlinked one leads
+            // elsewhere too; rules and copies would land there.
+            const dotGit = path.join(repoRoot, ".git");
+            const gitDir = yield* fs.stat(dotGit).pipe(Effect.option);
+            const gitDirIsLink = yield* fs.readLink(dotGit).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            );
+            if (
+              Option.isNone(gitDir) ||
+              gitDir.value.type !== "Directory" ||
+              gitDirIsLink ||
+              Option.isNone(checkout) ||
+              checkout.value[0] !== realRepoRoot ||
+              // NUL-terminated, so an empty or second URL cannot hide in trimmed whitespace.
+              checkout.value[1] !== `${input.remoteUrl}\0`
+            ) {
+              return yield* failure(
+                `This machine's folder for ${input.repository} is not a clone of it.`,
+              );
+            }
+          } else {
+            yield* fs
+              .makeDirectory(path.dirname(repoRoot), { recursive: true })
+              .pipe(Effect.mapError(() => failure("Could not make the folder for the clone.")));
+            // Staged beside its place, so a failed clone never leaves a checkout that looks ready.
+            const staging = `${repoRoot}.cloning-${yield* random.uuidV4()}`;
+            yield* Effect.gen(function* () {
+              const mirror = yield* mirrorFor(input.repository);
+              // From the forge, borrowing the worlds mirror's objects so only what it lacks travels. The
+              // mirror keeps forge branches under refs/remotes and its own under refs/heads, so it
+              // is never the clone's source.
+              yield* git([
+                "clone",
+                // A mirror that is no longer a usable repository falls back to a plain clone.
+                ...(mirror === undefined ? [] : ["--reference-if-able", mirror]),
+                "--",
+                input.remoteUrl,
+                staging,
+              ]);
+              // A folder the default branch lacks would leave a checkout that never gets it.
+              const stagedRoot = input.path === "" ? staging : inside(staging, input.path);
+              const staged =
+                stagedRoot === undefined
+                  ? undefined
+                  : yield* Effect.all([
+                      fs.realPath(staging),
+                      fs.realPath(stagedRoot),
+                      fs.stat(stagedRoot),
+                    ]).pipe(Effect.option, Effect.map(Option.getOrUndefined));
+              if (
+                staged === undefined ||
+                staged[2].type !== "Directory" ||
+                (staged[1] !== staged[0] &&
+                  pathInside(path, staged[0], path.relative(staged[0], staged[1])) === undefined)
+              ) {
+                return yield* failure(`${input.repository} has no folder ${input.path}.`);
+              }
+              yield* fs
+                .rename(staging, repoRoot)
+                .pipe(Effect.mapError(() => failure("Could not move the clone into place.")));
+            }).pipe(
+              Effect.onError(() => fs.remove(staging, { recursive: true }).pipe(Effect.ignore)),
+            );
+          }
+          const project = yield* projects
+            .getByWorkspaceRoot(workspaceRoot)
+            .pipe(Effect.mapError(() => failure("Could not read projects.")));
+          if (Option.isSome(project)) {
+            // An archived clone stays archived; placement does not bring it back.
+            if (project.value.archivedAt != null) {
+              return yield* failure(`The clone of ${input.repository} here is archived.`);
+            }
+          }
+          // Paths are checked again on disk: a checked-out symlink must not carry a write outside.
+          const [realRepoRoot, realRoot] = yield* Effect.all([
+            fs.realPath(repoRoot),
+            fs.realPath(workspaceRoot),
+          ]).pipe(Effect.mapError(() => failure("The clone has no such project folder.")));
+          if (
+            realRoot !== realRepoRoot &&
+            pathInside(path, realRepoRoot, path.relative(realRepoRoot, realRoot)) === undefined
+          ) {
+            return yield* failure("The project folder leaves its clone.");
+          }
+          const isLink = (candidate: string) =>
+            fs.readLink(candidate).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            );
+          const gitSays = (args: ReadonlyArray<string>) =>
+            processRunner
+              .run({
+                command: "git",
+                args: ["-C", realRepoRoot, ...args],
+                timeout: CLONE_TIMEOUT,
+                timeoutBehavior: "timedOutResult",
+              })
+              .pipe(
+                Effect.map((result) => !result.timedOut && result.code === 0),
+                Effect.orElseSucceed(() => false),
+              );
+          // A copied secret stays out of commits and checkpoints only while the clone ignores it,
+          // by its own rules: this host's global excludes can change without the clone knowing.
+          const ignoredHere = (relative: string) =>
+            gitSays([
+              "-c",
+              "core.excludesFile=/dev/null",
+              "check-ignore",
+              "-q",
+              "--no-index",
+              "--",
+              relative,
+            ]);
+          // A path Git tracks is committed whatever ignores it, even while missing from disk, and
+          // a case-insensitive checkout writes a differently cased name onto it.
+          const listed = (args: ReadonlyArray<string>) =>
+            processRunner
+              .run({
+                command: "git",
+                args: ["-C", realRepoRoot, ...args],
+                timeout: CLONE_TIMEOUT,
+                timeoutBehavior: "timedOutResult",
+              })
+              .pipe(
+                Effect.map((result) =>
+                  result.timedOut || result.code !== 0
+                    ? undefined
+                    : result.stdout.split("\0").filter((entry) => entry !== ""),
+                ),
+                Effect.orElseSucceed(() => undefined),
+              );
+          const indexed = yield* listed(["ls-files", "-z"]);
+          const committed = yield* listed(["ls-tree", "-r", "-z", "--name-only", "HEAD"]);
+          // Unknown means nothing is copied.
+          const tracked =
+            indexed === undefined || committed === undefined
+              ? undefined
+              : new Set([...indexed, ...committed].map((entry) => entry.toLowerCase()));
+          const gitExclude = path.resolve(
+            realRepoRoot,
+            yield* git(["-C", realRepoRoot, "rev-parse", "--git-path", "info/exclude"]),
+          );
+          // Git may resolve it elsewhere (a `commondir`, a symlinked `info`): rules and staged
+          // copies only ever go inside this clone's own `.git`, as the folder really resolves.
+          const ownGitDir = path.join(realRepoRoot, ".git");
+          const insideOwnGitDir = (folder: string) => {
+            const relative = path.relative(ownGitDir, folder);
+            return !relative.startsWith("..") && !path.isAbsolute(relative);
+          };
+          const elsewhere = failure(
+            `The clone of ${input.repository} keeps its git data elsewhere.`,
+          );
+          const unreadable = () => failure("Could not read the clone's git folder.");
+          // Checked before anything is made: the parent as it really resolves, then the folder.
+          const infoParent = yield* fs
+            .realPath(path.dirname(path.dirname(gitExclude)))
+            .pipe(Effect.mapError(unreadable));
+          if (!insideOwnGitDir(infoParent)) return yield* elsewhere;
+          const infoFolder = path.join(infoParent, path.basename(path.dirname(gitExclude)));
+          yield* fs.makeDirectory(infoFolder).pipe(
+            Effect.catchIf(
+              (error) => error._tag === "PlatformError" && error.reason._tag === "AlreadyExists",
+              () => Effect.void,
+            ),
+            Effect.mapError(unreadable),
+          );
+          const excludeDir = yield* fs.realPath(infoFolder).pipe(Effect.mapError(unreadable));
+          if (!insideOwnGitDir(excludeDir)) return yield* elsewhere;
+          const excludeFile = path.join(excludeDir, path.basename(gitExclude));
+          for (const file of input.files) {
+            // A line break would turn the path into extra rules in the clone's exclude file.
+            const target = inside(realRoot, file.path);
+            // As the clone's exclude file sees it; a line break anywhere would add rules there.
+            const relative =
+              target === undefined
+                ? undefined
+                : path.relative(realRepoRoot, target).split(path.sep).join("/");
+            const contents = Buffer.from(file.contents, "base64");
+            if (
+              target === undefined ||
+              relative === undefined ||
+              /[\u0000-\u001f\u007f]/.test(relative) ||
+              !COPIED_FILE_NAME.test(path.basename(target)) ||
+              contents.byteLength > COPIED_FILE_MAX_BYTES
+            ) {
+              continue;
+            }
+            const written = yield* Effect.gen(function* () {
+              // Each folder on the way is a real folder in the clone before anything is made in it.
+              let folder = realRoot;
+              for (const segment of path.relative(realRoot, path.dirname(target)).split(path.sep)) {
+                if (segment === "") continue;
+                folder = path.join(folder, segment);
+                if (yield* isLink(folder)) return false;
+                const info = yield* fs.stat(folder).pipe(Effect.option);
+                if (Option.isNone(info)) yield* fs.makeDirectory(folder);
+                else if (info.value.type !== "Directory") return false;
+              }
+              if (yield* isLink(target)) return false;
+              if (tracked === undefined || tracked.has(relative.toLowerCase())) return false;
+              // A rule of this checkout's own, even when a .gitignore covers the file now: a branch
+              // without that rule must not stage it.
+              const rule = `/${gitPatternLiteral(relative)}`;
+              const excluded = yield* fs.readFileString(excludeFile).pipe(
+                Effect.catchIf(
+                  (error) => error._tag === "PlatformError" && error.reason._tag === "NotFound",
+                  () => Effect.succeed(""),
+                ),
+              );
+              if (!excluded.split("\n").includes(rule)) {
+                // Replaced whole, so a failed write never drops the rules already there.
+                const nextExcluded = `${excludeFile}.${yield* random.uuidV4()}`;
+                yield* fs
+                  .writeFileString(
+                    nextExcluded,
+                    `${excluded}${excluded === "" || excluded.endsWith("\n") ? "" : "\n"}${rule}\n`,
+                  )
+                  .pipe(
+                    Effect.andThen(fs.rename(nextExcluded, excludeFile)),
+                    Effect.onError(() => fs.remove(nextExcluded).pipe(Effect.ignore)),
+                  );
+              }
+              // The clone's own rules can still unignore it; then it is not copied.
+              if (!(yield* ignoredHere(relative))) return false;
+              // Written whole in the git folder, where nothing is committed, then linked into
+              // place, which never replaces a file: one already there is tracked by the clone or
+              // this host's own. When the link works, a full disk leaves no partial file a retry
+              // would take as done; when it cannot, the file is written in place.
+              const staged = path.join(
+                path.dirname(excludeFile),
+                `t3-copy-${yield* random.uuidV4()}`,
+              );
+              // A failed write after `wx` created the file leaves no partial copy behind.
+              const writeDirectly = fs
+                .writeFile(target, contents, { flag: "wx", mode: 0o600 })
+                .pipe(
+                  Effect.tapError((error) =>
+                    error.reason._tag === "AlreadyExists"
+                      ? Effect.void
+                      : fs.remove(target).pipe(Effect.ignore),
+                  ),
+                );
+              return yield* fs.writeFile(staged, contents, { flag: "wx", mode: 0o600 }).pipe(
+                Effect.andThen(
+                  fs.link(staged, target).pipe(
+                    // No hard link there (another filesystem, or none supported): written in place.
+                    Effect.catchIf(
+                      (error) => error.reason._tag !== "AlreadyExists",
+                      () => writeDirectly,
+                    ),
+                  ),
+                ),
+                Effect.as(true),
+                Effect.catchIf(
+                  (error) => error.reason._tag === "AlreadyExists",
+                  () => Effect.succeed(false),
+                ),
+                Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
+              );
+            }).pipe(Effect.mapError(() => failure(`Could not copy ${file.path}.`)));
+            if (!written)
+              yield* Effect.logWarning(
+                "Placement skipped a copied file it could not keep private",
+                {
+                  path: file.path,
+                },
+              );
+          }
+          if (Option.isSome(project)) return { projectId: project.value.id };
+          const created = yield* projects
+            .create({
+              commandId: CommandId.make(`placement:hydrate:${yield* random.uuidV4()}`),
+              projectId: ProjectId.make(yield* random.uuidV4()),
+              title: input.title,
+              workspaceRoot,
+            })
+            .pipe(
+              Effect.tapError((error) =>
+                Effect.logWarning("Placement could not add the clone as a project", error),
+              ),
+              Effect.mapError(() =>
+                failure(`Could not add the clone of ${input.repository} as a project.`),
+              ),
+            );
+          return { projectId: created.id };
+        }),
+      );
+    },
+  );
+
+  return LocalPlacement.of({ report, admit, awaitRoom, startNow, hydrate });
 });
 
-export const layer = Layer.effect(LocalPlacement, make);
+export const layer = Layer.effect(LocalPlacement, make).pipe(Layer.provide(ProcessRunner.layer));
+
+/** Env files are the ignored files a new clone almost always needs; others stay put. */
+export const COPIED_FILE_NAME = /^(?:\.env(?:\..+)?|\.envrc|\.dev\.vars)$/;
+export const COPIED_FILE_MAX_BYTES = 1024 * 1024;
+
+/** `relative` as a gitignore pattern that matches only that path. */
+const gitPatternLiteral = (relative: string) => relative.replace(/[\\*?[\] ]/g, "\\$&");
 
 /** A folder inside a repository, with `/` whichever platform wrote it. */
 export const repositoryFolder = (relative: string) => relative.replaceAll("\\", "/");
