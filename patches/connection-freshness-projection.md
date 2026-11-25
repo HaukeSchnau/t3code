@@ -36,8 +36,8 @@ reachable server.
 - Web `ChatView.tsx` mounts `EnvironmentNetworkStatus` above the composer, except in an embedded
   side chat, whose parent already shows it. That component in
   `components/chat/TrainNetworkStatus.tsx` subscribes to the environment's connection and shell
-  itself, so shell pushes re-render the strip and not the chat, and renders the projection through
-  `TrainNetworkStatus` and `trainNetworkExperience.ts`. It runs its own Reconnect through
+  itself, so shell pushes re-render the notice and not the chat, and renders the projection through
+  `TrainNetworkStatus` and `trainNetworkExperience.ts` as a detached `ComposerBanner` notice. It runs its own Reconnect through
   `environmentCatalog.retryNow`. Mobile does not use the projection.
 - Since upstream's cold connects skip older settled threads, `live` means a partial shell. The
   projection only reports freshness, so it is unaffected.
