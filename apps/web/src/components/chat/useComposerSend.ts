@@ -27,6 +27,7 @@ import {
   type EnvironmentId,
   type ManagedWorkspacesCapability,
   type ModelSelection,
+  PlacementLaunchResult,
   type PreviewAnnotationPayload,
   type ResponseContextRecord,
   type ScopedThreadRef,
@@ -36,6 +37,7 @@ import {
   RuntimeMode,
 } from "@t3tools/contracts";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+import * as Schema from "effect/Schema";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
   declinePendingApprovals,
@@ -83,6 +85,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  redirectPromotedDraftThread,
   useComposerDraftStore,
   DraftId,
 } from "../../composerDraftStore";
@@ -103,12 +106,12 @@ import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated } from "../../hooks/useSettings";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { environmentPresentations } from "../../state/presentation";
+import { readEnvironment } from "../../state/environments";
 import {
   approvalRedirectNotice,
   composerDraftContentChanged,
-  loadBalancingSendWarning,
   multipleModelSendBlock,
-  referencedThreadContexts,
+  sendPlacesThread,
 } from "./composerSend.logic";
 import { formatInlineReplyPrompt, type InlineReplyDraftStore } from "./inlineReplies";
 import { managedWorkspaceBootstrap, setIsolatedWorkspaceChoice } from "../../lib/managedWorkspaces";
@@ -155,7 +158,6 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
 import type { SessionPhase } from "../../types";
 import type { DraftSessionState } from "../../composerDraftStore";
 import type { ComposerHandleRef } from "../../composerHandleContext";
-import type { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
 import type { useDraftEnvironmentRouting } from "./useDraftEnvironmentRouting";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
 import type { usePendingThreadRequests } from "./usePendingThreadRequests";
@@ -165,6 +167,12 @@ import type { useUsageLimitsPanel } from "./useUsageLimitsPanel";
 import type { useWorktreeSetup } from "./useWorktreeSetup";
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
+
+const isPlacementLaunchResult = Schema.is(PlacementLaunchResult);
+/** The machine an Auto send started on, as the launch named it. */
+function placedLabelOf(launched: unknown): string | undefined {
+  return isPlacementLaunchResult(launched) ? launched.placement?.label : undefined;
+}
 
 function readEnvironmentPresentation(environmentId: EnvironmentId) {
   return appAtomRegistry.get(environmentPresentations.presentationsAtom).get(environmentId);
@@ -234,7 +242,6 @@ interface ComposerSendInput {
     readonly threadBranch: string;
     readonly currentBranch: string;
   } | null;
-  readonly logicalProjectEnvironments: ReturnType<typeof useLogicalProjectEnvironments>;
   readonly providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly composerRef: ComposerHandleRef;
   readonly composerDraftTarget: ComposerThreadTarget;
@@ -265,9 +272,8 @@ interface ComposerSendInput {
   readonly usageLimitsOffered: boolean;
   readonly openUsageLimits: UsageLimitsPanel["open"];
   readonly clearUsageLimitsFor: UsageLimitsPanel["clearFor"];
-  readonly needsLoadBalancing: boolean;
-  readonly loadBalancing: DraftEnvironmentRouting["loadBalancing"];
-  readonly refreshBeforeSend: DraftEnvironmentRouting["refreshBeforeSend"];
+  /** A new thread goes where the server's placement picks (patches/fleet-placement.md). */
+  readonly autoPlacement: boolean;
   readonly readPendingEnvironmentChange: DraftEnvironmentRouting["readPendingEnvironmentChange"];
   readonly pendingApprovals: PendingThreadRequests["pendingApprovals"];
   readonly respondingRequestIds: PendingThreadRequests["respondingRequestIds"];
@@ -339,7 +345,6 @@ export function useComposerSend(input: ComposerSendInput) {
     worktreeRepositories,
     startFromOrigin,
     localCheckoutBranchMismatch,
-    logicalProjectEnvironments,
     providerInstanceEntries,
     composerRef,
     composerDraftTarget,
@@ -367,9 +372,7 @@ export function useComposerSend(input: ComposerSendInput) {
     usageLimitsOffered,
     openUsageLimits,
     clearUsageLimitsFor,
-    needsLoadBalancing,
-    loadBalancing,
-    refreshBeforeSend,
+    autoPlacement,
     readPendingEnvironmentChange,
     pendingApprovals,
     respondingRequestIds,
@@ -528,20 +531,6 @@ export function useComposerSend(input: ComposerSendInput) {
           }),
         );
       }
-      return;
-    }
-    if (needsLoadBalancing) {
-      const draft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
-      toastManager.add({
-        type: "warning",
-        ...loadBalancingSendWarning({
-          pending: loadBalancing.pending,
-          threadContexts: draft ? referencedThreadContexts(draft) : [],
-          candidateEnvironmentIds: logicalProjectEnvironments.map(
-            (candidate) => candidate.environmentId,
-          ),
-        }),
-      });
       return;
     }
     // Only a live send can decline shown approvals, so a send meant to redirect never queues.
@@ -848,6 +837,15 @@ export function useComposerSend(input: ComposerSendInput) {
     const replyTo =
       useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
     const promptForSend = withReplyReference(draftPrompt, replyTo);
+    const placeThread = sendPlacesThread({
+      autoPlacement,
+      worktreeRepositories,
+      prompt: promptForSend,
+      checksOutPullRequest:
+        draftId !== null &&
+        checkoutPullRequestUrlToLink(useComposerDraftStore.getState().getDraftSession(draftId)) !==
+          null,
+    });
     if (warnStrandedThreadContext(promptForSend, composerThreadContexts)) return;
     if (queuedRunEdit.isEditing) {
       // A queued message stays in its thread, so saving `/side` would send it to main.
@@ -1159,6 +1157,7 @@ export function useComposerSend(input: ComposerSendInput) {
             }
           : null,
       prepareWorkspace: managedWorkspace ?? null,
+      ...(placeThread && isLocalDraftThread ? { placement: "auto" as const } : {}),
     };
     // Nothing overtakes a message still waiting in the outbox for this thread. Ahead of the
     // compact-before-send path, so a queued message never compacts first.
@@ -1642,14 +1641,17 @@ export function useComposerSend(input: ComposerSendInput) {
         : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
       const directSendCommandId = CommandId.make(randomUUID());
-      const startPromise = startThreadTurn({
+      // The checkout read for the link, so a checkout made while uploads prepared stays here too.
+      const placesThread =
+        placeThread && bootstrap?.createThread !== undefined && checkoutPullRequestUrl === null;
+      const startTurnRequest = {
         environmentId,
         input: {
           commandId: directSendCommandId,
           threadId: threadIdForSend,
           message: {
             messageId: messageIdForSend,
-            role: "user",
+            role: "user" as const,
             attachments: turnAttachmentsResult.value,
             ...withMessageContext({
               text: outgoingMessageText,
@@ -1665,9 +1667,11 @@ export function useComposerSend(input: ComposerSendInput) {
           dispatchMode: turnDispatchMode,
           ...(freshArm === undefined ? {} : { freshContext: true }),
           ...(bootstrap ? { bootstrap } : {}),
+          ...(placesThread ? { placement: "auto" as const } : {}),
           createdAt: messageCreatedAt,
         },
-      });
+      };
+      const startPromise = startThreadTurn(startTurnRequest);
       if (backgroundThreadRef) {
         try {
           backgroundDraftOpened = Boolean(
@@ -1692,7 +1696,11 @@ export function useComposerSend(input: ComposerSendInput) {
         }
       }
       const startResult = await startPromise;
-      if (await handOffUnconfirmedSend(startResult, durableSend, directSendCommandId)) {
+      // The outbox replays an Auto send as the same placement.launch, so it keeps its decision.
+      // The outbox replays what was dispatched: unplaced when the checkout read kept it here.
+      const { placement: _placement, ...unplacedSend } = durableSend;
+      const dispatchedSend = placesThread ? durableSend : unplacedSend;
+      if (await handOffUnconfirmedSend(startResult, dispatchedSend, directSendCommandId)) {
         // The outbox shows the message until the environment confirms it.
         if (backgroundThreadRef) clearBackgroundDraftSubmissionByRef(backgroundThreadRef);
         setOptimisticUserMessages((existing) =>
@@ -1716,13 +1724,51 @@ export function useComposerSend(input: ComposerSendInput) {
           releaseDraftAttachments(composerAttachmentsSnapshot);
         }
         acknowledgeActiveThreadWoke();
+        // Placement may have started the thread on another machine: the draft follows it there.
+        const placedThreadRef =
+          sentDraftThreadRef === null
+            ? null
+            : redirectPromotedDraftThread(sentDraftThreadRef, startResult.value);
+        // A machine this client cannot reach never shows the thread, so the draft finalizes now.
+        const placedUnreachable =
+          placedThreadRef !== null &&
+          sentDraftThreadRef !== null &&
+          placedThreadRef !== sentDraftThreadRef &&
+          readEnvironment(placedThreadRef.environmentId)?.connection.phase !== "connected";
+        if (placedUnreachable) {
+          const paired = readEnvironment(placedThreadRef.environmentId);
+          const label = paired?.label ?? placedLabelOf(startResult.value);
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title:
+                label === undefined
+                  ? m(msg("Started on another machine"))
+                  : m(msg("Started on {machine}", { machine: label })),
+              description:
+                label === undefined
+                  ? m(msg("Add that machine in Settings → Environments to open it."))
+                  : paired
+                    ? m(msg("Reconnect to {machine} to open it.", { machine: label }))
+                    : m(
+                        msg("Add {machine} in Settings → Environments to open it.", {
+                          machine: label,
+                        }),
+                      ),
+            }),
+          );
+        }
         // A draft still on screen finalizes once its thread route takes over.
-        if (sentDraftThreadRef) {
-          if (backgroundDraftOpened || currentRouteThreadKeyRef.current !== routeThreadKey) {
-            finalizePromotedDraftThreadByRef(sentDraftThreadRef);
-          } else {
-            clearBackgroundDraftSubmissionByRef(sentDraftThreadRef);
+        if (placedThreadRef && sentDraftThreadRef) {
+          if (
+            placedUnreachable ||
+            backgroundDraftOpened ||
+            currentRouteThreadKeyRef.current !== routeThreadKey
+          ) {
+            finalizePromotedDraftThreadByRef(placedThreadRef);
           }
+          // Registered under the draft's own thread, wherever placement started it.
+          clearBackgroundDraftSubmissionByRef(sentDraftThreadRef);
         }
         if (backgroundThreadRef) {
           if (backgroundDraftOpened) {
@@ -1735,7 +1781,7 @@ export function useComposerSend(input: ComposerSendInput) {
                 onClick: () => {
                   void navigate({
                     to: "/$environmentId/$threadId",
-                    params: buildThreadRouteParams(backgroundThreadRef),
+                    params: buildThreadRouteParams(placedThreadRef ?? backgroundThreadRef),
                   });
                 },
               },
@@ -1867,32 +1913,17 @@ export function useComposerSend(input: ComposerSendInput) {
   };
 
   const onSendLatest = useStableCallback(onSend);
-  const sendWithEnvironmentRefresh = async (...args: Parameters<typeof onSend>) => {
-    const refresh =
-      args[3] || sendInFlightRef.current || readPendingEnvironmentChange() !== null
-        ? null
-        : refreshBeforeSend();
-    if (refresh === null) return onSend(...args);
-    sendInFlightRef.current = true;
-    const ready = await refresh.finally(() => {
-      sendInFlightRef.current = false;
-    });
-    if (ready) return onSendLatest(...args);
-  };
-  const sendWithEnvironmentRefreshLatest = useStableCallback(sendWithEnvironmentRefresh);
   const onSendWithRouting = async (...args: Parameters<typeof onSend>) => {
     args[0]?.preventDefault();
     const workspaceDefault =
       draftId && !sendInFlightRef.current ? readPendingWorkspaceDefault(draftId) : null;
-    if (workspaceDefault === null) return sendWithEnvironmentRefresh(...args);
+    if (workspaceDefault === null) return onSend(...args);
     sendInFlightRef.current = true;
     await workspaceDefault.finally(() => {
       sendInFlightRef.current = false;
     });
-    return sendWithEnvironmentRefreshLatest(...args);
+    return onSendLatest(...args);
   };
-  // No load-balancing refresh: it bails once the draft is no longer displayed, which is the
-  // only time a detached send runs, so the draft keeps the environment it was dictated for.
   const captureDetachedSend = useStableCallback(() => onSend);
   return { onSend: onSendWithRouting, captureDetachedSend };
 }

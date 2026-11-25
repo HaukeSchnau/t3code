@@ -46,7 +46,7 @@ import {
   type ComposerImageAttachment,
 } from "./composerDraftStore";
 import { environmentCatalog } from "./connection/catalog";
-import { deliverDurableComposerCommand } from "./durableCommandOutboxDelivery";
+import { deliverDurableComposerCommand, placedFollowUpRef } from "./durableCommandOutboxDelivery";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { randomUUID } from "./lib/utils";
 import { readAttachmentUpload, releaseDraftAttachment } from "./lib/attachmentUploadQueue";
@@ -115,6 +115,8 @@ export const DurableComposerCommand = Schema.Struct({
   bootstrap: Schema.optionalKey(DurableThreadBootstrap),
   // Sent with the thread's model and modes as they are when it arrives, not the ones above.
   inheritThreadSettings: Schema.optionalKey(Schema.Literal(true)),
+  // A new thread placement starts wherever it picks (patches/fleet-placement.md).
+  placement: Schema.optionalKey(Schema.Literal("auto")),
 });
 export type DurableComposerCommand = typeof DurableComposerCommand.Type;
 export type DurableComposerEntry = CommandOutboxEntry<DurableComposerCommand>;
@@ -269,6 +271,10 @@ function withDrainLock(drain: () => Promise<void>): Promise<void> {
   return navigator.locks.request(DRAIN_LOCK, drain);
 }
 
+function deliveryEnvironmentId(command: DurableComposerCommand): EnvironmentId {
+  return placedFollowUpRef(command)?.environmentId ?? command.environmentId;
+}
+
 function isEnvironmentConnected(environmentId: EnvironmentId): boolean {
   return Option.exists(
     AsyncResult.value(appAtomRegistry.get(environmentCatalog.stateAtom(environmentId))),
@@ -283,7 +289,7 @@ function startController(): CommandOutboxController<DurableComposerCommand> {
   const controller = createCommandOutboxController<DurableComposerCommand>({
     store: indexedDbOutboxStore,
     deliver: deliverDurableComposerCommand,
-    canDeliver: (command) => isEnvironmentConnected(command.environmentId),
+    canDeliver: (command) => isEnvironmentConnected(deliveryEnvironmentId(command)),
     withDrainLock,
     onRejected: (entry) => {
       for (const listener of rejectionListeners) listener(entry);
@@ -299,7 +305,9 @@ function startController(): CommandOutboxController<DurableComposerCommand> {
   // Wake on reconnect for every environment that has waiting messages.
   const watched = new Map<EnvironmentId, () => void>();
   const watchEnvironments = () => {
-    const needed = new Set(controller.entries().map((entry) => entry.command.environmentId));
+    const needed = new Set(
+      controller.entries().map((entry) => deliveryEnvironmentId(entry.command)),
+    );
     for (const [environmentId, unwatch] of watched) {
       if (needed.has(environmentId)) continue;
       unwatch();
@@ -454,6 +462,8 @@ export interface DurableComposerSend {
    * thread's model and modes as they are when it arrives, so it never undoes a change made since.
    */
   readonly inheritThreadSettings?: true;
+  /** A new thread placement starts wherever it picks; a replay keeps its command and decision. */
+  readonly placement?: "auto";
 }
 
 function threadBootstrap(
@@ -541,6 +551,7 @@ export async function enqueueComposerSend(
       titleSeed,
       ...(bootstrap ? { bootstrap } : {}),
       ...(send.inheritThreadSettings ? { inheritThreadSettings: true } : {}),
+      ...(send.placement && bootstrap?.createThread ? { placement: send.placement } : {}),
     },
     { acknowledgementLost: directSend?.acknowledgementLost === true },
   );

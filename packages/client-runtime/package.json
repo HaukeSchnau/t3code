@@ -399,6 +399,10 @@
       "types": "./src/state/sharedSettings.ts",
       "default": "./src/state/sharedSettings.ts"
     },
+    "./state/placement-wait": {
+      "types": "./src/state/placementWait.ts",
+      "default": "./src/state/placementWait.ts"
+    },
     "./state/shell": {
       "types": "./src/state/shell.ts",
       "default": "./src/state/shell.ts"

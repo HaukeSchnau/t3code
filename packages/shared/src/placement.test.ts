@@ -113,6 +113,26 @@ describe("decidePlacement", () => {
     });
   });
 
+  it("counts room left in the agents slice, sized by the agents already running", () => {
+    // Ten agents at 2.6 GiB each leave room for no more in 2 GiB, despite 14 GiB available.
+    const sliceNearlyFull = option("srv-2", {
+      resources: {
+        ...idle,
+        availableMemoryBytes: 14 * GiB,
+        agents: { running: 10, memoryCurrentBytes: 26 * GiB, memoryMaxBytes: 28 * GiB },
+      },
+    });
+    expect(decidePlacement([sliceNearlyFull], now)?.wait).toBe(true);
+    const roomySlice = option("srv-2", {
+      resources: {
+        ...idle,
+        availableMemoryBytes: 14 * GiB,
+        agents: { running: 10, memoryCurrentBytes: 6 * GiB, memoryMaxBytes: 28 * GiB },
+      },
+    });
+    expect(decidePlacement([option("dev-hauke"), roomySlice], now)?.chosen.label).toBe("srv-2");
+  });
+
   it("prefers a warm machine over a cold one with the same room", () => {
     const warm = option("dev-hauke");
     const cold = option("srv-2", {}, { warmth: 0.5 });

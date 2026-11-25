@@ -174,6 +174,8 @@ export interface EnvironmentThreadShell {
   readonly delegatedFrom: OrchestrationV2ThreadShell["delegatedFrom"] | null;
   /** The workflow run this thread is an agent step of, if it is one. */
   readonly workflowRun: OrchestrationV2ThreadShell["workflowRun"] | null;
+  /** Where placement started the thread and why (patches/fleet-placement.md). */
+  readonly placement: OrchestrationV2ThreadShell["placement"] | null;
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
   /** False when a wake, another agent or a schedule started the latest run, not the user. */
@@ -335,6 +337,7 @@ export function presentThreadShell(
     linkOrigin: thread.linkOrigin ?? null,
     delegatedFrom: thread.delegatedFrom ?? null,
     workflowRun: thread.workflowRun ?? null,
+    placement: thread.placement ?? null,
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,
     ...(thread.latestRunStartedByUser === undefined

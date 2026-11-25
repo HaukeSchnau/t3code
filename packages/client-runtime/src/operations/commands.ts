@@ -215,6 +215,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly freshContext?: boolean;
   /** Defaults to true. Callers with their own retry queue opt out so a dead socket fails fast. */
   readonly resendAfterSocketLoss?: boolean;
+  /** A new thread goes wherever the server's placement picks (patches/fleet-placement.md). */
+  readonly placement?: "auto";
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -847,7 +849,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    const launch = request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+    const launch = {
       commandId,
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
@@ -868,8 +870,14 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         ...(context ? { context } : {}),
         attachments,
       },
-    });
-    return yield* resend ? resendAfterSocketLoss(launch) : launch;
+    };
+    // Only a new thread is placed; its answer names the machine it went to.
+    if (bootstrap !== undefined && input.placement === "auto") {
+      const placed = request(WS_METHODS.placementLaunch, launch);
+      return yield* resend ? resendAfterSocketLoss(placed) : placed;
+    }
+    const launched = request(ORCHESTRATION_V2_WS_METHODS.launchThread, launch);
+    return yield* resend ? resendAfterSocketLoss(launched) : launched;
   }
 
   const requestedMode = input.dispatchMode ?? "auto";

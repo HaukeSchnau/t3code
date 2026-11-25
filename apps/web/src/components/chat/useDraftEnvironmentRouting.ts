@@ -1,17 +1,11 @@
 import { msg, useGT } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
-import { useLoadBalancedEnvironment } from "../../hooks/useLoadBalancedEnvironment";
+import type { usePlacementPreview } from "../../hooks/useLoadBalancedEnvironment";
 import { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import {
-  type EnvironmentId,
-  type ProviderDriverKind,
-  ProviderInstanceId,
-  resolveProjectProviderInstanceEnabled,
-  type ThreadContextRecord,
-} from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import {
   scopedThreadKey,
   scopeProjectRef,
@@ -22,40 +16,31 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { isTriagePrompt, replaceTriagePlaybookLink } from "@t3tools/shared/triagePrompt";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { useLayoutEffect, useRef, useState } from "react";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
-import { type EnvironmentPresentation, useEnvironmentProviders } from "../../state/environments";
 import { currentClientMetadata } from "../../connection/platform";
 import { useProjects } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { DraftSessionState } from "../../composerDraftStore";
-import { loadBalancingSendWarning } from "./composerSend.logic";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { seedDraftModelSelection } from "../../lib/seedDraftModelSelection";
 import { draftFanoutSelectionsAtom } from "./chatViewSend";
 
 interface DraftEnvironmentRoutingInput {
   readonly draftId: DraftId | null;
-  readonly draftThread: DraftSessionState | null;
   readonly envLocked: boolean;
   readonly automaticEnvironment: boolean;
+  readonly placementPreview: ReturnType<typeof usePlacementPreview>;
+  /** The draft holds something placement keeps on its own machine. */
+  readonly placementStaysHere: boolean;
+  readonly sourceEnvironmentLabel: string | null;
   readonly logicalProjectEnvironments: ReturnType<typeof useLogicalProjectEnvironments>;
-  readonly environmentById: ReadonlyMap<EnvironmentId, EnvironmentPresentation>;
-  readonly providersByEnvironment: ReturnType<typeof useEnvironmentProviders>;
-  readonly loadBalancingSettings: {
-    readonly loadBalancingWeights: Readonly<Record<string, number>>;
-  };
-  readonly referencedThreadContexts: ReadonlyArray<ThreadContextRecord>;
-  readonly activeProviderInstanceId: ProviderInstanceId | null;
-  readonly selectedProvider: ProviderDriverKind;
-  readonly composerHasAttachments: boolean;
   readonly activeProjectKey: string | null;
   readonly activeProjectIsScratch: boolean;
   readonly projectGroupingSettings: ReturnType<typeof selectProjectGroupingSettings>;
@@ -77,26 +62,20 @@ function carryFanoutSelections(
 }
 
 /**
- * Which machine an unsent draft runs on: automatic load balancing across the
- * project's machines, or a manual switch, which may first open a scratch
- * project on the target machine. A triage draft takes its session along: the
- * target machine prepares one, and the playbook link follows.
+ * Which machine an unsent draft runs on: automatic, where the server's placement picks on send,
+ * or a manual switch, which may first open a scratch project on the target machine. A triage
+ * draft takes its session along: the target machine prepares one, and the playbook link follows.
  */
 export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) {
   const gt = useGT();
   const {
     draftId,
-    draftThread,
     envLocked,
     automaticEnvironment,
+    placementPreview: preview,
+    placementStaysHere,
+    sourceEnvironmentLabel,
     logicalProjectEnvironments,
-    environmentById,
-    providersByEnvironment,
-    loadBalancingSettings,
-    referencedThreadContexts,
-    activeProviderInstanceId,
-    selectedProvider,
-    composerHasAttachments,
     activeProjectKey,
     activeProjectIsScratch,
     projectGroupingSettings,
@@ -112,142 +91,11 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   );
   const allProjects = useProjects();
   const { openScratchProject } = useScratchProject();
-  const needsLoadBalancing = automaticEnvironment && !draftThread?.loadBalancedEnvironmentId;
-  const loadBalancingCandidates = automaticEnvironment
-    ? logicalProjectEnvironments
-        .filter((candidate) => {
-          const environment = environmentById.get(candidate.environmentId);
-          return (
-            environment?.connection.phase === "connected" &&
-            (loadBalancingSettings.loadBalancingWeights[candidate.environmentId] ?? 50) > 0 &&
-            referencedThreadContexts.every(
-              (record) => record.environmentId === candidate.environmentId,
-            ) &&
-            providersByEnvironment
-              .get(candidate.environmentId)
-              ?.some(
-                (provider) =>
-                  (activeProviderInstanceId === null ||
-                    provider.instanceId === activeProviderInstanceId) &&
-                  provider.driver === selectedProvider &&
-                  (environment.serverConfig?.settings
-                    ? resolveProjectProviderInstanceEnabled(
-                        environment.serverConfig.settings,
-                        candidate.projectId,
-                        provider.instanceId,
-                      )
-                    : provider.enabled) &&
-                  provider.installed &&
-                  provider.status !== "error" &&
-                  provider.auth.status !== "unauthenticated" &&
-                  provider.availability !== "unavailable",
-              )
-          );
-        })
-        .map((candidate) => candidate.environmentId)
-    : [];
-  const loadBalancing = useLoadBalancedEnvironment(
-    needsLoadBalancing ? loadBalancingCandidates : [],
-    loadBalancingSettings.loadBalancingWeights,
-  );
-  const readRouting = useStableCallback(() => ({ input, loadBalancingCandidates }));
-  const refreshBeforeSend = () => {
-    if (
-      !automaticEnvironment ||
-      !draftId ||
-      !draftThread?.loadBalancedEnvironmentId ||
-      draftThread.promotedTo ||
-      composerHasAttachments
-    )
-      return null;
-    const originalDraft = getDraftSession(draftId);
-    const composerDraft = useComposerDraftStore.getState().getComposerDraft(draftId);
-    return loadBalancing.refreshSelection(loadBalancingCandidates).then((environmentId) => {
-      const current = readRouting();
-      if (
-        current.input.draftId !== draftId ||
-        !current.input.automaticEnvironment ||
-        current.input.composerHasAttachments ||
-        current.input.activeProjectKey !== activeProjectKey ||
-        current.input.selectedProvider !== selectedProvider ||
-        current.input.activeProviderInstanceId !== activeProviderInstanceId ||
-        current.input.loadBalancingSettings.loadBalancingWeights !==
-          loadBalancingSettings.loadBalancingWeights ||
-        current.loadBalancingCandidates.join("\n") !== loadBalancingCandidates.join("\n") ||
-        getDraftSession(draftId) !== originalDraft ||
-        useComposerDraftStore.getState().getComposerDraft(draftId) !== composerDraft
-      )
-        return false;
-      const target = current.input.logicalProjectEnvironments.find(
-        (candidate) => candidate.environmentId === environmentId,
-      );
-      if (!target?.projectId) {
-        toastManager.add({
-          type: "warning",
-          ...loadBalancingSendWarning({
-            pending: false,
-            threadContexts: referencedThreadContexts,
-            candidateEnvironmentIds: loadBalancingCandidates,
-          }),
-        });
-        return false;
-      }
-      const projectRef = scopeProjectRef(target.environmentId, target.projectId);
-      if (originalDraft) carryFanoutSelections(originalDraft, target.environmentId);
-      // The send must read the target project's composer and provider context after retargeting.
-      flushSync(() =>
-        setDraftThreadContext(draftId, {
-          projectRef,
-          environmentSelection: "auto",
-          loadBalancedEnvironmentId: target.environmentId,
-          branch: originalDraft?.branch ?? null,
-        }),
-      );
-      return true;
-    });
-  };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes the resolved load-balanced environment into the draft store once the async pick settles
-  useEffect(() => {
-    if (!needsLoadBalancing || loadBalancing.pending || !draftId || sendInFlightRef.current) return;
-    const target = logicalProjectEnvironments.find(
-      (environment) => environment.environmentId === loadBalancing.environmentId,
-    );
-    if (!target?.projectId) return;
-    const draft = getDraftSession(draftId);
-    if (draft) carryFanoutSelections(draft, target.environmentId);
-    setDraftThreadContext(draftId, {
-      projectRef: scopeProjectRef(target.environmentId, target.projectId),
-      environmentSelection: "auto",
-      loadBalancedEnvironmentId: target.environmentId,
-    });
-  }, [
-    needsLoadBalancing,
-    loadBalancing.pending,
-    loadBalancing.environmentId,
-    draftId,
-    logicalProjectEnvironments,
-    sendInFlightRef,
-    getDraftSession,
-    setDraftThreadContext,
-  ]);
+  // An automatic draft stays on its machine; on send, that machine's placement picks where the
+  // thread starts, which may be a linked machine without this project yet.
   const onAutoEnvironment = () => {
     if (envLocked || !draftId || sendInFlightRef.current) return;
-    if (composerHasAttachments) {
-      toastManager.add({
-        type: "warning",
-        id: "load-balancing-attachments",
-        title: m(msg("Keep attachments on this machine")),
-        description: m(
-          msg(
-            "Remove attachments before choosing automatic routing, then attach them on the selected machine.",
-          ),
-        ),
-      });
-      return;
-    }
-    loadBalancing.refresh(
-      logicalProjectEnvironments.map((environment) => environment.environmentId),
-    );
+    preview.refresh();
     setDraftThreadContext(draftId, {
       environmentSelection: "auto",
       loadBalancedEnvironmentId: null,
@@ -256,14 +104,17 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     });
   };
   const onAutoEnvironmentStable = useStableCallback(onAutoEnvironment);
+  const placementPreview = preview.data?.preview ?? null;
   const autoEnvironmentLabel = automaticEnvironment
-    ? draftThread?.loadBalancedEnvironmentId
-      ? gt("Auto balance")
-      : loadBalancing.pending
-        ? gt("Checking machines…")
-        : loadBalancing.failed
-          ? gt("Auto balance unavailable")
-          : gt("Auto balance")
+    ? placementStaysHere
+      ? sourceEnvironmentLabel === null
+        ? gt("Auto → this machine (stays here)")
+        : gt("Auto → {machine} (stays here)", { machine: sourceEnvironmentLabel })
+      : placementPreview
+        ? placementPreview.wait
+          ? gt("Auto → {machine} (waits for room)", { machine: placementPreview.label })
+          : gt("Auto → {machine}", { machine: placementPreview.label })
+        : gt("Auto", { $context: "automatic machine choice" })
     : undefined;
 
   // A change in flight belongs to the draft and project it started on.
@@ -394,9 +245,6 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   const onEnvironmentChangeStable = useStableCallback(onEnvironmentChange);
 
   return {
-    needsLoadBalancing,
-    loadBalancing,
-    refreshBeforeSend,
     onAutoEnvironmentStable,
     autoEnvironmentLabel,
     isEnvironmentChanging,

@@ -13,7 +13,7 @@ const AGENT_MEMORY_BYTES = 1.4 * GiB;
 // systemd-oomd kills at 60 by default, so stop placing work well before that.
 const MEMORY_PRESSURE_LIMIT = 20;
 /** A report older than this, by the reader's clock, no longer describes the machine. */
-export const PLACEMENT_REPORT_FRESH_MS = 15_000;
+const PLACEMENT_REPORT_FRESH_MS = 15_000;
 
 export interface AgentLoad {
   readonly resources: HostResourcesSnapshot;

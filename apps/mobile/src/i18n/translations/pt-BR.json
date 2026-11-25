@@ -4730,6 +4730,10 @@
   },
   "a5ab121035166e53": "Preencha as respostas pendentes",
   "545e67cafc32dc6b": "Esta conexão não pode enviar respostas.",
+  "22da0c8a2fb4bf65": "That did not work. Try again.",
+  "8471bcbc03d4e2e1": "Waiting for room on {machine}",
+  "1b1892e9f6187f61": "Start anyway",
+  "8b93438ec6cc799b": "Cancel",
   "aa5674d75dc47395": "Clone de {name} cancelado",
   "3c38548cbd950933": "Falha ao clonar {name}",
   "c941a659fc35dc4c": [
@@ -5032,6 +5036,7 @@
   "d506b798402041ab": "Enviar agora",
   "9a62f694ba5c35c5": "Abrindo thread…",
   "bb24a2960c689a20": "Esta thread não está disponível no snapshot móvel atual.",
+  "c1ecddecb5aaa932": "Auto: {reason}",
   "41ca8f475c481866": "Subagente de {title}",
   "f3e00e6c416eab38": "De {origin}",
   "bdfb9e7660ab25d3": "Não foi possível retomar a thread",

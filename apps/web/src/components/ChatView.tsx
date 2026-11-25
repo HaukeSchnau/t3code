@@ -1,10 +1,11 @@
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { useGT, useMessages } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { draftSupportedRuntimeModes } from "./chat/runtimeModeConfig";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { isTriagePrompt } from "@t3tools/shared/triagePrompt";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
@@ -49,7 +50,7 @@ import {
 } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
-import { usePlacementWeights } from "../hooks/useLoadBalancedEnvironment";
+import { usePlacementPreview } from "../hooks/useLoadBalancedEnvironment";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
@@ -68,6 +69,8 @@ import type { OrchestrationMessageContext, UsageLimitSourceSnapshots } from "@t3
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { freshSessionBannerItem } from "./chat/ComposerFreshSession";
 import { heldComposerSendBannerItem } from "./chat/ComposerHeldSendBanner";
+import { placementWaitBannerItem } from "./chat/placementWaitBanner";
+import { placementWaitOf } from "@t3tools/client-runtime/state/placement-wait";
 import { armFreshSession, disarmFreshSession, useFreshSessionArmed } from "./chat/freshSessionArms";
 import { cancelHeldComposerSend, useComposerSendHeld } from "./chat/preparingComposerImages";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
@@ -161,7 +164,6 @@ import {
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { useStore } from "zustand";
 import { shallow } from "zustand/vanilla/shallow";
-import { useShallow } from "zustand/react/shallow";
 import {
   isAtomCommandInterrupted,
   mapAtomCommandResult,
@@ -263,11 +265,11 @@ import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   composerTargetKey,
+  checkoutPullRequestUrlToLink,
   useComposerDraftStore,
   DraftId,
 } from "../composerDraftStore";
 import { type TerminalContextDraft } from "../lib/terminalContext";
-import { collectInlineContextIds } from "../lib/composerContextReferences";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQueryRefresh } from "../state/query";
@@ -531,6 +533,10 @@ export default function ChatView(props: ChatViewProps) {
   const interruptThreadTurn = useOrchestrationCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  const startPlacedThreadNow = useAtomCommand(serverEnvironment.placementStartNow, {
+    label: "start a waiting thread",
+  });
+  const [placementWaitBusy, setPlacementWaitBusy] = useState(false);
   const loadEarlierThreadHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
@@ -693,19 +699,6 @@ export default function ChatView(props: ChatViewProps) {
       ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
       : null;
   });
-  const composerHasAttachments = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
-  });
-  const referencedThreadContexts = useComposerDraftStore(
-    useShallow((store) => {
-      const draft = store.getComposerDraft(composerDraftTarget);
-      if (!draft?.threadContexts.length) return [];
-      // Linked prompts can replace text without pruning stored context records.
-      const referenced = new Set(collectInlineContextIds(draft.prompt));
-      return draft.threadContexts.filter((record) => referenced.has(record.contextId));
-    }),
-  );
   const composerHasNonPromptContent = useComposerDraftStore((store) => {
     const draft = store.getComposerDraft(composerDraftTarget);
     return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
@@ -1357,7 +1350,6 @@ export default function ChatView(props: ChatViewProps) {
     activeProjectIsScratch && draftId !== null,
   );
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
-  const canAutoBalanceEnvironments = hasMultipleEnvironments && !activeProjectIsScratch;
   const activeEnvironmentOption =
     logicalProjectEnvironments.find(
       (environment) => environment.environmentId === activeThread?.environmentId,
@@ -1443,47 +1435,6 @@ export default function ChatView(props: ChatViewProps) {
   const canChangeEnvironment =
     hasMultipleEnvironments && !envLocked && draftId !== null && !draftThread?.promotedTo;
 
-  // Each machine decides in its own settings whether it takes balanced work.
-  const projectEnvironmentIds = logicalProjectEnvironments.map(
-    ({ environmentId }) => environmentId,
-  );
-  const placementWeights = usePlacementWeights(projectEnvironmentIds);
-  const loadBalancingWeights = Object.fromEntries(
-    projectEnvironmentIds.map((environmentId, index) => [
-      environmentId,
-      placementWeights[index] ?? 0,
-    ]),
-  );
-  const loadBalancingSettings = {
-    loadBalancingEnabled: Object.values(loadBalancingWeights).some((weight) => weight > 0),
-    loadBalancingWeights,
-  };
-  const automaticEnvironment = Boolean(
-    draftId &&
-    !envLocked &&
-    canAutoBalanceEnvironments &&
-    loadBalancingSettings.loadBalancingEnabled &&
-    draftThread?.environmentSelection !== "manual" &&
-    (!composerHasAttachments || Boolean(draftThread?.loadBalancedEnvironmentId)) &&
-    (!draftThread?.branch || draftThread.environmentSelection === "auto") &&
-    !draftThread?.worktreePath,
-  );
-  const autoUpdateEnvironments = automaticEnvironment
-    ? logicalProjectEnvironments.flatMap(({ environmentId }) => {
-        const environment = environmentById.get(environmentId);
-        return environment ? [environment] : [];
-      })
-    : EMPTY_AUTO_UPDATE_ENVIRONMENTS;
-  const systemComposerBannerItems = useSystemComposerBanners({
-    activeEnvironment,
-    activeEnvironmentUnavailable,
-    activeEnvironmentUnavailableState,
-    activeThreadEnvironmentId: activeThread?.environmentId ?? null,
-    serverConfig,
-    hasMultipleRegisteredEnvironments: environments.length > 1,
-    automaticEnvironment,
-    autoUpdateEnvironments,
-  });
   const providerInstanceEntries = providerInstanceEntriesFor(
     providerStatuses,
     settings,
@@ -1503,6 +1454,73 @@ export default function ChatView(props: ChatViewProps) {
   });
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
+  // The draft's machine asks its placement where Auto would start the thread; no answer means
+  // no machine it reaches takes placed work, so the draft has no Auto (patches/fleet-placement.md).
+  const placementPreview = usePlacementPreview(
+    draftId && !envLocked && draftThread
+      ? {
+          environmentId: draftThread.environmentId,
+          projectId: draftThread.projectId,
+          // The provider the send will use, after falling back from an unavailable one.
+          instanceId: activeProviderInstanceId,
+        }
+      : null,
+  );
+  // While the first answer loads, Auto stays on, so a quick send is still placed.
+  const placementAvailable = Boolean(
+    draftId &&
+    !envLocked &&
+    // An unanswered preview (still loading, or offline) keeps Auto; only a "no machine" answer drops it.
+    (placementPreview.data === null
+      ? placementPreview.isPending || placementPreview.error !== null
+      : placementPreview.data.preview !== null),
+  );
+  const automaticEnvironment = Boolean(
+    placementAvailable &&
+    draftThread?.environmentSelection !== "manual" &&
+    (!draftThread?.branch || draftThread.environmentSelection === "auto") &&
+    !draftThread?.worktreePath,
+  );
+  // Placement keeps these here, as it does attachments, context and a worktree of a local base.
+  const worktreeRepositoryChoices = useWorktreeRepositoryChoices(activeProject);
+  const rememberedWorktreeRepositories = useRememberedWorktreeRepositories(activeProject ?? null);
+  // Only a new thread's draft holds a choice; anything else leaves it to the server's default.
+  const worktreeRepositories = resolveWorktreeRepositorySelection({
+    choices: worktreeRepositoryChoices.choices,
+    chosen: isLocalDraftThread
+      ? (draftThread?.worktreeRepositories ?? rememberedWorktreeRepositories)
+      : undefined,
+  }).strategyRepositories;
+  // A triage prompt links this machine's playbook, a repository choice names its paths, and a
+  // checked-out pull request is its checkout.
+  const composerIsTriage = useComposerDraftStore((store) =>
+    isTriagePrompt(store.getComposerDraft(composerDraftTarget)?.prompt ?? ""),
+  );
+  const placementStaysHere =
+    composerHasNonPromptContent ||
+    composerIsTriage ||
+    worktreeRepositories !== undefined ||
+    checkoutPullRequestUrlToLink(draftThread) !== null ||
+    // A new worktree or workspace from a local branch: the base is a commit only this machine has.
+    (draftThread?.envMode === "worktree" &&
+      draftThread.startFromOrigin !== true &&
+      draftThread.branch != null);
+  const autoUpdateEnvironments = automaticEnvironment
+    ? logicalProjectEnvironments.flatMap(({ environmentId }) => {
+        const environment = environmentById.get(environmentId);
+        return environment ? [environment] : [];
+      })
+    : EMPTY_AUTO_UPDATE_ENVIRONMENTS;
+  const systemComposerBannerItems = useSystemComposerBanners({
+    activeEnvironment,
+    activeEnvironmentUnavailable,
+    activeEnvironmentUnavailableState,
+    activeThreadEnvironmentId: activeThread?.environmentId ?? null,
+    serverConfig,
+    hasMultipleRegisteredEnvironments: environments.length > 1,
+    automaticEnvironment,
+    autoUpdateEnvironments,
+  });
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const activeUsageModel =
     [
@@ -2052,9 +2070,6 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   const {
-    needsLoadBalancing,
-    loadBalancing,
-    refreshBeforeSend,
     onAutoEnvironmentStable,
     autoEnvironmentLabel,
     isEnvironmentChanging,
@@ -2062,17 +2077,14 @@ export default function ChatView(props: ChatViewProps) {
     onEnvironmentChangeStable,
   } = useDraftEnvironmentRouting({
     draftId,
-    draftThread,
     envLocked,
     automaticEnvironment,
+    placementPreview,
+    placementStaysHere,
+    sourceEnvironmentLabel: draftThread
+      ? (environmentById.get(draftThread.environmentId)?.label ?? null)
+      : null,
     logicalProjectEnvironments,
-    environmentById,
-    providersByEnvironment,
-    loadBalancingSettings,
-    referencedThreadContexts,
-    activeProviderInstanceId,
-    selectedProvider,
-    composerHasAttachments,
     activeProjectKey,
     activeProjectIsScratch,
     projectGroupingSettings,
@@ -2502,25 +2514,16 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         activeProjectSettings.settings.newWorktreesStartFromOrigin)
       : false;
-  const worktreeRepositoryChoices = useWorktreeRepositoryChoices(activeProject);
   const workspaceModesOffered = offersWorkspaceModes({
     isScratchProject: activeProjectIsScratch,
     isGitRepo,
     tracksGitRepositories: worktreeRepositoryChoices.tracksGitRepositories,
   });
-  const rememberedWorktreeRepositories = useRememberedWorktreeRepositories(activeProject ?? null);
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo: canChooseWorkspace,
     tracksGitRepositories: worktreeRepositoryChoices.tracksGitRepositories,
   });
-  // Only a new thread's draft holds a choice; anything else leaves it to the server's default.
-  const worktreeRepositories = resolveWorktreeRepositorySelection({
-    choices: worktreeRepositoryChoices.choices,
-    chosen: isLocalDraftThread
-      ? (draftThread?.worktreeRepositories ?? rememberedWorktreeRepositories)
-      : undefined,
-  }).strategyRepositories;
   // jj keeps Git's HEAD detached, so a missing branch there is normal.
   const localCheckoutBranchMismatch =
     isServerThread && vcsKind !== "jj"
@@ -2884,6 +2887,47 @@ export default function ChatView(props: ChatViewProps) {
       : null,
     messages,
   );
+  const placementWait = activeThreadShell === null ? null : placementWaitOf(activeThreadShell);
+  const startWaitingThreadNow = () => {
+    if (activeThreadShell === null) return;
+    setPlacementWaitBusy(true);
+    void startPlacedThreadNow({
+      environmentId,
+      input: { threadId: activeThreadShell.id },
+    }).finally(() => setPlacementWaitBusy(false));
+  };
+  const cancelWaitingThread = () => {
+    if (activeThreadShell === null || placementWait === null) return;
+    const threadId = activeThreadShell.id;
+    setPlacementWaitBusy(true);
+    void interruptThreadTurn({
+      environmentId,
+      input: { threadId, runId: placementWait.cancelRunId },
+    })
+      .then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            threadId,
+            error instanceof Error ? error.message : m(msg("Failed to cancel the waiting thread.")),
+          );
+        }
+      })
+      .finally(() => setPlacementWaitBusy(false));
+  };
+  const startWaitingThreadNowStable = useStableCallback(startWaitingThreadNow);
+  const cancelWaitingThreadStable = useStableCallback(cancelWaitingThread);
+  const placementWaitBanner =
+    placementWait === null
+      ? null
+      : placementWaitBannerItem({
+          placement: placementWait.placement,
+          busy: placementWaitBusy,
+          canOperate: canOperateThread,
+          onStartNow: startWaitingThreadNowStable,
+          onCancel: cancelWaitingThreadStable,
+          resolve: messages,
+        });
   const composerBannerItems = (() => {
     const fallbackSelection = draftFallback?.selection;
     const defaultSelection =
@@ -2933,7 +2977,10 @@ export default function ChatView(props: ChatViewProps) {
             ),
           ]
         : [];
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const limitRecoveryItems = [
+      ...(placementWaitBanner === null ? [] : [placementWaitBanner]),
+      ...(limitRecoveryBanner === null ? [] : [limitRecoveryBanner]),
+    ];
     const extensionStatusBanner = extensionStatusBannerItem(
       deriveProviderExtensionStatuses(serverProjection),
     );
@@ -3263,7 +3310,6 @@ export default function ChatView(props: ChatViewProps) {
     worktreeRepositories,
     startFromOrigin,
     localCheckoutBranchMismatch,
-    logicalProjectEnvironments,
     providerInstanceEntries,
     composerRef,
     composerDraftTarget,
@@ -3291,9 +3337,7 @@ export default function ChatView(props: ChatViewProps) {
     usageLimitsOffered,
     openUsageLimits,
     clearUsageLimitsFor,
-    needsLoadBalancing,
-    loadBalancing,
-    refreshBeforeSend,
+    autoPlacement: automaticEnvironment,
     readPendingEnvironmentChange,
     pendingApprovals,
     respondingRequestIds,
@@ -3415,7 +3459,6 @@ export default function ChatView(props: ChatViewProps) {
     !isRevertingCheckpoint &&
     !threadDetailLoading &&
     clientSettingsHydrated &&
-    !needsLoadBalancing &&
     !activeEnvironmentUnavailable &&
     !activePendingUserInput &&
     !feedbackUploading;
@@ -3706,6 +3749,7 @@ export default function ChatView(props: ChatViewProps) {
               isServerThread={isServerThread}
               activeThreadTitle={activeThread.title}
               activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}
+              activeThreadPlacement={activeThreadShell?.placement ?? null}
               activeProject={activeProject ?? null}
               parentThreadLink={headerParentThreadLink}
               onOpenThread={onOpenRelatedThreadStable}
@@ -4191,12 +4235,7 @@ export default function ChatView(props: ChatViewProps) {
                                     : {})}
                                   autoEnvironmentLabel={autoEnvironmentLabel}
                                   onAutoEnvironment={
-                                    draftId &&
-                                    !envLocked &&
-                                    canAutoBalanceEnvironments &&
-                                    loadBalancingSettings.loadBalancingEnabled
-                                      ? onAutoEnvironmentStable
-                                      : undefined
+                                    placementAvailable ? onAutoEnvironmentStable : undefined
                                   }
                                   availableEnvironments={logicalProjectEnvironments}
                                   jjCwd={vcsKind === "jj" ? gitCwd : null}
@@ -4294,14 +4333,7 @@ export default function ChatView(props: ChatViewProps) {
                   envLocked={envLocked}
                   availableEnvironments={logicalProjectEnvironments}
                   autoEnvironmentLabel={autoEnvironmentLabel}
-                  onAutoEnvironment={
-                    draftId &&
-                    !envLocked &&
-                    canAutoBalanceEnvironments &&
-                    loadBalancingSettings.loadBalancingEnabled
-                      ? onAutoEnvironmentStable
-                      : undefined
-                  }
+                  onAutoEnvironment={placementAvailable ? onAutoEnvironmentStable : undefined}
                   {...(canChangeEnvironment
                     ? { onEnvironmentChange: onEnvironmentChangeStable }
                     : {})}

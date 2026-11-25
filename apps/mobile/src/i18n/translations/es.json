@@ -4729,6 +4729,10 @@
   },
   "a5ab121035166e53": "Completa las respuestas pendientes",
   "545e67cafc32dc6b": "Esta conexión no puede enviar respuestas.",
+  "22da0c8a2fb4bf65": "That did not work. Try again.",
+  "8471bcbc03d4e2e1": "Waiting for room on {machine}",
+  "1b1892e9f6187f61": "Start anyway",
+  "8b93438ec6cc799b": "Cancel",
   "aa5674d75dc47395": "Se canceló la clonación de {name}",
   "3c38548cbd950933": "No se pudo clonar {name}",
   "c941a659fc35dc4c": [
@@ -5031,6 +5035,7 @@
   "d506b798402041ab": "Enviar ahora",
   "9a62f694ba5c35c5": "Abriendo hilo…",
   "bb24a2960c689a20": "Este hilo no está disponible en la instantánea móvil actual.",
+  "c1ecddecb5aaa932": "Auto: {reason}",
   "41ca8f475c481866": "Subagente de {title}",
   "f3e00e6c416eab38": "De {origin}",
   "bdfb9e7660ab25d3": "No se pudo reanudar el hilo",

@@ -4736,6 +4736,10 @@
   },
   "a5ab121035166e53": "Fülle die ausstehenden Antworten aus",
   "545e67cafc32dc6b": "Diese Verbindung kann keine Antworten absenden.",
+  "22da0c8a2fb4bf65": "That did not work. Try again.",
+  "8471bcbc03d4e2e1": "Waiting for room on {machine}",
+  "1b1892e9f6187f61": "Start anyway",
+  "8b93438ec6cc799b": "Cancel",
   "aa5674d75dc47395": "Klonen von {name} abgebrochen",
   "3c38548cbd950933": "{name} konnte nicht geklont werden",
   "c941a659fc35dc4c": [
@@ -5038,6 +5042,7 @@
   "d506b798402041ab": "Jetzt senden",
   "9a62f694ba5c35c5": "Thread wird geöffnet…",
   "bb24a2960c689a20": "Dieser Thread ist im aktuellen mobilen Snapshot nicht verfügbar.",
+  "c1ecddecb5aaa932": "Auto: {reason}",
   "41ca8f475c481866": "Subagent von {title}",
   "f3e00e6c416eab38": "Von {origin}",
   "bdfb9e7660ab25d3": "Thread konnte nicht fortgesetzt werden",
