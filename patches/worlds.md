@@ -32,7 +32,7 @@ notion of any of it.
 - **World repo (4d).** A world's `repo` is cloned as each thread world's root, so its
   `AGENTS.md`, `agent-notes/` and `world.json` (the layout) sit at the top of the world and travel
   between machines. Its `.gitignore` keeps everything else out, so git never walks the repos below. Launches bind
-  its `.git` and `~/.config/git` read-only: T3 runs git there on the host with the host's keys, so the thread must not
+  its `.git` read-only: T3 runs git there on the host with the host's keys, so the thread must not
   plant hooks, config or filters.
   At the end of every turn (`CheckpointCaptureService`, after the jj seal) T3 runs `agent-exec
   world-notes` in the background, one at a time per thread world: commit, merge the remote's with

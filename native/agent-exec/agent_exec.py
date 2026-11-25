@@ -455,13 +455,7 @@ def launch(record, cwd, command, *, project=None):
             or name.endswith("AGENTS.md")
         ):
             continue
-        bind(
-            args,
-            host_home / name,
-            # T3 runs git on the host in a world's repo, so a world's thread may not change git's
-            # global config.
-            writable=name.startswith(".config/") and not world,
-        )
+        bind(args, host_home / name)
     # jj stores writable per-repository trust/config metadata next to user
     # settings. Keep that state private, while sharing familiar user settings.
     if not minimal:
