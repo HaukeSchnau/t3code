@@ -502,8 +502,9 @@ const appleInstall = Setup.make("apple-install", {
 });
 
 /**
- * Development clients for main's native fingerprint, built into m1's own client cache so
- * `vp run mobile:install` there installs in seconds. Fork hosts can't write upstream's shared cache.
+ * Development clients for the deployed revision's native fingerprint, built into m1's own client
+ * cache so `vp run mobile:install` there installs in seconds. Fork hosts can't write upstream's
+ * shared cache.
  */
 const nativeClients = Task.make("native-clients", {
   platform: "aarch64-darwin",
@@ -626,8 +627,8 @@ const apps = (promote: Step.Any) => {
 export default Project.standard({
   flake,
   // Production runs the redesign bookmark: main plus Maria's redesign stack, refreshed by the weekly
-  // upstream sync (.agents/skills/upstream-sync). Pushes to main still pass their PR checks but no
-  // longer deploy. Back to main, here and in infra's hosts/srv-2/calder.nix, once upstream lands it.
+  // upstream sync (.agents/skills/upstream-sync). Pull requests to main keep their checks; a push to
+  // main runs nothing. Back to main, here and in infra's hosts/srv-2/calder.nix, once upstream lands it.
   defaultBranch: "redesign",
   // Every fleet host gets the Release built for its system: srv-1 and srv-2, dev-hauke and the
   // tower, and m1.
