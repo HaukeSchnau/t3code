@@ -10,7 +10,7 @@ one ordinary user message when sent.
 
 - Assistant messages keep their existing Markdown typography and spacing when no reply is open.
 - A paragraph/list-item reply affordance appears only while that block is hovered. Selecting text
-  exposes a small contextual Reply action.
+  adds Reply to the timeline's selection toolbar, beside Cite and Copy.
 - Open editors identify their exact selected text or say `Whole paragraph`. Selection replies keep
   a quiet source highlight, and paragraph replies keep a small source indicator.
 - The existing main composer remains the only send control. Inline replies enable it even when its
@@ -39,8 +39,11 @@ one ordinary user message when sent.
 - The transparent hit target for each block affordance is always mounted in the adjacent gutter; its
   icon becomes visible when either the block or that target is hovered. The gutter lies outside
   `chat-content-lane`, so `MessagesTimeline`'s row frame (`renderItem`) clips horizontal overflow,
-  not the lane. Upstream keeps moving that clip onto the lane, which hides every reply arrow. Text
-  selection follows the document `selectionchange` event. Whole-block browser selections may end at the next block
-  boundary and must be normalized back to the source block.
+  not the lane. Upstream keeps moving that clip onto the lane, which hides every reply arrow.
+- `chat/AssistantSelectionToolbar.tsx` mounts `InlineSelectionReplyButton` from
+  `AssistantInlineReplies.tsx`. It finds the message's store through the root the replies render
+  (`data-inline-reply-root`, kept in a `WeakMap`), so the toolbar takes no new props. Whole-block
+  browser selections may end at the next block boundary and must be normalized back to the source
+  block.
 - The feature ships on the web client and therefore the Electron desktop client. The React Native
   mobile timeline remains unchanged until it has a native text-selection interaction.

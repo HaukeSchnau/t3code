@@ -3,39 +3,37 @@ import { CornerDownLeftIcon, XIcon } from "lucide-react";
 import { T, useGT } from "gt-react";
 import {
   cloneElement,
-  useEffect,
   useLayoutEffect,
   useRef,
-  useState,
   useSyncExternalStore,
   type KeyboardEvent,
   type ReactElement,
 } from "react";
-import { createPortal } from "react-dom";
 import ChatMarkdown, {
   type ChatMarkdownBlockRenderer,
   type ChatMarkdownBlock,
   type ChatMarkdownProps,
 } from "../ChatMarkdown";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Text } from "../ui/text";
+import { Textarea } from "../ui/textarea";
 import {
   resolveInlineReplySelectionScope,
   type InlineReplyDraft,
   type InlineReplyDraftStore,
 } from "./inlineReplies";
 
-interface SelectionAction {
-  readonly blockId: string;
-  readonly quote: string;
-  readonly textRange: { readonly start: number; readonly end: number };
-  readonly left: number;
-  readonly top: number;
-}
-
 interface AssistantInlineRepliesProps extends ChatMarkdownProps {
   readonly messageId: MessageId;
   readonly store: InlineReplyDraftStore;
 }
+
+// The selection toolbar reaches a message's replies through the root its markdown renders in.
+const inlineReplyRoots = new WeakMap<
+  HTMLElement,
+  { readonly messageId: MessageId; readonly store: InlineReplyDraftStore }
+>();
 
 function sourceBlockForNode(node: Node | null, root: HTMLElement): HTMLElement | null {
   const element = node instanceof HTMLElement ? node : node?.parentElement;
@@ -114,16 +112,6 @@ function InlineReplyEditor({
   store: InlineReplyDraftStore;
 }) {
   const gt = useGT();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The textarea height is measured from the DOM after each edit.
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The height follows the text, which the effect measures through the DOM.
-  }, [reply.text]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Escape") return;
@@ -135,33 +123,35 @@ function InlineReplyEditor({
     <div
       data-inline-reply-ui
       data-thread-find-ignore
-      className="group/inline-editor relative mt-1.5 ml-2"
+      className="group/inline-editor mt-1.5 ml-2 flex flex-col gap-1"
     >
-      <div className="relative rounded-md border border-border/65 focus-within:border-foreground/25">
-        <span className="absolute -top-2 left-2.5 max-w-[calc(100%-2.75rem)] truncate bg-background px-1 text-3xs leading-4 text-muted-foreground">
-          {reply.anchorKind === "paragraph" ? gt("Whole paragraph") : `“${reply.quote}”`}
-        </span>
-        <textarea
-          ref={textareaRef}
-          data-inline-reply-id={reply.id}
+      <Text variant="caption" tone="muted" truncate>
+        {reply.anchorKind === "paragraph" ? gt("Whole paragraph") : `“${reply.quote}”`}
+      </Text>
+      <div className="flex items-start gap-1">
+        <Textarea
+          size="sm"
           rows={1}
+          className="min-w-0 flex-1"
+          data-inline-reply-id={reply.id}
           value={reply.text}
           aria-label={
             reply.anchorKind === "paragraph" ? gt("Reply to paragraph") : gt("Reply to selection")
           }
           placeholder={gt("Reply…")}
-          className="block min-h-9 max-h-40 w-full resize-none overflow-y-auto bg-transparent px-2.5 py-2 pr-8 text-sm leading-5 outline-none placeholder:text-muted-foreground/60"
           onChange={(event) => store.update(reply.id, event.target.value)}
           onKeyDown={onKeyDown}
         />
-        <button
-          type="button"
-          aria-label={gt("Remove inline reply")}
-          className="absolute top-1.5 right-1.5 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/inline-editor:opacity-100"
-          onClick={() => store.remove(reply.id)}
-        >
-          <XIcon className="size-3.5" />
-        </button>
+        <div className="opacity-0 focus-within:opacity-100 group-hover/inline-editor:opacity-100 pointer-coarse:opacity-100">
+          <Button
+            variant="ghost-muted"
+            size="icon-fixed-xs"
+            aria-label={gt("Remove inline reply")}
+            onClick={() => store.remove(reply.id)}
+          >
+            <XIcon />
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -208,23 +198,25 @@ function InlineReplyBlock({
         data-inline-reply-ui
         data-thread-find-ignore
         aria-hidden="true"
-        className="absolute top-[0.65rem] -left-3 size-1 rounded-full bg-primary/60"
+        className="absolute top-[0.65rem] -left-3 size-1 rounded-full bg-primary"
       />
     ) : null,
-    <button
+    <span
       key="reply-action"
-      type="button"
       data-inline-reply-ui
       data-thread-find-ignore
       data-inline-reply-hover-affordance
-      aria-label={gt("Reply to this paragraph")}
-      className="absolute top-0 left-full z-10 flex h-6 w-7 items-center pl-1 opacity-0 group-hover/inline-reply-block:opacity-100 hover:opacity-100 focus-visible:opacity-100 max-sm:hidden"
-      onClick={() => onParagraphReply(block.id)}
+      className="absolute top-0 left-full z-10 flex h-6 w-7 justify-end opacity-0 group-hover/inline-reply-block:opacity-100 hover:opacity-100 focus-within:opacity-100 max-sm:hidden"
     >
-      <span className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground">
-        <CornerDownLeftIcon className="size-3.5" />
-      </span>
-    </button>,
+      <Button
+        variant="ghost-muted"
+        size="icon-fixed-xs"
+        aria-label={gt("Reply to this paragraph")}
+        onClick={() => onParagraphReply(block.id)}
+      >
+        <CornerDownLeftIcon />
+      </Button>
+    </span>,
     block.kind === "list-item"
       ? replies.map((reply) => <InlineReplyEditor key={reply.id} reply={reply} store={store} />)
       : null,
@@ -241,6 +233,78 @@ function InlineReplyBlock({
   );
 }
 
+/** The reply a selection in a replyable message would start, or null when it can take none. */
+function selectionReplyFor(range: Range) {
+  const node = range.startContainer;
+  const root = (node instanceof HTMLElement ? node : node.parentElement)?.closest<HTMLElement>(
+    "[data-inline-reply-root]",
+  );
+  const target = root ? inlineReplyRoots.get(root) : undefined;
+  const quote = range.toString().replace(/\s+/g, " ").trim();
+  if (!root || !target || quote.length < 2) return null;
+
+  const startBlock = sourceBlockForNode(range.startContainer, root);
+  const endBlock = sourceBlockForNode(range.endContainer, root);
+  const blockId = startBlock?.dataset.inlineReplyBlockId;
+  if (!startBlock || !blockId) return null;
+  const scope = resolveInlineReplySelectionScope({
+    selectedText: quote,
+    startBlockText: normalizedBlockText(startBlock),
+    endsInStartBlock: startBlock === endBlock,
+  });
+  if (!scope) return null;
+  const effectiveRange =
+    scope === "whole-block"
+      ? restoreTextRange(startBlock, { start: 0, end: selectableBlockTextLength(startBlock) })
+      : range;
+  if (!effectiveRange) return null;
+
+  const precedingRange = document.createRange();
+  precedingRange.selectNodeContents(startBlock);
+  precedingRange.setEnd(effectiveRange.startContainer, effectiveRange.startOffset);
+  const start = precedingRange.toString().length;
+  const selectedText = effectiveRange.toString();
+  return {
+    ...target,
+    blockId,
+    quote: selectedText.replace(/\s+/g, " ").trim(),
+    textRange: { start, end: start + selectedText.length },
+  };
+}
+
+/** Reply in the selection toolbar, for a selection inside one block of a replyable message. */
+export function InlineSelectionReplyButton({
+  range,
+  onDone,
+}: {
+  range: Range;
+  onDone: () => void;
+}) {
+  const reply = selectionReplyFor(range);
+  if (!reply) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      onClick={() => {
+        const replyId = reply.store.add({
+          messageId: reply.messageId,
+          blockId: reply.blockId,
+          anchorKind: "selection",
+          quote: reply.quote,
+          textRange: reply.textRange,
+        });
+        window.getSelection()?.removeAllRanges();
+        onDone();
+        focusReplyEditor(replyId);
+      }}
+    >
+      <CornerDownLeftIcon aria-hidden="true" />
+      <T context="verb">Reply</T>
+    </Button>
+  );
+}
+
 export function AssistantInlineReplies({
   messageId,
   store,
@@ -248,7 +312,6 @@ export function AssistantInlineReplies({
   ...markdownProps
 }: AssistantInlineRepliesProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const [selectionAction, setSelectionAction] = useState<SelectionAction | null>(null);
   const getReplies = () => store.getForMessage(messageId);
   const replies = useSyncExternalStore(
     (listener) => store.subscribeToMessage(messageId, listener),
@@ -271,14 +334,6 @@ export function AssistantInlineReplies({
     store.setHighlightRanges(messageId, ranges);
     return () => store.clearHighlightRanges(messageId);
   }, [messageId, replies, store]);
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Scrolling anywhere dismisses the selection action, which needs a window listener.
-  useEffect(() => {
-    if (!selectionAction) return;
-    const dismissOnScroll = () => setSelectionAction(null);
-    window.addEventListener("scroll", dismissOnScroll, true);
-    return () => window.removeEventListener("scroll", dismissOnScroll, true);
-  }, [selectionAction]);
 
   const addParagraphReply = (blockId: string) => {
     const blockElement = rootRef.current?.querySelector<HTMLElement>(
@@ -307,109 +362,16 @@ export function AssistantInlineReplies({
     />
   );
 
-  const updateSelectionAction = () => {
-    if (isStreaming) return;
-    const root = rootRef.current;
-    const selection = window.getSelection();
-    const quote = selection?.toString().replace(/\s+/g, " ").trim() ?? "";
-    if (
-      !root ||
-      !selection ||
-      selection.isCollapsed ||
-      selection.rangeCount === 0 ||
-      quote.length < 2
-    ) {
-      setSelectionAction(null);
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-    const startBlock = sourceBlockForNode(range.startContainer, root);
-    const endBlock = sourceBlockForNode(range.endContainer, root);
-    const blockId = startBlock?.dataset.inlineReplyBlockId;
-    if (!startBlock || !blockId) {
-      setSelectionAction(null);
-      return;
-    }
-
-    const scope = resolveInlineReplySelectionScope({
-      selectedText: quote,
-      startBlockText: normalizedBlockText(startBlock),
-      endsInStartBlock: startBlock === endBlock,
-    });
-    if (!scope) {
-      setSelectionAction(null);
-      return;
-    }
-
-    const effectiveRange =
-      scope === "whole-block"
-        ? restoreTextRange(startBlock, {
-            start: 0,
-            end: selectableBlockTextLength(startBlock),
-          })
-        : range;
-    if (!effectiveRange) {
-      setSelectionAction(null);
-      return;
-    }
-
-    const precedingRange = document.createRange();
-    precedingRange.selectNodeContents(startBlock);
-    precedingRange.setEnd(effectiveRange.startContainer, effectiveRange.startOffset);
-    const start = precedingRange.toString().length;
-    const bounds = effectiveRange.getBoundingClientRect();
-    const selectedRangeText = effectiveRange.toString();
-    setSelectionAction({
-      blockId,
-      quote: selectedRangeText.replace(/\s+/g, " ").trim(),
-      textRange: { start, end: start + selectedRangeText.length },
-      left: Math.min(window.innerWidth - 144, Math.max(12, bounds.left + bounds.width / 2 - 66)),
-      top: Math.max(12, bounds.top - 38),
-    });
-  };
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Text selection is document state with no React event.
-  useEffect(() => {
-    document.addEventListener("selectionchange", updateSelectionAction);
-    return () => document.removeEventListener("selectionchange", updateSelectionAction);
-  }, [updateSelectionAction]);
-
-  const addSelectionReply = () => {
-    if (!selectionAction) return;
-    const replyId = store.add({
-      messageId,
-      blockId: selectionAction.blockId,
-      anchorKind: "selection",
-      quote: selectionAction.quote,
-      textRange: selectionAction.textRange,
-    });
-    setSelectionAction(null);
-    window.getSelection()?.removeAllRanges();
-    focusReplyEditor(replyId);
+  const attachRoot = (root: HTMLDivElement | null) => {
+    rootRef.current = root;
+    if (root) inlineReplyRoots.set(root, { messageId, store });
   };
 
   if (isStreaming) return <ChatMarkdown {...markdownProps} isStreaming />;
 
   return (
-    <div ref={rootRef} onMouseUp={updateSelectionAction} onKeyUp={updateSelectionAction}>
+    <div ref={attachRoot} data-inline-reply-root>
       <ChatMarkdown {...markdownProps} renderBlock={renderBlock} />
-      {selectionAction && typeof document !== "undefined"
-        ? createPortal(
-            <button
-              type="button"
-              data-inline-reply-ui
-              className="fixed z-50 flex items-center gap-1.5 rounded-full bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
-              style={{ left: selectionAction.left, top: selectionAction.top }}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={addSelectionReply}
-            >
-              <CornerDownLeftIcon className="size-3.5" />
-              <T context="verb">Reply</T>
-            </button>,
-            document.body,
-          )
-        : null}
     </div>
   );
 }
