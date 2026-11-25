@@ -54,8 +54,8 @@ user. Upstream closed OIDC as not planned (pingdotgg/t3code#12278).
   the config reference. `apps/server/src/server.ts` wires the layers.
 - `packages/client-runtime/src/authorization/remote.ts`: `fetchRemoteSessionState` takes an
   optional bearer token.
-- Web: `PairingRouteSurface.tsx`, `AddEnvironmentDialog.tsx`, `routes/__root.tsx`,
-  `routes/pair.tsx`. Mobile: `ConnectionsNewRouteScreen.tsx`.
+- Web: `PairingRouteSurface.tsx` (mounts `auth/OidcSignInButton.tsx`), `AddEnvironmentDialog.tsx`,
+  `routes/__root.tsx`, `routes/pair.tsx`. Mobile: `ConnectionsNewRouteScreen.tsx`.
 
 ## Removal
 

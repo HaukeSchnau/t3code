@@ -21,6 +21,7 @@ import { canSignInWithOidc, peekOidcSignInFailure } from "../../oidcSignIn";
 import { continuePeerFanOut, peerFanOutStep } from "../../peerFanOut";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
+import { OidcSignInButton } from "./OidcSignInButton";
 import { Input } from "../ui/input";
 import { Kbd } from "../ui/kbd";
 import { Spinner } from "../ui/spinner";
@@ -176,7 +177,13 @@ export function PairingRouteSurface({
           >
             <T>Reload app</T>
           </Button>
-          <Button disabled={isSubmitting} size="standard" type="submit">
+          {signIn ? <OidcSignInButton signIn={signIn} disabled={isSubmitting} /> : null}
+          <Button
+            disabled={isSubmitting}
+            size="standard"
+            type="submit"
+            variant={signIn ? "secondary" : "default"}
+          >
             {isSubmitting ? <Spinner /> : null}
             {isSubmitting ? gt("Pairing…") : failed ? gt("Try again") : gt("Continue")}
             {isSubmitting ? null : <Kbd>⏎</Kbd>}
