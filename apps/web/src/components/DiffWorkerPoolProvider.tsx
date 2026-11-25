@@ -28,10 +28,20 @@ let sharedWorkerPool:
   | {
       readonly pool: WorkerPoolManager;
       readonly unsubscribeTheme: () => void;
+      failed: boolean;
+      readonly listeners: Set<() => void>;
       consumers: number;
       idleTimer: ReturnType<typeof setTimeout> | undefined;
     }
   | undefined;
+
+// A failed worker must release waiting viewers to main-thread highlighting.
+function failDiffWorkerPool(entry: NonNullable<typeof sharedWorkerPool>) {
+  if (entry.failed || entry.pool.isInitialized()) return;
+  entry.failed = true;
+  entry.pool.terminate();
+  for (const listener of entry.listeners) listener();
+}
 
 function applyDiffWorkerTheme(pool: WorkerPoolManager) {
   const themeName = resolveDiffThemeName(getRenderedAppearance());
@@ -56,7 +66,9 @@ function createDiffWorkerPool(poolSize: number) {
     {
       workerFactory: () => {
         try {
-          return new DiffsWorker();
+          const worker = new DiffsWorker();
+          worker.addEventListener("error", () => failDiffWorkerPool(entry), { once: true });
+          return worker;
         } catch (cause) {
           throw new DiffWorkerError({ operation: "create-worker", themeName, cause });
         }
@@ -71,12 +83,15 @@ function createDiffWorkerPool(poolSize: number) {
       useTokenTransformer: true,
     },
   );
-  return {
+  const entry: NonNullable<typeof sharedWorkerPool> = {
     pool,
+    failed: false,
+    listeners: new Set(),
     unsubscribeTheme: subscribeRenderedAppearance(() => applyDiffWorkerTheme(pool)),
     consumers: 0,
     idleTimer: undefined,
   };
+  return entry;
 }
 
 function acquireDiffWorkerPool(poolSize: number) {
@@ -88,25 +103,29 @@ function acquireDiffWorkerPool(poolSize: number) {
 }
 
 // Plain-text views do not queue a highlight task that could retry a blank first render.
-function DiffWorkerReady({ children }: { children?: ReactNode }) {
-  const ready = useDiffWorkerPoolReady(useWorkerPool());
+function DiffWorkerReady({ failed, children }: { failed: boolean; children?: ReactNode }) {
+  const ready = useDiffWorkerPoolReady(useWorkerPool(), failed);
   return ready ? (
     children
   ) : (
     <div
       role="status"
-      className="flex min-h-0 flex-1 items-center justify-center p-4 text-xs text-muted-foreground"
+      className="flex min-h-0 flex-1 items-center justify-center p-4 text-meta text-muted-foreground"
     >
       <T>Loading code...</T>
     </div>
   );
 }
 
-export function useDiffWorkerPoolReady(workerPool: WorkerPoolManager | undefined) {
+/** A null pool is one whose worker died: its views render plain text instead of waiting. */
+export function useDiffWorkerPoolReady(
+  workerPool: WorkerPoolManager | null | undefined,
+  failed?: boolean,
+) {
   const [readyPool, setReadyPool] = useState<WorkerPoolManager>();
   const ready = workerPool
     ? readyPool === workerPool || workerPool.isInitialized() || !workerPool.isWorkingPool()
-    : typeof window === "undefined";
+    : (failed ?? workerPool === null) || typeof window === "undefined";
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- initializes the diff worker pool and marks it ready when its async startup settles
   useEffect(() => {
@@ -130,8 +149,10 @@ export function useDiffWorkerPoolReady(workerPool: WorkerPoolManager | undefined
 function subscribeSharedWorkerPool(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
   const entry = acquireDiffWorkerPool(resolveDiffWorkerPoolSize());
+  entry.listeners.add(onStoreChange);
   onStoreChange();
   return () => {
+    entry.listeners.delete(onStoreChange);
     entry.consumers -= 1;
     if (entry.consumers !== 0) return;
     entry.idleTimer = setTimeout(() => {
@@ -146,7 +167,7 @@ function subscribeSharedWorkerPool(onStoreChange: () => void) {
 export function useDiffWorkerPool() {
   return useSyncExternalStore(
     subscribeSharedWorkerPool,
-    () => sharedWorkerPool?.pool,
+    () => (sharedWorkerPool?.failed ? null : sharedWorkerPool?.pool),
     () => undefined,
   );
 }
@@ -155,8 +176,8 @@ export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
   const workerPool = useDiffWorkerPool();
 
   return (
-    <WorkerPoolContext value={workerPool}>
-      <DiffWorkerReady>{children}</DiffWorkerReady>
+    <WorkerPoolContext value={workerPool ?? undefined}>
+      <DiffWorkerReady failed={workerPool === null}>{children}</DiffWorkerReady>
     </WorkerPoolContext>
   );
 }

@@ -7,7 +7,7 @@ import {
   useVoiceOwnerPresented,
 } from "../../speech/voiceInputSession";
 import { Button } from "../ui/button";
-import { ComposerSpeechRecordingPill } from "./ComposerSpeechButton";
+import { ComposerSpeechButton } from "./ComposerSpeechButton";
 
 /**
  * Keeps the chosen destination's dictation alive across navigation and, while the draft it
@@ -16,7 +16,7 @@ import { ComposerSpeechRecordingPill } from "./ComposerSpeechButton";
 export function GlobalVoiceInputIndicator({ hidden = false }: { hidden?: boolean }) {
   const gt = useGT();
   const session = useRetainedVoiceInputSession(useVoiceTranscriptionDestination());
-  const { state, target, recordingStartedAt } = useVoiceInputSessionSnapshot(session);
+  const { state, target } = useVoiceInputSessionSnapshot(session);
   const presented = useVoiceOwnerPresented(target?.ownerKey ?? null);
   const { level } = useVoiceInputSessionActivity(
     hidden || presented ? null : session,
@@ -37,15 +37,15 @@ export function GlobalVoiceInputIndicator({ hidden = false }: { hidden?: boolean
         >
           <span className="truncate">{target.label ?? gt("Untitled thread")}</span>
         </Button>
-        <ComposerSpeechRecordingPill
+        <ComposerSpeechButton
           state={state}
-          progress={null}
-          level={level}
-          recordingStartedAt={recordingStartedAt}
           onStart={() => void session.start(target)}
-          onStop={() => void session.stop()}
-          onCancel={() => session.cancel()}
-          onSkipPostProcessing={() => session.skipPostProcessing()}
+          dictation={{
+            level,
+            onStop: () => void session.stop(),
+            onCancel: () => session.cancel(),
+            onSkipPostProcessing: () => session.skipPostProcessing(),
+          }}
         />
       </div>
     </div>

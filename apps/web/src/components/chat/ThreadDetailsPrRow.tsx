@@ -17,7 +17,11 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type { ComposerThreadTarget } from "~/composerDraftStore";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -77,8 +81,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LABEL_CLASS,
-  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
-  THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
+  THREAD_DETAILS_PANEL_ACTION_GROUP_CLASS,
 } from "./threadDetailsPanelStyles";
 
 // A null checks response is settled; polling cannot find checks.
@@ -94,6 +97,7 @@ export function ThreadDetailsPrRow({
   project,
   label,
   onOpen,
+  onPress,
   onActed,
   onStopWatching,
   composerTarget,
@@ -106,6 +110,7 @@ export function ThreadDetailsPrRow({
   project: EnvironmentProject | null;
   label: string;
   onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
+  onPress?: ((event: ReactPointerEvent<HTMLElement>) => void) | undefined;
   onActed?: () => void;
   onStopWatching?: (() => void) | undefined;
   /** Fix and Resolve write here instead of checking the pull request out in a new thread. */
@@ -321,7 +326,7 @@ export function ThreadDetailsPrRow({
         side="top"
         align="start"
         sideOffset={4}
-        variant="glass"
+        variant="popover"
         className="max-w-80 text-left whitespace-normal"
       >
         <div className="flex min-w-0 max-w-80 flex-col gap-2 px-1 py-2">
@@ -355,7 +360,11 @@ export function ThreadDetailsPrRow({
                   }
                 />
                 <div className="min-w-0 truncate text-foreground/75">
-                  {describePullRequestChecks(detail.checks, m)}
+                  {describePullRequestChecks(detail.checks, m).map((fact) => (
+                    <span className="block" key={fact}>
+                      {fact}
+                    </span>
+                  ))}
                 </div>
               </div>
             ) : null}
@@ -463,7 +472,7 @@ export function ThreadDetailsPrRow({
 
   const watching =
     onStopWatching !== undefined && (detail?.state ?? pr?.state ?? "open") === "open";
-  const watchControl = (part: "secondary" | "icon") =>
+  const watchControl = (compact: boolean) =>
     watching ? (
       <Tooltip>
         <TooltipTrigger
@@ -472,7 +481,7 @@ export function ThreadDetailsPrRow({
               type="button"
               variant="ghost"
               size="sm"
-              part={part}
+              part="icon"
               className="group/watch"
               aria-label={gt("Stop watching #{number}", { number })}
               onClick={onStopWatching}
@@ -481,14 +490,11 @@ export function ThreadDetailsPrRow({
         >
           <EyeIcon
             aria-hidden
-            className={cn(part === "icon" ? "size-3.5" : "size-4", "group-hover/watch:hidden")}
+            className={cn(compact ? "size-3.5" : "size-4", "group-hover/watch:hidden")}
           />
           <EyeOffIcon
             aria-hidden
-            className={cn(
-              part === "icon" ? "size-3.5" : "size-4",
-              "hidden group-hover/watch:block",
-            )}
+            className={cn(compact ? "size-3.5" : "size-4", "hidden group-hover/watch:block")}
           />
         </TooltipTrigger>
         <TooltipPopup side="top">
@@ -500,8 +506,7 @@ export function ThreadDetailsPrRow({
       </Tooltip>
     ) : null;
 
-  // The title row wraps to two lines; a conventional-commit prefix eats most of one line.
-  const openRow = (text: string, part: "row" | "primary", wrap = false) => (
+  const openRow = (text: string, grow = false) => (
     <Tooltip>
       <TooltipTrigger
         render={
@@ -509,22 +514,16 @@ export function ThreadDetailsPrRow({
             type="button"
             variant="ghost"
             size="sm"
-            part={wrap ? "title" : part}
+            className={grow ? "flex-1" : undefined}
             aria-label={openAriaLabel}
             onClick={onOpen}
             onAuxClick={onOpen}
+            onPointerDown={onPress}
           />
         }
       >
         {icon}
-        <span
-          className={cn(
-            "min-w-0 flex-1 text-left",
-            wrap
-              ? "line-clamp-2 whitespace-normal leading-4.5"
-              : cn("truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
-          )}
-        >
+        <span className={cn("min-w-0 flex-1 truncate text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
           {text}
         </span>
       </TooltipTrigger>
@@ -537,53 +536,73 @@ export function ThreadDetailsPrRow({
   return (
     <>
       {detail !== null && (showChecks || trailingAction !== null || watching) ? (
-        <div className="pb-1.5">
-          {openRow(detail.title, "row", true)}
-          <div className="flex h-5 min-w-0 items-center gap-0.5 ps-9 pe-2.5 text-xs text-muted-foreground">
-            <span aria-hidden className="me-1 shrink-0 tabular-nums">
-              #{number}
-            </span>
+        <div className="flex min-h-9 min-w-0 items-center gap-2.5 ps-2.5 pe-1">
+          {icon}
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ThreadDetailsControl
+                    part="heading"
+                    aria-label={openAriaLabel}
+                    onClick={onOpen}
+                    onAuxClick={onOpen}
+                    onPointerDown={onPress}
+                  />
+                }
+              >
+                <span className="truncate text-meta text-foreground">
+                  #{number} {detail.title}
+                </span>
+              </TooltipTrigger>
+              {rowTooltip}
+            </Tooltip>
             {showChecks && checksRollup !== null ? (
               <PullRequestChecksPopover
                 checksState={checksRollup}
                 checks={detail.checks}
-                variant="count"
-                render={<ThreadDetailsControl part="meta" className="min-w-0 shrink" />}
+                label={
+                  <span
+                    className={cn(
+                      "truncate text-caption",
+                      checksRollup === "failing"
+                        ? "text-error-foreground"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {describePullRequestChecks(detail.checks, m)[0]}
+                  </span>
+                }
               />
             ) : null}
-            {watchControl("icon")}
-            <span className="flex-1" />
-            {trailingAction ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <ThreadDetailsControl
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      part="meta"
-                      tone={trailingAction.destructive ? "destructive" : "primary"}
-                      disabled={actionPending || handoff !== null}
-                      onClick={trailingAction.onClick}
-                    />
-                  }
-                >
-                  {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
-                  {trailingAction.suffix}
-                </TooltipTrigger>
-                <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
-              </Tooltip>
-            ) : null}
           </div>
+          {watchControl(true)}
+          {trailingAction ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ThreadDetailsControl
+                    part="meta"
+                    tone={trailingAction.destructive ? "destructive" : "primary"}
+                    disabled={actionPending || handoff !== null}
+                    onClick={trailingAction.onClick}
+                  />
+                }
+              >
+                {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
+                {trailingAction.suffix}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
+            </Tooltip>
+          ) : null}
         </div>
       ) : watching ? (
-        <div className={THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS}>
-          {openRow(label, "primary")}
-          <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-          {watchControl("secondary")}
+        <div className={THREAD_DETAILS_PANEL_ACTION_GROUP_CLASS}>
+          {openRow(label, true)}
+          {watchControl(false)}
         </div>
       ) : (
-        openRow(label, "row")
+        openRow(label)
       )}
       {rowAction === "merge" ? (
         <AlertDialog open={confirmingMerge} onOpenChange={(open) => setConfirmingMerge(open)}>
@@ -606,7 +625,7 @@ export function ThreadDetailsPrRow({
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              <AlertDialogClose render={<Button variant="secondary" size="sm" />}>
                 <T>Cancel</T>
               </AlertDialogClose>
               <Button

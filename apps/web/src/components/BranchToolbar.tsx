@@ -9,8 +9,8 @@ import * as Schema from "effect/Schema";
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { readLocalApi } from "../localApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { ComposerContextLabel } from "./ComposerContextLabel";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type {
   EnvironmentId,
   ManagedWorkspacesCapability,
@@ -19,7 +19,16 @@ import type {
 } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m as resolveMessage } from "../i18n/messages";
-import { FolderGit2Icon, FolderGitIcon, FolderIcon, PlusIcon, ScaleIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  FolderGit2Icon,
+  FolderGitIcon,
+  FolderIcon,
+  GitBranchIcon,
+  HistoryIcon,
+  PlusIcon,
+  ScaleIcon,
+} from "lucide-react";
 import {
   type Ref,
   type MouseEvent as ReactMouseEvent,
@@ -33,32 +42,38 @@ import { flushSync } from "react-dom";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
-import { useProject, useThreadShellsForProjectRefs } from "../state/entities";
+import { useProject, useServerConfigs, useThreadShellsForProjectRefs } from "../state/entities";
 import {
   ADD_TO_MACHINE_LABEL_CLASS,
   type EnvMode,
   type EnvironmentOption,
-  resolveContextStripLabelsCompact,
+  readContextStripCompaction,
+  resolveContextStripCompaction,
+  type ContextStripCompaction,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveLockedWorkspaceLabel,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
-  shouldShowEnvironmentIndicator,
+  type PreviousWorktreeSeed,
 } from "./BranchToolbar.logic";
 import {
   BranchToolbarBranchSelector,
   type BranchToolbarBranchSelectorHandle,
 } from "./BranchToolbarBranchSelector";
-import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { openAddProjectToMachine } from "./AddProjectToMachineDialog";
 import { type AddProjectTarget, useAddProjectTargets } from "../hooks/useAddProjectTargets";
-import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { ComposerContextLabel } from "./ComposerContextLabel";
 import { JjStackControl } from "./JjStackControl";
+import { StartTruncatedPath } from "./StartTruncatedPath";
+import { Badge } from "./ui/badge";
+import { useRelativeTimeState } from "../hooks/useRelativeTimeState";
+import { useConnectedEnvironmentIds } from "../state/environments";
+import { useEnvironmentQuery } from "../state/query";
+import { vcsEnvironment } from "../state/vcs";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ManagedWorkspaceSelector } from "./ManagedWorkspaceSelector";
 import { WorktreeRepositoriesControl } from "./WorktreeRepositoriesControl";
-import { useWorktreeBaseBranch } from "../worktreeRepositoryChoiceStore";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -79,10 +94,15 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "./ui/menu";
-import { Separator } from "./ui/separator";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerSurface } from "./chat/ComposerSurface";
+import { measureRestingComposerControls } from "./chat/restingComposerControlsMeasurement";
+import { contextStripGroupWidth } from "./contextStripMeasurement";
+import {
+  resolveRestingComposerControlsMinimumWidth,
+  resolveRestingComposerControlsNarrowestWidth,
+} from "./composerFooterLayout";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import { cn } from "~/lib/utils";
 
@@ -93,11 +113,13 @@ const isClipboardWriteError = Schema.is(ClipboardWriteError);
 
 export interface BranchToolbarHandle {
   openBranchPicker: () => void;
+  focusBranchPicker: () => void;
   usePreviousWorktree: () => void;
 }
 
 interface BranchToolbarProps {
   layout?: "composer" | "panel";
+  onOpenWorkspaceDetails?: (() => void) | undefined;
   panelSection?: "all" | "workspace" | "branch";
   forceNewWorktree?: boolean;
   ref?: Ref<BranchToolbarHandle>;
@@ -124,14 +146,487 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
   /** Shown at the end of the composer strip, such as the new thread's permissions. */
   trailing?: ReactNode;
+  afterBranch?: ReactNode;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   /** A jj checkout shows its stack in the composer strip instead of a branch. */
   jjCwd?: string | null;
   /** jj and directory projects choose a managed workspace instead (patches/workspaces.md). */
   managedWorkspaces?: ManagedWorkspacesCapability | null;
+  /** The thread's machine is offline or reconnecting. */
+  environmentUnavailable?: boolean;
+  /** Panel only: where the branch picker renders the thread's PR rows. */
+  panelPrRowsContainer?: HTMLElement | null;
+  /** Panel-only actions that belong to the environment, such as opening its editor. */
+  panelEnvironmentActions?: ReactNode;
 }
 
+interface WorkspaceMenuProps {
+  branch?: {
+    label: string;
+    disabled: boolean;
+    open: boolean;
+    focusSearch: boolean;
+    onOpenChange: (open: boolean) => void;
+    children: ReactNode;
+    onContextMenu: (event: ReactMouseEvent) => void;
+  };
+  forceNewWorktree: boolean;
+  envModeLocked: boolean;
+  environmentId: EnvironmentId;
+  effectiveEnvMode: EnvMode;
+  activeWorktreePath: string | null;
+  onEnvModeChange: (mode: EnvMode) => void;
+  workspaceRoot: string;
+  previousWorktree: PreviousWorktreeSeed | null;
+  onUsePreviousWorktree: () => void;
+}
+
+interface MachineMenuProps {
+  autoEnvironmentLabel?: string | undefined;
+  onAutoEnvironment?: (() => void) | undefined;
+  envLocked: boolean;
+  environmentId: EnvironmentId;
+  availableEnvironments: readonly EnvironmentOption[] | undefined;
+  showEnvironmentPicker: boolean;
+  onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
+  environmentUnavailable: boolean;
+  addTargets: readonly AddProjectTarget[];
+  onAddToMachine: (environmentId: EnvironmentId) => void;
+}
+
+/** "2h ago · 3 files changed" for the previous worktree row; the count is read while open. */
+function PreviousWorktreeMeta({
+  environmentId,
+  worktree,
+}: {
+  environmentId: EnvironmentId;
+  worktree: PreviousWorktreeSeed;
+}) {
+  const status = useEnvironmentQuery(
+    vcsEnvironment.status({ environmentId, input: { cwd: worktree.worktreePath } }),
+  );
+  const gt = useGT();
+  const changedFiles = status.data?.isRepo ? status.data.workingTree.files.length : null;
+  const relative = useRelativeTimeState(worktree.updatedAt);
+  const age = relative.status === "relative" ? relative.label : "";
+  const parts = [
+    age,
+    changedFiles === null
+      ? null
+      : changedFiles === 0
+        ? gt("no changes")
+        : gt("{count, plural, one {{count} file changed} other {{count} files changed}}", {
+            count: changedFiles,
+          }),
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? (
+    <span className="flex shrink-0 flex-col items-end gap-0.5 text-meta text-dim-foreground">
+      {parts.map((part) => (
+        <span key={part}>{part}</span>
+      ))}
+    </span>
+  ) : null;
+}
+
+/** The composer's workspace and branch chip. Machines have their own chip, `MachineMenu`. */
+const WorkspaceMenu = memo(function WorkspaceMenu({
+  branch,
+  forceNewWorktree,
+  envModeLocked,
+  environmentId,
+  effectiveEnvMode,
+  activeWorktreePath,
+  onEnvModeChange,
+  workspaceRoot,
+  previousWorktree,
+  onUsePreviousWorktree,
+}: WorkspaceMenuProps) {
+  const gt = useGT();
+  const m = useMessages();
+  const composerFloatingLayerProps = useComposerMenuProps();
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const open = branch?.open ?? workspaceOpen;
+  const setOpen = branch?.onOpenChange ?? setWorkspaceOpen;
+  const inWorktree = forceNewWorktree || effectiveEnvMode === "worktree" || activeWorktreePath;
+  const WorkspaceIcon = inWorktree ? FolderGit2Icon : GitBranchIcon;
+  const workspaceLabel = forceNewWorktree
+    ? resolveEnvModeLabel("worktree", m)
+    : envModeLocked
+      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, m)
+      : effectiveEnvMode === "worktree"
+        ? resolveEnvModeLabel("worktree", m)
+        : resolveCurrentWorkspaceLabel(activeWorktreePath, m);
+  const icon = <WorkspaceIcon aria-hidden className="size-3 shrink-0" />;
+
+  if (envModeLocked && !branch) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              // The chips' 12px medium label at every size: caption on phones, meta above.
+              className="inline-flex h-7 min-w-0 shrink-0 items-center gap-1.25 border border-transparent px-2 text-caption text-muted-foreground sm:h-5.5 sm:text-meta"
+              data-composer-context-control
+              aria-label={workspaceLabel}
+            />
+          }
+        >
+          {icon}
+          <ComposerContextLabel>{workspaceLabel}</ComposerContextLabel>
+        </TooltipTrigger>
+        <TooltipPopup>{workspaceLabel}</TooltipPopup>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Menu
+      open={open}
+      onOpenChange={setOpen}
+      onOpenChangeComplete={(nextOpen) => {
+        if (nextOpen) {
+          popupRef.current
+            ?.querySelector<HTMLElement>(
+              branch?.focusSearch
+                ? 'input[role="combobox"]'
+                : '[data-composer-workspace] [aria-checked="true"]',
+            )
+            ?.focus();
+        }
+      }}
+      modal={false}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={<ComposerControl size="xs" />}
+              data-pressed={open ? "" : undefined}
+              className={branch ? "min-w-0 max-w-full" : envModeLocked ? "ps-2 pe-0.5" : "ps-2"}
+              aria-label={
+                branch
+                  ? gt("Branch and workspace: {branch}", { branch: branch.label })
+                  : gt("Workspace: {workspace}", { workspace: workspaceLabel })
+              }
+              onContextMenu={branch?.onContextMenu}
+              data-composer-context-control
+              data-composer-shortcut={envModeLocked ? undefined : "composer.workspace"}
+            />
+          }
+        >
+          {icon}
+          {envModeLocked && !branch ? null : (
+            <>
+              <ComposerContextLabel compact={branch ? "truncate" : "hide"}>
+                {branch ? (
+                  <MiddleTruncate value={branch.label} variant="cap-aligned" className="w-full" />
+                ) : (
+                  workspaceLabel
+                )}
+              </ComposerContextLabel>
+              <ChevronDownIcon
+                aria-hidden
+                data-composer-chevron
+                className="size-2.5 shrink-0 text-muted-foreground"
+              />
+            </>
+          )}
+        </TooltipTrigger>
+        <TooltipPopup>
+          <span className="flex flex-col gap-0.5">
+            {branch ? <span>{branch.label}</span> : null}
+            <span>{workspaceLabel}</span>
+          </span>
+        </TooltipPopup>
+      </Tooltip>
+      <MenuPopup
+        ref={popupRef}
+        spacing="relaxed"
+        align="start"
+        side="top"
+        // Workspace choices and paths need a consistent width regardless of the chip label.
+        className="w-90"
+        {...composerFloatingLayerProps}
+        data-composer-run-context
+      >
+        <MenuGroup data-composer-workspace>
+          <MenuGroupLabel>
+            <T>Workspace</T>
+          </MenuGroupLabel>
+          <MenuRadioGroup
+            value={effectiveEnvMode}
+            onValueChange={(value) => onEnvModeChange(value as EnvMode)}
+          >
+            <MenuRadioItem disabled={envModeLocked || forceNewWorktree} value="local" closeOnClick>
+              <span className="flex min-w-0 items-center gap-2">
+                {activeWorktreePath ? (
+                  <FolderGitIcon className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="shrink-0">
+                  {resolveCurrentWorkspaceLabel(activeWorktreePath, m)}
+                </span>
+                <StartTruncatedPath
+                  path={activeWorktreePath ?? workspaceRoot}
+                  className="min-w-0 flex-1 pe-2 text-meta text-dim-foreground"
+                />
+              </span>
+            </MenuRadioItem>
+            <MenuRadioItem disabled={envModeLocked} value="worktree" closeOnClick>
+              <span className="flex min-w-0 items-center gap-2">
+                <FolderGit2Icon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="shrink-0">{resolveEnvModeLabel("worktree", m)}</span>
+                <span className="min-w-0 truncate text-meta text-dim-foreground">
+                  {forceNewWorktree
+                    ? gt("Each model starts in its own worktree.")
+                    : gt("Starts in a fresh worktree.")}
+                </span>
+              </span>
+            </MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuGroup>
+        {previousWorktree ? (
+          <MenuGroup>
+            <MenuGroupLabel>
+              <T>Previous worktree</T>
+            </MenuGroupLabel>
+            <MenuItem disabled={envModeLocked} onClick={onUsePreviousWorktree}>
+              <HistoryIcon />
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="min-w-0 truncate">
+                  {previousWorktree.branch ?? previousWorktree.worktreePath}
+                </span>
+                {open ? (
+                  <PreviousWorktreeMeta environmentId={environmentId} worktree={previousWorktree} />
+                ) : null}
+              </span>
+            </MenuItem>
+          </MenuGroup>
+        ) : null}
+        {branch ? (
+          <>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>
+                {inWorktree && !activeWorktreePath
+                  ? gt("Base ref", { $context: "git ref a new worktree starts from" })
+                  : gt("Branch", { $context: "git branch" })}
+              </MenuGroupLabel>
+            </MenuGroup>
+            <div
+              className="flex min-h-0 flex-col"
+              inert={branch.disabled}
+              aria-busy={branch.disabled}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape" && event.key !== "Tab") event.stopPropagation();
+              }}
+            >
+              {branch.children}
+            </div>
+          </>
+        ) : null}
+      </MenuPopup>
+    </Menu>
+  );
+});
+
+/** The composer's machine chip, shown on remote threads: only the machines to run on. */
+const MachineMenu = memo(function MachineMenu({
+  autoEnvironmentLabel,
+  onAutoEnvironment,
+  envLocked,
+  environmentId,
+  availableEnvironments,
+  showEnvironmentPicker,
+  onEnvironmentChange,
+  environmentUnavailable,
+  addTargets,
+  onAddToMachine,
+}: MachineMenuProps) {
+  const gt = useGT();
+  const composerFloatingLayerProps = useComposerMenuProps();
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const popupRef = useRef<HTMLDivElement>(null);
+  const activeEnvironment = availableEnvironments?.find(
+    (env) => env.environmentId === environmentId,
+  );
+  const environmentLabel = autoEnvironmentLabel ?? activeEnvironment?.label ?? environmentId;
+  const canPickEnvironment = (showEnvironmentPicker && !envLocked) || addTargets.length > 0;
+  const icon = autoEnvironmentLabel ? (
+    <ScaleIcon aria-hidden className="size-3 shrink-0" />
+  ) : (
+    <EnvironmentMachineIcon
+      kind={activeEnvironment?.machine ?? "server"}
+      className="size-3 shrink-0"
+    />
+  );
+  const tooltip = (
+    <TooltipPopup>
+      {environmentUnavailable
+        ? gt("{environment} (offline)", { environment: environmentLabel })
+        : environmentLabel}
+    </TooltipPopup>
+  );
+
+  if (!canPickEnvironment) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={cn(
+                "inline-flex h-7 max-w-[48%] shrink-0 items-center justify-start gap-1.5 rounded-md border border-transparent ps-2 pe-1.75 text-meta text-dim-foreground sm:h-6",
+                environmentUnavailable && "text-warning-foreground",
+              )}
+              aria-label={gt("Run on: {environment}", { environment: environmentLabel })}
+              data-composer-context-control
+            />
+          }
+        >
+          {icon}
+          <ComposerContextLabel>{environmentLabel}</ComposerContextLabel>
+        </TooltipTrigger>
+        {tooltip}
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Menu
+      onOpenChangeComplete={(nextOpen) => {
+        if (nextOpen) {
+          popupRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+        }
+      }}
+      modal={false}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={<ComposerControl size="xs" />}
+              className={cn(
+                "max-w-full shrink-0",
+                environmentUnavailable && "text-warning-foreground",
+              )}
+              aria-label={gt("Run on: {environment}", { environment: environmentLabel })}
+              data-composer-context-control
+              data-composer-shortcut="composer.host"
+            />
+          }
+        >
+          {icon}
+          <ComposerContextLabel>{environmentLabel}</ComposerContextLabel>
+          <ChevronDownIcon
+            aria-hidden
+            data-composer-chevron
+            className="size-2.5 shrink-0 text-muted-foreground"
+          />
+        </TooltipTrigger>
+        {tooltip}
+      </Tooltip>
+      <MenuPopup
+        ref={popupRef}
+        spacing="relaxed"
+        align="start"
+        side="top"
+        className="w-72"
+        {...composerFloatingLayerProps}
+        data-composer-run-context
+      >
+        <MenuGroup>
+          <MenuGroupLabel>
+            <T>Run on</T>
+          </MenuGroupLabel>
+          <MenuRadioGroup
+            value={autoEnvironmentLabel ? "auto" : environmentId}
+            onValueChange={(value) =>
+              value === "auto"
+                ? onAutoEnvironment?.()
+                : onEnvironmentChange?.(value as EnvironmentId)
+            }
+          >
+            {availableEnvironments?.map((env) => (
+              <MenuRadioItem
+                key={env.environmentId}
+                disabled={
+                  envLocked || (!onEnvironmentChange && env.environmentId !== environmentId)
+                }
+                value={env.environmentId}
+                closeOnClick
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <EnvironmentMachineIcon
+                    kind={env.machine}
+                    className="size-4 shrink-0 text-muted-foreground"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{env.label}</span>
+                  {env.isPrimary ? null : connectedEnvironmentIds.includes(env.environmentId) ? (
+                    <Badge variant="success">
+                      <T>Online</T>
+                    </Badge>
+                  ) : (
+                    <Badge variant="unavailable">
+                      <T>Offline</T>
+                    </Badge>
+                  )}
+                </span>
+              </MenuRadioItem>
+            ))}
+            {onAutoEnvironment && (
+              <MenuRadioItem
+                value="auto"
+                disabled={envLocked}
+                closeOnClick
+                onClick={() => {
+                  if (autoEnvironmentLabel) onAutoEnvironment?.();
+                }}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <ScaleIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="shrink-0">{autoEnvironmentLabel ?? gt("Auto balance")}</span>
+                  <span className="min-w-0 truncate text-meta text-dim-foreground">
+                    <T>Least busy machine</T>
+                  </span>
+                </span>
+              </MenuRadioItem>
+            )}
+          </MenuRadioGroup>
+          {addTargets.length > 0 ? (
+            <MenuSub>
+              <MenuSubTrigger>
+                <span className={ADD_TO_MACHINE_LABEL_CLASS}>
+                  <PlusIcon className="size-3" />
+                  <span className="min-w-0 truncate">
+                    <T>Add to another machine</T>
+                  </span>
+                </span>
+              </MenuSubTrigger>
+              <MenuSubPopup {...composerFloatingLayerProps}>
+                {addTargets.map((target) => (
+                  <MenuItem
+                    key={target.environmentId}
+                    onClick={() => onAddToMachine(target.environmentId)}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <EnvironmentMachineIcon kind={target.machine} className="size-3" />
+                      <span className="min-w-0 truncate">{target.label}</span>
+                    </span>
+                  </MenuItem>
+                ))}
+              </MenuSubPopup>
+            </MenuSub>
+          ) : null}
+        </MenuGroup>
+      </MenuPopup>
+    </Menu>
+  );
+});
+
+/** The thread panel's run-context row: machine, workspace, and a copy-path context menu. */
 function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string) {
   const api = readLocalApi();
   if (!api) return;
@@ -169,6 +664,7 @@ function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string)
 
 interface RunContextSelectorProps {
   displayMode?: "toolbar" | "panel";
+  panelEnvironmentActions?: ReactNode;
   workspaceRoot?: string;
   forceNewWorktree: boolean;
   /** False when the folder has no repository a worktree could come from. */
@@ -190,10 +686,16 @@ interface RunContextSelectorProps {
   onUsePreviousWorktree: () => void;
   addTargets: readonly AddProjectTarget[];
   onAddToMachine: (environmentId: EnvironmentId) => void;
+  /** A scratch thread with no project: the row names the folder as "No project". */
+  noProject?: boolean;
+  /** Panel only: the machine row lists Run on, the workspace row lists the workspace modes. */
+  section?: "machine" | "workspace";
 }
 
 const RunContextSelector = memo(function RunContextSelector({
   displayMode = "toolbar",
+  section,
+  panelEnvironmentActions,
   workspaceRoot,
   forceNewWorktree: requestedForceNewWorktree,
   offersWorkspaceModes,
@@ -214,6 +716,7 @@ const RunContextSelector = memo(function RunContextSelector({
   onUsePreviousWorktree,
   addTargets,
   onAddToMachine,
+  noProject = false,
 }: RunContextSelectorProps) {
   const gt = useGT();
   const m = useMessages();
@@ -223,26 +726,51 @@ const RunContextSelector = memo(function RunContextSelector({
   // A folder no worktree can come from runs threads in place, whatever mode was requested.
   const forceNewWorktree = offersWorkspaceModes && requestedForceNewWorktree;
   const effectiveEnvMode = offersWorkspaceModes ? requestedEnvMode : "local";
-  const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
+  const WorkspaceIcon = noProject
+    ? FolderIcon
+    : effectiveEnvMode === "worktree"
       ? FolderGit2Icon
       : activeWorktreePath && offersWorkspaceModes
         ? FolderGitIcon
         : FolderIcon;
-  const workspaceLabel = forceNewWorktree
-    ? resolveEnvModeLabel("worktree", m)
-    : envModeLocked
-      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, m)
-      : effectiveEnvMode === "worktree"
-        ? resolveEnvModeLabel("worktree", m)
-        : resolveCurrentWorkspaceLabel(activeWorktreePath, m);
+  const workspaceLabel = noProject
+    ? gt("No project")
+    : forceNewWorktree
+      ? resolveEnvModeLabel("worktree", m)
+      : envModeLocked
+        ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, m)
+        : effectiveEnvMode === "worktree"
+          ? resolveEnvModeLabel("worktree", m)
+          : resolveCurrentWorkspaceLabel(activeWorktreePath, m);
   const isPanel = displayMode === "panel";
   const workspaceModesLocked = envModeLocked || !offersWorkspaceModes;
-  const isLocked = envLocked || (workspaceModesLocked && (!isPanel || !showEnvironmentPicker));
+  const isLocked = isPanel
+    ? section === "workspace" && workspaceModesLocked
+    : envLocked || workspaceModesLocked;
   const workspacePath =
     forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
       ? null
       : (activeWorktreePath ?? workspaceRoot);
+  const runOnEnvironments =
+    section !== "workspace" &&
+    ((showEnvironmentPicker && onEnvironmentChange) || addTargets.length > 0)
+      ? availableEnvironments
+      : undefined;
+  const showWorkspaceGroup = section !== "machine" && offersWorkspaceModes;
+  const showPathGroup = isPanel && workspacePath !== null && section !== "workspace";
+  const environmentActions = isPanel && section !== "workspace" ? panelEnvironmentActions : null;
+  const runContextLabel =
+    section === "workspace"
+      ? gt("Workspace: {workspace}", { workspace: workspaceLabel })
+      : section === "machine"
+        ? gt("Run on: {environment}", {
+            environment: autoEnvironmentLabel ?? activeEnvironment?.label ?? gt("Run on"),
+          })
+        : gt("Run context: {context}", {
+            context: [autoEnvironmentLabel ?? activeEnvironment?.label, workspaceLabel]
+              .filter(Boolean)
+              .join(", "),
+          });
   const handleContextMenu = (event: ReactMouseEvent) => {
     if (isPanel && workspacePath) {
       showWorkspaceContextMenu(event, workspacePath);
@@ -255,7 +783,7 @@ const RunContextSelector = memo(function RunContextSelector({
       </TooltipTrigger>
       <TooltipPopup>
         {isPanel
-          ? forceNewWorktree
+          ? forceNewWorktree && !noProject
             ? gt("Each model starts in its own worktree.")
             : (workspacePath ?? workspaceLabel)
           : workspaceLabel}
@@ -288,45 +816,65 @@ const RunContextSelector = memo(function RunContextSelector({
   const icon = showEnvironmentIndicator ? environmentIcon : workspaceIcon;
   const triggerContent = (
     <>
-      {icon}
+      {isPanel ? (
+        section === "workspace" ? (
+          <WorkspaceIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+        ) : autoEnvironmentLabel ? (
+          <ScaleIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
+        ) : (
+          <EnvironmentMachineIcon
+            kind={activeEnvironment?.machine ?? "server"}
+            className={THREAD_DETAILS_PANEL_ICON_CLASS}
+          />
+        )
+      ) : (
+        icon
+      )}
       <ComposerContextLabel displayMode={displayMode}>
-        {autoEnvironmentLabel ??
-          (showEnvironmentIndicator ? (activeEnvironment?.label ?? gt("Run on")) : workspaceLabel)}
+        {section === "workspace"
+          ? workspaceLabel
+          : (autoEnvironmentLabel ??
+            (isPanel || showEnvironmentIndicator
+              ? (activeEnvironment?.label ?? gt("Run on"))
+              : workspaceLabel))}
       </ComposerContextLabel>
-      {/* Trailing in the panel, so every row label starts on the same edge. */}
-      {isPanel && showEnvironmentIndicator ? workspaceIcon : null}
     </>
   );
+  const hasMenuContent =
+    showPathGroup ||
+    runOnEnvironments !== undefined ||
+    showWorkspaceGroup ||
+    Boolean(environmentActions);
 
-  if (isLocked) {
-    return (
+  if (isLocked || !hasMenuContent) {
+    const row = (
       <span
         className={cn(
-          "inline-flex h-7 min-w-0 max-w-[48%] flex-initial items-center justify-start gap-1 rounded-md border border-transparent px-1.75 font-normal text-foreground/70 text-sm sm:h-6 sm:text-xs dark:text-muted-foreground",
-          isPanel && "max-w-full",
-          isPanel && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
+          isPanel
+            ? THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS
+            : "inline-flex h-7 min-w-0 max-w-[48%] flex-initial items-center justify-start gap-1 rounded-md border border-transparent ps-2 pe-1.75 text-meta text-dim-foreground sm:h-6",
         )}
         onContextMenu={handleContextMenu}
-        aria-label={
-          isPanel
-            ? gt("Run context: {context}", {
-                context: [autoEnvironmentLabel ?? activeEnvironment?.label, workspaceLabel]
-                  .filter(Boolean)
-                  .join(", "),
-              })
-            : undefined
-        }
+        aria-label={isPanel ? runContextLabel : undefined}
         data-composer-context-control
       >
         {triggerContent}
       </span>
+    );
+    return isPanel ? (
+      <Tooltip>
+        <TooltipTrigger render={row} tabIndex={-1} />
+        <TooltipPopup>{workspacePath ?? workspaceLabel}</TooltipPopup>
+      </Tooltip>
+    ) : (
+      row
     );
   }
 
   return (
     <Menu>
       <MenuTrigger
-        render={isPanel ? <ThreadDetailsControl part="select" /> : <ComposerControl size="xs" />}
+        render={isPanel ? <ThreadDetailsControl /> : <ComposerControl size="xs" />}
         className={isPanel ? undefined : "min-w-0 max-w-[48%] flex-initial justify-start"}
         onContextMenu={handleContextMenu}
         onMouseDownCapture={
@@ -336,15 +884,7 @@ const RunContextSelector = memo(function RunContextSelector({
               }
             : undefined
         }
-        aria-label={
-          isPanel
-            ? gt("Run context: {context}", {
-                context: [autoEnvironmentLabel ?? activeEnvironment?.label, workspaceLabel]
-                  .filter(Boolean)
-                  .join(", "),
-              })
-            : undefined
-        }
+        aria-label={isPanel ? runContextLabel : undefined}
         data-composer-context-control
         data-composer-shortcut={[
           showEnvironmentPicker && !envLocked ? "composer.host" : "",
@@ -352,10 +892,16 @@ const RunContextSelector = memo(function RunContextSelector({
         ].join(" ")}
       >
         {triggerContent}
+        {isPanel ? (
+          <ChevronDownIcon className="ms-auto size-3.5 shrink-0 text-muted-foreground" />
+        ) : null}
       </MenuTrigger>
       <MenuPopup
         align="start"
-        side={isPanel ? "bottom" : "top"}
+        side={isPanel ? "right" : "top"}
+        collisionAvoidance={
+          isPanel ? { side: "flip", align: "shift", fallbackAxisSide: "end" } : undefined
+        }
         className={
           isPanel
             ? "w-(--anchor-width)"
@@ -365,8 +911,15 @@ const RunContextSelector = memo(function RunContextSelector({
         }
         {...(!isPanel ? composerFloatingLayerProps : {})}
       >
-        {availableEnvironments &&
-        ((showEnvironmentPicker && onEnvironmentChange) || addTargets.length > 0) ? (
+        {showPathGroup ? (
+          <MenuGroup>
+            <MenuGroupLabel>{activeEnvironment?.label ?? gt("Environment")}</MenuGroupLabel>
+            <div className="px-2 py-1 text-caption text-muted-foreground break-all">
+              {workspacePath}
+            </div>
+          </MenuGroup>
+        ) : null}
+        {runOnEnvironments ? (
           <>
             <MenuGroup>
               <MenuGroupLabel>
@@ -397,7 +950,7 @@ const RunContextSelector = memo(function RunContextSelector({
                     </span>
                   </MenuRadioItem>
                 )}
-                {availableEnvironments.map((env) => (
+                {runOnEnvironments.map((env) => (
                   <MenuRadioItem
                     key={env.environmentId}
                     disabled={
@@ -439,10 +992,10 @@ const RunContextSelector = memo(function RunContextSelector({
                 </MenuSub>
               ) : null}
             </MenuGroup>
-            {offersWorkspaceModes ? <MenuSeparator /> : null}
+            {showWorkspaceGroup ? <MenuSeparator /> : null}
           </>
         ) : null}
-        {offersWorkspaceModes ? (
+        {showWorkspaceGroup ? (
           <MenuGroup>
             <MenuGroupLabel>
               <T>Workspace</T>
@@ -485,6 +1038,12 @@ const RunContextSelector = memo(function RunContextSelector({
             </MenuRadioGroup>
           </MenuGroup>
         ) : null}
+        {environmentActions ? (
+          <>
+            {showPathGroup || runOnEnvironments || showWorkspaceGroup ? <MenuSeparator /> : null}
+            {environmentActions}
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
@@ -493,6 +1052,14 @@ const RunContextSelector = memo(function RunContextSelector({
 const COMPOSER_CONTEXT_MOTION_DURATION_MS = 180;
 const COMPOSER_CONTEXT_MOTION_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 const COMPOSER_CONTEXT_LABEL_SELECTOR = "[data-composer-label]";
+const RESTING_CONTROLS_SELECTOR = '[data-chat-composer-resting-controls="true"]';
+
+function flexGap(element: HTMLElement | null): number {
+  while (element && getComputedStyle(element).display === "contents") {
+    element = element.parentElement;
+  }
+  return element ? Number.parseFloat(getComputedStyle(element).columnGap) || 0 : 0;
+}
 
 /** A hidden or squeezed label's scrollWidth loses its tail, causing label/icon flapping. */
 function labelTextWidth(label: HTMLElement, range: Range): number {
@@ -543,23 +1110,26 @@ function animateLabelWidths(
 }
 
 /**
- * Whether the strip's labels must collapse to icons. The strip is measured when
+ * How far the strip collapses: labels to icons, then the branch. The strip is measured when
  * it, a control group or a hosted control resizes, when its text or children
  * change, and when fonts load, which covers everything the widths depend on.
  */
-function useLabelsOverflow(): readonly [
+function useStripCompaction(): readonly [
   attach: (element: HTMLDivElement | null) => (() => void) | undefined,
-  overflows: boolean,
+  compaction: ContextStripCompaction,
 ] {
-  const [overflows, setOverflows] = useState(false);
+  const [compaction, setCompaction] = useState<ContextStripCompaction>("none");
 
   const attach = (current: HTMLDivElement | null) => {
     if (!current) return;
+    let measured = false;
     const labelAnimations = new Map<HTMLElement, Animation>();
 
     const measure = () => {
+      // Hidden tabs retain stage layout but must keep their last label mode.
+      if (!current.checkVisibility()) return;
       // The committed attribute, not render state, so a stale closure cannot misread it.
-      const compact = current.hasAttribute("data-compact");
+      const compact = readContextStripCompaction(current.dataset.compact);
       const stripWidth = current.clientWidth;
       if (stripWidth === 0) return;
       const stripStyle = getComputedStyle(current);
@@ -567,52 +1137,61 @@ function useLabelsOverflow(): readonly [
         stripWidth -
         (Number.parseFloat(stripStyle.paddingInlineStart) || 0) -
         (Number.parseFloat(stripStyle.paddingInlineEnd) || 0);
-      const contentWidth = (parent: Element): number => {
-        const gap = Number.parseFloat(getComputedStyle(parent).columnGap) || 0;
-        let width = 0;
-        let counted = 0;
-        for (const child of parent.children) {
-          if (!(child instanceof HTMLElement)) continue;
-          if (child.offsetWidth === 0) continue;
-          const style = getComputedStyle(child);
-          const position = style.position;
-          if (position === "absolute" || position === "fixed") continue;
-          width +=
-            child.offsetWidth +
-            (Number.parseFloat(style.marginInlineStart) || 0) +
-            (Number.parseFloat(style.marginInlineEnd) || 0);
-          counted += 1;
-        }
-        return width + gap * Math.max(0, counted - 1);
-      };
       const stripGap = Number.parseFloat(stripStyle.columnGap) || 0;
       let needed = 0;
+      let labelsNeeded = 0;
       let groups = 0;
       for (const child of current.children) {
         if (!(child instanceof HTMLElement)) continue;
-        const width = contentWidth(child);
+        const controls = child.querySelector<HTMLElement>(RESTING_CONTROLS_SELECTOR);
+        const controlsMeasurement = controls ? measureRestingComposerControls(controls) : null;
+        if (controlsMeasurement) {
+          child.style.minWidth = `${resolveRestingComposerControlsMinimumWidth(controlsMeasurement)}px`;
+          groups += 1;
+          needed += resolveRestingComposerControlsNarrowestWidth(controlsMeasurement, "none");
+          labelsNeeded += resolveRestingComposerControlsNarrowestWidth(
+            controlsMeasurement,
+            "labels",
+          );
+          continue;
+        }
+        const width = contextStripGroupWidth(child);
         if (width <= 1) continue;
         groups += 1;
         needed += width;
+        labelsNeeded += width;
       }
       needed += stripGap * Math.max(0, groups - 1);
+      labelsNeeded += stripGap * Math.max(0, groups - 1);
       const range = document.createRange();
-      for (const label of current.querySelectorAll<HTMLElement>("[data-composer-label]")) {
-        needed += Math.max(0, labelTextWidth(label, range) - label.getBoundingClientRect().width);
+      for (const label of current.querySelectorAll<HTMLElement>(COMPOSER_CONTEXT_LABEL_SELECTOR)) {
+        const textWidth = labelTextWidth(label, range);
+        const renderedWidth =
+          label.getBoundingClientRect().width +
+          (Number.parseFloat(getComputedStyle(label).marginInlineStart) || 0);
+        const missingWidth = Math.max(0, textWidth - renderedWidth);
+        needed += missingWidth;
+        labelsNeeded +=
+          label.dataset.composerLabel === "hide"
+            ? -renderedWidth - flexGap(label.parentElement)
+            : missingWidth;
       }
-      const nextOverflows = resolveContextStripLabelsCompact({
-        compact,
+      const nextCompaction = resolveContextStripCompaction({
+        current: compact,
         neededWidth: needed,
+        labelsNeededWidth: labelsNeeded,
         availableWidth: available,
       });
-      if (nextOverflows === compact) return;
+      const firstMeasure = !measured;
+      measured = true;
+      if (nextCompaction === compact) return;
       const previousRects = new Map(
         Array.from(current.querySelectorAll<HTMLElement>(COMPOSER_CONTEXT_LABEL_SELECTOR)).map(
           (label) => [label, label.getBoundingClientRect()] as const,
         ),
       );
-      flushSync(() => setOverflows(nextOverflows));
-      animateLabelWidths(previousRects, labelAnimations);
+      flushSync(() => setCompaction(nextCompaction));
+      if (!firstMeasure) animateLabelWidths(previousRects, labelAnimations);
     };
 
     let stopResize = () => {};
@@ -648,11 +1227,12 @@ function useLabelsOverflow(): readonly [
     };
   };
 
-  return [attach, overflows] as const;
+  return [attach, compaction] as const;
 }
 
 export const BranchToolbar = memo(function BranchToolbar({
   layout = "composer",
+  onOpenWorkspaceDetails,
   panelSection = "all",
   forceNewWorktree = false,
   ref,
@@ -680,6 +1260,10 @@ export const BranchToolbar = memo(function BranchToolbar({
   trailing,
   jjCwd = null,
   managedWorkspaces = null,
+  afterBranch,
+  environmentUnavailable = false,
+  panelPrRowsContainer,
+  panelEnvironmentActions,
 }: BranchToolbarProps) {
   const m = useMessages();
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
@@ -688,10 +1272,10 @@ export const BranchToolbar = memo(function BranchToolbar({
   // The composer retains resolved thread details while bootstrap cleanup can remove its shell.
   const activeProjectRef = scopeProjectRef(environmentId, projectId);
   const activeProject = useProject(activeProjectRef);
+  const scratchWorkspaceRoot = useServerConfigs().get(environmentId)?.scratchWorkspaceRoot;
   const activeWorktreePath = forceNewWorktree ? null : worktreePath;
   const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
   const envModeLocked = envLocked || (isServerThread && activeWorktreePath !== null);
-  const showWorkspaceControls = showGitControls || managedWorkspaces !== null;
   const onSelectManagedWorkspace = (
     workspace: { readonly path: string; readonly branch: string | null } | null,
   ) => {
@@ -717,9 +1301,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         currentWorktreePath: activeWorktreePath,
       })
     : null;
-  const previousWorktreeLabel = previousWorktreeSeed
-    ? resolvePreviousWorktreeLabel(previousWorktreeSeed, m)
-    : null;
+
   const onUsePreviousWorktree = () => {
     if (!previousWorktreeSeed) return;
     setDraftThreadContext(draftId ?? threadRef, {
@@ -733,7 +1315,11 @@ export const BranchToolbar = memo(function BranchToolbar({
   useImperativeHandle(
     ref,
     () => ({
-      openBranchPicker: () => branchSelectorRef.current?.open(),
+      focusBranchPicker: () => branchSelectorRef.current?.focus(),
+      openBranchPicker: () => {
+        if (onOpenWorkspaceDetails) onOpenWorkspaceDetails();
+        else branchSelectorRef.current?.open();
+      },
       usePreviousWorktree: () => {
         if (!showGitControls || !canUsePreviousWorktree || !previousWorktreeSeed) return;
         onUsePreviousWorktree();
@@ -742,6 +1328,7 @@ export const BranchToolbar = memo(function BranchToolbar({
     }),
     [
       canUsePreviousWorktree,
+      onOpenWorkspaceDetails,
       onComposerFocusRequest,
       onUsePreviousWorktree,
       previousWorktreeSeed,
@@ -757,14 +1344,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   const showEnvironmentPicker = hasMultipleEnvironments && onEnvironmentChange !== undefined;
   const activeEnvironmentOption =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
-  // Started threads get no handler but still show which machine they run on,
-  // matching the strip visibility ChatView computes from the same inputs.
-  const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
-    activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: hasMultipleEnvironments,
-  });
-  const [attachStrip, labelsOverflow] = useLabelsOverflow();
-  const plainProjectBaseBranch = useWorktreeBaseBranch(activeProject ?? null);
+  const [attachStrip, stripCompaction] = useStripCompaction();
 
   if (!activeProject) return null;
 
@@ -779,34 +1359,48 @@ export const BranchToolbar = memo(function BranchToolbar({
   if (layout === "panel") {
     return (
       <div className="flex w-full flex-col" data-thread-panel-run-context>
-        {panelSection !== "branch" ? (
-          <RunContextSelector
-            displayMode="panel"
-            workspaceRoot={activeProject.workspaceRoot}
-            forceNewWorktree={forceNewWorktree}
-            offersWorkspaceModes={showGitControls}
-            autoEnvironmentLabel={autoEnvironmentLabel}
-            onAutoEnvironment={onAutoEnvironment}
-            envLocked={envLocked}
-            envModeLocked={envModeLocked}
-            environmentId={environmentId}
-            availableEnvironments={availableEnvironments}
-            showEnvironmentPicker={showEnvironmentPicker}
-            showEnvironmentIndicator={activeEnvironmentOption !== null}
-            onEnvironmentChange={onEnvironmentChange}
-            effectiveEnvMode={effectiveEnvMode}
-            activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
-            previousWorktreeLabel={previousWorktreeLabel}
-            previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
-            onUsePreviousWorktree={onUsePreviousWorktree}
-            addTargets={addTargets}
-            onAddToMachine={onAddToMachine}
-          />
-        ) : null}
+        {panelSection !== "branch"
+          ? // Without Git there is no worktree to make, so only the machine row is left.
+            (showGitControls ? (["machine", "workspace"] as const) : (["machine"] as const)).map(
+              (section) => (
+                <RunContextSelector
+                  key={section}
+                  section={section}
+                  displayMode="panel"
+                  panelEnvironmentActions={panelEnvironmentActions}
+                  workspaceRoot={activeProject.workspaceRoot}
+                  forceNewWorktree={forceNewWorktree}
+                  offersWorkspaceModes={showGitControls}
+                  autoEnvironmentLabel={autoEnvironmentLabel}
+                  onAutoEnvironment={onAutoEnvironment}
+                  envLocked={envLocked}
+                  envModeLocked={envModeLocked || !showGitControls}
+                  environmentId={environmentId}
+                  availableEnvironments={availableEnvironments}
+                  showEnvironmentPicker={showEnvironmentPicker}
+                  showEnvironmentIndicator={activeEnvironmentOption !== null}
+                  onEnvironmentChange={onEnvironmentChange}
+                  effectiveEnvMode={showGitControls ? effectiveEnvMode : "local"}
+                  activeWorktreePath={activeWorktreePath}
+                  onEnvModeChange={onEnvModeChange}
+                  noProject={isScratchProject(activeProject, scratchWorkspaceRoot)}
+                  previousWorktreeLabel={
+                    previousWorktreeSeed
+                      ? resolvePreviousWorktreeLabel(previousWorktreeSeed, m)
+                      : null
+                  }
+                  previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
+                  onUsePreviousWorktree={onUsePreviousWorktree}
+                  addTargets={addTargets}
+                  onAddToMachine={onAddToMachine}
+                />
+              ),
+            )
+          : null}
         {panelSection !== "workspace" ? (
           <BranchToolbarBranchSelector
             displayMode="panel"
+            ref={branchSelectorRef}
             className="w-full"
             environmentId={environmentId}
             threadId={threadId}
@@ -819,100 +1413,67 @@ export const BranchToolbar = memo(function BranchToolbar({
             onStartFromOriginChange={onStartFromOriginChange}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
             {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+            {...(panelPrRowsContainer !== undefined
+              ? { prRowsContainer: panelPrRowsContainer }
+              : {})}
           />
         ) : null}
       </div>
     );
   }
 
+  // As on main: shown when there is another machine to pick or add, or the thread runs remotely.
+  const showMachineChip =
+    activeEnvironmentOption?.isPrimary !== true ||
+    environmentUnavailable ||
+    hasMultipleEnvironments;
+  const workspaceMenuProps = {
+    forceNewWorktree,
+    envModeLocked,
+    environmentId,
+    effectiveEnvMode,
+    activeWorktreePath,
+    onEnvModeChange,
+    workspaceRoot: activeProject.workspaceRoot,
+    previousWorktree: previousWorktreeSeed,
+    onUsePreviousWorktree,
+  };
+  const machineMenu = showMachineChip ? (
+    <MachineMenu
+      autoEnvironmentLabel={autoEnvironmentLabel}
+      onAutoEnvironment={onAutoEnvironment}
+      envLocked={envLocked}
+      environmentId={environmentId}
+      availableEnvironments={availableEnvironments}
+      showEnvironmentPicker={showEnvironmentPicker}
+      onEnvironmentChange={onEnvironmentChange}
+      environmentUnavailable={environmentUnavailable}
+      addTargets={addTargets}
+      onAddToMachine={onAddToMachine}
+    />
+  ) : null;
   return (
     <ComposerSurface.ContextStrip
       ref={attachStrip}
-      data-compact={labelsOverflow ? "" : undefined}
-      className={cn("gap-1 text-xs font-normal text-foreground/70 dark:text-muted-foreground")}
+      data-compact={stripCompaction === "none" ? undefined : stripCompaction}
+      data-composer-context-control
     >
-      {showGitControls && managedWorkspaces === null ? (
-        <div className="contents @xl/composer-surface:hidden">
-          <RunContextSelector
-            forceNewWorktree={forceNewWorktree}
-            offersWorkspaceModes={showGitControls}
-            autoEnvironmentLabel={autoEnvironmentLabel}
-            onAutoEnvironment={onAutoEnvironment}
-            envLocked={envLocked}
-            envModeLocked={envModeLocked}
-            environmentId={environmentId}
-            availableEnvironments={availableEnvironments}
-            showEnvironmentPicker={showEnvironmentPicker}
-            showEnvironmentIndicator={showEnvironmentIndicator}
-            onEnvironmentChange={onEnvironmentChange}
-            effectiveEnvMode={effectiveEnvMode}
-            activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
-            previousWorktreeLabel={previousWorktreeLabel}
-            previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
-            onUsePreviousWorktree={onUsePreviousWorktree}
-            addTargets={addTargets}
-            onAddToMachine={onAddToMachine}
-          />
-        </div>
+      {machineMenu}
+      {onOpenWorkspaceDetails ? null : managedWorkspaces !== null ? (
+        <ManagedWorkspaceSelector
+          environmentId={environmentId}
+          projectId={activeProject.id}
+          isolated={managedWorkspaces.isolated}
+          forceNewWorktree={forceNewWorktree}
+          envLocked={envModeLocked}
+          effectiveEnvMode={effectiveEnvMode}
+          activeWorktreePath={activeWorktreePath}
+          onEnvModeChange={onEnvModeChange}
+          {...(canUsePreviousWorktree ? { onSelectWorkspace: onSelectManagedWorkspace } : {})}
+        />
+      ) : showGitControls && !showBranchControls ? (
+        <WorkspaceMenu {...workspaceMenuProps} />
       ) : null}
-      {showWorkspaceControls || showEnvironmentIndicator ? (
-        <div
-          className={cn(
-            "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
-            showGitControls && managedWorkspaces === null
-              ? "hidden @xl/composer-surface:flex"
-              : "flex",
-            "flex-1",
-          )}
-        >
-          {showEnvironmentIndicator && availableEnvironments && (
-            <>
-              <BranchToolbarEnvironmentSelector
-                autoEnvironmentLabel={autoEnvironmentLabel}
-                onAutoEnvironment={onAutoEnvironment}
-                envLocked={envLocked}
-                environmentId={environmentId}
-                availableEnvironments={availableEnvironments}
-                {...(showEnvironmentPicker ? { onEnvironmentChange } : {})}
-                {...(addTargets.length > 0 ? { onAddToMachine: () => onAddToMachine(null) } : {})}
-              />
-              {showWorkspaceControls ? (
-                <Separator
-                  orientation="vertical"
-                  className="mx-0.5 h-3.5!"
-                  data-composer-context-control
-                />
-              ) : null}
-            </>
-          )}
-          {managedWorkspaces !== null ? (
-            <ManagedWorkspaceSelector
-              environmentId={environmentId}
-              projectId={activeProject.id}
-              isolated={managedWorkspaces.isolated}
-              forceNewWorktree={forceNewWorktree}
-              envLocked={envModeLocked}
-              effectiveEnvMode={effectiveEnvMode}
-              activeWorktreePath={activeWorktreePath}
-              onEnvModeChange={onEnvModeChange}
-              {...(canUsePreviousWorktree ? { onSelectWorkspace: onSelectManagedWorkspace } : {})}
-            />
-          ) : showGitControls ? (
-            <BranchToolbarEnvModeSelector
-              forceNewWorktree={forceNewWorktree}
-              envLocked={envModeLocked}
-              effectiveEnvMode={effectiveEnvMode}
-              activeWorktreePath={activeWorktreePath}
-              onEnvModeChange={onEnvModeChange}
-              previousWorktreeLabel={previousWorktreeLabel}
-              previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
-              onUsePreviousWorktree={onUsePreviousWorktree}
-            />
-          ) : null}
-        </div>
-      ) : null}
-
       {offersRepositoryChoice ? (
         <WorktreeRepositoriesControl
           project={activeProject}
@@ -920,34 +1481,22 @@ export const BranchToolbar = memo(function BranchToolbar({
           offersBaseBranch={!showBranchControls}
         />
       ) : null}
-      {!showGitControls ? null : jjCwd !== null ? (
+      {!showGitControls || onOpenWorkspaceDetails ? null : jjCwd !== null ? (
         <JjStackControl
           displayMode="toolbar"
-          className="flex-initial justify-end @xl/composer-surface:ml-auto"
+          className="min-w-0 flex-initial"
           environmentId={environmentId}
           threadId={threadId}
           cwd={jjCwd}
         />
-      ) : !showBranchControls ? (
-        startsNewWorktree ? (
-          <span
-            className="min-w-0 flex-initial truncate px-1.75 @xl/composer-surface:ml-auto"
-            data-composer-context-control
-          >
-            {plainProjectBaseBranch === ""
-              ? m(msg("Each repository starts from its own default branch"))
-              : m(
-                  msg("Repositories start from {branch} where they have it", {
-                    branch: plainProjectBaseBranch,
-                  }),
-                )}
-          </span>
-        ) : null
-      ) : (
+      ) : !showBranchControls ? null : (
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}
           ref={branchSelectorRef}
-          className="min-w-0 flex-initial justify-end @xl/composer-surface:ml-auto"
+          className="min-w-0 flex-initial"
+          renderWorkspaceMenu={(branch) => (
+            <WorkspaceMenu {...workspaceMenuProps} branch={branch} />
+          )}
           environmentId={environmentId}
           threadId={threadId}
           {...(draftId ? { draftId } : {})}
@@ -961,6 +1510,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
       )}
+      {afterBranch}
       {trailing}
     </ComposerSurface.ContextStrip>
   );

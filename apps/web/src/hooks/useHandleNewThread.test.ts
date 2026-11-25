@@ -205,6 +205,7 @@ vi.mock("../composerDraftStore", () => {
   return {
     composerDraftHasUserContent: () => false,
     markPromotedDraftThreadByRef: vi.fn(),
+    NO_PROJECTS_DRAFT_ID: "no-projects",
     useComposerDraftStore,
   };
 });

@@ -244,7 +244,6 @@ patchedDependencies:
   react-native-image-viewing@0.2.2: patches/react-native-image-viewing@0.2.2.patch
   mdast-util-math@3.0.0: patches/mdast-util-math@3.0.0.patch
   micromark-extension-llm-math@3.1.0: patches/micromark-extension-llm-math@3.1.0.patch
-  "@legendapp/list@3.7.3": patches/@legendapp__list@3.7.3.patch
   micromark-extension-gfm-table@2.1.1: patches/micromark-extension-gfm-table@2.1.1.patch
   micromark@4.0.2: patches/micromark@4.0.2.patch
   mdast-util-to-hast@13.2.1: patches/mdast-util-to-hast@13.2.1.patch
@@ -260,10 +259,15 @@ patchedDependencies:
   # scroll target a Material bottom sheet picks, so sheet content can sit below its header.
   "@expo/ui@58.0.27": patches/@expo__ui@58.0.27.patch
   "@ff-labs/fff-node@0.11.0": patches/@ff-labs__fff-node@0.11.0.patch
+  # Measures rows in layout pixels, so a list inside the scaled workspace overview keeps true sizes,
+  # and lets the timeline apply shrinks at once while its working history collapses.
+  "@legendapp/list@3.7.3": patches/@legendapp__list@3.7.3.patch
   # Exports the dependency-light subpaths mobile and the web diff parser import, re-measures
   # editor carets when the code font changes, stops the find bar reclaiming focus from the file,
   # and keeps drag selections intact across virtualized scroll renders.
   "@pierre/diffs@1.7.0-beta.4": patches/@pierre__diffs@1.7.0-beta.4.patch
+  # Exclude overlaid chrome from the tree viewport; recheck the overlay offset if stickyFolders is enabled.
+  "@pierre/trees@1.0.0-beta.6": patches/@pierre%2Ftrees@1.0.0-beta.6.patch
   "@react-native-menu/menu@2.0.0": patches/@react-native-menu__menu@2.0.0.patch
   "@react-navigation/native-stack@7.21.0": patches/@react-navigation%2Fnative-stack@7.21.0.patch
   dbus-next@0.10.2: patches/dbus-next@0.10.2.patch

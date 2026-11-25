@@ -49,8 +49,8 @@ Upstream-owned files with hooks:
   `workEntriesViewedImages`, which gives upstream's viewed-images row each path's latest copy.
   `resolveViewedImageAsset` uses the copy when there is one.
 - `apps/web/src/components/chat/TimelineWorkEntryRow.tsx` passes the copy to `resolveViewedImageAsset`
-  in the expanded row and in upstream's `ViewedImagesTimelineRow` below a collapsed group
-  (`viewedImagesRows` in `MessagesTimeline.logic.ts`).
+  in the expanded row, and `TimelineWorkGroupRows.tsx` (`useWorkGroupViewedImages`) in the
+  thumbnail strip below a work group.
 - `apps/mobile/src/features/threads/thread-work-log.tsx` and `ThreadFeed.tsx` pass the copy through
   the viewed-image renderer. Mobile's viewed-images row gets it from `workEntriesViewedImages` in
   `lib/threadActivity.ts`.

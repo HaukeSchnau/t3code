@@ -72,6 +72,7 @@ export function SecretSourceSelect(props: {
   readonly sources: ReadonlyArray<Pick<SecretSource, "id" | "label">>;
   readonly label: string;
   readonly disabled?: boolean;
+  readonly settings?: boolean;
   readonly onValueChange: (provider: SecretProviderId | null) => void;
 }) {
   const gt = useGT();
@@ -92,7 +93,8 @@ export function SecretSourceSelect(props: {
       {...(props.disabled === undefined ? {} : { disabled: props.disabled })}
     >
       <SelectTrigger
-        size="sm"
+        variant={props.settings ? "well" : "default"}
+        size={props.settings ? "compact" : "sm"}
         className="w-auto min-w-0 shrink-0"
         aria-label={gt("{label} source", { label: props.label })}
         title={title}
@@ -253,6 +255,7 @@ export function SecretSourceInput({
         value={provider}
         sources={sources}
         label={label}
+        settings={input.size === "settings"}
         onValueChange={(next) => {
           setRejectedReference(null);
           if (next === null) {
@@ -275,7 +278,7 @@ export function SecretSourceInput({
         <div className="flex min-w-0 items-center gap-1.5">
           <DraftInput
             {...(input.id !== undefined ? { id: input.id } : {})}
-            size="sm"
+            size={input.size === "settings" ? "settings" : "sm"}
             font="mono"
             className="min-w-0 flex-1"
             value={rejectedReference ?? reference}
@@ -319,7 +322,7 @@ export function SecretSourceInput({
           ) : null}
         </div>
         {rejectedReference !== null ? (
-          <p className="text-2xs text-destructive">
+          <p className="text-meta text-destructive">
             {definition
               ? invalidSecretReferenceText(definition.invalidReferenceMessage, messages)
               : gt("Enter a valid secret reference.")}

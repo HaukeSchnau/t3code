@@ -90,8 +90,9 @@ handling, because the maintainer and their agents work in jj repositories.
 - Contracts: `jj.ts`, `kind` and `jj` on the local status, `cwd` on `command_execution`, two
   project settings. Web `JjStackControl`, mobile `JjStackSheet`.
 - Web: `ChatView.tsx` reads `kind` from upstream's narrowed `chatGitStatusAtom` (`state/vcs.ts`),
-  `BranchToolbar.tsx` takes `jjCwd`, and `chat/ThreadDetailsPanel.tsx` puts `JjStackControl` in
-  upstream's Version Control section when any of its rows is visible.
+  `BranchToolbar.tsx` takes `jjCwd` and shows `JjStackControl` in place of the composer's branch
+  chip, and `chat/ThreadDetailsPanel.tsx` shows it in place of the details card's branch, git and
+  pull request rows when any of them is visible.
 - Mobile: `ThreadGitControls.tsx` puts the stack breadcrumb and push state in upstream's git menu,
   omits the Git quick action for a jj stack, and opens `JjStackSheet` from More.
   `ThreadRouteScreen.tsx` opens the sheet in place of the git inspector.

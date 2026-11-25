@@ -40,6 +40,7 @@ import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { openDiscoveredPort } from "../preview/openDiscoveredPort";
 import { Spinner } from "../ui/spinner";
+import { StatusDot } from "../ui/status-dot";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -85,6 +86,7 @@ function ThreadServersList(props: ThreadServersPanelProps) {
   const [visibleCount, setVisibleCount] = useState(SERVER_PAGE_COUNT);
 
   if (servers.length === 0) return null;
+
   const externalClickLabel = isMacPlatform(navigator.platform) ? "⌘-click" : "Ctrl-click";
   const threadRef = scopeThreadRef(props.environmentId, props.threadId);
   const hiddenCount = Math.max(0, servers.length - visibleCount);
@@ -174,8 +176,8 @@ function ThreadServersList(props: ThreadServersPanelProps) {
 
   return (
     <ThreadDetailsSection
-      headingId="thread-details-servers-heading"
       title={gt("Servers", { $context: "thread details section: running dev servers" })}
+      summary={gt("{count} running", { count: servers.length, $context: "running dev servers" })}
     >
       <ul className="m-0 list-none p-0">
         {servers.slice(0, visibleCount).map((server, index) => {
@@ -204,7 +206,12 @@ function ThreadServersList(props: ThreadServersPanelProps) {
                     />
                   }
                 >
-                  <GlobeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+                  <span className="relative shrink-0">
+                    <GlobeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+                    <span className="absolute -right-0.5 -top-0.5 flex">
+                      <StatusDot tone="success" />
+                    </span>
+                  </span>
                   {/* The end padding keeps text clear of the stop button. */}
                   <span
                     className={cn(
@@ -213,25 +220,19 @@ function ThreadServersList(props: ThreadServersPanelProps) {
                       actionCount === 2 && "pe-12",
                     )}
                   >
-                    <span className="truncate text-sm font-medium leading-4 text-foreground/85">
+                    <span className="truncate text-label leading-4 text-foreground">
                       localhost:{server.port}
                     </span>
-                    <span className="truncate text-2xs font-normal leading-4 text-muted-foreground">
-                      {[
-                        // First, so the narrow panel truncates the less useful parts.
-                        forward
-                          ? gt("Forwarded to :{port}", {
-                              $context: "a remote dev server reachable on this machine's port",
-                              port: forward.localPort,
-                            })
-                          : null,
-                        server.terminal === null
-                          ? gt("Agent", { $context: "who started a dev server" })
-                          : gt("Terminal", { $context: "who started a dev server" }),
-                        server.processName,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
+                    <span className="truncate text-caption leading-4 text-muted-foreground">
+                      {forward
+                        ? gt("Forwarded to :{port}", {
+                            $context: "a remote dev server reachable on this machine's port",
+                            port: forward.localPort,
+                          })
+                        : (server.processName ??
+                          (server.terminal === null
+                            ? gt("Agent", { $context: "who started a dev server" })
+                            : gt("Terminal", { $context: "who started a dev server" })))}
                     </span>
                   </span>
                 </TooltipTrigger>
@@ -245,9 +246,6 @@ function ThreadServersList(props: ThreadServersPanelProps) {
                 <div
                   className={cn(
                     "absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5",
-                    // A forward stays visible: it holds a port on this machine.
-                    !forward &&
-                      "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
                   )}
                 >
                   {canForward ? (
@@ -310,7 +308,7 @@ function ThreadServersList(props: ThreadServersPanelProps) {
                         {stoppingKey === key ? (
                           <Spinner aria-hidden size="xs" />
                         ) : (
-                          <SquareIcon aria-hidden className="size-3 fill-current" />
+                          <SquareIcon aria-hidden className="size-3.5" />
                         )}
                       </TooltipTrigger>
                       <TooltipPopup side="left">
@@ -333,7 +331,7 @@ function ThreadServersList(props: ThreadServersPanelProps) {
           }
           part="row"
           tone="muted"
-          className="w-full active:scale-100"
+          className="w-full"
         >
           {hiddenCount > 0 ? (
             <ChevronDownIcon aria-hidden className="size-4 shrink-0" />

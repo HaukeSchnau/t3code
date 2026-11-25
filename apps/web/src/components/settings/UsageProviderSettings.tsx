@@ -1,6 +1,6 @@
 import type { EnvironmentId, UnifiedSettings } from "@t3tools/contracts";
 import { T, useGT, Var } from "gt-react";
-import { PlusIcon } from "lucide-react";
+import { GaugeIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -14,9 +14,10 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
 import { useSearchableSetting } from "./settingsSearch";
-import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsEmptyState, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const CLI_PROXY_NAME = "CLI Proxy";
 
@@ -43,29 +44,40 @@ export function UsageProviderSettings({
         {...searchableSetting("usage-providers")}
         headerAction={
           !readOnly ? (
-            <Button size="xs" variant="outline" onClick={() => setAdding(true)}>
+            <Button size="xs" variant="secondary" onClick={() => setAdding(true)}>
               <PlusIcon className="size-3" aria-hidden />
-              <T>Add hub</T>
+              <T>Add usage provider</T>
             </Button>
           ) : null
         }
       >
         {entries.length === 0 ? (
-          <SettingsRow title={gt("No hubs configured.")} />
+          <div className="py-8">
+            <SettingsEmptyState
+              icon={<GaugeIcon />}
+              title={gt("No usage providers configured.")}
+              description={gt(
+                "Add a CLIProxyAPI hub to show the quota of every account it pools next to your providers.",
+              )}
+            />
+          </div>
         ) : (
           entries.map(([id, source]) => {
             const label = source.label?.trim() || source.url;
             return (
               <SettingsRow
                 key={id}
-                title={label}
+                title={
+                  <Tooltip>
+                    <TooltipTrigger render={<span tabIndex={0} />}>{label}</TooltipTrigger>
+                    <TooltipPopup>
+                      <span className="block">{CLI_PROXY_NAME}</span>
+                      {label !== source.url ? <span className="block">{source.url}</span> : null}
+                    </TooltipPopup>
+                  </Tooltip>
+                }
                 description={
-                  <span className="break-all">
-                    {source.enabled
-                      ? CLI_PROXY_NAME
-                      : gt("{name} · Disabled", { name: CLI_PROXY_NAME })}
-                    {label !== source.url ? ` · ${source.url}` : ""}
-                  </span>
+                  source.enabled ? CLI_PROXY_NAME : gt("Disabled", { $context: "provider status" })
                 }
                 control={
                   !readOnly ? (
@@ -123,7 +135,7 @@ function RemoveUsageProviderButton({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>
+            <AlertDialogClose render={<Button variant="secondary" />}>
               <T>Cancel</T>
             </AlertDialogClose>
             <Button

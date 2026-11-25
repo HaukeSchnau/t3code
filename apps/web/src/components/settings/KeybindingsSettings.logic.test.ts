@@ -86,7 +86,7 @@ describe("KeybindingsSettings.logic", () => {
       { command: "terminal.toggle", key: "mod+j", when: "terminalFocus" },
     ]);
     expect(new Set(rows.map((row) => row.id)).size).toBe(4);
-    expect(rows.find((row) => row.command === "chat.new")?.conflicts).toEqual(["Terminal: Toggle"]);
+    expect(rows.find((row) => row.command === "chat.new")?.conflicts).toEqual(["Toggle terminal"]);
     expect(buildKeybindingRows(bindings.slice(1)).map((row) => row.id)).toEqual(
       rows.map((row) => row.id),
     );
@@ -127,9 +127,19 @@ describe("KeybindingsSettings.logic", () => {
       const binding = compileResolvedKeybindingsConfig([{ command, key: "mod+enter" }]);
       const labels = (mode: "enter" | "mod-enter" | "mod-enter-multiline") =>
         buildKeybindingRows(binding, "Win32", mode)[0]?.previewLabels;
+      const shortcuts = (mode: "enter" | "mod-enter" | "mod-enter-multiline") =>
+        buildKeybindingRows(binding, "Win32", mode)[0]?.previewShortcuts.map(
+          shortcutToKeybindingParts,
+        );
       expect(labels("enter")).toEqual(["Ctrl+Enter"]);
       expect(labels("mod-enter")).toEqual(["Ctrl+Shift+Enter"]);
       expect(labels("mod-enter-multiline")).toEqual(["Ctrl+Enter", "Ctrl+Shift+Enter"]);
+      expect(shortcuts("enter")).toEqual([["mod", "enter"]]);
+      expect(shortcuts("mod-enter")).toEqual([["mod", "shift", "enter"]]);
+      expect(shortcuts("mod-enter-multiline")).toEqual([
+        ["mod", "enter"],
+        ["mod", "shift", "enter"],
+      ]);
     }
     const shiftedBindings = compileResolvedKeybindingsConfig([
       { command: "chat.new", key: "mod+shift+enter" },
@@ -288,6 +298,11 @@ describe("KeybindingsSettings.logic", () => {
       "shift",
       "+",
     ]);
+    expect(
+      buildKeybindingRows(
+        compileResolvedKeybindingsConfig([{ command: "preview.zoomIn", key: "mod++" }]),
+      )[0]?.previewShortcuts.map(shortcutToKeybindingParts),
+    ).toEqual([["mod", "+"]]);
   });
 
   it("serializes shortcuts and when expressions for upserts", () => {
@@ -384,27 +399,26 @@ describe("KeybindingsSettings.logic", () => {
       },
     ] satisfies ResolvedKeybindingsConfig);
 
-    expect(rows[0]?.conflicts).toEqual(["Chat: New Local"]);
+    expect(rows[0]?.conflicts).toEqual(["New local thread"]);
     const disabledRows = buildKeybindingRows([
       rows[0]!.binding,
       { ...rows[1]!.binding, whenAst: { type: "identifier", name: "false" } },
     ]);
     expect(disabledRows.find((row) => row.when === "false")?.previewLabels).toEqual([]);
     expect(disabledRows.map((row) => row.conflicts)).toEqual([[], []]);
-
     expect(
       keybindingConflictLabels(rows, {
         rowId: rows[0]?.id ?? "",
         key: "mod+n",
         when: "",
       }),
-    ).toEqual(["Chat: New Local"]);
+    ).toEqual(["New local thread"]);
   });
 
   it.each([
-    { platform: "Linux x86_64", ctrl: ["Chat: New"], meta: [] },
-    { platform: "Win32", ctrl: ["Chat: New"], meta: [] },
-    { platform: "MacIntel", ctrl: [], meta: ["Chat: New"] },
+    { platform: "Linux x86_64", ctrl: ["New thread"], meta: [] },
+    { platform: "Win32", ctrl: ["New thread"], meta: [] },
+    { platform: "MacIntel", ctrl: [], meta: ["New thread"] },
   ])("resolves mod to the $platform modifier when reporting conflicts", (expected) => {
     const rows = buildKeybindingRows(
       compileResolvedKeybindingsConfig([
@@ -420,7 +434,28 @@ describe("KeybindingsSettings.logic", () => {
     expect(conflictsFor("meta+k")).toEqual(expected.meta);
     expect(
       keybindingConflictLabels(rows, { rowId: "new", key: "ctrl+k", when: "" }, expected.platform),
-    ).toEqual(["Chat: New Local", ...expected.ctrl].toSorted());
+    ).toEqual(["New local thread", ...expected.ctrl].toSorted());
+  });
+
+  it.each([
+    {
+      platform: "MacIntel",
+      visible: ["", "!isMac || terminalFocus", "isMac", "isMac && isDesktop"],
+    },
+    { platform: "Linux x86_64", visible: ["", "!isMac", "!isMac || terminalFocus"] },
+  ])("lists only the $platform platform variants", ({ platform, visible }) => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { command: "layout.focusDown", key: "mod+alt+arrowdown", when: "isMac" },
+        { command: "layout.focusDown", key: "alt+shift+arrowdown", when: "!isMac" },
+        { command: "layout.focusDown", key: "mod+alt+j", when: "isMac && isDesktop" },
+        { command: "layout.focusDown", key: "ctrl+j", when: "!isMac || terminalFocus" },
+        { command: "layout.focusDown", key: "f9" },
+      ]),
+      platform,
+    );
+
+    expect(rows.map((row) => row.when).toSorted()).toEqual(visible);
   });
 
   it("keeps mod and ctrl shortcuts apart when their when contexts differ", () => {

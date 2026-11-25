@@ -11,6 +11,7 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
+  type ContextMenuItem,
   type ScopedThreadRef,
   type ThreadId,
   type ContextMenuSource,
@@ -52,6 +53,7 @@ import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
+import { deleteConfirm } from "../confirmDialog";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -63,14 +65,29 @@ function failureToast(title: string, error: unknown) {
   );
 }
 
+const NEW_SIDE_CHAT_MENU_ID = "thread:new-side-chat";
+
 export function useThreadActionMenu(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly projectCwd: string | null;
   readonly onStartRename: () => void;
   readonly onFind?: ((threadRef: ScopedThreadRef) => void) | undefined;
   readonly canShareWithGuest: boolean;
+  /** Tab actions prepended to the thread menu, read when it opens. */
+  readonly leadingItems?: () => readonly ContextMenuItem<string>[];
+  readonly onLeadingAction?: (id: string) => void;
+  readonly onNewSideChat?: (() => void) | undefined;
 }) {
-  const { threadRef, projectCwd, onStartRename, onFind, canShareWithGuest } = input;
+  const {
+    threadRef,
+    projectCwd,
+    onStartRename,
+    onFind,
+    canShareWithGuest,
+    leadingItems,
+    onLeadingAction,
+    onNewSideChat,
+  } = input;
   const router = useRouter();
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -159,9 +176,33 @@ export function useThreadActionMenu(input: {
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
       });
-      const clicked = await settlePromise(() => api.contextMenu.show(items, position, source));
+      const leading = leadingItems?.() ?? [];
+      const leadingIds = new Set(leading.map((item) => item.id));
+      const sideChatItems: ContextMenuItem<string>[] = onNewSideChat
+        ? [{ id: NEW_SIDE_CHAT_MENU_ID, label: m(msg("New side chat")), icon: "messages-square" }]
+        : [];
+      const menuItems: ContextMenuItem<string>[] = [
+        ...sideChatItems,
+        ...leading.map((item, index) =>
+          index === 0 && sideChatItems.length > 0 ? { ...item, separatorBefore: true } : item,
+        ),
+        ...items.map((item, index) =>
+          index === 0 && (leading.length > 0 || sideChatItems.length > 0)
+            ? { ...item, separatorBefore: true }
+            : item,
+        ),
+      ];
+      const clicked = await settlePromise(() => api.contextMenu.show(menuItems, position, source));
       if (clicked._tag === "Failure" || clicked.value === null) return;
-      const action: ThreadActionMenuId = clicked.value;
+      if (clicked.value === NEW_SIDE_CHAT_MENU_ID) {
+        onNewSideChat?.();
+        return;
+      }
+      if (leadingIds.has(clicked.value)) {
+        onLeadingAction?.(clicked.value);
+        return;
+      }
+      const action = clicked.value as ThreadActionMenuId;
       if (
         threadActionRequiresOperate(action) &&
         !readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)
@@ -351,11 +392,16 @@ export function useThreadActionMenu(input: {
           if (confirmThreadDelete) {
             const confirmed = await settlePromise(() =>
               api.dialogs.confirm(
-                [
-                  m(msg('Delete thread "{title}"?', { title: thread.title })),
-                  m(msg("This permanently clears conversation history for this thread.")),
-                ].join("\n"),
-                { variant: "destructive" },
+                m(
+                  msg('This deletes "{title}" and its chat history. You can\'t undo this.', {
+                    title: thread.title,
+                  }),
+                ),
+                deleteConfirm({
+                  variant: "destructive",
+                  title: m(msg("Delete thread?")),
+                  confirmLabel: m(msg("Delete thread")),
+                }),
               ),
             );
             if (confirmed._tag === "Failure" || !confirmed.value) return;

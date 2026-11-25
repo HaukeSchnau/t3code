@@ -66,6 +66,7 @@ export function ChunkedMarkdown(props: {
         recycleItems={false}
         className="h-full scrollbar-gutter-both"
         contentContainerClassName="py-5"
+        ListHeaderComponent={<div aria-hidden className="h-[var(--surface-top-inset,0px)]" />}
         ListFooterComponent={
           props.loading ? (
             <div className="flex justify-center py-4">
@@ -77,7 +78,7 @@ export function ChunkedMarkdown(props: {
           <div className="pb-5">
             {item.chunk.text.length > LARGE_MARKDOWN_CHUNK_MAX_CHARS ? (
               // One block this long (a huge fence or HTML block) is too slow to parse.
-              <pre className="mx-auto max-w-4xl overflow-x-auto px-6 font-mono text-xs whitespace-pre">
+              <pre className="mx-auto max-w-4xl overflow-x-auto px-6 font-mono text-meta whitespace-pre">
                 {item.chunk.text}
               </pre>
             ) : (

@@ -970,6 +970,8 @@ export function resolveAdjacentThreadId<T>(input: {
   return currentIndex < threadIds.length - 1 ? (threadIds[currentIndex + 1] ?? null) : null;
 }
 
+// Ready waits on the user; Monitoring waits on background work that will wake the agent.
+// Detached commands, such as a dev server, do not hold completion.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
@@ -1169,9 +1171,39 @@ export type SidebarV2TopStatusKind =
   | "limited"
   | "input"
   | "request"
+  | "preparing"
   | "waiting"
   | "woke"
   | "working";
+
+export function resolveSidebarV2TopStatus(input: {
+  readonly status: SidebarThreadStatus;
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+}): SidebarV2TopStatusKind | null {
+  if (input.status === "preparing") {
+    return "preparing";
+  }
+  if (input.status === "working") {
+    return "working";
+  }
+  if (input.status === "waiting") {
+    return "waiting";
+  }
+  if (input.status === "approval") {
+    return "approval";
+  }
+  if (input.status === "input" || input.status === "request") {
+    return input.status;
+  }
+  if (input.status === "failed" || input.status === "limited") {
+    return input.status;
+  }
+  if (input.isWoke) {
+    return "woke";
+  }
+  return input.isUnread ? "done" : null;
+}
 
 export function firstValidTimestampMs(
   ...candidates: ReadonlyArray<string | null | undefined>
@@ -1300,8 +1332,8 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return {
       label: msg("Pending Approval"),
-      colorClass: "text-amber-600 dark:text-amber-300/90",
-      dotClass: "bg-amber-500 dark:bg-amber-300/90",
+      colorClass: "text-warning-foreground",
+      dotClass: "bg-warning",
       pulse: false,
     };
   }
@@ -1309,8 +1341,8 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return {
       label: msg("Awaiting Input"),
-      colorClass: "text-indigo-600 dark:text-indigo-300/90",
-      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: false,
     };
   }
@@ -1340,8 +1372,8 @@ export function resolveThreadStatusPill(input: {
   ) {
     return {
       label: msg("Working"),
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: true,
     };
   }
@@ -1353,8 +1385,8 @@ export function resolveThreadStatusPill(input: {
   ) {
     return {
       label: msg("Connecting"),
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: true,
     };
   }
@@ -1377,7 +1409,9 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return waiting;
+  if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) {
+    return { ...waiting, label: msg("Monitoring") };
+  }
 
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
@@ -1387,8 +1421,8 @@ export function resolveThreadStatusPill(input: {
   if (hasPlanReadyPrompt) {
     return {
       label: msg("Plan Ready"),
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      colorClass: "text-merged-foreground",
+      dotClass: "bg-merged",
       pulse: false,
     };
   }
@@ -1396,8 +1430,8 @@ export function resolveThreadStatusPill(input: {
   if (hasUnseenCompletion(thread)) {
     return {
       label: msg("Completed"),
-      colorClass: "text-emerald-600 dark:text-emerald-300/90",
-      dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
+      colorClass: "text-success-foreground",
+      dotClass: "bg-success",
       pulse: false,
     };
   }

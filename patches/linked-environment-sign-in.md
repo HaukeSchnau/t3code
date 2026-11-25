@@ -35,8 +35,10 @@ MacBook and the iPhone without a tap.
 ## Upstream touch points
 
 - `packages/client-runtime/src/connection/index.ts` exports it.
-- `apps/web/src/routes/_chat.tsx` mounts the fan-out, `PairingRouteSurface.tsx` continues it, and
-  `apps/web/src/connection/onboarding.ts` has its command.
+- `apps/web/src/components/AppSidebarLayout.tsx` mounts the fan-out in the app shell, since
+  workspace panes replace the chat route's outlet while a thread is open.
+  `PairingRouteSurface.tsx` continues it, and `apps/web/src/connection/onboarding.ts` has its
+  command.
 - `apps/mobile/src/App.tsx` installs it, `LinkedEnvironmentsSection.tsx` has the manual action, and
   `apps/mobile/src/connection/onboarding.ts` has the commands.
 

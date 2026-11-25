@@ -53,7 +53,7 @@ fork's retry now only covers overloads upstream does not retry, such as a `/comp
 - `runtimeLayer.ts`: the worker beside `UsageLimitRecoveryWorker`.
 - `packages/shared/package.json`: the subpath export.
 - Web: `ChatView.tsx`, `ChatComposer.tsx`, `ComposerFooterControls.tsx`,
-  `ComposerPrimaryActions.tsx` (`StopGenerationButton`), `ChatBannerLane.tsx`,
+  `ComposerPrimaryActions.tsx` (`StopGenerationSlot`), `ChatBannerLane.tsx`,
   `ThreadErrorBanner.tsx`.
 - Mobile: `ThreadRouteScreen.tsx`, `ThreadDetailScreen.tsx`, `ThreadComposer.tsx`,
   `AppSymbol.android.tsx`.

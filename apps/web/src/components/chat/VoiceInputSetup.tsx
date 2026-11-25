@@ -27,6 +27,7 @@ import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { useEnvironmentScope } from "../../state/session";
 import { languageLabel } from "../settings/SpeechLanguageSelect";
 import { Button } from "../ui/button";
+import { Meter } from "../ui/meter";
 import { Dialog } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { WizardFooter, WizardHeader, WizardPanel, WizardPopup } from "../ui/wizard";
@@ -117,16 +118,16 @@ export function VoiceInputSetup(props: {
         />
         <WizardPanel>
           {props.step === 0 ? (
-            <section className="space-y-3 text-sm">
+            <section className="space-y-3 text-body">
               {model ? (
-                <div className="space-y-3 rounded-lg border border-border/70 bg-card/60 p-3">
+                <div className="space-y-3 rounded-card surface-card p-3">
                   <div className="flex items-baseline justify-between gap-3">
-                    <h3 className="min-w-0 truncate font-medium">{model.name}</h3>
-                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                    <h3 className="min-w-0 truncate text-label">{model.name}</h3>
+                    <span className="shrink-0 text-meta text-muted-foreground tabular-nums">
                       {gt("{size} MB", { size: Math.round(model.size / 1024 / 1024) })}
                     </span>
                   </div>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-meta text-muted-foreground">
                     {model.recommended && props.language ? (
                       <T>
                         Recommended for <Var>{languageName}</Var>. Includes a 1.2 MB silence
@@ -138,20 +139,14 @@ export function VoiceInputSetup(props: {
                   </p>
                   {props.downloading ? (
                     <div role="status" className="space-y-1.5">
-                      <div
+                      <Meter
                         role="progressbar"
                         aria-label={gt("Speech model download progress")}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
                         aria-valuenow={progress ?? undefined}
-                        className="h-1 overflow-hidden rounded-full bg-muted"
-                      >
-                        <div
-                          className="h-full bg-primary transition-[width] duration-200"
-                          style={{ width: `${progress ?? 0}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground tabular-nums">
+                        value={progress ?? 0}
+                        max={100}
+                      />
+                      <p className="text-meta text-muted-foreground tabular-nums">
                         {model.state === "verifying"
                           ? gt("Verifying…")
                           : progress === null
@@ -167,14 +162,14 @@ export function VoiceInputSetup(props: {
                 </p>
               ) : null}
               {props.error ? (
-                <p role="alert" className="flex items-start gap-1.5 text-destructive">
+                <p role="alert" className="flex items-start gap-1.5 text-destructive-foreground">
                   <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
                   {props.error}
                 </p>
               ) : null}
             </section>
           ) : (
-            <section className="space-y-2 text-sm">
+            <section className="space-y-2 text-body">
               <label className="sr-only" htmlFor="voice-setup-microphone">
                 <T>Microphone</T>
               </label>
@@ -234,12 +229,12 @@ export function VoiceInputSetup(props: {
                 </Button>
               </div>
               {selectedIsUnavailable ? (
-                <p className="text-xs text-destructive">
+                <p className="text-meta text-destructive-foreground">
                   <T>That microphone is unplugged. Pick another one.</T>
                 </p>
               ) : null}
               {microphoneError ? (
-                <p role="alert" className="text-xs text-muted-foreground">
+                <p role="alert" className="text-meta text-muted-foreground">
                   {microphoneError}
                 </p>
               ) : null}
@@ -260,7 +255,7 @@ export function VoiceInputSetup(props: {
               </Button>
             ) : null}
             {props.downloading ? (
-              <Button variant="outline" disabled={!canManage} onClick={props.onCancelDownload}>
+              <Button variant="secondary" disabled={!canManage} onClick={props.onCancelDownload}>
                 <T>Cancel download</T>
               </Button>
             ) : null}

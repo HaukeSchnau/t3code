@@ -1,26 +1,29 @@
 import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
-import { useStore } from "zustand";
-import { ChatCanvasContext } from "./ChatCanvasContext";
+import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
+import { ChatCanvasContext, ChatCanvasTimelineContext } from "./ChatCanvasContext";
 import type { ChatCanvasPreview } from "./chatCanvasLayout";
-import { resolveChatCanvasModel, type ChatCanvasStore } from "./canvasStore";
+import { chatCanvasDrawnKey, resolveChatCanvasModel, type ChatCanvasStore } from "./canvasStore";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { observeResize } from "../../lib/observeResize";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
+const PANELS = '[data-slot="sidebar-gap"], [data-preview-panel-mode="inline"]';
+
+// The document's running animations are few; querying the app for its panels on every
+// canvas resize walked every element. Both list transitions in tree order.
 function panelWidthTransitions(element: HTMLElement) {
-  const panels = element
-    .closest("[data-panel-animations]")
-    ?.querySelectorAll('[data-slot="sidebar-gap"], [data-preview-panel-mode="inline"]');
-  return Array.from(panels ?? []).flatMap((panel) =>
-    panel
-      .getAnimations()
-      .filter(
-        (animation): animation is CSSTransition =>
-          animation instanceof CSSTransition &&
-          animation.transitionProperty === "width" &&
-          animation.playState === "running",
-      ),
-  );
+  const root = element.closest("[data-panel-animations]");
+  if (!root) return [];
+  return document.getAnimations().filter((animation): animation is CSSTransition => {
+    if (
+      !(animation instanceof CSSTransition) ||
+      animation.transitionProperty !== "width" ||
+      animation.playState !== "running"
+    )
+      return false;
+    const target = animation.effect instanceof KeyframeEffect ? animation.effect.target : null;
+    return target !== null && target !== root && root.contains(target) && target.matches(PANELS);
+  });
 }
 
 // Sample only the layout panels; seeking unrelated transitions can change their lifecycle.
@@ -63,8 +66,28 @@ export function ChatCanvas({
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
   const htmlPreviewWidthProbeRef = useRef<HTMLDivElement | null>(null);
   const [timelineElement, registerTimeline] = useState<HTMLElement | null>(null);
-  const measurements = useStore(store, (state) => state.measurements);
-  const detailsCardMeasurement = useStore(store, (state) => state.detailsCardMeasurement);
+  const detailsCardInlineOpen = useRightPanelStore((state) =>
+    threadRef === null
+      ? false
+      : selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
+  );
+  // A resize renders the canvas only when it moves something drawn; most widths (a
+  // column drag, a panel sliding) leave the lane, the card and the player where they were.
+  const model = useSyncExternalStoreWithSelector(
+    store.subscribe,
+    store.getState,
+    store.getState,
+    (state) =>
+      resolveChatCanvasModel({
+        measurements: state.measurements,
+        detailsCardMeasurement: state.detailsCardMeasurement,
+        threadRef,
+        preview,
+        detailsCardInlineOpen,
+      }),
+    (a, b) => chatCanvasDrawnKey(a) === chatCanvasDrawnKey(b),
+  );
+  const { measurements } = model;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes canvas, find bar and timeline resizes and writes the measurements to the canvas store
   useLayoutEffect(() => {
     const element = elementRef.current;
@@ -137,24 +160,11 @@ export function ChatCanvas({
       stopObserving();
     };
   }, [store, composerOverlayElement, timelineElement, detailsCardTopInset]);
-  const detailsCardInlineOpen = useRightPanelStore((state) =>
-    threadRef === null
-      ? false
-      : selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
-  );
-  const model = resolveChatCanvasModel({
-    measurements,
-    detailsCardMeasurement,
-    threadRef,
-    preview,
-    detailsCardInlineOpen,
-  });
   const context = {
     container: model.container,
     lane: model.lane,
     layout: model.layout,
     previewKey: preview?.key ?? null,
-    registerTimeline,
     measureDetailsCard: store.getState().measureDetailsCard,
     detailsCardTopInset: model.detailsCardTopInset,
     preferredDetailsCard: model.preferredDetailsCard,
@@ -170,33 +180,35 @@ export function ChatCanvas({
       : null;
   return (
     <ChatCanvasContext value={context}>
-      <div
-        {...props}
-        ref={elementRef}
-        data-chat-canvas
-        data-preview-overlaps-chat={layout.overlapsChat || undefined}
-        className="relative flex min-h-0 min-w-0 flex-1 flex-col"
-        style={
-          {
-            "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
-            "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
-            "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
-            ...htmlPreviewLane,
-          } as CSSProperties
-        }
-      >
+      <ChatCanvasTimelineContext value={registerTimeline}>
         <div
-          ref={widthProbeRef}
-          aria-hidden
-          className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-12"
-        />
-        <div
-          ref={htmlPreviewWidthProbeRef}
-          aria-hidden
-          className="pointer-events-none invisible absolute h-0 w-(--html-preview-max-width)"
-        />
-        {children}
-      </div>
+          {...props}
+          ref={elementRef}
+          data-chat-canvas
+          data-preview-overlaps-chat={layout.overlapsChat || undefined}
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+          style={
+            {
+              "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
+              "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
+              "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+              ...htmlPreviewLane,
+            } as CSSProperties
+          }
+        >
+          <div
+            ref={widthProbeRef}
+            aria-hidden
+            className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-12"
+          />
+          <div
+            ref={htmlPreviewWidthProbeRef}
+            aria-hidden
+            className="pointer-events-none invisible absolute h-0 w-(--html-preview-max-width)"
+          />
+          {children}
+        </div>
+      </ChatCanvasTimelineContext>
     </ChatCanvasContext>
   );
 }

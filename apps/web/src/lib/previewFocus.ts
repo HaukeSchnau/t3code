@@ -10,6 +10,14 @@ export function isPreviewFocused(): boolean {
   );
 }
 
+/** Focus is in a browser, not in another tab the side panel shell hosts (diff, files, pull requests). */
+export function isBrowserFocused(): boolean {
+  if (!isPreviewFocused()) return false;
+  const kind = document.activeElement?.closest<HTMLElement>("[data-right-panel-surface-kind]")
+    ?.dataset.rightPanelSurfaceKind;
+  return kind === undefined || kind === "preview";
+}
+
 /** Narrower than isPreviewFocused, whose panel also hosts PR, diff, files and other surfaces. */
 export function isBrowserSurfaceFocused(): boolean {
   const activeElement = document.activeElement;

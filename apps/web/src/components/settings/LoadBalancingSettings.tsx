@@ -11,6 +11,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { EnvironmentRow, EnvironmentTransportLabel } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { SettingsNote } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 
 const preferences = [
@@ -134,7 +135,8 @@ function PlacementRow({
           }}
         >
           <SelectTrigger
-            size="xs"
+            variant="well"
+            size="compact"
             className="w-32"
             aria-label={gt("{environment} load preference", { environment: environment.label })}
           >
@@ -172,14 +174,14 @@ export function LoadBalancingSettings({
       title={title}
       summary={summarizeLoadPreferences(environments, weights, m)}
     >
-      <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+      <SettingsNote>
         <T>
           New threads on Auto start on the linked machine with the most room for another agent, and
           skip machines under memory pressure or at their agent limit. When none has room, the
           thread waits on the best one. Each machine keeps its own preference and limit, so every
           device sees the same choice.
         </T>
-      </p>
+      </SettingsNote>
       {environments.map((environment, index) => (
         <PlacementRow
           key={environment.environmentId}

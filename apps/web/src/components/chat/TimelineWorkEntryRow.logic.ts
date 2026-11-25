@@ -60,13 +60,13 @@ export function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   if (tone === "error") {
     return {
       iconName: "circle-alert",
-      className: "text-foreground/92",
+      className: "text-foreground",
     };
   }
   if (tone === "thinking") {
     return {
       iconName: "brain",
-      className: "text-icon-muted",
+      className: "text-muted-foreground",
     };
   }
   if (tone === "info") {
@@ -77,11 +77,11 @@ export function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   }
   return {
     iconName: "zap",
-    className: "text-foreground/92",
+    className: "text-foreground",
   };
 }
 
-export function workEntryRawCommand(
+function workEntryRawCommand(
   workEntry: Pick<TimelineWorkEntry, "command" | "rawCommand">,
 ): string | null {
   const rawCommand = workEntry.rawCommand?.trim();
@@ -95,7 +95,6 @@ export function buildToolCallExpandedBody(
   workEntry: TimelineWorkEntry,
   workspaceRoot: string | undefined,
   visibleLabel: string,
-  viewedImagePath: string | null,
   resolve: MessageResolver = m,
 ): string | null {
   const blocks: string[] = [];
@@ -127,22 +126,10 @@ export function buildToolCallExpandedBody(
     addBlock(raw ?? command);
   }
   const detail = workEntry.detail?.trim();
-  if (detail !== viewedImagePath?.trim()) {
-    addBlock(detail);
-  }
-  const viewedImagePaths = new Set(
-    viewedImagePath
-      ? [viewedImagePath.trim(), formatWorkspaceRelativePath(viewedImagePath, workspaceRoot)]
-      : [],
-  );
+  addBlock(detail);
   const changedFiles = (workEntry.changedFiles ?? []).flatMap((filePath) => {
     const formattedPath = formatWorkspaceRelativePath(filePath, workspaceRoot);
-    return viewedImagePaths.has(filePath) ||
-      viewedImagePaths.has(formattedPath) ||
-      filePath.trim() === detail ||
-      formattedPath === detail
-      ? []
-      : [formattedPath];
+    return filePath.trim() === detail || formattedPath === detail ? [] : [formattedPath];
   });
   if (changedFiles.length > 0) {
     addBlock([...new Set(changedFiles)].join("\n"));

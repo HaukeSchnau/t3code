@@ -1,5 +1,5 @@
 // Menu typeahead consumes search keystrokes; use a combobox.
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -16,6 +16,7 @@ import { PullRequestPeopleGhost } from "./PullRequestGhosts";
 export function PullRequestCandidatePicker<T>({
   icon,
   label,
+  text,
   allowed,
   disabledReason,
   open,
@@ -23,6 +24,7 @@ export function PullRequestCandidatePicker<T>({
   query,
   onQueryChange,
   searchLabel,
+  popupWidth,
   isPending,
   error,
   candidates,
@@ -33,10 +35,14 @@ export function PullRequestCandidatePicker<T>({
   truncatedLabel,
   candidateKey,
   onSelect,
+  groupLabel,
+  footer,
   children,
 }: {
   icon: ReactNode;
   label: string;
+  /** Written beside the icon where nothing is picked yet, so the empty row says what it adds. */
+  text?: string | undefined;
   allowed: boolean;
   disabledReason: string;
   open: boolean;
@@ -44,6 +50,7 @@ export function PullRequestCandidatePicker<T>({
   query: string;
   onQueryChange: (query: string) => void;
   searchLabel: string;
+  popupWidth: "reviewers" | "labels";
   isPending: boolean;
   error: string | null;
   candidates: ReadonlyArray<T>;
@@ -54,18 +61,36 @@ export function PullRequestCandidatePicker<T>({
   truncatedLabel: string;
   candidateKey: (candidate: T) => string;
   onSelect: (candidate: T) => void;
+  /**
+   * The heading of the group a candidate belongs to, such as "Suggested". The caller orders the
+   * candidates by group; a heading is drawn wherever the group changes.
+   */
+  groupLabel?: ((candidate: T) => string | null) | undefined;
+  /** A line pinned under the list, such as how many labels are applied. */
+  footer?: ReactNode;
   children: (candidate: T) => ReactNode;
 }) {
+  const trigger = (disabled: boolean) =>
+    text === undefined ? (
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-disabled={disabled || undefined}
+        aria-label={label}
+      >
+        {icon}
+      </Button>
+    ) : (
+      <Button size="xs" variant="ghost-muted" aria-disabled={disabled || undefined}>
+        {icon}
+        {text}
+      </Button>
+    );
+
   if (!allowed) {
     return (
       <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button size="icon-xs" variant="ghost" aria-disabled="true" aria-label={label}>
-              {icon}
-            </Button>
-          }
-        />
+        <TooltipTrigger render={trigger(true)} />
         <TooltipPopup side="bottom">{disabledReason}</TooltipPopup>
       </Tooltip>
     );
@@ -94,14 +119,12 @@ export function PullRequestCandidatePicker<T>({
         onOpenChange(nextOpen);
       }}
     >
-      <ComboboxTrigger
-        render={
-          <Button size="icon-xs" variant="ghost" aria-label={label}>
-            {icon}
-          </Button>
-        }
-      />
-      <ComboboxPopup align="start" side="bottom" className="w-72">
+      <ComboboxTrigger render={trigger(false)} />
+      <ComboboxPopup
+        align="start"
+        side="bottom"
+        className={popupWidth === "reviewers" ? "w-85" : "w-80"}
+      >
         <ComboboxSearchInput
           aria-label={searchLabel}
           placeholder={searchLabel}
@@ -112,24 +135,39 @@ export function PullRequestCandidatePicker<T>({
           {isPending ? (
             <PullRequestPeopleGhost rows={4} />
           ) : error !== null ? (
-            <p className="p-2 text-xs text-muted-foreground">
+            <p className="p-2 text-meta text-muted-foreground">
               {errorLabel} {error}
             </p>
           ) : candidates.length === 0 ? (
-            <p className="p-2 text-xs text-muted-foreground">
+            <p className="p-2 text-meta text-muted-foreground">
               {query.length > 0 ? noMatchLabel : emptyLabel}
             </p>
           ) : (
-            candidates.map((candidate, index) => (
-              <ComboboxItem key={keys[index]} hideIndicator index={index} value={keys[index]}>
-                {children(candidate)}
-              </ComboboxItem>
-            ))
+            candidates.map((candidate, index) => {
+              const group = groupLabel?.(candidate) ?? null;
+              const before = index > 0 ? candidates[index - 1] : undefined;
+              const previous = before === undefined ? null : (groupLabel?.(before) ?? null);
+              return (
+                <Fragment key={keys[index]}>
+                  {group !== null && (index === 0 || group !== previous) ? (
+                    <p className="px-2 pt-2 pb-1 text-meta text-muted-foreground">{group}</p>
+                  ) : null}
+                  <ComboboxItem hideIndicator index={index} value={keys[index]}>
+                    {children(candidate)}
+                  </ComboboxItem>
+                </Fragment>
+              );
+            })
           )}
           {truncated ? (
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">{truncatedLabel}</p>
+            <p className="px-2 py-1.5 text-meta text-muted-foreground">{truncatedLabel}</p>
           ) : null}
         </ComboboxList>
+        {footer ? (
+          <div className="border-t border-border px-3 py-2 text-meta text-muted-foreground">
+            {footer}
+          </div>
+        ) : null}
       </ComboboxPopup>
     </Combobox>
   );

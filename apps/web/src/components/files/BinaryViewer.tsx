@@ -1,9 +1,11 @@
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 /* oxlint-disable react/no-array-index-key -- Read-only cells retain their database row and column positions. */
 import { decodeFilePreviewText, filePreviewKind } from "@t3tools/shared/filePreview";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { ChevronLeftIcon, ChevronRightIcon, FileIcon, FolderIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Button } from "~/components/ui/button";
 import { m } from "~/i18n/messages";
 
 import {
@@ -220,7 +222,7 @@ export default function BinaryViewer(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {archive ? (
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-3 text-xs">
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-3 text-meta">
           <FileSurfaceAction
             label={selectedPath ? gt("Back to archive") : gt("Parent folder")}
             disabled={!selectedPath && !folder}
@@ -237,14 +239,22 @@ export default function BinaryViewer(props: {
             {selectedPath ?? (folder || gt("Archive contents"))}
           </span>
           <span className="shrink-0 text-muted-foreground">
-            {entriesLabel(archive.entries.length, gt)}
-            {sizeBytes !== null ? ` · ${formatAttachmentSize(sizeBytes, messages)}` : ""}
+            <Tooltip>
+              <TooltipTrigger render={<span tabIndex={0} />}>
+                {entriesLabel(archive.entries.length, gt)}
+              </TooltipTrigger>
+              <TooltipPopup>
+                {sizeBytes !== null
+                  ? formatAttachmentSize(sizeBytes, messages)
+                  : gt("Size unavailable")}
+              </TooltipPopup>
+            </Tooltip>
           </span>
         </div>
       ) : null}
       {database && table ? (
         <>
-          <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1 text-xs">
+          <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1 text-meta">
             <div className="min-w-32 flex-1">
               <Select
                 value={selectedTable}
@@ -296,12 +306,22 @@ export default function BinaryViewer(props: {
             </FileSurfaceAction>
           </div>
           <div
-            className="border-b border-border/60 px-3 py-2 text-xs text-muted-foreground tabular-nums"
+            className="flex flex-wrap gap-x-3 border-b border-border/60 px-3 py-2 text-meta text-muted-foreground tabular-nums"
             role="status"
           >
-            {rowsLabel(table.count, gt)} ·{" "}
-            {rows ? columnsLabel(rows.columns.length, gt) : gt("… columns")}
-            {sizeBytes !== null ? ` · ${formatAttachmentSize(sizeBytes, messages)}` : ""}
+            <Tooltip>
+              <TooltipTrigger render={<span tabIndex={0} />}>
+                {rowsLabel(table.count, gt)}
+              </TooltipTrigger>
+              <TooltipPopup>
+                <span className="block">
+                  {rows ? columnsLabel(rows.columns.length, gt) : gt("… columns")}
+                </span>
+                {sizeBytes !== null ? (
+                  <span className="block">{formatAttachmentSize(sizeBytes, messages)}</span>
+                ) : null}
+              </TooltipPopup>
+            </Tooltip>
           </div>
           <FileSurfaceNotice>
             <T>
@@ -325,17 +345,17 @@ export default function BinaryViewer(props: {
         <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-auto">
           <table
             aria-label={gt("Archive entries")}
-            className="w-full border-separate border-spacing-0 text-xs"
+            className="w-full border-separate border-spacing-0 text-meta"
           >
             <thead className="sticky top-0 bg-background text-muted-foreground">
               <tr>
-                <th scope="col" className="px-3 py-2 text-left font-normal">
+                <th scope="col" className="px-3 py-2 text-left text-meta">
                   <T $context="column header, file name">Name</T>
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-normal">
+                <th scope="col" className="px-3 py-2 text-right text-meta">
                   <T $context="column header, file size">Size</T>
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-normal">
+                <th scope="col" className="px-3 py-2 text-right text-meta">
                   <T $context="column header, last modified date">Modified</T>
                 </th>
               </tr>
@@ -352,9 +372,11 @@ export default function BinaryViewer(props: {
                     className="hover:bg-muted/40"
                   >
                     <td className="max-w-0 border-b border-border/60">
-                      <button
+                      <Button
                         type="button"
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:text-primary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start"
                         onClick={() => {
                           if (item.directory) setFolder(`${item.path}/`);
                           else {
@@ -370,7 +392,7 @@ export default function BinaryViewer(props: {
                           <FileIcon className="size-4 shrink-0 text-muted-foreground" />
                         )}
                         <span className="truncate">{item.path.slice(folder.length)}</span>
-                      </button>
+                      </Button>
                     </td>
                     <td className="w-20 border-b border-border/60 px-3 py-2 text-right whitespace-nowrap text-muted-foreground tabular-nums">
                       {formatAttachmentSize(item.size, messages)}
@@ -383,7 +405,7 @@ export default function BinaryViewer(props: {
             </tbody>
           </table>
           {children.size === 0 ? (
-            <p className="p-6 text-xs text-muted-foreground">
+            <p className="p-6 text-meta text-muted-foreground">
               <T>This folder is empty.</T>
             </p>
           ) : null}
@@ -392,7 +414,7 @@ export default function BinaryViewer(props: {
         <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-auto">
           <table
             aria-label={`${props.name}: ${rows.table}`}
-            className="min-w-full border-separate border-spacing-0 text-xs"
+            className="min-w-full border-separate border-spacing-0 text-meta"
           >
             <thead className="sticky top-0 bg-background">
               <tr>
@@ -400,7 +422,7 @@ export default function BinaryViewer(props: {
                   <th
                     key={name}
                     scope="col"
-                    className="border-r border-b border-border/60 px-3 py-2 text-left font-medium whitespace-nowrap"
+                    className="border-r border-b border-border/60 px-3 py-2 text-left text-meta whitespace-nowrap"
                   >
                     {name}
                   </th>
@@ -423,13 +445,13 @@ export default function BinaryViewer(props: {
             </tbody>
           </table>
           {rows.rows.length === 0 ? (
-            <p className="p-6 text-xs text-muted-foreground">
+            <p className="p-6 text-meta text-muted-foreground">
               <T>This table is empty.</T>
             </p>
           ) : null}
         </div>
       ) : (
-        <p className="p-6 text-xs text-muted-foreground">
+        <p className="p-6 text-meta text-muted-foreground">
           <T>This database has no readable tables.</T>
         </p>
       )}

@@ -54,6 +54,7 @@ function layerElectronApp(
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
     setDockIcon: () => Effect.void,
+    setWindowIcons: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
     onBeforeQuitForUpdate: (listener) => registerListener("before-quit-for-update", listener),
@@ -64,7 +65,9 @@ function layerElectronApp(
 
 const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
   shouldUseDarkColors: Effect.succeed(false),
+  shouldUseDarkChrome: Effect.succeed(false),
   setSource: () => Effect.void,
+  setBlackChrome: () => Effect.void,
   onUpdated: () => Effect.void,
 });
 

@@ -257,7 +257,8 @@ export const make = Effect.gen(function* () {
           { role: "services", label: m(msg("Services", { $context: "macOS app menu item" })) },
           { type: "separator" },
           { role: "hide", label: m(msg("Hide {appName}"), { appName: environment.displayName }) },
-          { role: "hideOthers", label: m(msg("Hide Others")) },
+          // alt+cmd+H focuses the pane on the left; Hide Others keeps its item.
+          { role: "hideOthers", label: m(msg("Hide Others")), accelerator: "" },
           {
             role: "unhide",
             label: m(msg("Show All", { $context: "macOS app menu item, shows hidden apps" })),
@@ -350,9 +351,10 @@ export const make = Effect.gen(function* () {
             accelerator: "Shift+CmdOrCtrl+R",
             click: mainContentsClick("forceReload"),
           },
+          // alt+cmd+I and J belong to the layout keys on macOS.
           {
             label: m(msg("Toggle Developer Tools")),
-            accelerator: environment.platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
+            accelerator: environment.platform === "darwin" ? "Alt+Shift+Command+I" : "Ctrl+Shift+I",
             click: mainContentsClick("toggleDevTools"),
           },
           { type: "separator" },

@@ -303,7 +303,7 @@ function ChatWithSideChatPane(props: { ran: string[] }) {
   );
 }
 
-it("runs right panel commands from inside a side chat pane, but not thread commands", async () => {
+it("runs right panel commands from inside a side chat pane, once per press, but not thread commands", async () => {
   const ran: string[] = [];
   await using screen = await render(<ChatWithSideChatPane ran={ran} />, options);
 
@@ -313,8 +313,22 @@ it("runs right panel commands from inside a side chat pane, but not thread comma
   await userEvent.click(screen.getByRole("region", { name: "Conversation" }));
   await userEvent.keyboard("{Control>}{Alt>}B{/Alt}{/Control}");
   await userEvent.keyboard("q");
+  const toggleKey = (repeat: boolean) =>
+    new KeyboardEvent("keydown", {
+      key: "b",
+      code: "KeyB",
+      ctrlKey: true,
+      altKey: true,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+  const passedThrough = [false, true, true, false].map((repeat) =>
+    screen.getByRole("region", { name: "Conversation" }).element().dispatchEvent(toggleKey(repeat)),
+  );
 
-  expect(ran).toEqual(["toggle", "close", "toggle"]);
+  expect(ran).toEqual(["toggle", "close", "toggle", "toggle", "toggle"]);
+  expect(passedThrough).toEqual([false, false, false, false]);
 });
 
 it("leaves keys to a focused video player with controls", async () => {
