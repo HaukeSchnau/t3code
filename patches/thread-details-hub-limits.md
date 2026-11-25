@@ -32,9 +32,12 @@ every subscription's room at a glance without opening Usage.
 
 ## Implementation
 
-`otherDriverPools` in `apps/web/src/components/chat/ThreadDetailsUsage.logic.ts` is fork-owned.
-`ThreadDetailsUsage.tsx` renders its windows as `PoolRow`s under `DriverCaption`s, beside
-upstream's rows for the selected instance.
+`otherDriverPools` in `apps/web/src/components/chat/ThreadDetailsUsage.logic.ts` and
+`chat/ThreadDetailsHubLimits.tsx` are fork-owned; upstream's `ThreadDetailsUsage.tsx` mounts the
+latter. `OtherDriverLimits` renders the other providers' groups under `DriverCaption`s through
+upstream's `LimitRow`. Upstream's pooled row keeps only the pool's sum, so `limitForecast` finds
+the row's pool and projects its member windows. `ProjectedLimitBar` replaces upstream's bar when a
+row projects, and `LimitForecastLines` ends the tooltip with the forecast and the pool's accounts.
 
 `projectLimitWindows` and `projectionPaces` in `packages/shared/src/usageLimits.ts` are fork-owned.
 They spend a pool the way infra's claude-pool priorities route it

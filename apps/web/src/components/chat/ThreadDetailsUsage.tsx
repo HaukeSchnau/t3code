@@ -36,6 +36,15 @@ import { contextWindowSegments } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { THREAD_DETAILS_PANEL_LABEL_CLASS } from "./threadDetailsPanelStyles";
 import {
+  DriverCaption,
+  type LimitForecast,
+  LimitForecastLines,
+  limitForecast,
+  OtherDriverLimits,
+  ProjectedLimitBar,
+  useOtherDriverLimits,
+} from "./ThreadDetailsHubLimits";
+import {
   foldLimitRows,
   limitTone,
   nextPoolReset,
@@ -104,8 +113,10 @@ export function ThreadDetailsUsage({
       ? limitPoolNotice(providerInstanceId, providers, sources)
       : null;
   const notice = pool ? null : (poolNotice ?? ownNotice);
+  const others = useOtherDriverLimits(driver, providers, sources, now);
   return (
     <ThreadDetailsSection title={gt("Usage limits")} variant="usage">
+      {others.length > 0 ? <DriverCaption driver={driver} /> : null}
       {notice || !rows.length ? (
         <UsageRow
           label={gt("Limits", { $context: "usage limits row label" })}
@@ -122,13 +133,14 @@ export function ThreadDetailsUsage({
         />
       ) : (
         <>
-          {(folded ? fold.shown : rows).map(({ window, accounts, sources }) => (
+          {(folded ? fold.shown : rows).map(({ driver, window, accounts, sources }) => (
             <LimitRow
               key={`${window.kind}:${window.id}`}
               window={window}
               now={now}
               pooledAccounts={accounts}
               sources={sources}
+              forecast={limitForecast(driver, window, pool, now)}
             />
           ))}
           {fold.hidden.length > 0 ? (
@@ -148,6 +160,7 @@ export function ThreadDetailsUsage({
           ) : null}
         </>
       )}
+      <OtherDriverLimits groups={others} renderRow={(row) => <LimitRow {...row} now={now} />} />
     </ThreadDetailsSection>
   );
 }
@@ -323,11 +336,13 @@ function LimitRow({
   now,
   pooledAccounts,
   sources,
+  forecast,
 }: {
   readonly window: ServerProviderUsageWindow;
   readonly now: number;
   readonly pooledAccounts: number;
   readonly sources: ReadonlyArray<string>;
+  readonly forecast?: LimitForecast;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -351,6 +366,7 @@ function LimitRow({
       fill={left}
       tone={limitTone(left)}
       tick={timeLeft}
+      projection={forecast?.projection}
       value={`${left}%`}
       ariaValue={gt("{left}% left", { left })}
       opensUsage
@@ -364,7 +380,7 @@ function LimitRow({
           <span className="text-foreground">
             {gt("{label}: {left}% left", { label: window.label, left })}
           </span>
-          {pace && timeLeft !== null ? (
+          {!forecast?.projection && pace && timeLeft !== null ? (
             <span>
               <span className="block">{m(PACE_LABEL[pace])}</span>
               <span className="block">{gt("{timeLeft}% of the window left", { timeLeft })}</span>
@@ -392,6 +408,7 @@ function LimitRow({
           {sources.length > 0 ? (
             <span>{gt("From {sources}", { sources: sources.join(", ") })}</span>
           ) : null}
+          <LimitForecastLines forecast={forecast} now={now} />
         </>
       }
     />
@@ -406,6 +423,7 @@ function UsageRow({
   fill,
   tone,
   tick = null,
+  projection,
   value,
   ariaValue = value,
   tooltip,
@@ -418,6 +436,7 @@ function UsageRow({
   readonly fill: number | null;
   readonly tone: UsageTone;
   readonly tick?: number | null;
+  readonly projection?: LimitForecast["projection"] | undefined;
   readonly value: string;
   readonly ariaValue?: string;
   readonly tooltip: ReactNode;
@@ -447,7 +466,9 @@ function UsageRow({
             <span className="truncate">{label}</span>
           )}
           <span className="flex items-center justify-end gap-1.5">
-            {fill !== null ? (
+            {fill !== null && projection ? (
+              <ProjectedLimitBar projection={projection} tone={tone} />
+            ) : fill !== null ? (
               <span className="relative h-1 min-w-12 flex-1 rounded-full bg-muted-foreground/20">
                 {fill > 0 ? (
                   <span
