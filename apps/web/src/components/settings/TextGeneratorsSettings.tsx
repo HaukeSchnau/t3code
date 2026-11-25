@@ -453,7 +453,7 @@ function TextGeneratorWizard({
                         {/* oxlint-disable-next-line t3code/no-untranslated-copy -- OpenAI's API name */}
                         Responses API
                       </Label>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-meta text-muted-foreground">
                         <T>
                           For reasoning models behind the Responses API, such as a ChatGPT
                           subscription proxy. Set reasoning effort and fast mode next to the model

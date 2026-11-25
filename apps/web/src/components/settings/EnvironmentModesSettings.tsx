@@ -11,10 +11,11 @@ import type { EnvironmentPresentation } from "~/state/environments";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { DraftInput } from "../ui/draft-input";
 import { toastManager } from "../ui/toast";
 import { Toggle } from "../ui/toggle";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { SettingsNote } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 
 const SUGGESTED_NAMES = [
@@ -60,7 +61,7 @@ export function EnvironmentModesSettings({
           : modes.map((mode) => mode.name).join(", ")
       }
     >
-      <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+      <SettingsNote>
         {shortcutLabel ? (
           <T>
             A mode turns its environments on and turns off environments that only other modes
@@ -74,22 +75,18 @@ export function EnvironmentModesSettings({
             apply only to this device.
           </T>
         )}
-      </p>
+      </SettingsNote>
       {modes.map((mode) => (
-        <div key={mode.id} className="flex flex-col gap-2 border-t px-3 py-2.5 sm:px-4">
+        <div key={mode.id} className="flex flex-col gap-2 px-3 py-2.5 sm:px-4">
           <div className="flex items-center gap-2">
-            <Input
-              size="sm"
+            <DraftInput
+              size="settings"
               className="w-48"
-              defaultValue={mode.name}
+              value={mode.name}
               aria-label={gt("Mode name")}
-              onBlur={(event) => {
-                const name = event.currentTarget.value.trim();
-                if (name.length === 0) event.currentTarget.value = mode.name;
-                else if (name !== mode.name) update(mode.id, (m) => ({ ...m, name }));
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
+              onCommit={(next) => {
+                const name = next.trim();
+                if (name.length > 0 && name !== mode.name) update(mode.id, (m) => ({ ...m, name }));
               }}
             />
             <Button
@@ -125,7 +122,7 @@ export function EnvironmentModesSettings({
           </div>
         </div>
       ))}
-      <div className="border-t px-3 py-2.5 sm:px-4">
+      <div className="px-3 py-2.5 sm:px-4">
         <Button
           size="xs"
           variant="ghost"
