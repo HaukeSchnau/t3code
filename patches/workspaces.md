@@ -126,7 +126,10 @@ workspaces get through thread-scoped file restore in the jj driver (see `jujutsu
   revert check is upstream's since #18379. `state/workspaces.ts` is fork-owned.
 - web `ChatView.tsx` computes the per-project capability once and passes it to `BranchToolbar`
   and `useComposerSend`; mobile `new-task-flow-provider.tsx` exposes it as
-  `flow.managedWorkspaces`.
+  `flow.managedWorkspaces`. In the composer, `ManagedWorkspaceSelector` takes the place of
+  upstream's workspace menu. Once a thread starts, the composer shows its workspace only in the
+  details card, so `BranchToolbar`'s panel keeps the workspace row (`namesWorkspace`) for a thread
+  in a workspace folder without Git.
 - web `BranchToolbar.tsx`, `ChatView.tsx`, `ChatView.logic.ts` (`planComposerTurn` returns
   `shouldCreateWorktree`), `chat/useComposerSend.ts` (the `prepareWorkspace` bootstrap),
   `settings/scheduledTasksSettings.logic.ts`, `settings/ScheduledTasksSettings.tsx`; fork-owned `ManagedWorkspaceSelector.tsx` and
