@@ -2052,6 +2052,9 @@ export function threadShellFromProjection(
     ...(projection.thread.placement === undefined
       ? {}
       : { placement: projection.thread.placement }),
+    ...(projection.thread.worldRepos === undefined
+      ? {}
+      : { worldRepos: projection.thread.worldRepos }),
     ...(projection.thread.workflowRun === undefined
       ? {}
       : { workflowRun: projection.thread.workflowRun }),
@@ -2377,6 +2380,9 @@ function shellFromState(input: {
     ...(input.state.thread.placement === undefined
       ? {}
       : { placement: input.state.thread.placement }),
+    ...(input.state.thread.worldRepos === undefined
+      ? {}
+      : { worldRepos: input.state.thread.worldRepos }),
     ...(input.state.thread.workflowRun === undefined
       ? {}
       : { workflowRun: input.state.thread.workflowRun }),

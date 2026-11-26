@@ -23,6 +23,14 @@ export const WorldSettings = Schema.Struct({
 });
 export type WorldSettings = typeof WorldSettings.Type;
 
+/**
+ * A repository's namespace, its forge and owner, such as `git.buildlinx.io/buildlinx` for
+ * `git.buildlinx.io/buildlinx/cloud/frontend`. Clients file older projects by it.
+ */
+export function worldRepositoryNamespace(repository: string): string {
+  return repository.split("/").slice(0, 2).join("/").toLowerCase();
+}
+
 export const WorldRepoBranch = Schema.Struct({
   name: Schema.String,
   /** Commits on the branch that no remote has. */
@@ -47,6 +55,17 @@ export const WorldThreadRepo = Schema.Struct({
   error: Schema.optional(Schema.String),
 });
 export type WorldThreadRepo = typeof WorldThreadRepo.Type;
+
+/** A repo a thread checked out in its world, kept on the thread after its world is gone. */
+export const ThreadWorldRepo = Schema.Struct({
+  /** The world's catalog name, such as `git.buildlinx.io/buildlinx/cloud/frontend`. */
+  repo: Schema.String,
+  /** Path inside the world, such as `Repos/buildlinx/cloud/frontend`. */
+  dir: Schema.String,
+  /** It held work no remote has when T3 last looked. */
+  work: Schema.Boolean,
+});
+export type ThreadWorldRepo = typeof ThreadWorldRepo.Type;
 
 /** A write or checkout the cap refused. */
 export const WorldRefusal = Schema.Struct({

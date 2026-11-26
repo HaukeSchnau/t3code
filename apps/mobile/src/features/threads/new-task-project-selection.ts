@@ -220,6 +220,29 @@ export function newTaskFilteredProject(
   return project && { environmentId: project.environmentId, projectId: project.id };
 }
 
+/**
+ * Where a new task under a chosen world starts: the world's own open project, on the list's
+ * machine when that one is connected, else on a connected machine. Undefined when no machine has
+ * one, so the picker opens.
+ */
+export function newTaskWorldProject(
+  projects: ReadonlyArray<EnvironmentProject>,
+  world: string,
+  preferredEnvironmentId: EnvironmentId | null,
+  connectedEnvironmentIds: ReadonlySet<EnvironmentId>,
+): ProjectRef | undefined {
+  const open = projects.filter(
+    (project) => project.world === world && isPickableProjectMember(project),
+  );
+  const connected = open.filter((project) => connectedEnvironmentIds.has(project.environmentId));
+  const project =
+    connected.find((candidate) => candidate.environmentId === preferredEnvironmentId) ??
+    connected[0] ??
+    open.find((candidate) => candidate.environmentId === preferredEnvironmentId) ??
+    open[0];
+  return project && { environmentId: project.environmentId, projectId: project.id };
+}
+
 export function newTaskDestination(options: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly requestId: string;

@@ -1,3 +1,5 @@
+import { useWorldFiling, worldColorFor } from "../home/worldFiling";
+import { worldShortTitle } from "@t3tools/client-runtime/state/worlds";
 import { useGT, useMessages } from "gt-react-native";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
@@ -56,6 +58,7 @@ import {
 import { useEnvironmentModeMenu } from "../connection/environmentModes";
 import {
   buildHomeProjectScopes,
+  buildHomeWorldScopes,
   resolveHomeProjectFilterScope,
   sortHomeProjectScopes,
 } from "../home/homeThreadList";
@@ -197,14 +200,21 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode, messages],
   );
-  const projectFilterOptions = pickableProjectGroups(
-    sortHomeProjectScopes({
-      scopes: projectScopes,
-      threads,
-      pendingTasks: [],
-      projectSortOrder: "updated_at",
-    }),
-  ).map((scope) => ({
+  const worldFiling = useWorldFiling();
+  const projectFilterOptions = [
+    ...buildHomeWorldScopes(projectScopes, worldFiling, messages).map((scope) => ({
+      ...scope,
+      title: worldShortTitle(scope.title),
+    })),
+    ...pickableProjectGroups(
+      sortHomeProjectScopes({
+        scopes: projectScopes,
+        threads,
+        pendingTasks: [],
+        projectSortOrder: "updated_at",
+      }),
+    ),
+  ].map((scope) => ({
     key: scope.key,
     label: scope.title,
   }));
@@ -223,7 +233,12 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ),
     [projectScopes],
   );
-  const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, options);
+  const selectedProjectScope = resolveHomeProjectFilterScope(
+    projectScopes,
+    projects,
+    options,
+    worldFiling,
+  );
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
@@ -441,6 +456,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             snoozeWakeLabelText={item.snoozeWakeLabelText}
             timeLabel={item.timeLabel}
             project={projectByKey.get(scopeKey) ?? null}
+            worldColor={worldColorFor(worldFiling, scopeKey)}
             providerInstance={resolveProviderInstance(thread)}
             providers={providersByEnvironmentId.get(thread.environmentId)}
             environmentLabel={

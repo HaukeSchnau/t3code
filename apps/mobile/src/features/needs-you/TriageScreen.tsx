@@ -53,6 +53,7 @@ import { useThreadListActions } from "../home/useThreadListActions";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { ThreadHtmlRender } from "../threads/HtmlRenderWebView";
 import { useThreadListNow } from "../threads/use-thread-list-now";
+import { useWorldFiling } from "../home/worldFiling";
 import { triageDeckThreads, triagePageView, type TriagePageView } from "./triageDeck";
 import { queueTriageMessage, triageDrafts } from "./triageSession";
 
@@ -71,6 +72,7 @@ function useNeedsYouDeckThreads() {
     threadListEnvironmentsAtom,
   );
   const now = useThreadListNow(threads);
+  const worldFiling = useWorldFiling();
   return triageDeckThreads({
     threads,
     projects,
@@ -78,6 +80,7 @@ function useNeedsYouDeckThreads() {
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     now,
+    worldFiling,
   });
 }
 

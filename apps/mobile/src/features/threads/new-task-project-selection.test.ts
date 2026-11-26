@@ -8,6 +8,7 @@ import {
   isSameRepository,
   newTaskDestination,
   newTaskFilteredProject,
+  newTaskWorldProject,
   resolveDraftProjectSelection,
   resolveEnvironmentProjectMatch,
   resolveNewTaskScratchOption,
@@ -153,6 +154,42 @@ describe("newTaskFilteredProject", () => {
       environmentId: "mac",
       projectId: "t3code",
     });
+  });
+});
+
+describe("newTaskWorldProject", () => {
+  const world = (id: string, environment: string, archived = false) => ({
+    ...makeProject(id, environment),
+    world: "buildlinx",
+    ...(archived ? { archivedAt: "2026-01-01T00:00:00.000Z" } : {}),
+  });
+  const connected = new Set([EnvironmentId.make("server"), EnvironmentId.make("tower")]);
+
+  it("starts in the world's open project, on the list's machine when it is connected", () => {
+    const projects = [
+      world("bx", "mac"),
+      world("bx", "server"),
+      world("bx", "tower"),
+      makeProject("legacy", "tower"),
+    ];
+    expect(
+      newTaskWorldProject(projects, "buildlinx", EnvironmentId.make("tower"), connected),
+    ).toEqual({ environmentId: "tower", projectId: "bx" });
+    // The list's machine is offline, so a connected copy wins.
+    expect(
+      newTaskWorldProject(projects, "buildlinx", EnvironmentId.make("mac"), connected),
+    ).toEqual({ environmentId: "server", projectId: "bx" });
+  });
+
+  it("finds nothing when no machine has an open copy, so the picker opens", () => {
+    expect(
+      newTaskWorldProject(
+        [world("bx", "server", true), makeProject("legacy", "tower")],
+        "buildlinx",
+        null,
+        connected,
+      ),
+    ).toBeUndefined();
   });
 });
 
