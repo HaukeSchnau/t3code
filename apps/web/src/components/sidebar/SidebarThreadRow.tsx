@@ -36,6 +36,7 @@ import {
   type ContextMenuSource,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type ProjectIconColor,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 
@@ -99,6 +100,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { SidebarWorldRepoChips, SidebarWorldStripe } from "./SidebarWorlds";
 import {
   animateSidebarLayoutChanges,
   type SidebarV2TopStatusKind,
@@ -454,6 +456,14 @@ function SidebarThreadTooltip({
             <div className="min-w-0 truncate text-foreground/75">{projectDisplayName}</div>
           </div>
         ) : null}
+        {thread.worldRepos.length > 0 ? (
+          <div className="flex min-w-0 items-start gap-2">
+            <FolderGit2Icon className="mt-0.5 size-3 shrink-0 stroke-muted-foreground" />
+            <div className="min-w-0 wrap-break-word text-foreground/75">
+              {thread.worldRepos.map((repo) => repo.dir).join(", ")}
+            </div>
+          </div>
+        ) : null}
         {environmentLabel ? (
           <div className="flex min-w-0 items-center gap-2">
             <EnvironmentMachineIcon
@@ -770,6 +780,11 @@ type SidebarThreadRowProps = {
   jumpLabel: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
+  /** The server this client is connected to, which the card leaves unnamed. */
+  environmentIsPrimary?: boolean | undefined;
+  /** The thread's world (patches/worlds.md): its color, and whether an older project is filed there. */
+  worldColor?: ProjectIconColor | null | undefined;
+  worldFiled?: boolean | undefined;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
@@ -1419,23 +1434,24 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const multiline = variant === "folder-multiline";
   const inFolder = variant === "folder" || multiline;
   const diff = latestRunDiff(thread);
+  const metaEnvironmentLabel = props.environmentIsPrimary ? null : props.environmentLabel;
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
-    props.environmentLabel === null &&
+    metaEnvironmentLabel === null &&
     prBadge === null &&
     issueBadge === null &&
     diff === null &&
     runningTerminalIds.length === 0;
   const metaLine = metaLineEmpty ? null : (
     <div className={SIDEBAR_CARD_META_LINE_CLASS_NAME}>
-      {props.environmentLabel !== null ? (
+      {metaEnvironmentLabel !== null ? (
         <>
           <EnvironmentMachineIcon
             aria-hidden
             kind={props.environmentMachine}
             className="size-3.5 shrink-0 text-icon-muted"
           />
-          <span className="min-w-0 flex-1 truncate">{props.environmentLabel}</span>
+          <span className="min-w-0 flex-1 truncate">{metaEnvironmentLabel}</span>
         </>
       ) : (
         <span className="flex-1" />
@@ -1720,13 +1736,18 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               (metaLineEmpty || needLabel !== null) && "h-auto",
             )}
           >
+            {props.worldColor ? (
+              <SidebarWorldStripe color={props.worldColor} filed={props.worldFiled === true} />
+            ) : null}
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
               {props.project ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
               ) : null}
               {pinIndicator}
-              {props.projectDisplayName ? (
+              {props.project?.world != null && thread.worldRepos.length > 0 ? (
+                <SidebarWorldRepoChips repos={thread.worldRepos} />
+              ) : props.projectDisplayName ? (
                 <span className={SIDEBAR_CARD_PROJECT_LABEL_CLASS_NAME}>
                   {props.projectDisplayName}
                 </span>

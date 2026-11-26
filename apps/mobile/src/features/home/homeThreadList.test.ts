@@ -5,7 +5,18 @@ import type {
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildHomeProjectScopes, findHomeProjectScope } from "./homeThreadList";
+import {
+  fileProjectsIntoWorlds,
+  declaredWorldsFromConfigs,
+  worldScopeKey,
+} from "@t3tools/client-runtime/state/worlds";
+
+import {
+  buildHomeProjectScopes,
+  buildHomeWorldScopes,
+  findHomeProjectScope,
+  resolveHomeProjectFilterScope,
+} from "./homeThreadList";
 import { makeThreadShellFixture } from "../../test-fixtures";
 import { buildThreadListV2Items } from "../threads/threadListV2";
 
@@ -221,5 +232,127 @@ describe("home project scopes", () => {
     expect(findHomeProjectScope(scopes, "environment-local:project-target")).toBe(targetScope);
     expect(findHomeProjectScope(scopes, "environment-local:missing")).toBeNull();
     expect(findHomeProjectScope(scopes, null)).toBeNull();
+  });
+});
+
+describe("home world scopes", () => {
+  it("keeps a repository's clones in the world each one is filed under", () => {
+    const identity = {
+      canonicalKey: "git.example.com/team/app",
+      locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl: "x" },
+    };
+    const world = makeProject({
+      environmentId: EnvironmentId.make("tower"),
+      id: ProjectId.make("buildlinx-world"),
+      title: "BuildlinX World",
+      world: "buildlinx",
+    });
+    const filed = makeProject({
+      environmentId: EnvironmentId.make("dev-hauke"),
+      id: ProjectId.make("filed"),
+      title: "app",
+      workspaceRoot: "/home/u/Buildlinx/app",
+      repositoryIdentity: identity,
+    });
+    const elsewhere = makeProject({
+      environmentId: EnvironmentId.make("srv-2"),
+      id: ProjectId.make("elsewhere"),
+      title: "app",
+      workspaceRoot: "/home/u/Code/app",
+      repositoryIdentity: identity,
+    });
+    const projects = [world, filed, elsewhere];
+    const scopes = buildHomeProjectScopes({
+      projects,
+      environmentId: null,
+      projectGroupingMode: "repository",
+    });
+    const filing = fileProjectsIntoWorlds({
+      projects,
+      worlds: declaredWorldsFromConfigs(
+        new Map([
+          ["tower", { settings: { worlds: { buildlinx: { path: "/home/u/Buildlinx" } } } }],
+        ]),
+      ),
+    });
+
+    const worldScopes = buildHomeWorldScopes(scopes, filing);
+
+    expect(
+      worldScopes.map((scope) => [scope.key, scope.projectRefs.map((ref) => ref.projectId)]),
+    ).toEqual([
+      [worldScopeKey("buildlinx"), ["buildlinx-world", "filed"]],
+      [worldScopeKey(null), ["elsewhere"]],
+    ]);
+  });
+
+  it("filters a world by every project filed under it", () => {
+    const tower = EnvironmentId.make("tower");
+    const devHauke = EnvironmentId.make("dev-hauke");
+    const world = makeProject({
+      environmentId: tower,
+      id: ProjectId.make("buildlinx-world"),
+      title: "BuildlinX World",
+      workspaceRoot: "/home/u/.t3/worlds/buildlinx",
+      world: "buildlinx",
+    });
+    const umbrella = makeProject({
+      environmentId: devHauke,
+      id: ProjectId.make("umbrella"),
+      title: "Buildlinx",
+      workspaceRoot: "/home/u/Buildlinx",
+    });
+    const scratch = makeProject({
+      environmentId: tower,
+      id: ProjectId.make("scratch"),
+      title: "No project",
+      workspaceRoot: "/home/u/.t3/scratch",
+    });
+    const projects = [world, umbrella, scratch];
+    const scopes = buildHomeProjectScopes({
+      projects,
+      environmentId: null,
+      projectGroupingMode: "repository",
+    });
+    const filing = fileProjectsIntoWorlds({
+      projects,
+      worlds: declaredWorldsFromConfigs(
+        new Map([
+          ["tower", { settings: { worlds: { buildlinx: { path: "/home/u/Buildlinx" } } } }],
+        ]),
+      ),
+    });
+    const options = {
+      selectedProjectKey: worldScopeKey("buildlinx"),
+      projectGroupingMode: "repository" as const,
+    };
+
+    const scope = resolveHomeProjectFilterScope(scopes, projects, options, filing);
+
+    expect([...(scope?.projectRefs.map((ref) => ref.projectId) ?? [])].sort()).toEqual([
+      "buildlinx-world",
+      "umbrella",
+    ]);
+    // Narrowed to a machine without the world's project, the world lists its older projects.
+    expect(
+      resolveHomeProjectFilterScope(
+        buildHomeProjectScopes({
+          projects,
+          environmentId: devHauke,
+          projectGroupingMode: "repository",
+        }),
+        projects,
+        options,
+        filing,
+      )?.projectRefs.map((ref) => ref.projectId),
+    ).toEqual(["umbrella"]);
+    expect(
+      resolveHomeProjectFilterScope(
+        scopes,
+        projects,
+        { ...options, selectedProjectKey: worldScopeKey(null) },
+        filing,
+      )?.projectRefs.map((ref) => ref.projectId),
+    ).toEqual(["scratch"]);
   });
 });

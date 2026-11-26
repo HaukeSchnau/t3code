@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { decodeDaemonThreadStatus, toWorldThreadStatus } from "./worldStatus.ts";
+import type { WorldThreadRepo } from "@t3tools/contracts";
+
+import { decodeDaemonThreadStatus, threadWorldRepos, toWorldThreadStatus } from "./worldStatus.ts";
 
 describe("toWorldThreadStatus", () => {
   it.effect("maps the daemon's status to what the thread shows", () =>
@@ -102,6 +104,79 @@ describe("toWorldThreadStatus", () => {
         refusals: null,
       });
       expect(toWorldThreadStatus(daemon, 42)).toMatchObject({ repos: [], refusals: [] });
+    }),
+  );
+});
+
+describe("threadWorldRepos", () => {
+  const repo = (dir: string, overrides: Partial<WorldThreadRepo> = {}): WorldThreadRepo => ({
+    repo: `git.buildlinx.io/${dir}`,
+    dir,
+    checkedOut: true,
+    dirty: 0,
+    commits: 0,
+    branches: [],
+    lostOnTeardown: false,
+    ...overrides,
+  });
+  const status = (repos: ReadonlyArray<WorldThreadRepo>, available = true) => ({
+    world: "buildlinx",
+    path: "/home/haukeschnau/Buildlinx",
+    repos,
+    refusals: [],
+    available,
+  });
+
+  it("keeps the checked-out repos and whether each holds work no remote has", () => {
+    expect(
+      threadWorldRepos(
+        status([
+          repo(".", { dirty: 2 }),
+          repo("Repos/cloud/frontend", { dirty: 1 }),
+          repo("Repos/cloud/model-backend", { branches: [{ name: "fix", commits: 1 }] }),
+          repo("Repos/edgelinx/edgenix"),
+          repo("Repos/misc/roominator", { checkedOut: false }),
+        ]),
+      ),
+    ).toEqual([
+      { repo: "git.buildlinx.io/Repos/cloud/frontend", dir: "Repos/cloud/frontend", work: true },
+      {
+        repo: "git.buildlinx.io/Repos/cloud/model-backend",
+        dir: "Repos/cloud/model-backend",
+        work: true,
+      },
+      {
+        repo: "git.buildlinx.io/Repos/edgelinx/edgenix",
+        dir: "Repos/edgelinx/edgenix",
+        work: false,
+      },
+    ]);
+  });
+
+  it("records nothing when the daemon doesn't answer or reports no repos", () => {
+    expect(threadWorldRepos(status([repo("Repos/cloud/frontend")], false))).toBeUndefined();
+    expect(threadWorldRepos(status([repo(".")]))).toBeUndefined();
+  });
+
+  it.effect("leaves out a repo the daemon reports at the world's root", () =>
+    Effect.gen(function* () {
+      const daemon = yield* decodeDaemonThreadStatus({
+        world: "buildlinx",
+        path: "/home/haukeschnau/Buildlinx",
+        repos: [
+          {
+            repo: "git.schnau.dev/schnau/world-buildlinx",
+            dir: "/home/haukeschnau/Buildlinx",
+            state: "checked-out",
+            dirty: 1,
+            commits: 0,
+            jjCommits: 0,
+            lostOnTeardown: true,
+          },
+        ],
+        refusals: null,
+      });
+      expect(threadWorldRepos(toWorldThreadStatus(daemon, 42))).toBeUndefined();
     }),
   );
 });

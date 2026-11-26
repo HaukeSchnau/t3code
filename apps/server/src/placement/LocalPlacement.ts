@@ -42,6 +42,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { worldProjectRoot } from "../world/threadWorldPaths.ts";
+import { decodeWorldCatalog, WORLDS_CACHE } from "../world/worldCatalog.ts";
 import { isolatedWorkspacesAvailable } from "../workspace/IsolatedWorkspaces.ts";
 
 /** How often a waiting thread checks for room. */
@@ -49,18 +50,8 @@ const ROOM_CHECK_INTERVAL = "3 seconds";
 // The deploy's idle check renews the drain on every retry of a waiting release: every 2 minutes
 // on NixOS hosts, every 10 on macOS. A release that no longer waits releases the host after this.
 const RELEASE_DRAIN_MS = 15 * 60 * 1000;
-/** Where infra keeps every world's repositories (patches/worldfs.md). */
-const WORLDS_CACHE = "/var/lib/worlds";
 // A clone that borrows a mirror's objects takes seconds; a cold one of a large repository minutes.
 const CLONE_TIMEOUT = "15 minutes";
-const decodeCatalog = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      repos: Schema.Array(Schema.Struct({ name: Schema.String, mirror: Schema.String })),
-    }),
-  ),
-);
-
 interface Waiter {
   readonly since: number;
   readonly release: Deferred.Deferred<void>;
@@ -373,7 +364,7 @@ const make = Effect.gen(function* () {
     const worlds = yield* fs.readDirectory(WORLDS_CACHE).pipe(Effect.orElseSucceed(() => []));
     for (const world of worlds) {
       const catalog = Option.getOrUndefined(
-        decodeCatalog(
+        decodeWorldCatalog(
           yield* fs
             .readFileString(path.join(WORLDS_CACHE, world, "catalog.json"))
             .pipe(Effect.orElseSucceed(() => "")),
