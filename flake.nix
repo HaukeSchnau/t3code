@@ -9,8 +9,8 @@
     # Node, pnpm and nixpkgs' pnpm fetcher come from here: the root package.json pins Node
     # exactly and pnpm 12, which the main pin predates. Drop once `nixpkgs` ships both.
     nixpkgs-node.url = "github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504";
-    nix-infra-modules = {
-      url = "github:HaukeSchnau/nix-infra-modules/c08469c9ed76a0e2223cb6bf1ac624580be6f98c";
+    projects-sdk = {
+      url = "github:HaukeSchnau/projects-sdk/v0.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # agent-exec runs devenv in isolated workspaces, where infra's Projects
@@ -25,7 +25,7 @@
       nixpkgs,
       nixpkgs-jj,
       nixpkgs-node,
-      nix-infra-modules,
+      projects-sdk,
       devenv,
     }:
     let
@@ -41,7 +41,7 @@
       forAllSystems = lib.genAttrs systems;
 
       packageJson = builtins.fromJSON (builtins.readFile ./apps/server/package.json);
-      projectDescriptor = nix-infra-modules.lib.projectDefinition { modules = [ ./project.nix ]; };
+      projectDescriptor = projects-sdk.lib.projectDefinition { modules = [ ./project.nix ]; };
 
       mkPkgs =
         system:
@@ -441,7 +441,7 @@
             '';
           };
         in
-        nix-infra-modules.lib.projectRuntime.mkServiceRelease {
+        projects-sdk.lib.projectRuntime.mkServiceRelease {
           inherit pkgs;
           descriptor = projectDescriptor;
           payloads = [

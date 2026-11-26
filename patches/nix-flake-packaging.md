@@ -124,7 +124,7 @@ retries later. `--drain` first tells the running server that a release waits, so
 threads and can go idle (patches/fleet-placement.md). A running server that predates the drain
 route answers 404, and the check goes on without it. The task prints each blocking thread's title
 and what it waits for, the user's questions and approvals first, and the deploy keeps that output
-as the reason the release waits (`deferred` in nix-infra-modules' `GET /status/<name>`). A pending
+as the reason the release waits (`deferred` in projects-sdk's `GET /status/<name>`). A pending
 question that needs the live provider blocks the release until someone answers or dismisses it. Upstream has no idle check. `t3 status idle` (`cli/status.ts`),
 `GET /api/server/idle` (`status/http.ts`) and the `ServerIdleStatus` contract are fork additions.
 `idle` is a subcommand of upstream's own `t3 status`, so the command line stays the same.

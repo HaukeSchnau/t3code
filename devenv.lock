@@ -50,32 +50,6 @@
         "type": "github"
       }
     },
-    "projectSdk": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1790115917,
-        "narHash": "sha256-Y/hfCjK9o8xThCCLZt09NbGRv+tVwF9v1+a2GzG7BgU=",
-        "owner": "HaukeSchnau",
-        "repo": "nix-infra-modules",
-        "rev": "c08469c9ed76a0e2223cb6bf1ac624580be6f98c",
-        "type": "github"
-      },
-      "original": {
-        "owner": "HaukeSchnau",
-        "repo": "nix-infra-modules",
-        "rev": "c08469c9ed76a0e2223cb6bf1ac624580be6f98c",
-        "type": "github"
-      }
-    },
-    "root": {
-      "inputs": {
-        "devenv": "devenv",
-        "nixpkgs": "nixpkgs",
-        "nixpkgs-jj": "nixpkgs-jj",
-        "projectSdk": "projectSdk",
-        "nixpkgs-node": "nixpkgs-node"
-      }
-    },
     "nixpkgs-node": {
       "locked": {
         "lastModified": 1792773339,
@@ -90,6 +64,32 @@
         "repo": "nixpkgs",
         "rev": "3ec636362e1816bc2f0888fa0fa2c69f1bc9e504",
         "type": "github"
+      }
+    },
+    "projectSdk": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1795741271,
+        "narHash": "sha256-xaMY/Lmzo5TieoNNnoORjEZKR2BGiTDm7kSb1sXvXSs=",
+        "owner": "HaukeSchnau",
+        "repo": "projects-sdk",
+        "rev": "721be53734ff2ec1a65c519de69e8617999d957f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "HaukeSchnau",
+        "ref": "v0.1.0",
+        "repo": "projects-sdk",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "devenv": "devenv",
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-jj": "nixpkgs-jj",
+        "nixpkgs-node": "nixpkgs-node",
+        "projectSdk": "projectSdk"
       }
     }
   },
