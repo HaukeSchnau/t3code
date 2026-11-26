@@ -46,8 +46,8 @@ import { isolatedWorkspacesAvailable } from "../workspace/IsolatedWorkspaces.ts"
 
 /** How often a waiting thread checks for room. */
 const ROOM_CHECK_INTERVAL = "3 seconds";
-// The deploy's idle check renews the drain on every retry of a waiting release: every 2 minutes
-// on NixOS hosts, every 10 on macOS. A release that no longer waits releases the host after this.
+// The deploy's idle check renews the drain on every retry of a waiting release, which infra
+// schedules every 2 to 10 minutes. A release that no longer waits releases the host after this.
 const RELEASE_DRAIN_MS = 15 * 60 * 1000;
 /** Where infra keeps every world's repositories (patches/worldfs.md). */
 const WORLDS_CACHE = "/var/lib/worlds";

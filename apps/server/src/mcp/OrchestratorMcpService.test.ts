@@ -3229,6 +3229,7 @@ describe("OrchestratorMcpService provider resolution", () => {
   it.effect("an auto delegation that would wait for room runs beside its parent", () =>
     Effect.gen(function* () {
       const abandoned = yield* Ref.make(0);
+      const dispatched = yield* Ref.make<ReadonlyArray<{ readonly type: string }>>([]);
       const peer = EnvironmentId.make("environment:mcp-providers-updating-peer");
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
@@ -3238,6 +3239,10 @@ describe("OrchestratorMcpService provider resolution", () => {
           getThreadShell: () => Effect.succeed(null),
           getThreadRecords: (threadId) =>
             Effect.succeed(threadId === parentThreadId ? parentProjection([]) : childProjection),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.as({ sequence: 1, storedEvents: [] } as never),
+            ),
         }),
         providerRegistryLayer([
           providerSnapshot({
@@ -3247,7 +3252,9 @@ describe("OrchestratorMcpService provider resolution", () => {
           }),
         ]),
         adapterRegistryLayer([codexInstanceId]),
-        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeedSome({ id: projectId, workspaceRoot: "/repo" } as never),
+        }),
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
@@ -3275,15 +3282,19 @@ describe("OrchestratorMcpService provider resolution", () => {
 
       yield* Effect.gen(function* () {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        // The task then starts here, which this test's mocks leave unfinished.
+        // These mocks end the local start once it has requested the task here.
         yield* service
           .delegateTask(scope, {
             task: "Summarize the diff.",
             target: { environmentId: EnvironmentId.make("auto") },
             mode: "async",
           })
-          .pipe(Effect.exit);
+          .pipe(Effect.ignore);
         assert.equal(yield* Ref.get(abandoned), 1);
+        assert.deepEqual(
+          (yield* Ref.get(dispatched)).map((command) => command.type),
+          ["delegated_task.request"],
+        );
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );
