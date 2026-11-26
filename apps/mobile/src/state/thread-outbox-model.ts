@@ -58,6 +58,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
   ),
   repositories: Schema.optional(Schema.Array(Schema.String)),
   startsFromRepositoryDefaults: Schema.optional(Schema.Boolean),
+  placement: Schema.optional(Schema.Literal("auto")),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -100,6 +101,8 @@ export interface QueuedThreadCreation {
   readonly repositories?: ReadonlyArray<string>;
   /** The project folder is no Git repository, so a new worktree needs no base branch. */
   readonly startsFromRepositoryDefaults?: boolean;
+  /** The server's placement picks the machine (patches/fleet-placement.md). */
+  readonly placement?: "auto";
 }
 
 export interface QueuedThreadMessage {

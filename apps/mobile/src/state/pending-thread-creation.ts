@@ -3,7 +3,12 @@ import {
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { LocalThreadMessage } from "../lib/threadActivity";
-import { DEFAULT_PROVIDER_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "@t3tools/contracts";
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  type EnvironmentId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { asLaunchingThread } from "@t3tools/client-runtime/state/thread-inbox";
 import { Atom } from "effect/reactivity";
@@ -14,8 +19,19 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 
+/** Where placement started a task, when that is not where it was sent. */
+export interface PlacedThreadCreation {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly label: string;
+}
+
 export type PendingThreadCreationOutcome =
-  | { readonly kind: "delivered"; readonly message: QueuedThreadMessage }
+  | {
+      readonly kind: "delivered";
+      readonly message: QueuedThreadMessage;
+      readonly placed?: PlacedThreadCreation;
+    }
   | { readonly kind: "failed"; readonly message: QueuedThreadMessage; readonly reason: string };
 
 export type PendingThreadCreation = {
@@ -44,9 +60,11 @@ export function selectThreadCreationDetail<Ref>(input: {
   })();
   // The shell can arrive before creation is acknowledged. Wait for delivery
   // before subscribing: an early not-found is cached as a deleted thread.
-  // Every detail reader must use this ref, not the route id.
+  // A task placed elsewhere never exists here. Every detail reader must use
+  // this ref, not the route id.
   const detailRef =
-    pendingCreation === null || pendingCreation.outcome?.kind === "delivered"
+    pendingCreation === null ||
+    (pendingCreation.outcome?.kind === "delivered" && pendingCreation.outcome.placed === undefined)
       ? input.threadRef
       : null;
   return { pendingCreation, detailRef };

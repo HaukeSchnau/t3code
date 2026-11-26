@@ -451,6 +451,8 @@ export interface ComposerDraft {
   /** `/clear` armed this draft: its next message starts a fresh provider session. */
   readonly freshContext?: boolean;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
+  /** A new task's machine: "auto" lets placement pick on send (patches/fleet-placement.md). */
+  readonly environmentSelection?: "auto" | "manual";
   readonly project?: ComposerDraftProject;
 }
 
@@ -493,6 +495,7 @@ export type ComposerDraftSettingsUpdate = Pick<
   | "interactionMode"
   | "freshContext"
   | "workspaceSelection"
+  | "environmentSelection"
   | "project"
 >;
 
@@ -528,6 +531,7 @@ const ComposerDraftSchema = Schema.Struct({
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   freshContext: Schema.optional(Schema.Boolean),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  environmentSelection: Schema.optional(Schema.Literals(["auto", "manual"])),
   project: Schema.optional(ComposerDraftProjectSchema),
 });
 
@@ -707,7 +711,8 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
     draft.freshContext !== true &&
-    draft.workspaceSelection === undefined
+    draft.workspaceSelection === undefined &&
+    draft.environmentSelection === undefined
   );
 }
 
@@ -1725,6 +1730,7 @@ export function clearComposerDraftContentState(
     context: _context,
     modelSelection,
     workspaceSelection,
+    environmentSelection,
     project: _project,
     ...retained
   } = existing;
@@ -1734,6 +1740,9 @@ export function clearComposerDraftContentState(
     ...(options?.clearWorkspaceSelection || workspaceSelection === undefined
       ? {}
       : { workspaceSelection }),
+    ...(options?.clearWorkspaceSelection || environmentSelection === undefined
+      ? {}
+      : { environmentSelection }),
     text: "",
     attachments: [],
   };
@@ -1891,7 +1900,8 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
     a.freshContext === b.freshContext &&
-    a.workspaceSelection === b.workspaceSelection
+    a.workspaceSelection === b.workspaceSelection &&
+    a.environmentSelection === b.environmentSelection
   );
 }
 
@@ -1921,7 +1931,8 @@ export function undoComposerDraftMergeState(
       | "runtimeMode"
       | "interactionMode"
       | "freshContext"
-      | "workspaceSelection",
+      | "workspaceSelection"
+      | "environmentSelection",
   >(
     key: K,
   ): ComposerDraft[K] => (existing[key] === merged[key] ? snapshot[key] : existing[key]);
@@ -1943,6 +1954,11 @@ export function undoComposerDraftMergeState(
     interactionMode: undoSetting("interactionMode"),
     freshContext: undoSetting("freshContext"),
     workspaceSelection: undoSetting("workspaceSelection"),
+    // The machine follows the workspace: a branch picked since the merge keeps it pinned.
+    environmentSelection:
+      existing.workspaceSelection === merged.workspaceSelection
+        ? undoSetting("environmentSelection")
+        : existing.environmentSelection,
   };
   return withComposerDraft(current, draftKey, draft);
 }

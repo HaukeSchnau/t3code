@@ -115,6 +115,7 @@ import IconPlus from "@tabler/icons-react-native/IconPlus";
 import IconQrcode from "@tabler/icons-react-native/IconQrcode";
 import IconRefresh from "@tabler/icons-react-native/IconRefresh";
 import IconRobot from "@tabler/icons-react-native/IconRobot";
+import IconScale from "@tabler/icons-react-native/IconScale";
 import IconSearch from "@tabler/icons-react-native/IconSearch";
 import IconShare from "@tabler/icons-react-native/IconShare";
 import IconServer from "@tabler/icons-react-native/IconServer";
@@ -271,6 +272,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   safari: IconExternalLink,
   "server.rack": IconServer,
   stethoscope: IconStethoscope,
+  scalemass: IconScale,
   "sidebar.left": IconLayoutSidebar,
   "sidebar.right": IconLayoutSidebarRight,
   "slider.horizontal.3": IconAdjustmentsHorizontal,

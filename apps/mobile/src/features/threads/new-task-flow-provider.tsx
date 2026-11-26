@@ -45,9 +45,11 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { projectEnvironment } from "../../state/projects";
 import { useLinkedEnvironments } from "../../state/peerLinks";
 import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   appendComposerDraftAttachments,
+  type ComposerDraft,
   type ComposerDraftInsertion,
   type ComposerDraftWorkspaceSelection,
   composerDraftsLoadedAtom,
@@ -118,6 +120,11 @@ import {
   type WorktreeRepositorySelection,
 } from "@t3tools/client-runtime/state/thread-repositories";
 import { useConnectionsReady, useWorkspaceEnvironments } from "../../state/workspace";
+import {
+  newTaskLaunchesHere,
+  resolveNewTaskPlacement,
+  type NewTaskPlacement,
+} from "./new-task-placement";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -206,6 +213,9 @@ type NewTaskFlowContextValue = {
   } | null;
   readonly selectEnvironment: (environmentId: EnvironmentId) => void;
   readonly switchEnvironment: (environmentId: EnvironmentId) => Promise<boolean>;
+  /** Whether Auto is offered and chosen, and where the draft's machine would place the task. */
+  readonly placement: NewTaskPlacement;
+  readonly chooseAutoEnvironment: () => void;
   readonly switchingToEnvironmentId: EnvironmentId | null;
   readonly setSelectedModelKey: (
     key: string | null,
@@ -564,6 +574,49 @@ export function NewTaskFlowProvider(
   };
 
   const providerGroups = groupByProvider(modelOptions);
+  // The draft's machine asks its placement where Auto would start the task; no answer means no
+  // machine it reaches takes placed work (patches/fleet-placement.md).
+  const placementPreview = useEnvironmentQuery(
+    props.active !== false && selectedProject !== null
+      ? serverEnvironment.placementPreview({
+          environmentId: selectedProject.environmentId,
+          input: {
+            projectId: selectedProject.id,
+            // The provider the send will use, so machines without it are left out.
+            ...(selectedModel === null ? {} : { instanceId: selectedModel.instanceId }),
+          },
+        })
+      : null,
+  );
+  const placementFor = (draft: ComposerDraft) => {
+    const selection = resolveWorkspaceSelection(draft.workspaceSelection);
+    const isTriage = isTriagePrompt(draft.text);
+    const choosesRepositories =
+      resolveWorktreeRepositorySelection({
+        choices: worktreeRepositoryChoices,
+        chosen: selection.repositories,
+      }).strategyRepositories !== undefined;
+    const launchesHere = newTaskLaunchesHere({
+      isTriage,
+      workspaceMode: selection.mode,
+      pullRequestReference: selection.pullRequestReference,
+      choosesRepositories,
+    });
+    const placement = resolveNewTaskPlacement({
+      preview: placementPreview,
+      environmentSelection: draft.environmentSelection,
+      worktreePath: selection.mode === "local" ? selection.worktreePath : null,
+      launchesHere,
+      server: {
+        hasAttachments: draft.attachments.length > 0,
+        hasContext: (draft.context?.records.length ?? 0) > 0,
+        branchesFromLocalCommit:
+          selection.mode === "worktree" && !(selection.startFromOrigin ?? startFromOrigin),
+      },
+    });
+    return { placement, sendPlaces: placement.automatic && !launchesHere };
+  };
+  const placement = placementFor(selectedProjectDraft).placement;
   const setPrompt = (value: string) => {
     if (!selectedProjectDraftKey) {
       return;
@@ -645,14 +698,42 @@ export function NewTaskFlowProvider(
     null,
   );
   const latestSwitchRef = useRef<object | null>(null);
+  // Picking a machine, or a branch of its checkout, takes the task off Auto, as on web.
+  const pinDraftEnvironment = () => {
+    const draftKey = readFlow().draftKey;
+    if (draftKey !== null)
+      updateComposerDraftSettings(draftKey, { environmentSelection: "manual" });
+  };
+  const chooseAutoEnvironment = () => {
+    if (!selectedProjectDraftKey) return;
+    latestSwitchRef.current = null;
+    setSwitchingToEnvironmentId(null);
+    const stored = getComposerDraftSnapshot(selectedProjectDraftKey).workspaceSelection;
+    updateComposerDraftSettings(selectedProjectDraftKey, {
+      environmentSelection: "auto",
+      // A picked branch belongs to this machine; Auto starts from the defaults, as on web.
+      ...(stored === undefined
+        ? {}
+        : {
+            workspaceSelection: {
+              ...stored,
+              branch: null,
+              worktreePath: null,
+              ...(stored.mode === "local" ? { followsCurrentCheckout: true } : {}),
+            },
+          }),
+    });
+  };
   const switchEnvironment = async (environmentId: EnvironmentId): Promise<boolean> => {
     if (environmentId === selectedEnvironmentId) {
       latestSwitchRef.current = null;
       setSwitchingToEnvironmentId(null);
+      pinDraftEnvironment();
       return true;
     }
     if (!isScratchDraft) {
       selectEnvironment(environmentId);
+      pinDraftEnvironment();
       return true;
     }
     const request = {};
@@ -680,6 +761,7 @@ export function NewTaskFlowProvider(
         if (nextText !== text) setComposerDraftText(draftKey, nextText);
       }
       setProject(result.value);
+      pinDraftEnvironment();
       return true;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -726,6 +808,7 @@ export function NewTaskFlowProvider(
       return;
     }
     updateComposerDraftSettings(selectedProjectDraftKey, {
+      environmentSelection: "manual",
       workspaceSelection: {
         mode: workspaceMode,
         branch: branch.name,
@@ -830,6 +913,7 @@ export function NewTaskFlowProvider(
     }
     const workspaceSelection = resolveWorkspaceSelection(draft.workspaceSelection);
     const mode = workspaceSelection.mode;
+    const placesThread = placementFor(draft).sendPlaces;
     return {
       environmentId: selectedProject.environmentId,
       threadId: ThreadId.make(metadata.threadId),
@@ -854,11 +938,15 @@ export function NewTaskFlowProvider(
           ? { pullRequestReference: workspaceSelection.pullRequestReference }
           : {}),
         // Queued local tasks use drain-time checkout; snapshot branches only for immediate sends or explicit choices.
-        branch: resolveProjectThreadCreationBranch({
-          workspaceMode: mode,
-          selectedBranch: workspaceSelection?.branch ?? null,
-          currentCheckoutBranch: options?.currentCheckoutBranch ?? null,
-        }),
+        // A placed local task records the checkout of the machine it lands on.
+        branch:
+          placesThread && mode === "local"
+            ? null
+            : resolveProjectThreadCreationBranch({
+                workspaceMode: mode,
+                selectedBranch: workspaceSelection?.branch ?? null,
+                currentCheckoutBranch: options?.currentCheckoutBranch ?? null,
+              }),
         worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
         ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
           ? { startFromOrigin: true }
@@ -868,6 +956,7 @@ export function NewTaskFlowProvider(
           : managedWorkspaces !== null
             ? managedWorkspaceCreation(managedWorkspaces)
             : worktreeCreation(workspaceSelection.repositories)),
+        ...(placesThread ? { placement: "auto" as const } : {}),
       },
       createdAt: metadata.createdAt,
     };
@@ -982,6 +1071,8 @@ export function NewTaskFlowProvider(
         : null,
     selectEnvironment,
     switchEnvironment,
+    placement,
+    chooseAutoEnvironment,
     switchingToEnvironmentId,
     setSelectedModelKey,
     setWorkspaceMode,

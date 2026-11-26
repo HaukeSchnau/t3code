@@ -96,6 +96,7 @@ import {
 import { incomingShareImports, useIncomingShare } from "../sharing/IncomingShareProvider";
 import { idleShareFlagAtom, idleShareImportPhaseAtom } from "./incomingShareImport";
 import { newTaskFlowKey } from "./new-task-flow-state";
+import { newTaskPlacementLabel } from "./new-task-placement";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -459,6 +460,8 @@ export function NewTaskDraftScreen(props: {
           }
           // Checkout completed before mount; local mode reuses it while worktree mode would create another.
           updateComposerDraftSettings(flow.draftKey, {
+            // The checkout is this machine's, so Auto must not move the task elsewhere.
+            environmentSelection: "manual",
             workspaceSelection: {
               mode: "local",
               branch: props.initialProjectRef.branch,
@@ -546,6 +549,10 @@ export function NewTaskDraftScreen(props: {
     flow.environments.find(
       (environment) => environment.environmentId === flow.selectedEnvironmentId,
     )?.environmentLabel ?? gt("Environment");
+  const autoEnvironmentLabel = flow.placement.automatic
+    ? newTaskPlacementLabel(flow.placement, selectedEnvironmentLabel, m)
+    : null;
+  const environmentControlLabel = autoEnvironmentLabel ?? selectedEnvironmentLabel;
   const availableCurrentBranchName =
     flow.availableBranches.find((branch) => branch.current)?.name ??
     flow.availableBranches.find((branch) => branch.isDefault)?.name ??
@@ -777,6 +784,7 @@ export function NewTaskDraftScreen(props: {
     <DraftEnvironmentControl
       connectionState={connectionState}
       label={selectedEnvironmentLabel}
+      autoLabel={autoEnvironmentLabel}
       machineKind={resolveEnvironmentMachineKind(selectedEnvironmentServerConfig)}
       disabled={isComposerInteractionLocked}
       onChooseEnvironment={() => openContextPicker("NewTaskEnvironment")}
@@ -907,19 +915,23 @@ export function NewTaskDraftScreen(props: {
         <ComposerInlineControl
           accessibilityLabel={
             connectionState === "connected"
-              ? gt("Choose environment, {label}, Connected", { label: selectedEnvironmentLabel })
-              : gt("Choose environment, {label}, Offline", { label: selectedEnvironmentLabel })
+              ? gt("Choose environment, {label}, Connected", { label: environmentControlLabel })
+              : gt("Choose environment, {label}, Offline", { label: environmentControlLabel })
           }
           chevronDirection="right"
           disabled={isComposerInteractionLocked}
-          renderIcon={(size) => (
-            <EnvironmentMachineSymbol
-              kind={resolveEnvironmentMachineKind(selectedEnvironmentServerConfig)}
-              size={size}
-              tintColorClassName="accent-icon-muted"
-            />
-          )}
-          label={selectedEnvironmentLabel}
+          renderIcon={(size) =>
+            autoEnvironmentLabel === null ? (
+              <EnvironmentMachineSymbol
+                kind={resolveEnvironmentMachineKind(selectedEnvironmentServerConfig)}
+                size={size}
+                tintColorClassName="accent-icon-muted"
+              />
+            ) : (
+              <SymbolView name="scalemass" size={size} tintColorClassName="accent-icon-muted" />
+            )
+          }
+          label={environmentControlLabel}
           maxWidth="100%"
           onPress={() => openContextPicker("NewTaskEnvironment")}
           suffix={

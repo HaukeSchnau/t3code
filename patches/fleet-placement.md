@@ -120,8 +120,13 @@ the project, and never waits for room.
   the launch goes to the thread wherever it started (`placedDraftThreadRef`). The header's `ThreadPlacementChip` shows where and why with
   every candidate; `placementWaitBannerItem` shows the wait with Start anyway and Cancel (the
   run's stop). Settings → Load balancing edits each machine's weight and agent limit.
-- Mobile shows the reason in the thread header and the wait in `PlacementWaitCard`. Starting a
-  new task on Auto from the phone is not there yet.
+- Mobile shows the reason in the thread header and the wait in `PlacementWaitCard`. A new task's
+  machine picker offers Auto by the web composer's rules (`new-task-placement.ts`): on until the
+  user picks a machine or a branch, labelled from `placement.preview`. The outbox launches it with
+  `placement: "auto"` (`QueuedThreadCreation.placement`), and its resend after a lost reply reuses
+  the server's decision as web's outbox does. When the answer names another machine, the creation
+  outcome records it and the thread route follows (`PlacedThreadRedirect`); a machine the phone has
+  no connection to opens read-only through the link (`LinkedThread`).
 
 ## Limits
 
@@ -152,4 +157,5 @@ service when upstream places new threads across connected environments on the se
 
 `Placement.test.ts`, `HostPressure.test.ts`, shared `placement.test.ts`, the load balancing cases
 in client-runtime `projectGrouping.test.ts`, the placement case in shared `serverSettings.test.ts`,
-and the waiting case in `ThreadLaunchService.test.ts`.
+the waiting case in `ThreadLaunchService.test.ts`, mobile `new-task-placement.test.ts`, and the Auto
+task cases in mobile `threadOutboxDelivery.permissions.test.ts` and `threadOutboxDelivery.test.ts`.
