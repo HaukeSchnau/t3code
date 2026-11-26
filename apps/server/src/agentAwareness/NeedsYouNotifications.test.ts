@@ -1408,6 +1408,38 @@ describe("NeedsYouNotifications", () => {
     ),
   );
 
+  it.effect("events that record nothing look for no delivery", () =>
+    withDatabase(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(local(17));
+        const w = yield* makeWorld;
+        yield* emit(w, world.thread("t"));
+        let lookups = 0;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* makeServer(w, {
+              ledger: (ledger) => ({
+                ...ledger,
+                nextDelivery: (since) =>
+                  Effect.suspend(() => {
+                    lookups += 1;
+                    return ledger.nextDelivery(since);
+                  }),
+              }),
+            });
+            yield* server.emit(yield* world.request("t", "q"));
+            assert.lengthOf(server.pushes, 1);
+            const before = lookups;
+            // A running agent's events: a message and its run, which no need reads.
+            yield* server.emit(yield* world.message("t", "r"));
+            yield* server.emit(yield* world.run("t", "r", "running"));
+            assert.equal(lookups, before);
+          }),
+        );
+      }),
+    ),
+  );
+
   it.effect("a failed read of the subjects is retried, never sent to clients as none", () =>
     withDatabase(
       Effect.gen(function* () {
