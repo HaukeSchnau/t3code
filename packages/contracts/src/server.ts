@@ -1013,6 +1013,8 @@ export const ServerIdleBusyThread = Schema.Struct({
   status: Schema.optional(TrimmedNonEmptyString),
   provider: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  /** Names the thread in a deploy's report of what keeps it waiting. Older servers omit it. */
+  title: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerIdleBusyThread = typeof ServerIdleBusyThread.Type;
 

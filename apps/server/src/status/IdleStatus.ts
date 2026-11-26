@@ -7,11 +7,14 @@ import { PROCESS_BOUND_EFFECT_TYPES } from "../orchestration-v2/EffectOutbox.ts"
 
 interface ThreadRow {
   readonly threadId: string;
+  readonly title: string | null;
 }
 
 interface RunRow extends ThreadRow {
   readonly status: "queued" | "preparing" | "starting" | "running" | "waiting";
   readonly provider: string;
+  /** 1 when the thread waits for room on this host (patches/fleet-placement.md). */
+  readonly waitingForRoom: number;
 }
 
 interface SessionRow extends ThreadRow {
@@ -39,15 +42,18 @@ interface IdleWork {
 
 // Startup recovery terminalizes active runs, stops provider sessions, closes requests that need
 // the live provider, and cancels process-bound effects, so all of those block a restart. Queued
-// runs and requests answered by a later message survive the restart and are only counted.
+// runs, runs of threads waiting for room and requests answered by a later message survive the
+// restart and are only counted.
 function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdleStatus {
   const busyThreads: Array<ServerIdleBusyThread> = [];
   const seen = new Set<string>();
-  const busy = (thread: ServerIdleBusyThread) => {
-    const key = `${thread.source}:${thread.reason}:${thread.threadId}`;
+  const busy = (row: ThreadRow, thread: Omit<ServerIdleBusyThread, "threadId" | "title">) => {
+    const threadId = ThreadId.make(row.threadId);
+    const key = `${thread.source}:${thread.reason}:${threadId}`;
     if (seen.has(key)) return;
     seen.add(key);
-    busyThreads.push(thread);
+    const title = row.title?.trim();
+    busyThreads.push({ threadId, ...thread, ...(title ? { title } : {}) });
   };
   const counts = {
     liveActiveTurnCount: 0,
@@ -60,14 +66,16 @@ function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdl
   };
 
   for (const run of work.runs) {
-    const threadId = ThreadId.make(run.threadId);
     switch (run.status) {
       case "queued":
         counts.queuedMessageCount += 1;
         break;
       case "preparing":
-        busy({
-          threadId,
+        if (run.waitingForRoom === 1) {
+          counts.queuedMessageCount += 1;
+          break;
+        }
+        busy(run, {
           reason: "command-in-progress",
           source: "command-preprocessing",
           turnId: null,
@@ -78,8 +86,7 @@ function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdl
         break;
       case "starting":
         counts.projectedStartingSessionCount += 1;
-        busy({
-          threadId,
+        busy(run, {
           reason: "projected-session-starting",
           source: "projection",
           turnId: null,
@@ -90,8 +97,7 @@ function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdl
       case "running":
       case "waiting":
         counts.projectedRunningTurnCount += 1;
-        busy({
-          threadId,
+        busy(run, {
           reason: "projected-latest-turn-running",
           source: "projection",
           turnId: null,
@@ -106,8 +112,7 @@ function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdl
     const starting = session.status === "starting";
     if (starting) counts.projectedStartingSessionCount += 1;
     else counts.projectedActiveTurnCount += 1;
-    busy({
-      threadId: ThreadId.make(session.threadId),
+    busy(session, {
       reason: starting ? "projected-session-starting" : "projected-active-turn",
       source: "projection",
       turnId: null,
@@ -121,8 +126,7 @@ function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdl
     if (userInput) counts.pendingUserInputCount += 1;
     else counts.pendingApprovalCount += 1;
     if (request.responseType === "message" || request.responseType === "not_resumable") continue;
-    busy({
-      threadId: ThreadId.make(request.threadId),
+    busy(request, {
       reason: userInput ? "pending-user-input" : "pending-approval",
       source: "projection",
       turnId: null,
@@ -131,8 +135,7 @@ function summarizeServerIdleStatus(work: IdleWork, checkedAt: string): ServerIdl
   }
 
   for (const effect of work.effects) {
-    busy({
-      threadId: ThreadId.make(effect.threadId),
+    busy(effect, {
       reason: "command-in-progress",
       source: "command-preprocessing",
       turnId: null,
@@ -154,14 +157,22 @@ const readIdleWork = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const [runs, sessions, runtimeRequests, effects] = yield* Effect.all([
     sql<RunRow>`
-      SELECT run.thread_id AS "threadId", run.status, run.provider
+      SELECT
+        run.thread_id AS "threadId",
+        thread.title,
+        run.status,
+        run.provider,
+        CASE WHEN json_valid(thread.payload_json)
+          THEN json_type(thread.payload_json, '$.placement.waitingSince') = 'text'
+          ELSE 0
+        END AS "waitingForRoom"
       FROM orchestration_v2_projection_runs AS run
       LEFT JOIN orchestration_v2_projection_threads AS thread ON thread.thread_id = run.thread_id
       WHERE thread.deleted_at IS NULL
         AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
     `,
     sql<SessionRow>`
-      SELECT binding.thread_id AS "threadId", session.status, session.provider
+      SELECT binding.thread_id AS "threadId", thread.title, session.status, session.provider
       FROM orchestration_v2_projection_provider_sessions AS session
       JOIN orchestration_v2_projection_provider_session_bindings AS binding
         ON binding.provider_session_id = session.provider_session_id
@@ -173,6 +184,7 @@ const readIdleWork = Effect.gen(function* () {
     sql<RuntimeRequestRow>`
       SELECT
         request.thread_id AS "threadId",
+        thread.title,
         request.kind,
         CASE WHEN json_valid(request.payload_json)
           THEN json_extract(request.payload_json, '$.responseCapability.type')
@@ -183,7 +195,11 @@ const readIdleWork = Effect.gen(function* () {
       WHERE thread.deleted_at IS NULL AND request.status = 'pending'
     `,
     sql<EffectRow>`
-      SELECT effect.thread_id AS "threadId", effect.effect_type AS "effectType", effect.status
+      SELECT
+        effect.thread_id AS "threadId",
+        thread.title,
+        effect.effect_type AS "effectType",
+        effect.status
       FROM orchestration_v2_effect_outbox AS effect
       LEFT JOIN orchestration_v2_projection_threads AS thread
         ON thread.thread_id = effect.thread_id

@@ -10,6 +10,7 @@ import * as NetService from "@t3tools/shared/Net";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import { Command } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import * as Etag from "effect/http/Etag";
@@ -26,6 +27,7 @@ import { cli } from "../binCli.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as LocalPlacement from "../placement/LocalPlacement.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { acquireServerOwnership } from "../serverOwnership.ts";
@@ -91,10 +93,17 @@ class SettingsRoutesApi extends HttpApi.make("environment").add(EnvironmentHttpA
 
 // The real settings routes, auth and settings service on `baseDir`, without a listening socket.
 // The web handler runs on the wall clock, so tests that use it are `it.live` to mint valid tokens.
-const serveRoutes = Effect.fn("SettingsCliTest.serveRoutes")(function* (baseDir: string) {
+const serveRoutes = Effect.fn("SettingsCliTest.serveRoutes")(function* (
+  baseDir: string,
+  drain: Effect.Effect<void> = Effect.void,
+) {
   // The server runtime gives handlers these per request; the test hands them over itself.
   const services = yield* Layer.build(
-    Layer.mergeAll(EnvironmentAuth.layer, ServerSettings.layer).pipe(
+    Layer.mergeAll(
+      EnvironmentAuth.layer,
+      ServerSettings.layer,
+      Layer.mock(LocalPlacement.LocalPlacement)({ drain }),
+    ).pipe(
       // The real identity: tokens the CLI mints name the environment id stored in `baseDir`.
       Layer.provide([ManagedPolicy.layerTest(), ServerEnvironment.layer]),
       Layer.provideMerge(ServerSecretStore.layer),
@@ -158,6 +167,65 @@ it.live("reads and patches through the real routes, then revokes the CLI's sessi
 
     const token = server.tokens.at(-1)!;
     assert.equal((yield* server.call("GET", "/api/server/settings", token)).status, 401);
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.live("idle --drain asks the server to drain, and still answers one without the route", () =>
+  Effect.gen(function* () {
+    const home = yield* makeHome();
+    const drains = yield* Ref.make(0);
+    const server = yield* serveRoutes(
+      home.baseDir,
+      Ref.update(drains, (count) => count + 1),
+    );
+    const idle = (fetch: typeof globalThis.fetch) =>
+      runCli(["status", "idle", "--drain", "--base-dir", home.baseDir]).pipe(
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+      );
+
+    const drained = yield* idle(server.fetch);
+    assert.equal(drained.exitCode, undefined);
+    assert.equal(drained.stdout, "T3 Code is idle.");
+    assert.equal(yield* Ref.get(drains), 1);
+
+    // The waiting release's CLI asks the running one, which may predate the route and titles.
+    const busy = {
+      idle: false,
+      checkedAt: "2026-11-26T00:00:00.000Z",
+      busyThreadCount: 1,
+      liveActiveTurnCount: 0,
+      projectedActiveTurnCount: 0,
+      projectedStartingSessionCount: 0,
+      projectedRunningTurnCount: 0,
+      queuedMessageCount: 0,
+      pendingApprovalCount: 0,
+      pendingUserInputCount: 1,
+      busyThreads: [
+        {
+          threadId: "thread-asking",
+          reason: "pending-user-input",
+          source: "projection",
+          turnId: null,
+        },
+      ],
+    };
+    const older: typeof globalThis.fetch = (input, init) => {
+      const { pathname } = new URL(new Request(input, init).url);
+      if (pathname === "/api/server/drain") {
+        return Promise.resolve(new Response("Not Found", { status: 404 }));
+      }
+      return pathname === "/api/server/idle"
+        ? Promise.resolve(Response.json(busy))
+        : server.fetch(input, init);
+    };
+    const answered = yield* idle(older);
+    assert.equal(answered.exitCode, 1);
+    assert.equal(
+      answered.stdout,
+      "T3 Code is busy with 1 thread:\n(thread-asking) waits for an answer to its question",
+    );
+    assert.equal(answered.stderr, "");
+    assert.equal(yield* Ref.get(drains), 1);
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 

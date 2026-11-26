@@ -239,6 +239,11 @@ phone too. Once sent, the thread opens on the machine it started on, and its hea
 runs and why; select it to see every machine placement weighed. A thread with attachments,
 composer context, an existing worktree or a local base branch stays on this machine.
 
+Placement also skips a machine while an update of T3 Code waits for it to go idle, so the threads
+already running there can finish and the update can install; the header lists it as **is
+updating**. A thread with nowhere else to go waits there and starts once the update is in. Threads
+you start on that machine yourself still run there.
+
 When no machine has room, the thread waits on the best one and starts as soon as a slot frees up.
 The composer shows **Waiting for room on** the machine, with **Start anyway** and **Cancel**; the
 phone shows the same card. Agents start threads anywhere with `environmentId: "auto"`, and the CLI

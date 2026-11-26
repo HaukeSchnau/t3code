@@ -117,10 +117,15 @@ Its cold-start readiness allowance is 300 seconds.
 
 ## Release idle gate
 
-Release promotion depends on the candidate release's `t3 status idle --quiet`. `project.nix` runs
+Release promotion depends on the candidate release's `t3 status idle --drain`. `project.nix` runs
 it as the `wait-for-idle` pre-deploy task (`idleAction` in `flake.nix`). A failed task leaves the
 running release untouched, and `failureMode = "defer"` keeps the new release queued so the updater
-retries later. Upstream has no idle check. `t3 status idle` (`cli/status.ts`),
+retries later. `--drain` first tells the running server that a release waits, so it takes no placed
+threads and can go idle (patches/fleet-placement.md). A running server that predates the drain
+route answers 404, and the check goes on without it. The task prints each blocking thread's title
+and what it waits for, the user's questions and approvals first, and the deploy keeps that output
+as the reason the release waits (`deferred` in nix-infra-modules' `GET /status/<name>`). A pending
+question that needs the live provider blocks the release until someone answers or dismisses it. Upstream has no idle check. `t3 status idle` (`cli/status.ts`),
 `GET /api/server/idle` (`status/http.ts`) and the `ServerIdleStatus` contract are fork additions.
 `idle` is a subcommand of upstream's own `t3 status`, so the command line stays the same.
 `apps/server/src/feedback/FeedbackReport.ts` lists it among the `t3` commands a feedback report may name.
@@ -129,7 +134,8 @@ The command asks the running server first and falls back to reading the database
 idle, 1 when busy and 2 when the state is unknown. `status/IdleStatus.ts` reads the orchestration
 v2 tables. Startup recovery would end the following work, so each item blocks a restart:
 
-- runs that are preparing, starting, running or waiting
+- runs that are preparing, starting, running or waiting, except a placed thread's run that waits
+  for room, which waits again after the restart
 - provider sessions that are starting, running or waiting
 - pending runtime requests that need the live provider process
 - pending or running process-bound outbox effects

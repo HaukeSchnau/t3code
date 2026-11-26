@@ -898,6 +898,15 @@ class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
+    // A release waits for this server to be idle; it stops taking placed threads for a while.
+    // See patches/fleet-placement.md.
+    HttpApiEndpoint.post("drain", "/api/server/drain", {
+      headers: OptionalBearerHeaders,
+      success: HttpApiSchema.NoContent,
+      error: [EnvironmentScopeRequiredError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
     HttpApiEndpoint.get("settings", "/api/server/settings", {
       headers: OptionalBearerHeaders,
       success: ServerSettingsSnapshot,
