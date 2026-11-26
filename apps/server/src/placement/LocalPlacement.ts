@@ -17,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { freeAgentSlots } from "@t3tools/shared/placement";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -45,6 +46,9 @@ import { isolatedWorkspacesAvailable } from "../workspace/IsolatedWorkspaces.ts"
 
 /** How often a waiting thread checks for room. */
 const ROOM_CHECK_INTERVAL = "3 seconds";
+// The deploy's idle check renews the drain on every retry of a waiting release: every 2 minutes
+// on NixOS hosts, every 10 on macOS. A release that no longer waits releases the host after this.
+const RELEASE_DRAIN_MS = 15 * 60 * 1000;
 /** Where infra keeps every world's repositories (patches/worldfs.md). */
 const WORLDS_CACHE = "/var/lib/worlds";
 // A clone that borrows a mirror's objects takes seconds; a cold one of a large repository minutes.
@@ -80,6 +84,12 @@ export class LocalPlacement extends Context.Service<
   {
     /** This environment's load, with the project that fits `match` when one is given. */
     readonly report: (match?: PlacementMatch) => Effect.Effect<PlacementReport>;
+    /**
+     * A T3 release waits for this host to be idle: report it as updating, with no room, until the
+     * release lands or `RELEASE_DRAIN_MS` passes without another call. Placement passes it over,
+     * and threads placed here wait until then. Running threads and explicit launches still run.
+     */
+    readonly drain: Effect.Effect<void>;
     /**
      * Checks a placed launch against this host's load as it is created here, so two deciders
      * that saw the same last slot do not both start: the later one waits. Holds the slot until
@@ -121,6 +131,31 @@ const make = Effect.gen(function* () {
   const waiters = yield* Ref.make<ReadonlyMap<ThreadId, Waiter>>(new Map());
   const admission = yield* Semaphore.make(1);
   const admitted = yield* Ref.make(0);
+  const drainedUntil = yield* Ref.make(0);
+  const updating = Effect.zipWith(
+    Clock.currentTimeMillis,
+    Ref.get(drainedUntil),
+    (now, until) => now < until,
+  );
+
+  // Under the admission permit, so a waiter leaving the queue has recorded that before this
+  // returns. Then it waits until admitted launches have recorded their runs, which the idle check
+  // that follows reads. The deploy's task timeout bounds that wait; a check it cuts off defers.
+  const drain: LocalPlacement["Service"]["drain"] = Effect.gen(function* () {
+    const wasUpdating = yield* admission.withPermits(1)(
+      Effect.gen(function* () {
+        const was = yield* updating;
+        yield* Ref.set(drainedUntil, (yield* Clock.currentTimeMillis) + RELEASE_DRAIN_MS);
+        return was;
+      }),
+    );
+    if (!wasUpdating) {
+      yield* Effect.logInfo("A T3 release waits for this host; it takes no placed threads");
+    }
+    yield* Ref.get(admitted).pipe(
+      Effect.repeat({ until: (count) => count === 0, schedule: Schedule.spaced("100 millis") }),
+    );
+  });
 
   const activeRuns = sql<{ readonly thread_id: ThreadId; readonly status: string }>`
     SELECT thread_id, status
@@ -209,6 +244,7 @@ const make = Effect.gen(function* () {
         providers: (yield* providerRegistry.getProviders).flatMap((provider) =>
           provider.enabled && provider.installed ? [provider.instanceId] : [],
         ),
+        updating: yield* updating,
         ...(projectId === undefined ? {} : { projectId }),
       } satisfies PlacementReport;
     },
@@ -254,6 +290,7 @@ const make = Effect.gen(function* () {
           runningAgents: load.runningAgents,
           launchesInFlight: load.launchesInFlight,
           agentLimit: load.agentLimit,
+          updating: load.updating,
         }).slots >= 1,
     ),
     Effect.catchDefect((defect) =>
@@ -707,7 +744,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return LocalPlacement.of({ report, admit, awaitRoom, startNow, hydrate });
+  return LocalPlacement.of({ report, drain, admit, awaitRoom, startNow, hydrate });
 });
 
 export const layer = Layer.effect(LocalPlacement, make).pipe(Layer.provide(ProcessRunner.layer));

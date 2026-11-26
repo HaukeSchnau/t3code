@@ -435,9 +435,9 @@
             name = "t3code-release-idle";
             text = ''
               ${runtimeIdentity}
-              exec ${lib.getExe package} status idle \
-                --base-dir "$T3CODE_HOME" \
-                --quiet
+              # The deploy reports what this prints as the reason a release still waits.
+              exec ${lib.getExe package} status idle --drain \
+                --base-dir "$T3CODE_HOME"
             '';
           };
         in

@@ -1550,6 +1550,12 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
     if (choice._tag === "Here") return here;
+    // A delegation never waits for room, and its parent here waits on it. Started on a full or
+    // updating peer it would keep that one busy too, so it runs beside its parent instead.
+    if (choice.placement.waitingSince !== null) {
+      yield* placement.value.abandon(choice);
+      return here;
+    }
     // A host without the repository clones it first.
     const placedTarget = yield* placement.value
       .prepareTarget(
