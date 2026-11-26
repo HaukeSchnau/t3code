@@ -53,6 +53,7 @@ import {
   useConnectionDiagnosis,
 } from "../connection/ConnectionDiagnosisDetails";
 import { environmentStatusText } from "../connection/environmentStatusText";
+import { newTaskPlacementLabel } from "./new-task-placement";
 
 const BRANCH_SEARCH_DEBOUNCE_MS = 150;
 
@@ -149,6 +150,38 @@ function EnvironmentPickerRow(props: {
   );
 }
 
+/** Lets the server's placement pick the machine when the task is sent. */
+function AutoEnvironmentPickerRow(props: {
+  readonly title: string;
+  readonly detail: string;
+  readonly selected: boolean;
+  readonly onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={`${props.title}, ${props.detail}`}
+      accessibilityState={{ checked: props.selected }}
+      onPress={props.onPress}
+      className="min-h-16 flex-row items-center gap-3 bg-grouped-card px-4 py-3 active:bg-subtle"
+      testID="new-task-environment-auto"
+    >
+      <SymbolView name="scalemass" size={20} tintColorClassName="accent-icon-muted" />
+      <View className="min-w-0 flex-1 gap-1">
+        <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
+          {props.title}
+        </Text>
+        <Text className="text-xs text-foreground-muted" numberOfLines={2}>
+          {props.detail}
+        </Text>
+      </View>
+      {props.selected ? (
+        <SymbolView name="checkmark" size={16} tintColorClassName="accent-icon" />
+      ) : null}
+    </Pressable>
+  );
+}
+
 export function ToggleRow(props: {
   readonly title: string;
   readonly value: boolean;
@@ -190,9 +223,18 @@ export function PickerSurface(props: { readonly children: ReactNode }) {
 
 export function NewTaskEnvironmentPickerRouteScreen() {
   const gt = useGT();
+  const messages = useMessages();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { placement } = flow;
+  const sourceLabel =
+    flow.environments.find(
+      (environment) => environment.environmentId === flow.selectedEnvironmentId,
+    )?.environmentLabel ?? gt("Environment");
+  const autoDetail = placement.staysHere
+    ? gt("This task uses something only {machine} has", { machine: sourceLabel })
+    : (placement.preview?.reason ?? gt("Least busy machine"));
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
       <AppBar title={gt("Environment")} hideBottomBorder onBack={() => navigation.goBack()} />
@@ -206,6 +248,22 @@ export function NewTaskEnvironmentPickerRouteScreen() {
           }}
           showsVerticalScrollIndicator={false}
         >
+          {placement.available ? (
+            <View className="mb-4">
+              <PickerSurface>
+                <AutoEnvironmentPickerRow
+                  title={newTaskPlacementLabel(placement, sourceLabel, messages)}
+                  detail={autoDetail}
+                  selected={placement.automatic}
+                  onPress={() => {
+                    void Haptics.selectionAsync();
+                    flow.chooseAutoEnvironment();
+                    navigation.goBack();
+                  }}
+                />
+              </PickerSurface>
+            </View>
+          ) : null}
           <PickerSurface>
             {flow.environments.map((environment, index) => (
               <EnvironmentPickerRow
@@ -219,7 +277,9 @@ export function NewTaskEnvironmentPickerRouteScreen() {
                     if (switched) navigation.goBack();
                   });
                 }}
-                selected={flow.selectedEnvironmentId === environment.environmentId}
+                selected={
+                  !placement.automatic && flow.selectedEnvironmentId === environment.environmentId
+                }
                 title={environment.environmentLabel}
               />
             ))}

@@ -10,6 +10,8 @@ import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
 
 export function DraftEnvironmentControl(props: {
   readonly label: string;
+  /** Set while placement picks the machine, such as "Auto → dev-hauke". */
+  readonly autoLabel: string | null;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly machineKind: EnvironmentMachineKind;
   readonly disabled: boolean;
@@ -17,27 +19,36 @@ export function DraftEnvironmentControl(props: {
 }) {
   const gt = useGT();
   const disconnected = props.connectionState !== "connected";
+  const label = props.autoLabel ?? props.label;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
         disconnected
-          ? gt("Choose environment, {label}, Offline", { label: props.label })
-          : gt("Choose environment, {label}, Connected", { label: props.label })
+          ? gt("Choose environment, {label}, Offline", { label })
+          : gt("Choose environment, {label}, Connected", { label })
       }
       disabled={props.disabled}
       onPress={props.onChooseEnvironment}
       className="flex-row items-center gap-1.5 rounded-xl px-3 py-2 active:opacity-65"
     >
-      <EnvironmentMachineSymbol
-        kind={props.machineKind}
-        size={13}
-        tintColorClassName="accent-icon-muted"
-      />
+      {props.autoLabel === null ? (
+        <EnvironmentMachineSymbol
+          kind={props.machineKind}
+          size={13}
+          tintColorClassName="accent-icon-muted"
+        />
+      ) : (
+        <SymbolView name="scalemass" size={13} tintColorClassName="accent-icon-muted" />
+      )}
       <Text className="shrink text-sm text-foreground-muted" numberOfLines={1}>
-        <T>
-          on <Var>{props.label}</Var>
-        </T>
+        {props.autoLabel === null ? (
+          <T>
+            on <Var>{props.label}</Var>
+          </T>
+        ) : (
+          props.autoLabel
+        )}
       </Text>
       <SymbolView name="chevron.right" size={11} tintColorClassName="accent-icon-muted" />
       {disconnected ? <ConnectionStatusDot state="error" pulse={false} size={6} /> : null}

@@ -668,6 +668,29 @@ describe("thread outbox delivered creation recovery", () => {
     }),
   );
 
+  it.effect("hands a placed task's edits to the composer of the thread placement started", () =>
+    Effect.gen(function* () {
+      const message = queuedMessage({ messageId: "message-recovery-placed", text: "edited idea" });
+      yield* Effect.promise(() => harness.manager.enqueue(message));
+      const placed = {
+        environmentId: EnvironmentId.make("dev-hauke"),
+        threadId: ThreadId.make("placed-thread"),
+        label: "dev-hauke",
+      };
+
+      expect(yield* handled(recoverEditedCreationAfterDelivery(message, placed))).toBe(true);
+
+      expect(composerDrafts.getComposerDraftSnapshot("dev-hauke:placed-thread")).toMatchObject({
+        text: "edited idea",
+      });
+      expect(
+        composerDrafts.getComposerDraftSnapshot(`${message.environmentId}:${message.threadId}`)
+          .text,
+      ).toBe("");
+      expect(remainingMessages()).toEqual([]);
+    }),
+  );
+
   it.effect("leaves recovery to an editor that opens while the draft persists", () =>
     Effect.gen(function* () {
       const message = queuedMessage({

@@ -45,6 +45,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly managedWorkspace?:
     | { readonly isolated?: boolean; readonly profile?: WorkspaceProfile }
     | undefined;
+  /** The server's placement picks the machine (patches/fleet-placement.md). */
+  readonly placement?: "auto";
 }
 
 export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpec) {
@@ -106,6 +108,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
         ? {}
         : { prepareWorkspace: managedWorkspace, runSetupScript: true }),
     },
+    ...(spec.placement === undefined ? {} : { placement: spec.placement }),
     createdAt: spec.createdAt,
   };
 }

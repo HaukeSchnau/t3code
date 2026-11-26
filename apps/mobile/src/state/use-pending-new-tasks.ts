@@ -81,8 +81,9 @@ export function useLaunchingThreads(
       ...flattenQueuedThreadMessages(queuedMessagesByThreadKey).filter((message) =>
         isQueuedCreationSending(message, sendGate),
       ),
+      // A task placed on another machine is that machine's thread, which shows its own state.
       ...Object.values(outcomes).flatMap((outcome) =>
-        outcome.kind === "delivered" ? [outcome.message] : [],
+        outcome.kind === "delivered" && outcome.placed === undefined ? [outcome.message] : [],
       ),
     ];
     return withLaunchingThreads({ threads, launches, hiddenThreadKeys });

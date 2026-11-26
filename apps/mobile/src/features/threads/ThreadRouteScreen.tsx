@@ -8,6 +8,7 @@ import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 import { AppBar } from "../../components/ui/AppBar";
 import {
+  CommonActions,
   StackActions,
   useIsFocused,
   useNavigation,
@@ -46,7 +47,10 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { useConnectionsReady } from "../../state/workspace";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
-import { clearPendingThreadCreationOutcome } from "../../state/pending-thread-creation";
+import {
+  clearPendingThreadCreationOutcome,
+  type PlacedThreadCreation,
+} from "../../state/pending-thread-creation";
 import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draft";
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
@@ -65,6 +69,7 @@ import {
   useRemoteConnections,
   useRemoteConnectionStatus,
   useRemoteEnvironmentRuntime,
+  useSavedRemoteConnection,
 } from "../../state/use-remote-environment-registry";
 import { useKnownTerminalSessions } from "../../state/use-terminal-session";
 import { uuidv4 } from "../../lib/uuid";
@@ -87,7 +92,8 @@ import {
 } from "../terminal/terminalLaunchContext";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { ThreadScreenBinding, ThreadScreenFallback, ThreadScreenHost } from "./ThreadScreenHost";
-import { draftRouteIdentity } from "./thread-route-state";
+import { draftRouteIdentity, submittedThreadParams } from "./thread-route-state";
+import { linkedThreadRouteParams } from "./linkedThreadRoute";
 import { NewTaskDraftRouteScreen, type NewTaskDraftRouteParams } from "./NewTaskDraftRouteScreen";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -243,6 +249,47 @@ function UnavailableThreadDraftRedirect(props: { readonly environmentId: Environ
   return <OpeningThreadLoadingScreen />;
 }
 
+/** A task placement started on another machine opens there (patches/fleet-placement.md). */
+function PlacedThreadRedirect(props: {
+  readonly placed: PlacedThreadCreation;
+  readonly sent: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+  readonly title: string | null;
+}) {
+  const navigation = useNavigation();
+  const routeKey = useRoute().key;
+  const connected = useSavedRemoteConnection(props.placed.environmentId) !== null;
+  const follow = useEffectEvent(() => {
+    navigation.dispatch(
+      connected
+        ? CommonActions.setParams(
+            submittedThreadParams(props.placed.environmentId, props.placed.threadId),
+          )
+        : // This app has no connection to that machine; the one it sent to reads it over the link.
+          {
+            ...StackActions.replace(
+              "LinkedThread",
+              linkedThreadRouteParams(
+                props.placed,
+                { viaEnvironmentId: props.sent.environmentId, label: props.placed.label },
+                props.title,
+              ),
+            ),
+            // A stack replaces its focused route unless the action names this one.
+            source: routeKey,
+            target: navigation.getState()?.key,
+          },
+    );
+    clearPendingThreadCreationOutcome(
+      scopedThreadKey(props.sent.environmentId, props.sent.threadId),
+    );
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the outbox reports where placement started the task, and the route follows it there
+  useEffect(() => {
+    follow();
+  }, []);
+  return null;
+}
+
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   return (
     <ThreadScreenHost>
@@ -263,7 +310,12 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   useAndroidWorkspaceBack();
   const connectionsReady = useConnectionsReady();
   const { connectionState } = useRemoteConnectionStatus();
-  const { selectedThread } = useThreadSelection();
+  const { selectedThread, selectedThreadCreation } = useThreadSelection();
+  const placedOutcome = selectedThreadCreation?.outcome;
+  const placed =
+    placedOutcome?.kind === "delivered" && !props.inspectorPresentation
+      ? placedOutcome.placed
+      : undefined;
   const params = props.route.params ?? {};
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const threadIdRaw = firstRouteParam(params.threadId);
@@ -312,6 +364,14 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
     // ThreadRouteContent draws its own inspector header so it can show the sync status.
     return (
       <InspectorHeaderShownContext value={props.inspectorPresentation !== undefined}>
+        {placed === undefined ? null : (
+          <PlacedThreadRedirect
+            key={`${placed.environmentId}:${placed.threadId}`}
+            placed={placed}
+            sent={{ environmentId: selectedThread.environmentId, threadId: selectedThread.id }}
+            title={selectedThread.title}
+          />
+        )}
         <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />
       </InspectorHeaderShownContext>
     );
