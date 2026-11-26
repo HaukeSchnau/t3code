@@ -1,4 +1,10 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import {
+  expandWorldScopeKeys,
+  narrowToWorldLens,
+  useWorldFiling,
+  worldLensKeyOf,
+} from "../sidebar/SidebarWorlds.logic";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -62,12 +68,14 @@ function useNeedsYouDeckThreads() {
   const configsReady = useAtomValue(environmentProjects.projectConfigsReadyAtom);
   const nowMinute = useNowMinute();
   const snoozeWakeClock = useSnoozeWakeClock(threads);
-  const { projectKeys } = resolveSidebarProjectScope({
+  const worldFiling = useWorldFiling();
+  const { projectKeys: scopeProjectKeys } = resolveSidebarProjectScope({
     groups: projectGroups,
-    keys: scopeKeys,
+    keys: expandWorldScopeKeys(scopeKeys, worldFiling, projectGroups),
     settings: groupingSettings,
     canClearMissingScope: snapshotsReady && configsReady,
   });
+  const projectKeys = narrowToWorldLens(scopeProjectKeys, worldLensKeyOf(scopeKeys), worldFiling);
   const listed = new Set(filterSidebarV2VisibleThreads(threads, projectKeys, delegatedUnderParent));
   return needsYouDeckThreads(threads, {
     now: new Date(Math.max(Date.parse(`${nowMinute}:00.000Z`), snoozeWakeClock)).toISOString(),

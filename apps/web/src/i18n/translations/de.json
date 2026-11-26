@@ -13432,6 +13432,10 @@
       "v": "v"
     }
   ],
+  "2253d131ab9b959f": "Worlds",
+  "ca3d234e8af0ec7c": "Show only {world}",
+  "fbd3beda7ee0a8b3": "Show only threads outside worlds",
+  "1d12b03128c7cd43": "{dir}: holds work no remote has",
   "77be1b7e2a1d3d31": "{count, plural, one {{count} Rechner aktualisieren?} other {{count} Rechner aktualisieren?}}",
   "e4892b21e88abb60": "{count, plural, one {{count} Anbieter-Update} other {{count} Anbieter-Updates}}",
   "36d530903a763a14": "Suche nach weiteren…",

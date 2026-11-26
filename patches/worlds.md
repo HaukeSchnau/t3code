@@ -55,6 +55,11 @@ notion of any of it.
 - **State.** `status` from the daemon becomes `world` on the VCS local status
   (`VcsStatusBroadcaster`) and on `t3_worktree_status`. A refusal whose caller is this server's
   pid is labelled as Claude's Bash hook.
+- **Touched repos.** Whenever a local status read finds a thread world's checked-out repos
+  changed (every turn's end refreshes it), `WorldRepoSync` records them on the thread as
+  `worldRepos` through a server-only field of `thread.metadata.update`, which keeps the thread's
+  `updatedAt`. Lists show them without asking the daemon, and keep them after teardown: a status
+  with no repos, or from a daemon that didn't answer, records nothing.
 - **Teardown (decision 2).** Every 10 minutes the sweep looks at each thread world. It runs
   `agent-exec retire --remove-checkout` only when its threads are settled, archived or deleted and
   quiet for 6 hours (past a provider session's longest pin), the daemon answers and reports no
@@ -68,6 +73,34 @@ notion of any of it.
 
 ## Clients
 
+Hauke picks between two worlds and nothing else (fu-c318c751), so the thread lists are organized
+around them:
+
+- **One project per world.** Each machine keeps its own world project; project grouping keys
+  them by `world`, so they are one project on every client.
+- **Filing.** Every project belongs to a world or to none (`fileProjectsIntoWorlds` in
+  client-runtime `state/worlds.ts`): a world project to its world, and an older per-repo or
+  umbrella project to the world whose `path` holds it, else to the world whose catalog holds its
+  repository's namespace (`git.buildlinx.io/buildlinx`, `github.com/haukeschnau`). The `path` is
+  the one the project's own server declares; only a server that declares no worlds, such as
+  dev-hauke before its update, uses another's. Each server reads its worlds' namespaces from the
+  worldfs catalogs (`world/worldCatalog.ts`) and sends them in its config, so filing doesn't
+  depend on which threads a client has loaded; a namespace two worlds hold files nothing, and a
+  catalog change reaches clients when they reconnect. Scratch threads and everything else are
+  outside worlds. Older projects keep running next to the worlds until Hauke switches.
+- **Lenses.** A world scope key (`worldScopeKey`) stands for every project filed under a world.
+  Web's sidebar shows the worlds as a segmented control under search, each with its needs-you
+  count; pressing one scopes the inbox, search, drafts and new threads like a chosen project
+  would. A new thread, from the button or its shortcut, starts in the world's own project on
+  any machine, even with an older project's thread open or a machine filter set, and opens the
+  project picker when no machine has one. Mobile shows the worlds as pills (iOS) or filter
+  entries (Android) that set the same key as the list's project filter. A repository's
+  clones can sit in different worlds, so a lens admits a whole repository group and then keeps
+  only the clones filed under it; route reveal sees the same narrowed projects.
+- **Rows.** A world thread's card names the repos it checked out instead of its project, with a
+  dot on one that holds work no remote has; every thread filed under a world gets the world's
+  color down its edge, dashed (fainter on mobile) for an older project. The web card names the
+  machine only when it isn't the server the client is connected to.
 - Web: `ThreadWorldPanel` in the thread details card; the git actions control hides for world
   projects and thread worlds, whose roots are no repository.
 - Mobile: the thread header's git menu becomes a World menu for a thread world.
@@ -77,14 +110,24 @@ notion of any of it.
 ## Upstream touch points
 
 - contracts: `world.ts` (fork-only), `world` on project shells, `project.created` and VCS local
-  status, `worlds` in settings and the patch, `world` on `WorktreeMcpStatusResult`.
+  status, `worlds` in settings and the patch, `world` on `WorktreeMcpStatusResult`,
+  `worldRepos` on threads and `thread.metadata.update`.
 - server: `orchestration-v2/ThreadLaunchService.ts` (one normalization),
   `orchestration-v2/CheckpointCaptureService.ts` (one `turnEnded` after the jj seal), `ProviderSessionManager.ts`
   (one `ensure` before the workspace check), `Adapters/ClaudeAdapterV2.ts` (the PreToolUse
   matcher), `vcs/VcsStatusBroadcaster.ts`, `ProjectStore.ts`, `ProjectCommands.ts`,
   `ProjectService.ts`, `mcp/WorktreeMcpService.ts`, `server.ts`.
-- web `ThreadDetailsPanel.tsx`, `ChatView.tsx`; mobile `ThreadGitControls.tsx`,
-  `new-task-flow-provider.tsx`; client-runtime `state/workspaces.ts`.
+- server `orchestration-v2/WorldRepoSync.ts` (fork-only) and its line in `runtimeLayer.ts`;
+  `ThreadManagementService.ts` strips the server-only field from client commands; `ws.ts` sends
+  `worldNamespaces` in the server config (contracts `server.ts`).
+- web `ThreadDetailsPanel.tsx`, `ChatView.tsx`, `Sidebar.tsx` (the scope expansion, the lens
+  row, a row's world props), `shortcuts/chatRouteCommands.ts` (the lens's New thread),
+  `sidebar/SidebarThreadRow.tsx` (first line, stripe, machine); mobile `ThreadGitControls.tsx`,
+  `new-task-flow-provider.tsx`, `HomeScreen.tsx`, `HomeRouteScreen.tsx`,
+  `ThreadNavigationSidebar.tsx`, `thread-list-v2-items.tsx`, `AdaptiveWorkspaceLayout.tsx` and
+  `new-task-project-selection.ts` (the lens's New), `homeThreadList.ts` and every caller of
+  `resolveHomeProjectFilterScope`; client-runtime `state/workspaces.ts`, `state/models.ts`,
+  `state/projectGrouping.ts` (one key).
 
 ## What this does not replace yet
 

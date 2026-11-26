@@ -79,7 +79,9 @@ current head.
   `layout/surfaceTabLabels.ts`, iconized in `SurfaceTabIcon.tsx`, dragged in `layout/layoutDrag.ts`.
 - Thread-details hub limits: `chat/ThreadDetailsHubLimits.tsx`, mounted in `ThreadDetailsUsage.tsx`.
 - Workspaces and worlds: `ManagedWorkspaceSelector` and `JjStackControl` in `BranchToolbar.tsx`
-  and the details Workspace card; `ThreadWorldPanel` in `ThreadDetailsPanel.tsx`.
+  and the details Workspace card; `ThreadWorldPanel` in `ThreadDetailsPanel.tsx`. The world
+  lenses (`sidebar/SidebarWorlds.tsx`) follow the search row in `Sidebar.tsx`'s fixed header, and
+  a card's repo chips and world stripe sit in `SidebarThreadRow.tsx`'s card body.
 - jj commit trailers: `settings/JjCommitTrailerSettings.tsx`, after the merge method row.
 - Follow-ups and Pages: still `/follow-ups` and `/pages` route pages, reached from the sidebar
   footer's icon row. Quoting a selection into a follow-up and inline replies are buttons in the

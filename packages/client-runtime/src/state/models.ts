@@ -178,6 +178,8 @@ export interface EnvironmentThreadShell {
   readonly workflowRun: OrchestrationV2ThreadShell["workflowRun"] | null;
   /** Where placement started the thread and why (patches/fleet-placement.md). */
   readonly placement: OrchestrationV2ThreadShell["placement"] | null;
+  /** The repos the thread checked out in its world (patches/worlds.md); empty outside worlds. */
+  readonly worldRepos: NonNullable<OrchestrationV2ThreadShell["worldRepos"]>;
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
   /** False when a wake, another agent or a schedule started the latest run, not the user. */
@@ -342,6 +344,7 @@ export function presentThreadShell(
     delegatedFrom: thread.delegatedFrom ?? null,
     workflowRun: thread.workflowRun ?? null,
     placement: thread.placement ?? null,
+    worldRepos: thread.worldRepos ?? [],
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,
     ...(thread.latestRunStartedByUser === undefined

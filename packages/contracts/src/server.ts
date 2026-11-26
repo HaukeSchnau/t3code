@@ -32,6 +32,7 @@ import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { LayoutSettings, ServerSettings } from "./settings.ts";
+import { WorldId } from "./world.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
@@ -732,6 +733,8 @@ export const ServerConfig = Schema.Struct({
   }),
   /** The environment that keeps this one's follow-ups, itself included (patches/follow-ups.md). */
   followUpHome: Schema.optionalKey(EnvironmentId),
+  /** Each served world's repository namespaces, from its catalog (patches/worlds.md). */
+  worldNamespaces: Schema.optionalKey(Schema.Record(WorldId, Schema.Array(Schema.String))),
   /** Present when an administrator's policy file manages this environment. */
   managedPolicy: Schema.optionalKey(ManagedPolicySummary),
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),

@@ -848,6 +848,20 @@ function askedForLinkedMachine(
   return hint !== "" && hint === normalize(linked.hint) && hint === normalize(linked.linkedLabel);
 }
 
+function isWorldReposOnlyUpdate(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): boolean {
+  const {
+    type: _type,
+    commandId: _commandId,
+    threadId: _threadId,
+    expectedWorktreePath: _expectedWorktreePath,
+    worldRepos,
+    ...rest
+  } = command;
+  return worldRepos !== undefined && Object.values(rest).every((value) => value === undefined);
+}
+
 // A workspace change detaches the session, which can settle the calling run at once. Queuing its
 // follow-up in a later command would let a delegated task report its result before that exists.
 function metadataUpdateContinuation(
@@ -5353,6 +5367,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ? { placement: { ...thread.placement, waitingSince: null } }
               : {}),
             ...(command.placement === undefined ? {} : { placement: command.placement }),
+            ...(command.worldRepos === undefined ? {} : { worldRepos: command.worldRepos }),
             ...(command.linkedPullRequest === undefined
               ? {}
               : {
@@ -5385,7 +5400,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : command.regenerateTitle === false || command.title !== undefined
                 ? { titleRegeneration: null }
                 : {}),
-            updatedAt: now,
+            // Recording a world's repos observes the thread; it must not reorder the sidebar.
+            updatedAt: isWorldReposOnlyUpdate(command) ? thread.updatedAt : now,
           };
         }
         case "thread.pull-request.link":
