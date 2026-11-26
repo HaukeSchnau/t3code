@@ -1,4 +1,5 @@
 import {
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
@@ -19,6 +20,7 @@ import {
   patchStoredSettings,
   readSettingsSnapshot,
 } from "../settingsAccess.ts";
+import * as LocalPlacement from "../placement/LocalPlacement.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
 // Clients get the error's own message; its cause can hold payload fragments or provider
@@ -41,6 +43,14 @@ export const layer = HttpApiBuilder.group(
           return yield* getServerIdleStatus().pipe(
             Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
           );
+        }),
+      )
+      .handle(
+        "drain",
+        Effect.fn("environment.server.drain")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthEnvironmentMaintainScope);
+          yield* (yield* LocalPlacement.LocalPlacement).drain;
         }),
       )
       .handle(

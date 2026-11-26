@@ -113,6 +113,26 @@ describe("decidePlacement", () => {
     });
   });
 
+  it("has no room on a machine a release waits on, so a thread waits there only as a last resort", () => {
+    const updating = option("dev-hauke", { updating: true });
+    const roomy = option("srv-2", { weight: 25 });
+    const decision = decidePlacement([updating, roomy], now);
+    expect(decision).toMatchObject({ wait: false, chosen: { label: "srv-2" } });
+    expect(decision?.reason).toBe("dev-hauke is updating");
+    expect(decision?.candidates.find((candidate) => candidate.label === "dev-hauke")).toMatchObject(
+      { admissible: false, note: "is updating" },
+    );
+    // A thread waiting for room survives the restart and starts once the release has landed.
+    expect(decidePlacement([updating], now)).toMatchObject({
+      wait: true,
+      chosen: { label: "dev-hauke" },
+      reason: "no machine has room; dev-hauke is updating",
+    });
+    // A clone would start before the wait, so a cold machine that updates is no place to wait.
+    const coldUpdating = option("srv-1", { updating: true }, { warmth: 0.5 });
+    expect(decidePlacement([coldUpdating], now)).toBeNull();
+  });
+
   it("counts room left in the agents slice, sized by the agents already running", () => {
     // Ten agents at 2.6 GiB each leave room for no more in 2 GiB, despite 14 GiB available.
     const sliceNearlyFull = option("srv-2", {
