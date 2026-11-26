@@ -101,12 +101,14 @@ the project, and never waits for room.
   release 4173ce9 for two days while srv-1, srv-2 and tower moved on. While a release waits, the
   deploy retries its idle check, `t3 status idle --drain`, which first calls
   `POST /api/server/drain`. `LocalPlacement` then reports the host as `updating` for 15 minutes,
-  and each retry (every 2 minutes on NixOS, every 10 on macOS) renews that, so a withdrawn release
-  frees the host within 15 minutes. An updating host has no room (`freeAgentSlots`, note "is
-  updating"): placement passes it over, and a thread that has nowhere else to go waits there
-  instead of starting on whichever host decided. A thread waiting for room survives a restart, so
-  the idle check does not count it as busy, and it starts once the release has landed. Running
-  threads and launches sent there explicitly still run.
+  and each retry (every 2 to 10 minutes, as infra sets the host's update timer) renews that, so a
+  withdrawn release frees the host within 15 minutes. An updating host has no room
+  (`freeAgentSlots`, note "is updating"): placement passes it over, and a thread that has nowhere
+  else to go waits there instead of starting on whichever host decided. A host that would first
+  have to clone the repository is no place to wait, since the clone would start before the wait
+  and the restart could cut it off. A thread waiting for room survives a restart, so the idle check
+  does not count it as busy, and it starts once the release has landed. Running threads and
+  launches sent there explicitly still run.
 - **Launching.** Clients call `placement.launch` with the ordinary launch input and open the thread
   it returns on its environment. `t3_thread_launch` accepts `environmentId: "auto"`
   (`McpToolAccess.routed`, `placement/autoLaunch.ts`), and `delegate_task` accepts
