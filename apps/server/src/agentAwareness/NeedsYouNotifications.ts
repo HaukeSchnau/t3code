@@ -586,11 +586,12 @@ export const make = Effect.gen(function* () {
     for (const { subject, decision } of decided) {
       if (decision.state === "waiting") waitingThreads.add(subject.threadId);
     }
+    const waitingChanged = [...changed].some((threadId) => waitingThreads.has(threadId));
     // Recorded already: the tick decides again what this misses.
-    if ([...changed].some((threadId) => waitingThreads.has(threadId))) {
-      yield* logged("needs-you held completions failed", decideWaiting(false));
-    }
-    yield* requestDelivery;
+    if (waitingChanged) yield* logged("needs-you held completions failed", decideWaiting(false));
+    // A batch wakes delivery only after recording a change or rechecking waits; the tick retries
+    // whatever is still due.
+    if (relevant || waitingChanged) yield* requestDelivery;
     // Reading again after a failure goes back to the cursor; what was recorded stays recorded.
     yield* SubscriptionRef.update(processed, (through) => Math.max(through, last.sequence));
   });
