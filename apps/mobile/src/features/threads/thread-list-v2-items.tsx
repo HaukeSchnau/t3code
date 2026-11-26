@@ -9,6 +9,7 @@ import {
   getThreadListV2RowAppearance,
 } from "./thread-list-v2-row-appearance";
 import { RowPressable } from "../../components/ui/RowPressable";
+import { threadWorldReposLabel } from "@t3tools/client-runtime/state/worlds";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
@@ -29,6 +30,7 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type ProjectIconColor,
 } from "@t3tools/contracts";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
@@ -54,6 +56,7 @@ import {
 } from "../../components/ProviderIcon";
 import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
+import { projectIconColorClassNames } from "../../lib/projectIcon";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { copyThreadReference } from "../../lib/copyThreadReference";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -810,6 +813,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly timeLabel: string;
   readonly snoozePresetMinute: string;
   readonly project: EnvironmentProject | null;
+  /** The color of the world the thread's project is filed under (patches/worlds.md). */
+  readonly worldColor?: ProjectIconColor | undefined;
   readonly providers: ReadonlyArray<ThreadListProvider> | undefined;
   readonly providerInstance: ThreadRowProviderInstance | null;
   readonly environmentLabel: string | null;
@@ -948,10 +953,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const timeLabel = props.timeLabel && m(props.timeLabel);
   const snoozeWakeLabelText =
     props.snoozeWakeLabelText === undefined ? undefined : m(props.snoozeWakeLabelText);
+  const worldReposLabel =
+    props.project?.world != null && thread.worldRepos.length > 0
+      ? threadWorldReposLabel(thread.worldRepos)
+      : null;
   const rowAccessibilityLabel = threadListV2RowAccessibilityLabel(
     {
-      // The need line reads right after the title, as the row shows it.
-      title: props.needLabel ? `${thread.title}, ${props.needLabel}` : thread.title,
+      // The need line and the repos read right after the title, as the row shows them.
+      title: [thread.title, props.needLabel, worldReposLabel].filter(Boolean).join(", "),
       variant,
       woke: showsWoke,
       // Working and waiting rows show only an icon and a duration, so name them for speech.
@@ -1618,9 +1627,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {thread.runtime.lastError}
           </Text>
-        ) : props.environmentLabel ? (
+        ) : worldReposLabel !== null || props.environmentLabel ? (
           <View className="min-w-0 flex-1 flex-row items-center gap-1">
-            {props.environmentMachine ? (
+            {worldReposLabel !== null ? (
+              <Text
+                className={cn(
+                  "shrink text-xs",
+                  selected
+                    ? selectedThreadRowColors.mutedForegroundClassName
+                    : rowAppearance.mutedForegroundClassName,
+                )}
+                numberOfLines={1}
+              >
+                {worldReposLabel}
+                {props.environmentLabel ? "  ·  " : null}
+              </Text>
+            ) : null}
+            {props.environmentLabel && props.environmentMachine ? (
               <EnvironmentMachineSymbol
                 kind={props.environmentMachine}
                 size={machineIconSize}
@@ -1631,17 +1654,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 }
               />
             ) : null}
-            <Text
-              className={cn(
-                "shrink text-xs",
-                selected
-                  ? selectedThreadRowColors.mutedForegroundClassName
-                  : rowAppearance.tertiaryForegroundClassName,
-              )}
-              numberOfLines={1}
-            >
-              {props.environmentLabel}
-            </Text>
+            {props.environmentLabel ? (
+              <Text
+                className={cn(
+                  "shrink text-xs",
+                  selected
+                    ? selectedThreadRowColors.mutedForegroundClassName
+                    : rowAppearance.tertiaryForegroundClassName,
+                )}
+                numberOfLines={1}
+              >
+                {props.environmentLabel}
+              </Text>
+            ) : null}
           </View>
         ) : (
           <View className="flex-1" />
@@ -1733,6 +1758,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   ) : (
     cardContent
   );
+  // The world's color down the row's edge; fainter for an older project filed under it.
+  const worldStripe = props.worldColor ? (
+    <View
+      pointerEvents="none"
+      className={cn(
+        "absolute top-3 bottom-3 left-1.5 w-[3px] rounded-full",
+        projectIconColorClassNames(props.worldColor).solid,
+        props.project?.world == null && "opacity-45",
+      )}
+    />
+  ) : null;
 
   const rowContent = (close: () => void) =>
     variant === "card" ? (
@@ -1757,9 +1793,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         style={rowAppearance.cardStyle}
       >
         {sidebarPane ? (
-          fadedCardContent
+          <>
+            {worldStripe}
+            {fadedCardContent}
+          </>
         ) : (
           <View>
+            {worldStripe}
             <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{fadedCardContent}</View>
             {THREAD_LIST_V2_ROW_DIVIDERS && props.showTrailingDivider !== false ? (
               <View className="ml-5 h-px bg-border-subtle" />

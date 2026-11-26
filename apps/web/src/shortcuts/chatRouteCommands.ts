@@ -9,6 +9,10 @@ import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { dispatchPreviewAction, type PreviewAction } from "../components/preview/previewActionBus";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
+import {
+  worldLensKeyOf,
+  worldLensNewThreadProjectRef,
+} from "../components/sidebar/SidebarWorlds.logic";
 import { isBrowserSurfaceFocused } from "../lib/previewFocus";
 import { shouldCreateNewThreadInCurrentProject } from "../components/Sidebar.logic";
 import {
@@ -150,6 +154,19 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
       },
       "chat.new": (event) => {
         const groups = readProjectGroups();
+        if (!getClientSettings().boringSidebarEnabled) {
+          const worldProjectRef = worldLensNewThreadProjectRef({
+            lensKey: worldLensKeyOf(useUiStateStore.getState().sidebarProjectScopeKeys),
+            groups,
+            primaryEnvironmentId: appAtomRegistry.get(primaryEnvironmentIdAtom),
+          });
+          if (worldProjectRef !== undefined) {
+            claim(event);
+            if (worldProjectRef === null) openCommandPalette({ open: "new-thread-in" });
+            else void handleNewThread(worldProjectRef);
+            return;
+          }
+        }
         if (
           !shouldCreateNewThreadInCurrentProject(
             false,

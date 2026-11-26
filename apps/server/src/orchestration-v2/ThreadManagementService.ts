@@ -104,7 +104,12 @@ export function withCreationProvenance(
     }
     case "thread.metadata.update": {
       // Ending a wait goes through placement, which also releases the waiting launch.
-      const { placementWaitEnded: _placementWaitEnded, placement: _placement, ...rest } = command;
+      const {
+        placementWaitEnded: _placementWaitEnded,
+        placement: _placement,
+        worldRepos: _worldRepos,
+        ...rest
+      } = command;
       return rest;
     }
     case "message.dispatch":

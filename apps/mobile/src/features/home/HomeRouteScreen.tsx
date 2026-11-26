@@ -29,9 +29,12 @@ import {
 } from "./home-route-visibility";
 import {
   buildHomeProjectScopes,
+  buildHomeWorldScopes,
   resolveHomeProjectFilterScope,
   sortHomeProjectScopes,
 } from "./homeThreadList";
+import { useWorldFiling } from "./worldFiling";
+import { worldShortTitle } from "@t3tools/client-runtime/state/worlds";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
@@ -150,8 +153,9 @@ export function HomeRouteScreen() {
       })),
     [projectScopes, threads],
   );
+  const worldFiling = useWorldFiling();
   const selectedProjectKey =
-    resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
+    resolveHomeProjectFilterScope(projectScopes, projects, listOptions, worldFiling)?.key ?? null;
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
@@ -180,7 +184,13 @@ export function HomeRouteScreen() {
             items: buildHomeListFilterMenuItems(
               {
                 environments,
-                projects: projectFilterOptions,
+                projects: [
+                  ...buildHomeWorldScopes(projectScopes, worldFiling, m).map((scope) => ({
+                    key: scope.key,
+                    label: worldShortTitle(scope.title),
+                  })),
+                  ...projectFilterOptions,
+                ],
                 selectedEnvironmentId,
                 selectedProjectKey,
                 onEnvironmentChange: setSelectedEnvironmentId,

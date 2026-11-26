@@ -1,3 +1,4 @@
+import type { WorldFiling } from "@t3tools/client-runtime/state/worlds";
 import { needsYouDeckThreads } from "@t3tools/client-runtime/state/needs-you-triage";
 import type {
   EnvironmentProject,
@@ -23,6 +24,7 @@ export function triageDeckThreads(input: {
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly snoozeEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly now: string;
+  readonly worldFiling?: WorldFiling;
 }) {
   const { threads, projects, options, snoozeEnvironmentIds, now } = input;
   const projectScope = resolveHomeProjectFilterScope(
@@ -33,6 +35,7 @@ export function triageDeckThreads(input: {
     }),
     projects,
     options,
+    input.worldFiling,
   );
   const layout = buildThreadListV2Items({
     threads,

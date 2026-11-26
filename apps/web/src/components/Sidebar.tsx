@@ -289,6 +289,16 @@ import {
 } from "./sidebar/SidebarDraftBlock";
 import { SidebarFollowUpRow } from "./sidebar/SidebarFollowUpRow";
 import {
+  buildWorldLenses,
+  expandWorldScopeKeys,
+  narrowToWorldLens,
+  useWorldFiling,
+  worldColor,
+  worldLensKeyOf,
+  worldLensNewThreadProjectRef,
+} from "./sidebar/SidebarWorlds.logic";
+import { SidebarWorldLenses } from "./sidebar/SidebarWorlds";
+import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
@@ -1144,6 +1154,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     scrollSidebarToTop(sidebarContentRef.current);
   };
   const scopeGroups = pickableProjectGroups(projectGroups);
+  const worldFiling = useWorldFiling();
   const {
     scopeKeys: chosenProjectScopeKeys,
     groups: chosenProjectGroups,
@@ -1151,10 +1162,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     loading: chosenScopeLoading,
   } = resolveSidebarProjectScope({
     groups: projectGroups,
-    keys: persistedProjectScopeKeys,
+    keys: expandWorldScopeKeys(persistedProjectScopeKeys, worldFiling, projectGroups),
     settings: projectGroupingSettings,
     canClearMissingScope: allProjectSnapshotsReady && allProjectConfigsReady,
   });
+  const chosenWorldLensKey = worldLensKeyOf(persistedProjectScopeKeys);
+  const chosenListProjectKeys = narrowToWorldLens(
+    chosenScopeProjectKeys,
+    chosenWorldLensKey,
+    worldFiling,
+  );
   const threads = useQuietThreadShells();
   const promotingDraftThreadKeys = usePromotingDraftThreadKeys();
   const listedThreads =
@@ -1183,13 +1200,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeKey: routeRowThreadKey,
     routeKeyInPlace,
     isSearching: isSearchingThreads,
-    scopedProjectKeys: chosenScopeProjectKeys,
+    scopedProjectKeys: chosenListProjectKeys,
     scopeLoading: chosenScopeLoading,
     delegatedUnderParent,
     findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
+  const worldLensKey = revealWidensScope ? null : chosenWorldLensKey;
+  const worldColorById = new Map(
+    worldFiling.worlds.map((world) => [world.id, worldColor(world.title)] as const),
+  );
   const toggleProjectScopeKey = (key: string) =>
     setProjectScopeKeys(
       projectScopeKeys.includes(key)
@@ -1233,8 +1254,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       projectScopeFilter.contains(item, query, (candidate) => candidate.label),
   });
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
-  const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
-  const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
+  const scopedProjectKeys = revealWidensScope ? null : chosenListProjectKeys;
+  const scopedProjectRefs = scopedProjectGroups
+    .flatMap((project) => project.memberProjectRefs)
+    .filter((ref) => scopedProjectKeys?.has(`${ref.environmentId}:${ref.projectId}`) ?? true);
   const threadSearch = useThreadSearch(
     connectedEnvironmentIds,
     threadSearchQuery,
@@ -3116,7 +3139,37 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       )
     : null;
 
+  // Counted as the Needs you shelf lists them: a snooze outranks a need.
+  const worldLenses = buildWorldLenses({
+    filing: worldFiling,
+    groups: projectGroups,
+    needsYou:
+      worldFiling.worlds.length === 0
+        ? []
+        : filterSidebarV2VisibleThreads(threads, null, delegatedUnderParent).filter(
+            (thread) =>
+              threadNeedsYou(thread) !== null &&
+              !(
+                serverConfigs.has(thread.environmentId) &&
+                effectiveSnoozed(thread, { now: snoozeNow })
+              ),
+          ),
+  });
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
+    const worldProjectRef =
+      boringSidebarEnabled || event?.shiftKey
+        ? undefined
+        : worldLensNewThreadProjectRef({
+            lensKey: worldLensKey,
+            groups: projectGroups,
+            primaryEnvironmentId,
+          });
+    if (worldProjectRef !== undefined) {
+      if (isMobile) setOpenMobile(false);
+      if (worldProjectRef === null) openCommandPalette({ open: "new-thread-in" });
+      else void handleNewThread(worldProjectRef);
+      return;
+    }
     const scopedProjectRef = resolveScopedNewThreadProjectRef({
       shiftKey: event?.shiftKey ?? false,
       // The folder sidebar's header button always opens the picker.
@@ -3413,6 +3466,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            {worldLenses.worlds.length > 0 ? (
+              <SidebarWorldLenses
+                worlds={worldLenses.worlds}
+                outsideNeedsYou={worldLenses.outsideNeedsYou}
+                selectedKey={worldLensKey}
+                onSelect={(key) => setProjectScopeKeys(key === null ? [] : [key])}
+              />
+            ) : null}
           </SidebarGroup>
         }
       >
@@ -3609,6 +3670,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           : isCard
                             ? "card"
                             : "slim";
+                        const threadWorld = worldFiling.worldByProjectKey.get(
+                          `${thread.environmentId}:${thread.projectId}`,
+                        );
                         return (
                           <SortableThreadRow
                             key={threadKey}
@@ -3677,6 +3741,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             environmentMachine={
                               environmentMachineById.get(thread.environmentId) ?? "server"
+                            }
+                            environmentIsPrimary={thread.environmentId === primaryEnvironmentId}
+                            worldColor={
+                              threadWorld === undefined
+                                ? null
+                                : (worldColorById.get(threadWorld) ?? null)
+                            }
+                            worldFiled={
+                              threadWorld !== undefined &&
+                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`)
+                                ?.world == null
                             }
                             project={
                               projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??

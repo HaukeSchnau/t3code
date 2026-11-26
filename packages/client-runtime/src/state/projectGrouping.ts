@@ -14,6 +14,7 @@ import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
 const SCRATCH_PROJECT_SCOPE_KEY = "\0no-project";
+const WORLD_PROJECT_KEY_PREFIX = "\0world-project:";
 
 export interface ProjectGroupingSettings {
   readonly sidebarProjectGroupingMode: SidebarProjectGroupingMode;
@@ -145,7 +146,7 @@ function deriveRepositoryScopedKey(
 function deriveLogicalProjectKey(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch" | "world"
   >,
   options?: {
     readonly groupingMode?: SidebarProjectGroupingMode;
@@ -153,6 +154,8 @@ function deriveLogicalProjectKey(
   },
 ): string {
   if (options?.groupScratchProjects && project.isScratch) return SCRATCH_PROJECT_SCOPE_KEY;
+  // Fork (patches/worlds.md): each machine keeps a project per world; they are one project.
+  if (project.world != null) return `${WORLD_PROJECT_KEY_PREFIX}${project.world}`;
   const groupingMode = options?.groupingMode ?? "repository";
   if (groupingMode === "separate") {
     return derivePhysicalProjectKey(project);
@@ -168,7 +171,7 @@ function deriveLogicalProjectKey(
 export function deriveLogicalProjectKeyFromSettings(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch" | "world"
   >,
   settings: ProjectGroupingSettings,
   options?: { readonly groupScratchProjects?: boolean },
@@ -201,7 +204,7 @@ export function resolveScratchProjectScopeKey(
   projects: ReadonlyArray<
     Pick<
       EnvironmentProject,
-      "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+      "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch" | "world"
     >
   >,
   settings: ProjectGroupingSettings = {

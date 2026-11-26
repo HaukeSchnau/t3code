@@ -1,7 +1,9 @@
 import { useGT } from "gt-react-native";
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { Chip } from "../../components/ui/Chip";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useEnvironmentModeMenu } from "../connection/environmentModes";
 import type {
@@ -10,6 +12,8 @@ import type {
 } from "./home-list-filter-menu";
 
 export function ThreadListFilters(props: {
+  /** One pill per world, and one for threads outside them (patches/worlds.md). */
+  readonly worlds?: ReadonlyArray<HomeListFilterMenuProject>;
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly selectedEnvironmentId: EnvironmentId | null;
@@ -27,6 +31,7 @@ export function ThreadListFilters(props: {
     (project) => project.key === props.selectedProjectKey,
   );
   const modeMenu = useEnvironmentModeMenu();
+  const { themeAppearance } = useAppearancePreferences();
   return (
     <ScrollView
       horizontal
@@ -34,6 +39,25 @@ export function ThreadListFilters(props: {
       style={{ marginHorizontal: -props.gutter, overflow: "visible" }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
+      {props.worlds?.map((world) => (
+        <Pressable
+          key={world.key}
+          accessibilityRole="button"
+          accessibilityLabel={gt("Show only {world}", { world: world.label })}
+          accessibilityState={{ selected: world.key === props.selectedProjectKey }}
+          hitSlop={6}
+          onPress={() =>
+            props.onProjectChange(world.key === props.selectedProjectKey ? null : world.key)
+          }
+        >
+          <Chip
+            label={world.label}
+            selected={world.key === props.selectedProjectKey}
+            glass
+            colorScheme={themeAppearance}
+          />
+        </Pressable>
+      ))}
       {modeMenu.visible ? (
         <ListFilterMenu
           label={modeMenu.label}

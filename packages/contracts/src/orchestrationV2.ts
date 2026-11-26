@@ -99,6 +99,7 @@ import {
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 import { ManagedWorkspaceLaunchStrategy } from "./workspace.ts";
 import { ThreadPlacement } from "./placement.ts";
+import { ThreadWorldRepo } from "./world.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -523,6 +524,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
   // Fork (patches/fleet-placement.md): where placement put the thread and why.
   placement: Schema.optional(ThreadPlacement),
+  // Fork (patches/worlds.md): the repos the thread checked out in its world.
+  worldRepos: Schema.optional(Schema.Array(ThreadWorldRepo)),
   workflowRun: Schema.optional(OrchestrationV2WorkflowOrigin),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(
@@ -2449,6 +2452,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
   // Fork (patches/fleet-placement.md): where placement put the thread and why.
   placement: Schema.optional(ThreadPlacement),
+  // Fork (patches/worlds.md): the repos the thread checked out in its world.
+  worldRepos: Schema.optional(Schema.Array(ThreadWorldRepo)),
   workflowRun: Schema.optional(OrchestrationV2WorkflowOrigin),
   latestRunId: Schema.NullOr(RunId),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -3545,6 +3550,8 @@ export const OrchestrationV2Command = Schema.Union([
     placementWaitEnded: Schema.optional(Schema.Literal(true)),
     /** Only the server sets this: a retried launch that found no room records its wait. */
     placement: Schema.optional(ThreadPlacement),
+    /** Only the server sets this, from the thread world's state (patches/worlds.md). */
+    worldRepos: Schema.optional(Schema.Array(ThreadWorldRepo)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
