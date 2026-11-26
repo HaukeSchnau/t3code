@@ -98,8 +98,9 @@ around them:
   clones can sit in different worlds, so a lens admits a whole repository group and then keeps
   only the clones filed under it; route reveal sees the same narrowed projects.
 - **Rows.** A world thread's card names the repos it checked out instead of its project, with a
-  dot on one that holds work no remote has; every thread filed under a world gets the world's
-  color down its edge, dashed (fainter on mobile) for an older project. The web card names the
+  dot on one that holds work no remote has; every thread card filed under a world gets the
+  world's color down its edge, dashed (fainter on mobile) for an older project, while settled
+  rows stay plain on both clients. The web card names the
   machine only when it isn't the server the client is connected to.
 - Web: `ThreadWorldPanel` in the thread details card; the git actions control hides for world
   projects and thread worlds, whose roots are no repository.

@@ -1,4 +1,4 @@
-import { useWorldFiling, worldColorFor } from "../home/worldFiling";
+import { useWorldFiling, worldColorFor, worldFilingKey } from "../home/worldFiling";
 import { worldShortTitle } from "@t3tools/client-runtime/state/worlds";
 import { useGT, useMessages } from "gt-react-native";
 import { useActiveNewTask } from "../../state/active-new-task";
@@ -385,6 +385,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   // Recycle equality needs project/search data for titles and favicons; keep the minute clock on items to limit updates.
   const listExtraData = {
     activeNewTask,
+    worldFilingKey: worldFilingKey(worldFiling),
     selectedThreadKey: selectedThreadKey ?? "",
     projectByKey,
     projectTitleByProjectKey,
