@@ -167,8 +167,9 @@ prose asks waited over two hours or never got a reply.
   preparation failed runs again under its id, and each end counts on its own, while repeated
   updates of one end do not), `ask:<id>` when an agent asks, `request:<id>` for each pending
   question, approval, secret card or link card (a subagent's approval and a side chat's request
-  on their listed parent), and `guest:<id>` for a guest's message. Every thread event carries
-  the thread's asks, so an ask also ends with an event that is not its own, such as settling. A
+  on their listed parent), and `guest:<id>` for a guest's message. Every thread event whose
+  payload is the thread carries its asks, so an ask also ends with an event that is not its own,
+  such as settling. A visit's and a pull request link's events carry no thread. A
   later run, such as a wake queued right behind the user's, a hold, an archive or a reconnect
   cannot erase or repeat one. The first start puts the cursor at the current event and keeps its
   time: what started before it is history, also when a later event repeats it, so a deploy alerts

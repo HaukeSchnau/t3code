@@ -1,10 +1,34 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, type PlacementReport, ProjectId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import { TestClock } from "effect/testing";
 
+import * as ServerConfig from "../config.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
+import * as LocalPlacement from "./LocalPlacement.ts";
 import {
   type PeerMatch,
   type PlacementChoice,
   type PlacementRequest,
+  PLACEMENT_REPORT_PATH,
+  layer as placementLayer,
+  Placement,
   recordMatch,
   retryRefusal,
   shareableRepositoryKey,
@@ -93,3 +117,128 @@ it("sends peers a clone URL and a repository key without credentials", () => {
     assert.isNull(shareableRepositoryKey(leaky), leaky);
   }
 });
+
+const loadReport = (label: string, weight: number): PlacementReport => ({
+  environmentId: EnvironmentId.make(label),
+  label,
+  platform: "linux",
+  weight,
+  agentLimit: null,
+  resources: {
+    sampledAt: 0,
+    cpuUtilization: 0,
+    cpuCount: 16,
+    availableMemoryBytes: 64 * 1024 ** 3,
+    totalMemoryBytes: 64 * 1024 ** 3,
+  },
+  runningAgents: 0,
+  launchesInFlight: 0,
+  waiting: 0,
+  worlds: [],
+  providers: [],
+});
+
+const withPeer = <A, E>(
+  body: (
+    placement: Placement["Service"],
+    peerState: { readonly reportRequests: Ref.Ref<number>; readonly answers: Ref.Ref<boolean> },
+  ) => Effect.Effect<A, E, Layer.Success<typeof placementLayer>>,
+) =>
+  Effect.gen(function* () {
+    const reportRequests = yield* Ref.make(0);
+    const answers = yield* Ref.make(true);
+    const peer = {
+      environmentId: EnvironmentId.make("peer"),
+      label: "peer",
+      urls: ["http://peer.test"],
+      access: "full-access",
+      linkedAt: DateTime.makeUnsafe(0),
+      expiresAt: DateTime.makeUnsafe("2100-01-01T00:00:00.000Z"),
+      lastReachedAt: null,
+      lastError: null,
+    } as const;
+    const services = Layer.mergeAll(
+      // This machine takes no placed work, so a preview lands on the peer while its report is fresh.
+      Layer.mock(LocalPlacement.LocalPlacement)({
+        report: () => Effect.succeed(loadReport("here", 0)),
+      }),
+      Layer.mock(PeerLinks.PeerLinks)({
+        enabled: Effect.succeed(true),
+        stored: Effect.succeed([peer]),
+        resolve: () =>
+          Effect.succeed({ link: peer, url: "http://peer.test", token: "token" } as never),
+      }),
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.gen(function* () {
+            if (request.url.endsWith(PLACEMENT_REPORT_PATH))
+              yield* Ref.update(reportRequests, (n) => n + 1);
+            return HttpClientResponse.fromWeb(
+              request,
+              (yield* Ref.get(answers))
+                ? new Response(JSON.stringify(loadReport("peer", 100)))
+                : new Response(null, { status: 503 }),
+            );
+          }),
+        ),
+      ),
+      Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
+      Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+      Layer.mock(ThreadManagement.ThreadManagementService)({}),
+      Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+      Layer.mock(DocumentText.DocumentText)({}),
+      ServerSettings.layerTest(),
+      NodeCrypto.layer,
+    );
+    return yield* Effect.gen(function* () {
+      return yield* body(yield* Placement, { reportRequests, answers });
+    }).pipe(
+      Effect.provide(
+        placementLayer.pipe(
+          Layer.provide(services),
+          Layer.provideMerge(SqlitePersistence.layerMemory),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-placement-" })),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    );
+  });
+
+const scratchLaunch: PlacementRequest = {
+  projectId: null,
+  instanceId: undefined,
+  workspaceStrategy: { type: "root" },
+  hasAttachments: false,
+  hasContext: false,
+  mayClone: false,
+};
+
+it.effect("asks a peer for its load only when a decision needs a fresh report", () =>
+  withPeer((placement, { reportRequests, answers }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* placement.start();
+        yield* TestClock.adjust("1 minute");
+        assert.equal(yield* Ref.get(reportRequests), 0);
+
+        assert.equal((yield* placement.preview(scratchLaunch))?.label, "peer");
+        assert.equal(yield* Ref.get(reportRequests), 1);
+        // A report younger than five seconds is reused.
+        yield* TestClock.adjust("4 seconds");
+        assert.equal((yield* placement.preview(scratchLaunch))?.label, "peer");
+        assert.equal(yield* Ref.get(reportRequests), 1);
+        yield* TestClock.adjust("2 seconds");
+        assert.equal((yield* placement.preview(scratchLaunch))?.label, "peer");
+        assert.equal(yield* Ref.get(reportRequests), 2);
+        // A peer that stops answering is not placed on its last report, though that is recent.
+        yield* Ref.set(answers, false);
+        yield* TestClock.adjust("6 seconds");
+        assert.isNull(yield* placement.preview(scratchLaunch));
+        assert.equal(yield* Ref.get(reportRequests), 3);
+      }),
+    ),
+  ),
+);
