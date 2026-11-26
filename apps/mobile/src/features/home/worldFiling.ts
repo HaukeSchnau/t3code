@@ -16,6 +16,17 @@ export function useWorldFiling(): WorldFiling {
   return fileProjectsIntoWorlds({ projects, worlds });
 }
 
+/**
+ * Changes only when a project moves to another world or a world is renamed. Lists put it in their
+ * rows' extraData, so rows rendered before the filing settled get their stripe.
+ */
+export function worldFilingKey(filing: WorldFiling): string {
+  return [
+    ...filing.worlds.map((world) => `${world.id}\0${world.title}`),
+    ...[...filing.worldByProjectKey].map(([projectKey, world]) => `${projectKey}\0${world}`).sort(),
+  ].join("\n");
+}
+
 /** The color of the world a project is filed under: its world project's monogram color. */
 export function worldColorFor(
   filing: WorldFiling,

@@ -108,7 +108,7 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
-import { useWorldFiling, worldColorFor } from "./worldFiling";
+import { useWorldFiling, worldColorFor, worldFilingKey } from "./worldFiling";
 import { worldShortTitle } from "@t3tools/client-runtime/state/worlds";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
@@ -639,6 +639,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // extraData changes invalidate every visible row; put the minute clock on items to limit updates.
   const v2ExtraData = {
     activeNewTask,
+    worldFilingKey: worldFilingKey(worldFiling),
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
     listEnvironments,
