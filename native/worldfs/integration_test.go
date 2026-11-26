@@ -24,12 +24,27 @@ func TestIntegration(t *testing.T) {
 		t.Skip("needs FUSE and user namespaces; set WORLDFS_INTEGRATION=1")
 	}
 	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "bin", "worldfs")
-	build := exec.Command("go", "build", "-o", bin, ".")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
+	build := func(rev string) string {
+		out := filepath.Join(tmp, "bin", "worldfs-"+rev)
+		cmd := exec.Command("go", "build", "-ldflags", "-X main.revision="+rev, "-o", out, ".")
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build: %v\n%s", err, b)
+		}
+		return out
 	}
+	// bin is the Release's command, as infra's unit runs it.
+	bin := filepath.Join(tmp, "bin", "worldfs")
+	release := func(target string) {
+		if err := os.Symlink(target, bin+".new"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(bin+".new", bin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release(build("a"))
+	next := build("b")
 	a, b, c, d := "example.com/x/a", "example.com/x/b", "example.com/x/c", "example.com/x/d"
 	w := newTestWorld(t, a, b, c, d)
 	state := filepath.Join(tmp, "state")
@@ -137,8 +152,51 @@ func TestIntegration(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("stats: %s", compact(it.ctl(map[string]any{"method": "stats"})))
+	stats := map[string]any{"method": "stats"}
+	t.Logf("stats: %s", compact(it.ctl(stats)))
+
+	it.step("A new Release's worldfs waits while t2 runs, and t2 keeps reading its views")
+	release(next)
+	waitFor(t, func() bool { return compact(it.ctl(stats)["upgrade"]) != "null" })
+	st = it.ctl(stats)
+	expect(t, compact(st), `"revision":"a"`, `"upgrade":{"revision":"b"`, `"waitingFor":["t2"]`)
+	expect(t, provider2.run(`cat `+view(a)+`/README.md; stat -f -c %T `+view(c)), "version 2", "fuse\n")
+
+	it.step("Once t2 stops, the daemon runs the new Release in its own process, and the socket answers throughout")
+	pid := it.daemon.Process.Pid
+	calls, failed, slowest := 0, 0, time.Duration(0)
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			calls++
+			t0 := time.Now()
+			if _, err := it.tryCall(stats); err != nil {
+				failed++
+				t.Logf("stats during the upgrade: %v", err)
+			}
+			slowest = max(slowest, time.Since(t0))
+		}
+	}()
 	provider2.stop()
+	waitFor(t, func() bool { return it.ctl(stats)["revision"] == "b" })
+	close(stop)
+	<-stopped
+	if failed > 0 {
+		t.Fatalf("%d of %d stats calls failed during the upgrade", failed, calls)
+	}
+	t.Logf("%d stats calls during the upgrade, none failed; the slowest took %v", calls, slowest)
+	if exe, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); exe != next {
+		t.Fatalf("daemon pid %d runs %s, not %s", pid, exe, next)
+	}
+	expect(t, compact(it.ctl(stats)), `"revision":"b"`)
+	notContains(t, compact(it.ctl(stats)), "upgrade")
+	expect(t, t2.launch(`cat /world/example.com/x/a/README.md; stat -f -c %T /world/example.com/x/c`), "version 2", "fuse\n")
 }
 
 type integ struct {
@@ -218,23 +276,31 @@ func (it *integ) holder() int {
 
 func (it *integ) call(req map[string]any) (map[string]any, bool) {
 	it.t.Helper()
-	c, err := net.Dial("unix", it.sock)
+	res, err := it.tryCall(req)
 	if err != nil {
-		it.t.Fatal(err)
-	}
-	defer c.Close()
-	b, _ := json.Marshal(req)
-	c.Write(append(b, '\n'))
-	line, err := bufio.NewReader(c).ReadBytes('\n')
-	if err != nil {
-		it.t.Fatal(err)
-	}
-	var res map[string]any
-	if err := json.Unmarshal(line, &res); err != nil {
 		it.t.Fatal(err)
 	}
 	ok, _ := res["ok"].(bool)
 	return res, ok
+}
+
+func (it *integ) tryCall(req map[string]any) (map[string]any, error) {
+	c, err := net.Dial("unix", it.sock)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	b, _ := json.Marshal(req)
+	if _, err := c.Write(append(b, '\n')); err != nil {
+		return nil, err
+	}
+	line, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil {
+		return nil, err
+	}
+	var res map[string]any
+	return res, json.Unmarshal(line, &res)
 }
 
 func (it *integ) ctl(req map[string]any) map[string]any {

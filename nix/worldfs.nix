@@ -4,9 +4,7 @@
   pkgs,
   lib ? pkgs.lib,
 }:
-pkgs.buildGoModule {
-  pname = "worldfs";
-  version = "0.1.0";
+let
   src = lib.fileset.toSource {
     root = ../native/worldfs;
     fileset = lib.fileset.unions [
@@ -15,6 +13,14 @@ pkgs.buildGoModule {
       (lib.fileset.fileFilter (file: file.hasExt "go") ../native/worldfs)
     ];
   };
+in
+pkgs.buildGoModule {
+  pname = "worldfs";
+  version = "0.1.0";
+  inherit src;
+  # The source's store hash: the same daemon source gives the same revision on every host, and
+  # the daemon moves to a Release whose worldfs reports another one (README.md, Upgrades).
+  ldflags = [ "-X main.revision=${builtins.substring 11 12 "${src}"}" ];
   vendorHash = "sha256-6CTXIcY+1t73uPllRNp/fcXaEl4A80dxy472fig1V40=";
   env.CGO_ENABLED = "0";
   nativeBuildInputs = [ pkgs.makeWrapper ];

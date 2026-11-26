@@ -280,6 +280,7 @@ func (m *machine) checkout(t *thread, r *repo, who, why string, force bool) erro
 			log.Printf("backfill flag %s: %v", r.name, err)
 		}
 	}
+	m.bg.Add(1)
 	go m.initJJ(t, r, dir, ready)
 	return nil
 }
@@ -302,8 +303,9 @@ func rollbackCheckout(dir, admin string) {
 	}
 }
 
-// initJJ colocates a jj repo in a fresh checkout.
+// initJJ colocates a jj repo in a fresh checkout. Callers add it to m.bg.
 func (m *machine) initJJ(t *thread, r *repo, dir string, ready chan struct{}) {
+	defer m.bg.Done()
 	defer close(ready)
 	if !m.jj {
 		return
@@ -747,6 +749,7 @@ func (m *machine) recover() {
 					close(tr.jjReady)
 				} else {
 					_ = os.RemoveAll(filepath.Join(dir, ".jj"))
+					m.bg.Add(1)
 					go m.initJJ(t, w.repoOrStub(name), dir, tr.jjReady)
 				}
 			}
