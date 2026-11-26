@@ -66,9 +66,40 @@ type ThreadEvent = Extract<
   { readonly payload: OrchestrationV2AppThread }
 >;
 
-/** Every thread event but a pull request link's carries the thread, with its asks. */
+// The events whose payload is the thread, with its asks. `satisfies` makes a new one a type error
+// until it is listed; a `thread.` prefix also matches a visit's or a pull request link's payload.
+const THREAD_EVENT_TYPES: ReadonlySet<string> = new Set(
+  Object.keys({
+    "thread.created": true,
+    "thread.archived": true,
+    "thread.unarchived": true,
+    "thread.deleted": true,
+    "thread.settled": true,
+    "thread.unsettled": true,
+    "thread.snoozed": true,
+    "thread.unsnoozed": true,
+    "thread.pinned": true,
+    "thread.auto-settle-set": true,
+    "thread.unpinned": true,
+    "thread.pin-reordered": true,
+    "thread.active-reordered": true,
+    "thread.tags-updated": true,
+    "thread.visited": true,
+    "thread.marked-unread": true,
+    "thread.metadata-updated": true,
+    "thread.pull-request-synced": true,
+    "thread.issue-synced": true,
+    "thread.runtime-mode-updated": true,
+    "thread.interaction-mode-updated": true,
+    "thread.model-selection-updated": true,
+    "thread.provider-switched": true,
+    "thread.guest-share-updated": true,
+    "thread.asks-updated": true,
+  } satisfies Record<ThreadEvent["type"], true>),
+);
+
 const carriesThread = (event: OrchestrationV2DomainEvent): event is ThreadEvent =>
-  event.type.startsWith("thread.") && event.type !== "thread.pull-request-link-updated";
+  THREAD_EVENT_TYPES.has(event.type);
 
 /** Whether the event can change what a thread needs, its count or a held completion. */
 export function changesNeeds(event: OrchestrationV2DomainEvent): boolean {

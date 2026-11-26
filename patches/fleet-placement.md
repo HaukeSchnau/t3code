@@ -43,9 +43,11 @@ the project, and never waits for room.
   with its `PlacementReport`: host resources, running agents, launches in flight, threads waiting
   for room, served worlds, enabled provider instances, and its weight and agent limit. The route
   admits a request exactly as `/mcp` does (`McpHttpServer.makeRequestAuthenticator`), so a peer
-  link's own token reads it. `Placement.start` reads every stored, unexpired link every 5 seconds.
-  Reports flow over the link in the direction a launch can go: a machine that can start threads
-  on a peer is the one that reads that peer's load.
+  link's own token reads it. Nothing polls: a preview or launch reads the stored, unexpired links
+  and asks each peer whose report is older than 5 seconds, in parallel, before it decides. An
+  open automatic draft previews every 10 seconds, which keeps its reports that fresh, and an idle
+  fleet sends no load traffic. Reports flow over the link in the direction a launch can go: a
+  machine that can start threads on a peer is the one that reads that peer's load.
 - **Decision.** `Placement.decide` classifies the thread by its project: a world project needs a
   host that serves that world (worldfs on Linux; m1 serves none), a repository needs a host with a
   project of the same `repositoryIdentity.canonicalKey` or one that may clone it (cold hosts,
@@ -160,7 +162,7 @@ service when upstream places new threads across connected environments on the se
 
 ## Verification
 
-`HostPressure.test.ts`, shared `placement.test.ts`, the load balancing cases in client-runtime
-`projectGrouping.test.ts`, the placement case in shared `serverSettings.test.ts`, the waiting
-case in `ThreadLaunchService.test.ts`, the drain cases in `LocalPlacement.test.ts`, and the
-`idle --drain` case in `cli/settings.test.ts`.
+`Placement.test.ts`, `HostPressure.test.ts`, shared `placement.test.ts`, the load balancing cases
+in client-runtime `projectGrouping.test.ts`, the placement case in shared `serverSettings.test.ts`,
+the waiting case in `ThreadLaunchService.test.ts`, the drain cases in `LocalPlacement.test.ts`,
+and the `idle --drain` case in `cli/settings.test.ts`.

@@ -1348,7 +1348,7 @@ describe("NeedsYouNotifications", () => {
     ),
   );
 
-  it.effect("archiving and unarchiving a thread alerts nothing again", () =>
+  it.effect("visiting, archiving and unarchiving a thread alerts nothing again", () =>
     withDatabase(
       Effect.gen(function* () {
         yield* TestClock.setTime(local(17));
@@ -1359,6 +1359,12 @@ describe("NeedsYouNotifications", () => {
             const server = yield* makeServer(w);
             yield* server.emit(yield* asks(w, "t", [{ run: "r" }]));
             const before = yield* server.subjects;
+            // A visit's payload is its read state, not the thread.
+            yield* server.emit({
+              type: "thread.visit-recorded",
+              threadId: ThreadId.make("t"),
+              payload: { lastVisitedAt: utc(local(17)) },
+            });
             const thread = w.projections.get(ThreadId.make("t"))!.thread;
             yield* server.emit({
               type: "thread.archived",
