@@ -234,9 +234,10 @@ that may write source control, or an agent's at full access in the default inter
 that already have the repository.
 
 Choose **Auto** in the composer's machine picker to see where the thread would start, such as
-**Auto → dev-hauke**. Once sent, the thread header shows where it runs and why; select it to see
-every machine placement weighed. A thread with attachments, composer context, an existing worktree
-or a local base branch stays on this machine.
+**Auto → dev-hauke**. A new thread starts on Auto until you pick a machine or a branch, on the
+phone too. Once sent, the thread opens on the machine it started on, and its header shows where it
+runs and why; select it to see every machine placement weighed. A thread with attachments,
+composer context, an existing worktree or a local base branch stays on this machine.
 
 When no machine has room, the thread waits on the best one and starts as soon as a slot frees up.
 The composer shows **Waiting for room on** the machine, with **Start anyway** and **Cancel**; the

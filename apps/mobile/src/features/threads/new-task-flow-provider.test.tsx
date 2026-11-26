@@ -104,6 +104,7 @@ vi.mock("../../state/use-composer-drafts", () => ({
 }));
 
 vi.mock("../../state/peerLinks", () => ({ useLinkedEnvironments: () => new Map() }));
+vi.mock("../../state/server", () => ({ serverEnvironment: { placementPreview: () => null } }));
 vi.mock("../../state/project-has-threads", () => ({ useProjectHasThreads: () => false }));
 vi.mock("../../state/workspace", () => ({
   useConnectionsReady: () => true,

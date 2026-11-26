@@ -180,8 +180,10 @@ vi.mock("./use-composer-drafts", async () => {
 });
 
 import { appAtomRegistry } from "./atom-registry";
+import { pendingThreadCreationOutcomesAtom } from "./pending-thread-creation";
 import { environmentSession } from "./session";
 import { dispatchingQueuedMessageIdsAtom, editingQueuedMessageIdsAtom } from "./use-thread-outbox";
+import { mergeComposerDraftContent } from "./use-composer-drafts";
 
 const sendingMessageIds = () => Object.keys(appAtomRegistry.get(dispatchingQueuedMessageIdsAtom));
 import { createThreadOutboxDelivery } from "./threadOutboxDelivery";
@@ -629,6 +631,84 @@ describe("queued task whose launch reply is lost", () => {
     const [first, resent] = state.start.mock.calls.map(([call]) => call.input);
     expect(resent.bootstrap.createThread.worktreePath).toBe("/repo/.t3/worktrees/pr-123");
     expect(resent.bootstrap).toEqual(first.bootstrap);
+    expect(remaining()).toEqual([]);
+  });
+});
+
+describe("queued Auto task", () => {
+  const autoTask = () =>
+    message({
+      threadId: ThreadId.make("new-thread"),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+      creation: {
+        projectId: ProjectId.make("project"),
+        projectCwd: "/repo",
+        workspaceMode: "local",
+        branch: null,
+        worktreePath: null,
+        placement: "auto",
+      },
+    });
+  const placedLaunch = AsyncResult.success({
+    environmentId: "dev-hauke",
+    threadId: "placed-thread",
+    placement: {
+      decidedBy: { environmentId: "secondary", label: "tower" },
+      environmentId: "dev-hauke",
+      label: "dev-hauke",
+      reason: "3 free agent slots",
+      candidates: [],
+      decidedAt: "2026-11-26T12:00:00.000Z",
+      waitingSince: null,
+    },
+  });
+
+  it("launches through placement and follows the thread to the machine it started on", async () => {
+    setOperateGrant("secondary", true);
+    await state.manager.enqueue(autoTask());
+    // The placed machine's shell can show the thread running before the launch reply arrives.
+    appAtomRegistry.set(state.threadShells, [
+      state.thread,
+      {
+        ...state.thread,
+        environmentId: "dev-hauke",
+        id: "placed-thread",
+        latestRun: { runId: "run", status: "running" },
+      },
+    ]);
+    state.start.mockResolvedValueOnce(placedLaunch);
+    await runDrain();
+
+    expect(state.start.mock.calls[0]?.[0].input.placement).toBe("auto");
+    expect(
+      appAtomRegistry.get(pendingThreadCreationOutcomesAtom)["secondary:new-thread"],
+    ).toMatchObject({
+      kind: "delivered",
+      placed: { environmentId: "dev-hauke", threadId: "placed-thread", label: "dev-hauke" },
+    });
+    expect(remaining()).toEqual([]);
+  });
+
+  it("hands an edit made during the launch to the placed thread instead of launching again", async () => {
+    setOperateGrant("secondary", true);
+    const queued = autoTask();
+    await state.manager.enqueue(queued);
+    state.start.mockImplementationOnce(async () => {
+      appAtomRegistry.set(editingQueuedMessageIdsAtom, { [queued.messageId]: true });
+      await state.manager.update({ ...queued, text: "Edited idea" });
+      return placedLaunch;
+    });
+    await runDrain();
+    expect(remaining()).toHaveLength(1);
+
+    appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
+    await runDrain();
+
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(mergeComposerDraftContent).toHaveBeenCalledWith(
+      "dev-hauke:placed-thread",
+      expect.objectContaining({ text: "Edited idea" }),
+    );
     expect(remaining()).toEqual([]);
   });
 });

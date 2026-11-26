@@ -20,6 +20,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   MessageId,
+  PlacementLaunchResult,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -56,6 +57,7 @@ import {
   clearPendingThreadCreationOutcome,
   pendingThreadCreationOutcomesAtom,
   recordPendingThreadCreationOutcome,
+  type PlacedThreadCreation,
 } from "./pending-thread-creation";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom, serverEnvironment } from "./server";
@@ -396,7 +398,7 @@ export const removeAcknowledgedExistingThreadMessage = Effect.fn(
 
 /** Hands a new task edited after its launch back to the composer, then drops it from the queue. */
 export const recoverEditedCreationAfterDelivery = Effect.fn("ThreadOutbox.recoverEditedCreation")(
-  function* (queuedMessage: QueuedThreadMessage) {
+  function* (queuedMessage: QueuedThreadMessage, placed?: PlacedThreadCreation) {
     const kept = Object.values(
       appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
     )
@@ -404,7 +406,9 @@ export const recoverEditedCreationAfterDelivery = Effect.fn("ThreadOutbox.recove
       .find((candidate) => candidate.messageId === queuedMessage.messageId);
     if (!kept || isEditingQueuedMessage(kept.messageId)) return;
     const keptRevision = threadOutboxRevision(kept.messageId);
-    const draftKey = scopedThreadKey(kept.environmentId, kept.threadId);
+    // A placed task's thread is the one placement started, where its route goes.
+    const thread = placed ?? kept;
+    const draftKey = scopedThreadKey(thread.environmentId, thread.threadId);
     const handedBack = yield* Effect.gen(function* () {
       // Merge before removal to retain file ownership; allow overflow and let send guards require trimming.
       yield* storage("hand-back-to-draft", kept.messageId, () =>
@@ -542,6 +546,7 @@ export const restoreRejectedQueuedMessage = Effect.fn("ThreadOutbox.restoreRejec
         ...(queuedMessage.freshContext ? { freshContext: true } : {}),
         ...(queuedMessage.creation
           ? {
+              environmentSelection: queuedMessage.creation.placement ?? "manual",
               workspaceSelection: {
                 mode: queuedMessage.creation.workspaceMode,
                 branch: queuedMessage.creation.branch,
@@ -694,8 +699,10 @@ const deliveryInputsAtom = Atom.make((get) => {
 const settledCreationOutcomeKeysAtom = Atom.make((get): ReadonlyArray<string> => {
   const outcomes = get(pendingThreadCreationOutcomesAtom);
   const threads = get(environmentThreadShells.threadShellsAtom);
+  // A placed outcome is the route's way to the placed thread, so the route clears it.
   return Object.entries(outcomes).flatMap(([threadKey, outcome]) =>
     outcome.kind === "delivered" &&
+    outcome.placed === undefined &&
     threads.some(
       (thread) =>
         scopedThreadKey(thread.environmentId, thread.id) === threadKey &&
@@ -708,6 +715,19 @@ const settledCreationOutcomeKeysAtom = Atom.make((get): ReadonlyArray<string> =>
       : [],
   );
 }).pipe(Atom.withLabel("mobile:thread-outbox:settled-creation-outcomes"));
+
+const isPlacementLaunchResult = Schema.is(PlacementLaunchResult);
+
+/** Where placement started a task, when that is not the thread the outbox sent. */
+function placedElsewhere(
+  message: QueuedThreadMessage,
+  result: AtomCommandResult<object, unknown>,
+): PlacedThreadCreation | undefined {
+  if (!AsyncResult.isSuccess(result) || !isPlacementLaunchResult(result.value)) return undefined;
+  const { environmentId, threadId, placement } = result.value;
+  if (environmentId === message.environmentId && threadId === message.threadId) return undefined;
+  return { environmentId, threadId, label: placement?.label ?? environmentId };
+}
 
 function deliveredSequence(result: AtomCommandResult<object, unknown>): number | undefined {
   // A placed launch answers with the machine it went to, not a commit sequence here.
@@ -804,6 +824,9 @@ export function createThreadOutboxDelivery(): {
     MessageId,
     { readonly revision: number; readonly workspace: QueuedThreadCreation }
   >();
+  // Where placement started each new task. Its thread never appears where the task was sent, so
+  // an edit that outlived the launch goes to the placed thread instead of launching again.
+  const placedCreations = new Map<MessageId, PlacedThreadCreation>();
   // Targets the shell may have left out hold their thread family until they leave the queue, so
   // the row stays readable through dispatch.
   const familyMounts = new Map<MessageId, () => void>();
@@ -1215,6 +1238,7 @@ export function createThreadOutboxDelivery(): {
           : { worktreeRepositories: workspace.repositories }),
         worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
         managedWorkspace: creation.managedWorkspace,
+        ...(creation.placement === undefined ? {} : { placement: creation.placement }),
       }),
     });
     if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return;
@@ -1225,7 +1249,13 @@ export function createThreadOutboxDelivery(): {
     if (failure?.action === "restore") {
       return yield* restoreQueuedMessage(persistedMessage, failure.message);
     }
-    recordPendingThreadCreationOutcome({ kind: "delivered", message: persistedMessage });
+    const placed = placedElsewhere(persistedMessage, deliveryResult);
+    if (placed !== undefined) placedCreations.set(persistedMessage.messageId, placed);
+    recordPendingThreadCreationOutcome({
+      kind: "delivered",
+      message: persistedMessage,
+      ...(placed === undefined ? {} : { placed }),
+    });
     const outcome = yield* completeQueuedMessageDelivery(
       persistedMessage,
       deliveryRevision,
@@ -1233,7 +1263,7 @@ export function createThreadOutboxDelivery(): {
     );
     if (outcome === "edited") {
       if (isEditingQueuedMessage(queuedMessage.messageId)) return;
-      return yield* recoverEditedCreationAfterDelivery(persistedMessage);
+      return yield* recoverEditedCreationAfterDelivery(persistedMessage, placed);
     }
     if (outcome !== "removed") return yield* retryDelivery;
   });
@@ -1287,6 +1317,23 @@ export function createThreadOutboxDelivery(): {
     }
     if (retryNotBefore(messageId) > Date.now()) {
       return { _tag: "Wait", until: retryNotBefore(messageId) };
+    }
+    const placedLaunch = placedCreations.get(messageId);
+    // An unedited task resends below, which replays the placed launch.
+    if (
+      placedLaunch !== undefined &&
+      launchedCreations.get(messageId)?.revision !== threadOutboxRevision(messageId)
+    ) {
+      return {
+        _tag: "Dispatch",
+        messageId,
+        run: Effect.gen(function* () {
+          if (!(yield* confirmQueued(nextQueuedMessage)) || isEditingQueuedMessage(messageId)) {
+            return;
+          }
+          yield* recoverEditedCreationAfterDelivery(nextQueuedMessage, placedLaunch);
+        }),
+      };
     }
     let thread = findThread(threads, nextQueuedMessage);
     if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
@@ -1540,6 +1587,9 @@ export function createThreadOutboxDelivery(): {
     }
     for (const messageId of launchedCreations.keys()) {
       if (!queuedMessageIds.has(messageId)) launchedCreations.delete(messageId);
+    }
+    for (const messageId of placedCreations.keys()) {
+      if (!queuedMessageIds.has(messageId)) placedCreations.delete(messageId);
     }
     for (const [messageId, release] of familyMounts) {
       if (!queuedMessageIds.has(messageId)) {
