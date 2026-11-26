@@ -80,10 +80,10 @@ around them:
   them by `world`, so they are one project on every client.
 - **Filing.** Every project belongs to a world or to none (`fileProjectsIntoWorlds` in
   client-runtime `state/worlds.ts`): a world project to its world, and an older per-repo or
-  umbrella project to the world whose `path` holds it, else to the world whose catalog holds its
-  repository's namespace (`git.buildlinx.io/buildlinx`, `github.com/haukeschnau`). The `path` is
-  the one the project's own server declares; only a server that declares no worlds, such as
-  dev-hauke before its update, uses another's. Each server reads its worlds' namespaces from the
+  umbrella project to the world whose `path` holds it (the innermost, when world paths nest),
+  else to the world whose catalog holds its repository's namespace (`git.buildlinx.io/buildlinx`,
+  `github.com/haukeschnau`). The `path` is the one the project's own server declares; only a
+  server that declares no worlds, such as dev-hauke before its update, uses another's. Each server reads its worlds' namespaces from the
   worldfs catalogs (`world/worldCatalog.ts`) and sends them in its config, so filing doesn't
   depend on which threads a client has loaded; a namespace two worlds hold files nothing, and a
   catalog change reaches clients when they reconnect. Scratch threads and everything else are

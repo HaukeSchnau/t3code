@@ -7,12 +7,10 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as WorldRepoSync from "./WorldRepoSync.ts";
 
@@ -22,7 +20,7 @@ const frontend: ThreadWorldRepo = {
   work: true,
 };
 
-it.effect("records a thread world's repos once on the threads that still run in it", () => {
+it.effect("records a thread world's repos once on each thread that runs in it", () => {
   const recorded = Deferred.makeUnsafe<void>();
   const commands: OrchestrationV2ServerCommand[] = [];
   const thread = (id: string, worktreePath: string, worldRepos?: ReadonlyArray<ThreadWorldRepo>) =>
@@ -31,17 +29,19 @@ it.effect("records a thread world's repos once on the threads that still run in 
       worktreePath,
       ...(worldRepos === undefined ? {} : { worldRepos }),
     }) as OrchestrationV2ThreadShell;
-  const threads = [
+  let threads = [
     thread("new", "/worlds/buildlinx/t3-a"),
-    // Reached only through a symlinked base dir.
-    thread("linked", "/link/t3-c"),
     thread("recorded", "/worlds/buildlinx/t3-a", [frontend]),
     thread("other", "/worlds/buildlinx/t3-b"),
-    thread("moved", "/worlds/buildlinx/t3-d"),
   ];
-  // "moved" was still in t3-a when the sync looked its path up.
-  const lookedUpPath = (shell: OrchestrationV2ThreadShell) =>
-    shell.id === "moved" ? "/worlds/buildlinx/t3-a" : shell.worktreePath!;
+  const read = (cwd: string) => Stream.make({ cwd, repos: [frontend] });
+  // A thread that starts in an existing thread world after its repos were recorded.
+  const join = (id: string, worktreePath: string) =>
+    Stream.fromEffect(
+      Effect.sync(() => {
+        threads = [...threads, thread(id, worktreePath)];
+      }),
+    ).pipe(Stream.drain);
   return Effect.gen(function* () {
     yield* Layer.build(WorldRepoSync.layer);
     yield* Deferred.await(recorded);
@@ -52,41 +52,38 @@ it.effect("records a thread world's repos once on the threads that still run in 
       }),
       [
         [ThreadId.make("new"), [frontend], "/worlds/buildlinx/t3-a"],
-        [ThreadId.make("linked"), [frontend], "/link/t3-c"],
+        [ThreadId.make("joined"), [frontend], "/worlds/buildlinx/t3-a"],
       ],
     );
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        FileSystem.layerNoop({
-          realPath: (path) =>
-            Effect.succeed(path === "/link/t3-c" ? "/worlds/buildlinx/t3-c" : path),
-        }),
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getThreadWorktreePaths: () =>
-            Effect.succeed(
-              threads.map((shell) => ({ threadId: shell.id, worktreePath: lookedUpPath(shell) })),
-            ),
-        }),
         Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
-          // Every status read publishes; the second, unchanged read writes nothing.
-          streamWorldRepoChanges: Stream.make(
-            { cwd: "/worlds/buildlinx/t3-a", repos: [frontend] },
-            { cwd: "/worlds/buildlinx/t3-a", repos: [frontend] },
-            { cwd: "/worlds/buildlinx/t3-c", repos: [frontend] },
-          ).pipe(Stream.ensuring(Deferred.succeed(recorded, undefined))),
+          // Every status read publishes; a repeated read writes only to threads that joined since.
+          streamWorldRepoChanges: read("/worlds/buildlinx/t3-a").pipe(
+            Stream.concat(join("joined", "/worlds/buildlinx/t3-a")),
+            Stream.concat(read("/worlds/buildlinx/t3-a")),
+            Stream.ensuring(Deferred.succeed(recorded, undefined)),
+          ),
         }),
         Layer.mock(ThreadManagement.ThreadManagementService)({
           getShellSnapshot: (options) =>
             Effect.succeed({
               schemaVersion: 2,
               snapshotSequence: 0,
-              threads: threads.filter((shell) => options?.threadIds?.includes(shell.id) ?? true),
+              threads: threads.filter((shell) => shell.worktreePath === options?.worktreePath),
               archivedThreads: [],
             }),
           dispatch: (command) =>
             Effect.sync(() => {
               commands.push(command);
+              if (command.type === "thread.metadata.update") {
+                threads = threads.map((shell) =>
+                  shell.id === command.threadId
+                    ? { ...shell, worldRepos: command.worldRepos }
+                    : shell,
+                );
+              }
               return { sequence: commands.length, storedEvents: [] };
             }),
         }),

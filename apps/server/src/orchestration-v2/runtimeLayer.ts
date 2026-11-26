@@ -457,9 +457,7 @@ export const layerProduction = Layer.mergeAll(
   WorktreeBranchSync.layer.pipe(
     Layer.provide(Layer.merge(layerThreadManagementProvided, ProjectionStore.layer)),
   ),
-  WorldRepoSync.layer.pipe(
-    Layer.provide(Layer.merge(layerThreadManagementProvided, ProjectionStore.layer)),
-  ),
+  WorldRepoSync.layer.pipe(Layer.provide(layerThreadManagementProvided)),
   layer,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
