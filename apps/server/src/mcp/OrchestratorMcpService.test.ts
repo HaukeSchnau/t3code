@@ -73,6 +73,7 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import * as Placement from "../placement/Placement.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -3223,6 +3224,79 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.deepEqual(yield* Ref.get(dispatched), []);
         }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
       }),
+  );
+
+  it.effect("an auto delegation that would wait for room runs beside its parent", () =>
+    Effect.gen(function* () {
+      const abandoned = yield* Ref.make(0);
+      const dispatched = yield* Ref.make<ReadonlyArray<{ readonly type: string }>>([]);
+      const peer = EnvironmentId.make("environment:mcp-providers-updating-peer");
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          hasReceipt: () => Effect.succeed(false),
+          getThreadShell: () => Effect.succeed(null),
+          getThreadRecords: (threadId) =>
+            Effect.succeed(threadId === parentThreadId ? parentProjection([]) : childProjection),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.as({ sequence: 1, storedEvents: [] } as never),
+            ),
+        }),
+        providerRegistryLayer([
+          providerSnapshot({
+            instanceId: codexInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+        ]),
+        adapterRegistryLayer([codexInstanceId]),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeedSome({ id: projectId, workspaceRoot: "/repo" } as never),
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        // The peer it would wait on is updating; starting there would keep it busy.
+        Layer.mock(Placement.Placement)({
+          decide: () =>
+            Effect.succeed({
+              _tag: "Peer",
+              environmentId: peer,
+              target: { projectId },
+              placement: {
+                decidedBy: { environmentId: scope.environmentId, label: "here" },
+                environmentId: peer,
+                label: "srv-2",
+                reason: "no machine has room; srv-2 is updating",
+                candidates: [],
+                decidedAt: "2026-11-26T00:00:00.000Z",
+                waitingSince: "2026-11-26T00:00:00.000Z",
+              },
+            } as const),
+          abandon: () => Ref.update(abandoned, (count) => count + 1),
+        }),
+        ServerSettings.layerTest(),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        // These mocks end the local start once it has requested the task here.
+        yield* service
+          .delegateTask(scope, {
+            task: "Summarize the diff.",
+            target: { environmentId: EnvironmentId.make("auto") },
+            mode: "async",
+          })
+          .pipe(Effect.ignore);
+        assert.equal(yield* Ref.get(abandoned), 1);
+        assert.deepEqual(
+          (yield* Ref.get(dispatched)).map((command) => command.type),
+          ["delegated_task.request"],
+        );
+      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+    }),
   );
 
   it.effect(

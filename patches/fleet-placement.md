@@ -96,6 +96,19 @@ the project, and never waits for room.
   the machine has a free slot (checked every 3 seconds, oldest first) or someone calls
   `placement.startNow`. Either ends the wait with `thread.metadata.update { placementWaitEnded }`.
   Stopping the run (the composer's stop, or archiving) cancels the wait.
+- **Release drain.** The fork's deploys install a T3 release only once its host is idle
+  (patches/nix-flake-packaging.md), and placement kept sending work to a busy host: dev-hauke ran
+  release 4173ce9 for two days while srv-1, srv-2 and tower moved on. While a release waits, the
+  deploy retries its idle check, `t3 status idle --drain`, which first calls
+  `POST /api/server/drain`. `LocalPlacement` then reports the host as `updating` for 15 minutes,
+  and each retry (every 2 to 10 minutes, as infra sets the host's update timer) renews that, so a
+  withdrawn release frees the host within 15 minutes. An updating host has no room
+  (`freeAgentSlots`, note "is updating"): placement passes it over, and a thread that has nowhere
+  else to go waits there instead of starting on whichever host decided. A host that would first
+  have to clone the repository is no place to wait, since the clone would start before the wait
+  and the restart could cut it off. A thread waiting for room survives a restart, so the idle check
+  does not count it as busy, and it starts once the release has landed. Running threads and
+  launches sent there explicitly still run.
 - **Launching.** Clients call `placement.launch` with the ordinary launch input and open the thread
   it returns on its environment. `t3_thread_launch` accepts `environmentId: "auto"`
   (`McpToolAccess.routed`, `placement/autoLaunch.ts`), and `delegate_task` accepts
@@ -130,9 +143,10 @@ the project, and never waits for room.
 
 ## Limits
 
-- A delegated task never waits for room: placed here it starts as a local task, placed on a peer
-  it starts at once there without a placement record, since remote delegation forwards through
-  `/mcp`, which cannot carry the stamp. Its parent is already running and waits on it.
+- A delegated task never waits for room. When no machine has room it starts here, beside its
+  parent, which already runs and waits on it, so it keeps no full or updating peer busy. Placed on
+  a peer with room it starts there at once without a placement record, since remote delegation
+  forwards through `/mcp`, which cannot carry the stamp.
 - A delegated task placed on a peer works in that machine's checkout, without the parent's
   uncommitted edits, as an explicit remote delegation does. One that names a `driverKind` stays
   here, since remote delegation runs a provider instance and does not check its driver kind.
@@ -157,5 +171,6 @@ service when upstream places new threads across connected environments on the se
 
 `Placement.test.ts`, `HostPressure.test.ts`, shared `placement.test.ts`, the load balancing cases
 in client-runtime `projectGrouping.test.ts`, the placement case in shared `serverSettings.test.ts`,
-the waiting case in `ThreadLaunchService.test.ts`, mobile `new-task-placement.test.ts`, and the Auto
+the waiting case in `ThreadLaunchService.test.ts`, the drain cases in `LocalPlacement.test.ts`, the
+`idle --drain` case in `cli/settings.test.ts`, mobile `new-task-placement.test.ts`, and the Auto
 task cases in mobile `threadOutboxDelivery.permissions.test.ts` and `threadOutboxDelivery.test.ts`.

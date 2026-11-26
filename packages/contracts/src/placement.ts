@@ -61,6 +61,11 @@ export const PlacementReport = Schema.Struct({
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
   /** Clones a repository it lacks into a project of its own. Older servers omit it. */
   canClone: Schema.optional(Schema.Boolean),
+  /**
+   * A T3 release waits for this host to go idle, so it takes no placed threads until the release
+   * lands. Older servers omit it.
+   */
+  updating: Schema.optional(Schema.Boolean),
 });
 export type PlacementReport = typeof PlacementReport.Type;
 

@@ -22,6 +22,8 @@ export interface AgentLoad {
   /** Launches that will start an agent there soon. */
   readonly launchesInFlight?: number;
   readonly agentLimit?: number | null;
+  /** A T3 release waits for the host to go idle; it has no room until the release lands. */
+  readonly updating?: boolean | undefined;
 }
 
 /**
@@ -39,6 +41,7 @@ export function freeAgentSlots(load: AgentLoad): {
   const { memoryPressure, memoryPressureLevel, agents } = resources;
   const inFlight = load.launchesInFlight ?? 0;
   const none = (note: string) => ({ slots: 0, preference: 0, note });
+  if (load.updating === true) return none("is updating");
   const pressure = memoryPressure
     ? Math.max(memoryPressure.someAvg10, memoryPressure.someAvg60)
     : 0;
@@ -157,6 +160,7 @@ export function decidePlacement(
       runningAgents: report.runningAgents,
       launchesInFlight: report.launchesInFlight + report.waiting + option.sentLaunches,
       agentLimit: report.agentLimit,
+      updating: report.updating,
     });
     const score = weight * preference * option.warmth;
     return {
@@ -166,7 +170,9 @@ export function decidePlacement(
       warmth: option.warmth,
       admissible: slots >= 1,
       note: note ?? (option.warmth < 1 ? "has no copy of the repository yet" : null),
-      preference: weight * option.warmth,
+      // A thread waits for room there only where it can start right after the release lands; a
+      // clone would begin before the wait, and the restart could cut it off.
+      preference: report.updating === true && option.warmth < 1 ? 0 : weight * option.warmth,
       queue: report.waiting + option.sentLaunches,
     };
   });

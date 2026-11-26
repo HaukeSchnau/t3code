@@ -177,6 +177,39 @@ it.effect("keeps checking for room after a load read fails", () =>
   ),
 );
 
+it.effect("reports updating while a release keeps asking, and takes work once it stops", () =>
+  withPlacement({}, (placement) =>
+    Effect.gen(function* () {
+      assert.isFalse((yield* placement.report()).updating);
+      yield* placement.drain;
+      yield* TestClock.adjust("14 minutes");
+      assert.isTrue((yield* placement.report()).updating);
+      // Each retry of the waiting release renews the drain.
+      yield* placement.drain;
+      yield* TestClock.adjust("14 minutes");
+      assert.isTrue((yield* placement.report()).updating);
+      yield* TestClock.adjust("1 minute");
+      assert.isFalse((yield* placement.report()).updating);
+    }),
+  ),
+);
+
+it.effect("keeps a thread waiting while a release waits for the host", () =>
+  withPlacement({}, (placement, { endedWaits }) =>
+    Effect.gen(function* () {
+      yield* placement.drain;
+      const waiter = yield* placement
+        .awaitRoom(ThreadId.make("thread-waiting"), 0)
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 minutes");
+      assert.isUndefined(waiter.pollUnsafe());
+      yield* TestClock.adjust("6 minutes");
+      yield* Fiber.join(waiter);
+      assert.equal(yield* Ref.get(endedWaits), 1);
+    }),
+  ),
+);
+
 it.effect("copies a peer's files only inside the new clone, never into .git", () =>
   Effect.gen(function* () {
     const path = yield* Path.Path;

@@ -2,12 +2,18 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { formatIdleStatus } from "../cli/status.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
 const at = "2026-10-01T00:00:00.000Z";
 
-const insertThread = (threadId: string, deletedAt: string | null = null) =>
+const insertThread = (
+  threadId: string,
+  deletedAt: string | null = null,
+  title = "Thread",
+  payload: object = {},
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -15,8 +21,8 @@ const insertThread = (threadId: string, deletedAt: string | null = null) =>
         thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
         created_at, updated_at, deleted_at, payload_json
       ) VALUES (
-        ${threadId}, 'project', 'Thread', 'codex', 'full-access', 'default',
-        ${at}, ${at}, ${deletedAt}, '{}'
+        ${threadId}, 'project', ${title}, 'codex', 'full-access', 'default',
+        ${at}, ${at}, ${deletedAt}, ${JSON.stringify(payload)}
       )
     `;
   });
@@ -115,11 +121,34 @@ it.effect("counts durable work without blocking restart", () =>
     yield* insertEffect("thread", "checkpoint.capture", "running");
     yield* insertEffect("thread", "provider-turn.interrupt", "succeeded");
     yield* insertRun("deleted", 1, "running");
+    // A placed thread waiting for room waits again after a restart.
+    yield* insertThread("waiting", null, "Thread", { placement: { waitingSince: at } });
+    yield* insertRun("waiting", 1, "preparing");
 
     const status = yield* getServerIdleStatus();
     assert.isTrue(status.idle);
     assert.equal(status.busyThreadCount, 0);
-    assert.equal(status.queuedMessageCount, 1);
+    assert.equal(status.queuedMessageCount, 2);
     assert.equal(status.pendingUserInputCount, 1);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("names what keeps a release waiting, the user's questions first", () =>
+  Effect.gen(function* () {
+    yield* insertThread("turn", null, "Refactor the parser");
+    yield* insertRun("turn", 1, "running");
+    yield* insertThread("question", null, "M2 Office\nAttendance Patterns");
+    yield* insertRun("question", 1, "running");
+    yield* insertRequest("question", "user_input", "live");
+
+    const status = yield* getServerIdleStatus();
+    assert.equal(
+      formatIdleStatus(status, { json: false }),
+      [
+        "T3 Code is busy with 2 threads:",
+        '"M2 Office Attendance Patterns" (question) waits for an answer to its question',
+        '"Refactor the parser" (turn) is running a turn',
+      ].join("\n"),
+    );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
