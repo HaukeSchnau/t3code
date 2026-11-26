@@ -1,7 +1,7 @@
 /**
  * Placement of new threads across this environment and its linked peers
- * (patches/fleet-placement.md). Peers' load arrives every few seconds over their links; a launch
- * picks its machine at once and, when none has room, waits on the best one.
+ * (patches/fleet-placement.md). A preview or launch asks its peers for their load over their links;
+ * a launch picks its machine at once and, when none has room, waits on the best one.
  */
 import {
   CommandId,
@@ -64,7 +64,8 @@ export const PLACEMENT_REPORT_PATH = "/mcp/placement/report";
 export const PLACEMENT_LAUNCH_PATH = "/mcp/placement/launch";
 export const PLACEMENT_HYDRATE_PATH = "/mcp/placement/hydrate";
 
-const POLL_INTERVAL = "5 seconds";
+// A decision asks a peer for its load again once its report is older than this.
+const REPORT_REFRESH_MS = 5_000;
 const REPORT_TIMEOUT = Duration.seconds(3);
 // Finding the project there may resolve every project's repository for the first time.
 const MATCH_TIMEOUT = Duration.seconds(10);
@@ -209,7 +210,7 @@ export class Placement extends Context.Service<
       },
       PlacementError | Effect.Error<ReturnType<typeof ThreadMessageIntake.launchThread>>
     >;
-    /** Reads every linked peer's load every few seconds while this service lives. */
+    /** Resumes the threads that waited for room when the server stopped. */
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("t3/placement/Placement") {}
@@ -487,11 +488,11 @@ const make = Effect.gen(function* () {
     return report;
   });
 
-  const poll = Effect.gen(function* () {
-    if (!(yield* links.enabled)) return;
+  /** The stored, unexpired links, keeping each peer's last report. */
+  const readRoster = Effect.gen(function* () {
     const now = yield* DateTime.now;
     const read = yield* links.stored.pipe(Effect.option);
-    // An unreadable roster keeps the peers and reports already known until the next poll.
+    // An unreadable roster keeps the peers and reports already known.
     if (Option.isNone(read)) return yield* Effect.logWarning("Placement could not read its links");
     const stored = read.value.filter((link) => DateTime.isGreaterThan(link.expiresAt, now));
     yield* Ref.update(peers, (current) => {
@@ -508,12 +509,7 @@ const make = Effect.gen(function* () {
       }
       return next;
     });
-    yield* Effect.forEach(
-      stored,
-      (link) => probe(link.environmentId, link.label).pipe(Effect.ignore),
-      { concurrency: "unbounded", discard: true },
-    );
-  }).pipe(Effect.withSpan("Placement.poll"));
+  });
 
   /** Threads that waited for room when the server stopped wait again. */
   const resumeWaiting = Effect.gen(function* () {
@@ -541,21 +537,7 @@ const make = Effect.gen(function* () {
     Effect.retry(Schedule.spaced(RESUME_RETRY_INTERVAL)),
   );
 
-  const start: Placement["Service"]["start"] = () =>
-    forkParked(
-      Effect.all(
-        [
-          resumeWaiting,
-          poll.pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Placement could not read peer load", cause),
-            ),
-            Effect.repeat(Schedule.spaced(POLL_INTERVAL)),
-          ),
-        ],
-        { concurrency: 2, discard: true },
-      ),
-    );
+  const start: Placement["Service"]["start"] = () => forkParked(resumeWaiting);
 
   const sentLaunches = (environmentId: EnvironmentId, now: number) => {
     const recent = (sent.get(environmentId) ?? []).filter(
@@ -610,26 +592,35 @@ const make = Effect.gen(function* () {
   ) {
     let report = state.report;
     let receivedAt = state.receivedAt;
-    let projectId: ProjectId | null = null;
+    const key = match.kind === "scratch" ? undefined : `${environmentId} ${matchKey(match)}`;
+    const known = key === undefined ? undefined : matches.get(key);
+    const matchKnown = key === undefined || (known !== undefined && now - known.at < MATCH_TTL_MS);
+    let projectId: ProjectId | null = matchKnown ? (known?.projectId ?? null) : null;
     let answered = true;
-    if (match.kind !== "scratch") {
-      const key = `${environmentId} ${matchKey(match)}`;
-      const known = matches.get(key);
-      if (known !== undefined && now - known.at < MATCH_TTL_MS) {
-        projectId = known.projectId;
-      } else {
-        const fresh = yield* probe(environmentId, state.label, match).pipe(Effect.option);
-        answered = Option.isSome(fresh);
-        if (Option.isSome(fresh)) {
-          // Load from the newest report, which an older probe that answered late never replaced;
-          // the match from the newest answer about it.
-          const latest = (yield* Ref.get(peers)).get(environmentId);
-          report = latest?.report ?? fresh.value;
-          receivedAt = latest?.receivedAt ?? (yield* Clock.currentTimeMillis);
+    if (
+      !matchKnown ||
+      report === null ||
+      // The clock now, not `now`: the project and roster reads before this take time.
+      (yield* Clock.currentTimeMillis) - receivedAt >= REPORT_REFRESH_MS
+    ) {
+      const fresh = yield* probe(environmentId, state.label, matchKnown ? undefined : match).pipe(
+        Effect.option,
+      );
+      if (!matchKnown) answered = Option.isSome(fresh);
+      if (Option.isSome(fresh)) {
+        // Load from the newest report, which an older probe that answered late never replaced;
+        // the match from the newest answer about it.
+        const latest = (yield* Ref.get(peers)).get(environmentId);
+        report = latest?.report ?? fresh.value;
+        receivedAt = latest?.receivedAt ?? (yield* Clock.currentTimeMillis);
+        if (!matchKnown && key !== undefined) {
           // The newest answer about it, which the probe just recorded unless a newer one won.
           const cached = matches.get(key);
           projectId = cached === undefined ? (fresh.value.projectId ?? null) : cached.projectId;
         }
+      } else if (matchKnown) {
+        // A peer that just failed to answer is not placed on its older report.
+        report = null;
       }
     }
     const unavailable = (reason: string) => ({ unavailable: reason });
@@ -723,6 +714,7 @@ const make = Effect.gen(function* () {
             : 1,
     };
     const enabled = yield* links.enabled;
+    if (enabled) yield* readRoster;
     const peerEntries = enabled ? [...(yield* Ref.get(peers)).entries()] : [];
     const peerOptions = yield* Effect.forEach(
       peerEntries,
