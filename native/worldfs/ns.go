@@ -96,12 +96,15 @@ func threadNamespaces(key, hostMnt uint64) []namespace {
 		if m == 0 || seen[m] {
 			continue
 		}
-		seen[m] = true
 		u, k, err := ownerOf(pid)
-		if err != nil {
-			continue
+		if err != nil || mntnsOf(pid) != m {
+			if u != nil {
+				u.Close()
+			}
+			continue // pid exited or moved; another process in m answers for it
 		}
 		u.Close()
+		seen[m] = true
 		if k == key {
 			out = append(out, namespace{mnt: m, pid: pid})
 		}

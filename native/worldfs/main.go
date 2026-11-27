@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,7 +20,8 @@ import (
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   worldfs daemon --cache DIR --state DIR [--socket PATH] [policy flags]
-  worldfs ctl [--socket PATH] JSON     send one request to the daemon`)
+  worldfs ctl [--socket PATH] JSON     send one request to the daemon
+  worldfs version                      print the revision`)
 	os.Exit(2)
 }
 
@@ -40,6 +40,8 @@ func main() {
 			usage()
 		}
 		os.Exit(ctlClient(*socket, []byte(fl.Arg(0))))
+	case "version":
+		fmt.Println(revision)
 	case "ns-mount":
 		// Internal: runs inside a thread namespace, see ns.go.
 		if err := nsMount(); err != nil {
@@ -77,10 +79,16 @@ func daemon(args []string) {
 	hostMnt := mntnsOf(os.Getpid())
 	m := newMachine(*cache, *state, *socket, p, realNS{nsHelper{self: self, hostMnt: hostMnt}})
 	m.hostMnt = hostMnt
+	m.release = releaseCommand(os.Args[0])
 	for _, d := range []string{*state, filepath.Dir(*socket)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			log.Fatal(err)
 		}
+	}
+	// Callers of an upgrading daemon wait in its listener's backlog. A
+	// fresh daemon opens the socket once it is ready.
+	if m.listener, err = inheritedListener(*socket); err != nil {
+		log.Fatal(err)
 	}
 	if err := m.load(); err != nil {
 		log.Fatal(err)
@@ -109,26 +117,31 @@ func daemon(args []string) {
 		m.sync(t)
 	}
 
-	_ = os.Remove(*socket)
-	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: *socket, Net: "unix"})
-	if err != nil {
-		log.Fatal(err)
+	if m.listener == nil {
+		if m.listener, err = listen(*socket); err != nil {
+			log.Fatal(err)
+		}
 	}
-	go m.serve(l)
-	log.Printf("worldfs: %d worlds, %d threads, views at %s, socket %s", len(m.worlds), len(threads), m.views, *socket)
+	m.startServing()
+	log.Printf("worldfs %s: %d worlds, %d threads, views at %s, socket %s", revision, len(m.worlds), len(threads), m.views, *socket)
 
 	go func() {
 		for range time.Tick(*poll) {
+			m.periodic.Lock()
 			for w, names := range m.refreshCatalogs() {
 				log.Printf("catalog %s: %d repos moved", w, len(names))
 				m.advance(w, names)
 			}
+			m.followRelease()
+			m.periodic.Unlock()
 		}
 	}()
 	go func() {
 		for range time.Tick(time.Minute) {
+			m.periodic.Lock()
 			m.closeIdle()
 			m.dropUnused()
+			m.periodic.Unlock()
 		}
 	}()
 	go func() {
@@ -150,7 +163,7 @@ func daemon(args []string) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	l.Close()
+	m.listener.Close()
 	// Lazily: thread namespaces still hold binds, and the next daemon
 	// replaces them (see recover and sync).
 	if err := exec.Command("fusermount3", "-u", "-z", m.views).Run(); err != nil {
