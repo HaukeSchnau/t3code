@@ -68,6 +68,17 @@ notion of any of it.
   between. agent-exec asks the daemon again and keeps everything on a refusal. Explicit deletion
   goes through `ManagedWorkspaces.removeWorktree`, which retires the same way. An unregistered
   thread world goes only by removing empty directories, so any file keeps it.
+- **Private state.** Teardown keeps the thread world's private home for a thread that resumes.
+  Each sweep reads the deleted threads' `worktreePath`s. For each root among them, or torn
+  down by the sweep, that no thread that isn't deleted names and that is gone from disk, it
+  runs `agent-exec forget-state`, one call for all of them (`rootsToForget` in
+  `world/worldTeardown.ts`). Reading the deleted threads every sweep finds a root whether it
+  was torn down before or after its last thread was deleted, and a root whose state is gone
+  isn't asked about again in that process. Roots are matched by path, not settings, so a world
+  removed from settings keeps its settled threads' state.
+  Only thread worlds are covered. A separate project keeps its state on purpose, so re-adding
+  its root resumes it, and an isolated workspace whose retire failed still has the registration
+  that keeps it.
 - **No world, no host.** A provider session whose cwd is a world's project root, as for a thread
   whose world could not be created, is refused instead of running on the host.
 
@@ -117,7 +128,8 @@ around them:
   `orchestration-v2/CheckpointCaptureService.ts` (one `turnEnded` after the jj seal), `ProviderSessionManager.ts`
   (one `ensure` before the workspace check), `Adapters/ClaudeAdapterV2.ts` (the PreToolUse
   matcher), `vcs/VcsStatusBroadcaster.ts`, `ProjectStore.ts`, `ProjectCommands.ts`,
-  `ProjectService.ts`, `mcp/WorktreeMcpService.ts`, `server.ts`.
+  `ProjectService.ts`, `mcp/WorktreeMcpService.ts`, `server.ts`, and a `deleted` option on
+  `orchestration-v2/ProjectionStore.ts`'s `getThreadWorktreePaths` (deleted threads' roots).
 - server `orchestration-v2/WorldRepoSync.ts` (fork-only) and its line in `runtimeLayer.ts`;
   `ThreadManagementService.ts` strips the server-only field from client commands; `ws.ts` sends
   `worldNamespaces` in the server config (contracts `server.ts`).

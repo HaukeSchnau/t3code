@@ -50,6 +50,11 @@ agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.
   commits its remote lacks. A key is torn down only once the daemon has
   accepted it for this ROOT. It keeps the private home, so a thread resumed in the same ROOT
   keeps its provider sessions.
+- `forget-state ROOT...` removes that private home once nothing will resume there: for each
+  ROOT without a registration it stops the root's units and removes its state the way retire
+  does, under the lock registration takes, and finishes a removal that failed after its rename.
+  A ROOT with a registration keeps everything. It prints each ROOT's outcome (`removed`,
+  `absent`, `registered`, `failed`), so T3 runs it once for many roots.
 
 T3's side, world projects, thread worlds, Claude's checkout hook and the thread's world state,
 is in [Worlds](worlds.md).

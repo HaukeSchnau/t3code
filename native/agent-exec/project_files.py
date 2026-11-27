@@ -1,5 +1,6 @@
 """Lazy directory views with private, independent checkouts at repository boundaries."""
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -171,14 +172,40 @@ def remove_checkout(runtime, record):
     remove_private_state(runtime, record)
 
 
-def remove_private_state(runtime, record):
+def forget_private_state(runtime, root):
+    """Removes the private state of a root with no registration, such as a thread world torn down
+    while its thread could still resume, once that thread is deleted.
+
+    Returns "removed", "absent", or "registered" for a root that has a registration, which keeps it.
+    """
+    root = Path(root).expanduser().resolve()
+    locks = runtime.STATE / "provision-locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    # Creating a registration holds this lock until its record is written.
+    with (locks / runtime.identity(root)).open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if runtime.record_path(root).exists():
+            return "registered"
+        record = {"root": str(root)}
+        # A removal that failed after its rename left the state under this name.
+        renamed = (runtime.STATE / "environments").glob(f".removed-{runtime.identity(root)}-*")
+        if not runtime.project_state(record).exists() and not any(renamed):
+            return "absent"
+        runtime.stop_unit("agent-exec-" + runtime.identity(root))
+        runtime.stop_unit("agent-env-" + runtime.identity(root) + ".slice")
+        # Another root's stuck removal must not keep failing this one's.
+        remove_private_state(runtime, record, only_own=True)
+        return "removed"
+
+
+def remove_private_state(runtime, record, only_own=False):
     """A deleted workspace leaves no private home, provider state or tool caches behind."""
     environments = runtime.STATE / "environments"
     state = runtime.project_state(record)
     if state.exists():
         # Under a fresh name, an interrupted removal cannot reach a later workspace at this root.
         state.rename(environments / f".removed-{state.name}-{uuid.uuid4().hex[:8]}")
-    for removed in environments.glob(".removed-*"):
+    for removed in environments.glob(f".removed-{state.name}-*" if only_own else ".removed-*"):
         # Private homes can hold read-only trees, such as Go's module cache.
         runtime.run(["chmod", "-R", "u+rwX", str(removed)], capture_output=True)
         shutil.rmtree(removed)

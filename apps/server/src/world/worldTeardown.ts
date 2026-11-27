@@ -62,3 +62,22 @@ export function teardownDecision(input: {
   }
   return { teardown: true };
 }
+
+/**
+ * The thread world roots whose private state goes now. Teardown keeps that state for a thread
+ * that resumes, so it goes only for a root no thread that isn't deleted names, once the root is
+ * gone, and only to agent-exec once per process.
+ */
+export function rootsToForget(input: {
+  /** Deleted threads' roots, and the roots this sweep tore down. */
+  readonly candidates: Iterable<string>;
+  /** The roots threads that aren't deleted name, archived ones included. */
+  readonly named: ReadonlySet<string>;
+  /** The roots whose state agent-exec already removed or found gone. */
+  readonly answered: ReadonlySet<string>;
+  readonly onDisk: (root: string) => boolean;
+}): ReadonlyArray<string> {
+  return [...new Set(input.candidates)].filter(
+    (root) => !input.named.has(root) && !input.answered.has(root) && !input.onDisk(root),
+  );
+}

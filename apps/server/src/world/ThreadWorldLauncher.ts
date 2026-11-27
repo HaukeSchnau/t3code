@@ -10,7 +10,11 @@ import * as Schema from "effect/Schema";
 
 import { readSeparateProject } from "../project/SeparateProjectRegistry.ts";
 import { isolatedWorkspacesAvailable } from "../workspace/IsolatedWorkspaces.ts";
-import { ManagedWorkspaceError, runWorkspaceCommandOrFail } from "../workspace/WorkspaceCommand.ts";
+import {
+  ManagedWorkspaceError,
+  runWorkspaceCommand,
+  runWorkspaceCommandOrFail,
+} from "../workspace/WorkspaceCommand.ts";
 import { worldThreadKey } from "./threadWorldPaths.ts";
 
 const decodeRegistration = Schema.decodeEffect(
@@ -110,6 +114,39 @@ export const pushThreadWorldNotes = Effect.fn("ThreadWorlds.pushNotes")(function
     args: ["world-notes", root],
     timeout: "2 minutes",
   });
+});
+
+const decodeForgotten = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Record(Schema.String, Schema.Literals(["removed", "absent", "registered", "failed"])),
+  ),
+);
+
+/**
+ * `agent-exec forget-state`: removes the private state of thread worlds that have no
+ * registration, and keeps it for any that has one. Returns each root's outcome.
+ */
+export const forgetThreadWorldState = Effect.fn("ThreadWorlds.forgetState")(function* (
+  roots: ReadonlyArray<string>,
+) {
+  const launcher = yield* requireLauncher("ThreadWorlds.forgetState");
+  const result = yield* runWorkspaceCommand({
+    operation: "ThreadWorlds.forgetState",
+    command: launcher,
+    args: ["forget-state", ...roots],
+    timeout: "10 minutes",
+  });
+  // A root that fails fails the command too, but stdout still has every root's outcome.
+  const outcomes = yield* decodeForgotten(result.stdout).pipe(
+    Effect.mapError((cause) =>
+      fail(
+        "ThreadWorlds.forgetState",
+        result.stderr.trim() || "agent-exec returned unreadable outcomes.",
+        cause,
+      ),
+    ),
+  );
+  return { outcomes, errors: result.stderr.trim() };
 });
 
 /**
