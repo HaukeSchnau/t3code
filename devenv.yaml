@@ -1,6 +1,6 @@
 inputs:
   projectSdk:
-    url: github:HaukeSchnau/nix-infra-modules/c08469c9ed76a0e2223cb6bf1ac624580be6f98c
+    url: github:HaukeSchnau/projects-sdk/v0.1.0
     flake: false
   nixpkgs:
     url: github:NixOS/nixpkgs/331800de5053fcebacf6813adb5db9c9dca22a0c
