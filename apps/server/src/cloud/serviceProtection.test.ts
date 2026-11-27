@@ -23,7 +23,6 @@ const temporaryDirectory = () =>
 describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivilegedScript", () => {
   it("writes and removes only its drop-ins and gives running main processes their score", () => {
     const root = temporaryDirectory();
-    const target = NodeChildProcess.spawn("sleep", ["60"], { stdio: "ignore" });
     try {
       const systemUnitDir = NodePath.join(root, "system");
       const plan = (uid: number, remoteAccessUnits: ReadonlyArray<string>) =>
@@ -47,20 +46,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       NodeFS.writeFileSync(unrelated, "[Service]\nNice=1\n");
       const bin = NodePath.join(root, "bin");
       NodeFS.mkdirSync(bin);
-      // Raising a score needs no privilege, so the test's own child stands in for a main process.
-      // CI jobs already run at 1000, so the score never goes below the child's own.
-      const score = Math.max(
-        900,
-        Number(NodeFS.readFileSync(`/proc/${target.pid}/oom_score_adj`, "utf8")),
-      );
+      // The kernel keeps a process from lowering a score a privileged parent set, as CI's units do,
+      // so the script writes the main process's score into a stand-in for /proc.
+      const proc = NodePath.join(root, "proc");
+      const mainPid = 4242;
+      const scoreFile = NodePath.join(proc, String(mainPid), "oom_score_adj");
+      NodeFS.mkdirSync(NodePath.dirname(scoreFile), { recursive: true });
+      NodeFS.writeFileSync(scoreFile, "0\n");
       NodeFS.writeFileSync(
         NodePath.join(bin, "systemctl"),
         [
           "#!/bin/sh",
           'echo "$*" >>"$CALLS"',
           'case "$*" in',
-          '  *MainPID*) echo "$TARGET_PID" ;;',
-          '  *OOMScoreAdjust*) echo "$SCORE" ;;',
+          '  *MainPID*) echo "$MAIN_PID" ;;',
+          "  *OOMScoreAdjust*) echo 900 ;;",
           "esac",
           "",
         ].join("\n"),
@@ -68,20 +68,19 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       );
       const calls = NodePath.join(root, "calls");
       const runScript = (protection: ServiceProtection.ProtectionPlan, mode: "apply" | "undo") => {
-        const result = NodeChildProcess.spawnSync(
-          "/bin/sh",
-          ["-c", ServiceProtection.renderPrivilegedScript(protection, mode)],
-          {
-            encoding: "utf8",
-            env: {
-              // NixOS has no coreutils in /usr/bin or /bin.
-              PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ""}`,
-              CALLS: calls,
-              TARGET_PID: String(target.pid),
-              SCORE: String(score),
-            },
+        const script = ServiceProtection.renderPrivilegedScript(protection, mode);
+        const redirected = script.replaceAll('"/proc/$pid/', '"$PROC_ROOT/$pid/');
+        expect(redirected).not.toBe(script);
+        const result = NodeChildProcess.spawnSync("/bin/sh", ["-c", redirected], {
+          encoding: "utf8",
+          env: {
+            // NixOS has no coreutils in /usr/bin or /bin.
+            PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ""}`,
+            CALLS: calls,
+            MAIN_PID: String(mainPid),
+            PROC_ROOT: proc,
           },
-        );
+        });
         expect(result.stderr).toBe("");
         expect(result.status).toBe(0);
       };
@@ -93,9 +92,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       for (const { path, contents } of theo.system) {
         expect(NodeFS.readFileSync(path, "utf8")).toBe(contents);
       }
-      expect(NodeFS.readFileSync(`/proc/${target.pid}/oom_score_adj`, "utf8").trim()).toBe(
-        String(score),
-      );
+      expect(NodeFS.readFileSync(scoreFile, "utf8").trim()).toBe("900");
       expect(NodeFS.readFileSync(calls, "utf8").split("\n")[0]).toBe("daemon-reload");
 
       // Undo removes every drop-in a user could own, and keeps shared ones while another user is protected.
@@ -111,7 +108,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       expect(NodeFS.existsSync(NodePath.join(systemUnitDir, "user.slice.d"))).toBe(false);
       expect(NodeFS.readFileSync(unrelated, "utf8")).toBe("[Service]\nNice=1\n");
     } finally {
-      target.kill();
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
   });
