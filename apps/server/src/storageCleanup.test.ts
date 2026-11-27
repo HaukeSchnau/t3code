@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import type * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Stream from "effect/Stream";
 import { SCAN_CACHE_FILE_NAME } from "./usage/usageScanCache.ts";
 import { TestClock } from "effect/testing";
@@ -22,6 +23,7 @@ import { checkpointRefForScopeOrdinal } from "./orchestration-v2/CheckpointServi
 import {
   DEFAULT_SERVER_SETTINGS,
   type WorktreeKeepWhen,
+  type StorageCleanupReportEntry,
   type StorageCleanupSettings,
   type TerminalMetadataStreamEvent,
   type TerminalSummary,
@@ -63,8 +65,10 @@ import * as DateTime from "effect/DateTime";
 import {
   storageCleanupActivityAt,
   storageCleanupPullRequestMerged,
+  storageCleanupPullRequestsMerged,
   storageCleanupThreadIdle,
 } from "./storageCleanup.ts";
+import * as ProcessRunner from "./processRunner.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -692,6 +696,7 @@ const runCleanupTest = <A, E>(
     | GitVcsDriver.GitVcsDriver
     | Path.Path
     | Scope.Scope
+    | ChildProcessSpawner.ChildProcessSpawner
   >,
 ) => effect.pipe(Effect.provide(cleanupTestLayer));
 
@@ -4445,3 +4450,176 @@ it.effect("keeps saved usage data when removing a settled checkout", () =>
     }),
   ),
 );
+
+describe("managed workspaces", () => {
+  const jjFixture = Effect.fn("test.jjFixture")(function* (
+    fixture: Effect.Success<ReturnType<typeof cleanupFixture>>,
+  ) {
+    const runner = yield* ProcessRunner.make();
+    const jj = (cwd: string, ...args: ReadonlyArray<string>) =>
+      runner
+        .run({ command: "jj", args: ["--no-pager", "--color=never", ...args], cwd })
+        .pipe(
+          Effect.flatMap((result) =>
+            result.code === 0
+              ? Effect.succeed(result.stdout.trim())
+              : Effect.die(new Error(`jj ${args.join(" ")}: ${result.stderr}`)),
+          ),
+        );
+    const base = yield* fixture.fs.realPath(
+      yield* fixture.fs.makeTempDirectoryScoped({ prefix: "cleanup-jj-" }),
+    );
+    const remote = `${base}/remote.git`;
+    yield* fixture.command(base, ["init", "--bare", remote]);
+    const repo = `${base}/app`;
+    yield* jj(base, "git", "init", repo);
+    yield* fixture.fs.writeFileString(`${repo}/README.md`, "hello\n");
+    yield* jj(repo, "commit", "-m", "init");
+    yield* jj(repo, "bookmark", "create", "main", "-r", "@-");
+    yield* jj(repo, "git", "remote", "add", "origin", remote);
+    yield* jj(repo, "git", "push", "--bookmark", "main");
+    const workspace = `${fixture.config.baseDir}/workspaces/app/settled-task`;
+    yield* fixture.fs.makeDirectory(`${fixture.config.baseDir}/workspaces/app`, {
+      recursive: true,
+    });
+    yield* jj(repo, "workspace", "add", "--name", "settled-task", workspace);
+    fixture.setProjectRoots([repo]);
+    fixture.setStoredWorktreePaths([]);
+    fixture.setThreads([shell({ worktreePath: workspace })]);
+    const pushFeature = Effect.gen(function* () {
+      yield* fixture.fs.writeFileString(`${workspace}/feature.txt`, "feature\n");
+      yield* jj(workspace, "commit", "-m", "feature");
+      yield* jj(workspace, "bookmark", "create", "feature", "-r", "@-");
+      yield* jj(workspace, "git", "push", "--bookmark", "feature");
+      return yield* jj(workspace, "log", "--no-graph", "-r", "@-", "-T", "commit_id");
+    });
+    const workspaceNames = jj(repo, "workspace", "list", "-T", 'name ++ "\\n"');
+    return { jj, repo, workspace, pushFeature, workspaceNames };
+  });
+  const outcomes = (report: { readonly entries: ReadonlyArray<StorageCleanupReportEntry> }) =>
+    report.entries.map(({ path, outcome, reason }) => ({ path, outcome, reason }));
+
+  it.effect("removes a jj workspace whose work a remote has, and records where it was", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture();
+        const { workspace, pushFeature, workspaceNames } = yield* jjFixture(fixture);
+        const pushed = yield* pushFeature;
+        const report = yield* fixture.service.runNow;
+        expect(outcomes(report)).toEqual([
+          { path: workspace, outcome: "removed", reason: "Inactive for 30 days" },
+        ]);
+        expect(yield* fixture.fs.exists(workspace)).toBe(false);
+        expect((yield* workspaceNames).split("\n")).toEqual(["default"]);
+        const records = `${fixture.config.stateDir}/removed-jj-workspaces`;
+        const [record] = yield* fixture.fs.readDirectory(records);
+        expect(JSON.parse(yield* fixture.fs.readFileString(`${records}/${record}`))).toEqual({
+          root: workspace,
+          name: "settled-task",
+          revisions: [pushed],
+        });
+      }),
+    ),
+  );
+
+  it.effect.each([
+    {
+      name: "an edit nobody committed",
+      write: { file: "draft.txt", bytes: 6 },
+      reason: /^Change [a-z]+ is not on a remote bookmark or tag$/,
+    },
+    {
+      name: "a file too large for jj to snapshot",
+      write: { file: "recording.bin", bytes: 2 * 1024 * 1024 },
+      reason: /^Has files jj did not snapshot$/,
+    },
+  ])("keeps a jj workspace with $name", ({ write, reason }) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture();
+        const { workspace, pushFeature } = yield* jjFixture(fixture);
+        yield* pushFeature;
+        yield* fixture.fs.writeFileString(`${workspace}/${write.file}`, "x".repeat(write.bytes));
+        const report = yield* fixture.service.runNow;
+        expect(outcomes(report)).toEqual([
+          { path: workspace, outcome: "kept", reason: expect.stringMatching(reason) },
+        ]);
+        expect(yield* fixture.fs.exists(`${workspace}/${write.file}`)).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("removes a finished jj workspace that adds nothing beyond trunk", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture({
+          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          worktreeUnchanged: true,
+        });
+        const { workspace } = yield* jjFixture(fixture);
+        fixture.setThreads([
+          shell({ worktreePath: workspace, archivedAt: at(-DAY_MS), status: "completed" }),
+        ]);
+        const report = yield* fixture.service.runNow;
+        expect(outcomes(report)).toEqual([
+          { path: workspace, outcome: "removed", reason: "No changes beyond trunk" },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect.each([
+    { name: "holds only node_modules", files: ["node_modules/left-pad/index.js"], kept: null },
+    { name: "holds files", files: ["notes.md"], kept: "Has local files (notes.md)" },
+  ])("handles a deleted No project thread's scratch folder that $name", ({ files, kept }) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture();
+        const scratchRoot = `${fixture.config.baseDir}/scratch`;
+        const folder = `${scratchRoot}/quiet-otter`;
+        for (const file of files) {
+          yield* fixture.fs.makeDirectory(`${folder}/${file.split("/").slice(0, -1).join("/")}`, {
+            recursive: true,
+          });
+          yield* fixture.fs.writeFileString(`${folder}/${file}`, "scratch\n");
+        }
+        fixture.setProjectRoots([scratchRoot]);
+        fixture.setStoredWorktreePaths([]);
+        fixture.setThreads([]);
+        fixture.setDeletedThreads([
+          shell({ worktreePath: folder, deletedAt: at(-DAY_MS), status: "completed" }),
+        ]);
+        const report = yield* fixture.service.runNow;
+        expect(outcomes(report).filter((entry) => entry.path === folder)).toEqual([
+          kept === null
+            ? { path: folder, outcome: "removed", reason: "Thread was deleted" }
+            : { path: folder, outcome: "kept", reason: kept },
+        ]);
+        expect(yield* fixture.fs.exists(folder)).toBe(kept !== null);
+      }),
+    ),
+  );
+
+  it("counts pull requests as merged only once none is open and one merged", () => {
+    const link = (state: "open" | "closed" | "merged" | null, source = "agent") => ({
+      pullRequests: [
+        {
+          source,
+          snapshot: state === null ? null : { state },
+        } as unknown as NonNullable<OrchestrationV2ThreadShell["pullRequests"]>[number],
+      ],
+    });
+    expect(storageCleanupPullRequestsMerged([link("merged"), link("closed")])).toBe(true);
+    expect(storageCleanupPullRequestsMerged([link("merged"), link("open")])).toBe(false);
+    expect(storageCleanupPullRequestsMerged([link("merged"), link(null)])).toBe(false);
+    expect(storageCleanupPullRequestsMerged([link("closed")])).toBe(false);
+    expect(storageCleanupPullRequestsMerged([{}])).toBe(false);
+    expect(
+      storageCleanupPullRequestsMerged([link("merged"), link("open", "stack-dismissed")]),
+    ).toBe(true);
+  });
+});
