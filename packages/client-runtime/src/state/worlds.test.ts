@@ -149,6 +149,29 @@ describe("fileProjectsIntoWorlds", () => {
     expect(filed.worldByProjectKey.has("dev-hauke:m2")).toBe(false);
   });
 
+  it("files a project under the innermost of nested world paths, whatever the project order", () => {
+    const nested = declaredWorldsFromConfigs(
+      new Map([
+        [
+          "srv-1",
+          {
+            settings: {
+              worlds: { schnau: { path: "/home/u" }, buildlinx: { path: "/home/u/Buildlinx" } },
+            },
+          },
+        ],
+      ]),
+    );
+    const umbrella = project("srv-1", "app", "/home/u/Buildlinx/app");
+    for (const order of [
+      [projects[0]!, projects[2]!, umbrella],
+      [projects[2]!, projects[0]!, umbrella],
+    ]) {
+      const filed = fileProjectsIntoWorlds({ projects: order, worlds: nested });
+      expect(filed.worldByProjectKey.get("srv-1:app")).toBe("buildlinx");
+    }
+  });
+
   it("files nothing without a world project", () => {
     expect(fileProjectsIntoWorlds({ projects: projects.slice(3), worlds })).toEqual({
       worlds: [],

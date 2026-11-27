@@ -154,10 +154,13 @@ export function fileProjectsIntoWorlds(input: {
     if (project.world != null) continue;
     const paths =
       input.worlds.pathsByEnvironment.get(project.environmentId) ?? input.worlds.anyPaths;
-    let world = [...titles.keys()].find((id) => {
-      const path = paths.get(id);
-      return path !== undefined && isUnder(project.workspaceRoot, path);
-    });
+    // When world paths nest, the innermost one that holds the project wins.
+    let world = [...titles.keys()]
+      .filter((id) => {
+        const path = paths.get(id);
+        return path !== undefined && isUnder(project.workspaceRoot, path);
+      })
+      .sort((left, right) => paths.get(right)!.length - paths.get(left)!.length)[0];
     if (world === undefined && project.repositoryIdentity) {
       const namespace = worldRepositoryNamespace(
         repositoryGroupingKeyOf(project.repositoryIdentity),
