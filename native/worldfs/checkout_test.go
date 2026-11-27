@@ -49,7 +49,7 @@ func TestCheckoutAndClose(t *testing.T) {
 	}
 	// Files carry the commit's time, so no index entry is racily clean.
 	st, _ := os.Stat(filepath.Join(dir, "README.md"))
-	if ct := run(t, dir, "git", "show", "-s", "--format=%ct", "HEAD"); fmt.Sprint(st.ModTime().Unix()) != ct {
+	if ct := run(t, dir, "git", "log", "-1", "--format=%ct", "HEAD"); fmt.Sprint(st.ModTime().Unix()) != ct {
 		t.Fatalf("README.md mtime %d, commit time %s", st.ModTime().Unix(), ct)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".jj", "repo")); err != nil {
@@ -240,10 +240,7 @@ func TestRefreshFollowsOnlyUntouchedThreads(t *testing.T) {
 		t.Fatal("no namespace was moved to the new view")
 	}
 	// A repo that joins the catalog gets a directory and a view in every thread.
-	w2 := newTestWorld(t, "example.com/x/new")
-	w.src["example.com/x/new"] = w2.src["example.com/x/new"]
-	run(t, "", "git", "init", "-q", "--bare", w.mirror("example.com/x/new"))
-	w.fetch(t, "example.com/x/new")
+	w.addRepo(t, "example.com/x/new")
 	w.writeCatalog(t)
 	m.worlds["w"].mtime = time.Time{}
 	changed = m.refreshCatalogs()
