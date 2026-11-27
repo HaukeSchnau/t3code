@@ -58,6 +58,12 @@ import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
+import { environmentServerConfigsAtom } from "../../state/server";
+import {
+  declaredWorldsFromConfigs,
+  fileProjectsIntoWorlds,
+  worldOfScopeKey,
+} from "@t3tools/client-runtime/state/worlds";
 import { withKnownPullRequestSummary } from "../../state/use-thread-pr";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { savedConnectionsByIdAtom } from "../../state/use-remote-environment-registry";
@@ -87,7 +93,11 @@ import { startOpeningDetail } from "./workspace/useSelectWorkspaceDetail";
 import { useWorkspaceTabs } from "./workspace/WorkspaceTabsContext";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "../home/homeThreadList";
-import { newTaskDestination, newTaskFilteredProject } from "../threads/new-task-project-selection";
+import {
+  newTaskDestination,
+  newTaskFilteredProject,
+  newTaskWorldProject,
+} from "../threads/new-task-project-selection";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { PaneContext } from "../../components/ui/Pane";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
@@ -630,6 +640,10 @@ function AdaptiveWorkspaceLayoutContent(
       buildHomeProjectScopes({ projects, environmentId: listEnvironmentId, projectGroupingMode }),
       projects,
       { selectedProjectKey: listFilters?.projectKey ?? null, projectGroupingMode },
+      fileProjectsIntoWorlds({
+        projects,
+        worlds: declaredWorldsFromConfigs(appAtomRegistry.get(environmentServerConfigsAtom)),
+      }),
     );
     const connectedEnvironmentIds = new Set(
       appAtomRegistry
@@ -637,21 +651,29 @@ function AdaptiveWorkspaceLayoutContent(
         .filter((environment) => environment.connectionState === "connected")
         .map((environment) => environment.environmentId),
     );
+    // The world the list shows decides where new work goes, over the open thread's project, as
+    // on web: its own project on any machine.
+    const world = filteredScope === null ? undefined : worldOfScopeKey(filteredScope.key);
+    const worldChosen = typeof world === "string";
     handleSelectThreadRoute(
       newTaskDestination({
         projects,
         requestId: uuidv4(),
         useLastProject: saved?.useLastProjectForNewThreads,
-        currentProject: environmentId && projectId ? { environmentId, projectId } : undefined,
-        filteredProject: filteredScope
-          ? newTaskFilteredProject(
-              filteredScope,
-              listEnvironmentId,
-              connectedEnvironmentIds,
-              saved?.lastThreadProject,
-            )
-          : undefined,
-        lastProject: saved?.lastThreadProject,
+        currentProject:
+          !worldChosen && environmentId && projectId ? { environmentId, projectId } : undefined,
+        filteredProject:
+          typeof world === "string"
+            ? newTaskWorldProject(projects, world, listEnvironmentId, connectedEnvironmentIds)
+            : filteredScope
+              ? newTaskFilteredProject(
+                  filteredScope,
+                  listEnvironmentId,
+                  connectedEnvironmentIds,
+                  saved?.lastThreadProject,
+                )
+              : undefined,
+        lastProject: worldChosen ? undefined : saved?.lastThreadProject,
       }),
     );
   };

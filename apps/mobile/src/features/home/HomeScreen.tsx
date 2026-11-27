@@ -98,6 +98,7 @@ import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-s
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
+  buildHomeWorldScopes,
   findHomeProjectScope,
   type HomeProjectSortOrder,
   sortHomeProjectScopes,
@@ -107,6 +108,8 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
+import { useWorldFiling, worldColorFor, worldFilingKey } from "./worldFiling";
+import { worldShortTitle } from "@t3tools/client-runtime/state/worlds";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
 
@@ -350,11 +353,12 @@ export function HomeScreen(props: HomeScreenProps) {
   })();
 
   const v2ProjectScopeKey = props.selectedProjectKey;
+  const worldFiling = useWorldFiling();
+  const worldScopes = buildHomeWorldScopes(projectScopes, worldFiling, m);
   // An archived project's filter reads as all projects, matching the filter menu.
-  const v2ScopedProjectGroup = findHomeProjectScope(
-    pickableProjectGroups(projectScopes),
-    v2ProjectScopeKey,
-  );
+  const v2ScopedProjectGroup =
+    worldScopes.find((scope) => scope.key === v2ProjectScopeKey) ??
+    findHomeProjectScope(pickableProjectGroups(projectScopes), v2ProjectScopeKey);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
@@ -571,6 +575,10 @@ export function HomeScreen(props: HomeScreenProps) {
         timeLabel={item.timeLabel}
         showTrailingDivider={item.showTrailingDivider}
         project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
+        worldColor={worldColorFor(
+          worldFiling,
+          scopedProjectKey(thread.environmentId, thread.projectId),
+        )}
         providerInstance={resolveProviderInstance(thread)}
         providers={providersByEnvironmentId.get(thread.environmentId)}
         environmentLabel={
@@ -631,6 +639,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // extraData changes invalidate every visible row; put the minute clock on items to limit updates.
   const v2ExtraData = {
     activeNewTask,
+    worldFilingKey: worldFilingKey(worldFiling),
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
     listEnvironments,
@@ -715,6 +724,10 @@ export function HomeScreen(props: HomeScreenProps) {
       {Platform.OS === "ios" && workspace ? (
         <ThreadListFilters
           gutter={sidebarSurface ? 8 : 0}
+          worlds={worldScopes.map((scope) => ({
+            key: scope.key,
+            label: worldShortTitle(scope.title),
+          }))}
           environments={props.environments}
           projects={pickableProjectGroups(
             sortHomeProjectScopes({

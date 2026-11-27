@@ -12753,6 +12753,10 @@
       "v": "v"
     }
   ],
+  "2253d131ab9b959f": "Mundos",
+  "ca3d234e8af0ec7c": "Mostrar solo {world}",
+  "fbd3beda7ee0a8b3": "Mostrar solo los hilos fuera de los mundos",
+  "1d12b03128c7cd43": "{dir}: contiene trabajo que no está en ningún remoto",
   "e7f35f60e6229cf5": "App de escritorio",
   "77be1b7e2a1d3d31": "{count, plural, one {¿Actualizar {count} máquina?} other {¿Actualizar {count} máquinas?}}",
   "e4892b21e88abb60": "{count, plural, one {{count} actualización de proveedor} other {{count} actualizaciones de proveedores}}",

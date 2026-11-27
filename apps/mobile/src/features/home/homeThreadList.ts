@@ -17,8 +17,14 @@ import type {
   SidebarProjectGroupingMode,
   SidebarProjectSortOrder,
 } from "@t3tools/contracts";
+import {
+  type WorldFiling,
+  worldOfScopeKey,
+  worldScopeKey,
+} from "@t3tools/client-runtime/state/worlds";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
+import { msg } from "gt-react-native";
 
 import { m, type MessageResolver } from "../../i18n/messages";
 import { scopedProjectKey } from "../../lib/scopedEntities";
@@ -89,7 +95,18 @@ export function resolveHomeProjectFilterScope(
     readonly selectedProjectKey: string | null;
     readonly projectGroupingMode: SidebarProjectGroupingMode;
   },
+  filing?: WorldFiling,
+  resolve: MessageResolver = m,
 ): HomeProjectScope | null {
+  if (filing !== undefined && options.selectedProjectKey !== null) {
+    if (worldOfScopeKey(options.selectedProjectKey) !== undefined) {
+      return (
+        buildHomeWorldScopes(scopes, filing, resolve).find(
+          (scope) => scope.key === options.selectedProjectKey,
+        ) ?? null
+      );
+    }
+  }
   // A legacy per-environment scratch key resolves here; the stored value is only
   // rewritten when the user picks a filter.
   const key = resolveScratchProjectScopeKey(options.selectedProjectKey, projects, {
@@ -175,4 +192,50 @@ export function sortHomeProjectScopes(input: {
       }),
     ),
   );
+}
+
+/**
+ * A filter scope per world, and one for threads in no world, each merging the project scopes
+ * filed there (patches/worlds.md), so the list's project filter can stand for a whole world.
+ */
+export function buildHomeWorldScopes(
+  scopes: ReadonlyArray<HomeProjectScope>,
+  filing: WorldFiling,
+  resolve: MessageResolver = m,
+): ReadonlyArray<HomeProjectScope> {
+  if (filing.worlds.length === 0) return [];
+  // Each ref by its own filing: a repository's clones can sit in different worlds.
+  const worldOf = (environmentId: string, projectId: string) =>
+    filing.worldByProjectKey.get(`${environmentId}:${projectId}`) ?? null;
+  const live = scopes.filter((scope) => !scope.archived);
+  const buckets: ReadonlyArray<{ readonly id: string | null; readonly title: string }> = [
+    ...filing.worlds,
+    { id: null, title: resolve(msg("Outside worlds")) },
+  ];
+  return buckets.flatMap(({ id, title }) => {
+    const members = live.filter((scope) =>
+      scope.projectRefs.some((ref) => worldOf(ref.environmentId, ref.projectId) === id),
+    );
+    if (members.length === 0) return [];
+    const projectRefs = members.flatMap((scope) =>
+      scope.projectRefs.filter((ref) => worldOf(ref.environmentId, ref.projectId) === id),
+    );
+    const projects = members.flatMap((scope) =>
+      scope.projects.filter((project) => worldOf(project.environmentId, project.id) === id),
+    );
+    return [
+      {
+        key: worldScopeKey(id),
+        title,
+        representative:
+          projects.find((project) => project.world != null) ??
+          projects[0] ??
+          members[0]!.representative,
+        projects,
+        projectRefs,
+        pinned: false,
+        archived: false,
+      },
+    ];
+  });
 }

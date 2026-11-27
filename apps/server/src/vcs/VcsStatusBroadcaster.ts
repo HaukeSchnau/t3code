@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type {
   GitManagerServiceError,
+  ThreadWorldRepo,
   VcsStatusInput,
   VcsBranchStatus,
   VcsStatusLocalResult,
@@ -27,6 +28,7 @@ import type {
   VcsStatusResult,
   VcsStatusStreamEvent,
   VcsStatusSubscriptionInput,
+  WorldThreadStatus,
 } from "@t3tools/contracts";
 import { DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL } from "@t3tools/contracts";
 import { mergeGitStatusParts } from "@t3tools/shared/git";
@@ -36,6 +38,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as JjStatusReader from "../jj/JjStatusReader.ts";
+import { threadWorldRepos } from "../world/worldStatus.ts";
 import { WorldThreadHooks } from "../world/WorldThreadHooks.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -224,6 +227,11 @@ export class VcsStatusBroadcaster extends Context.Service<
       readonly cwd: string;
       readonly refName: string | null;
     }>;
+    /** A thread world's checked-out repos, at every local status read that finds some. */
+    readonly streamWorldRepoChanges: Stream.Stream<{
+      readonly cwd: string;
+      readonly repos: ReadonlyArray<ThreadWorldRepo>;
+    }>;
     readonly getStatus: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
@@ -265,6 +273,17 @@ export const make = Effect.gen(function* () {
   const workflow = yield* GitWorkflowService.GitWorkflowService;
   const jjStatus = yield* JjStatusReader.JjStatusReader;
   const worlds = yield* WorldThreadHooks;
+  const worldReposPubSub = yield* Effect.acquireRelease(
+    PubSub.unbounded<{ readonly cwd: string; readonly repos: ReadonlyArray<ThreadWorldRepo> }>(),
+    (pubsub) => PubSub.shutdown(pubsub),
+  );
+  const publishWorldRepos = Effect.fn("VcsStatusBroadcaster.publishWorldRepos")(function* (
+    cwd: string,
+    world: WorldThreadStatus,
+  ) {
+    const repos = threadWorldRepos(world);
+    if (repos !== undefined) yield* PubSub.publish(worldReposPubSub, { cwd, repos });
+  });
   // jj working copies add their jj block; one without a Git worktree has no remote status.
   // A thread world adds its world block (patches/worlds.md).
   const localStatusFor = (cwd: string, options?: Parameters<typeof workflow.localStatus>[1]) =>
@@ -272,8 +291,10 @@ export const make = Effect.gen(function* () {
       .localStatus(cwd, workflow.localStatus({ cwd }, options))
       .pipe(
         Effect.flatMap((local) =>
-          Effect.map(worlds.status(cwd), (world) =>
-            world === undefined ? local : { ...local, world },
+          Effect.flatMap(worlds.status(cwd), (world) =>
+            world === undefined
+              ? Effect.succeed(local)
+              : Effect.as(publishWorldRepos(cwd, world), { ...local, world }),
           ),
         ),
       );
@@ -1349,6 +1370,7 @@ export const make = Effect.gen(function* () {
     streamBranchChanges: Stream.fromPubSub(branchChangesPubSub).pipe(
       Stream.map(({ cwd, refName }) => ({ cwd, refName })),
     ),
+    streamWorldRepoChanges: Stream.fromPubSub(worldReposPubSub),
     getStatus,
     refreshLocalStatus,
     refreshAfterCheckout,

@@ -1,4 +1,5 @@
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
+import * as WorldRepoSync from "./WorldRepoSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as CodexOverloadRetryWorker from "./CodexOverloadRetryWorker.ts";
@@ -456,6 +457,7 @@ export const layerProduction = Layer.mergeAll(
   WorktreeBranchSync.layer.pipe(
     Layer.provide(Layer.merge(layerThreadManagementProvided, ProjectionStore.layer)),
   ),
+  WorldRepoSync.layer.pipe(Layer.provide(layerThreadManagementProvided)),
   layer,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,

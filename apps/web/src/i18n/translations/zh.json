@@ -12784,6 +12784,10 @@
     },
     " 中的更改"
   ],
+  "2253d131ab9b959f": "世界",
+  "ca3d234e8af0ec7c": "仅显示{world}",
+  "fbd3beda7ee0a8b3": "仅显示世界之外的会话",
+  "1d12b03128c7cd43": "{dir}：包含任何远端都没有的工作",
   "e7f35f60e6229cf5": "桌面应用",
   "77be1b7e2a1d3d31": "{count, plural, other {更新 {count} 台机器？}}",
   "e4892b21e88abb60": "{count, plural, other {{count} 个提供方更新}}",

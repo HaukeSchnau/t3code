@@ -12766,6 +12766,10 @@
       "v": "v"
     }
   ],
+  "2253d131ab9b959f": "Världar",
+  "ca3d234e8af0ec7c": "Visa bara {world}",
+  "fbd3beda7ee0a8b3": "Visa bara trådar utanför världarna",
+  "1d12b03128c7cd43": "{dir}: innehåller arbete som inte finns på någon remote",
   "e7f35f60e6229cf5": "Skrivbordsapp",
   "77be1b7e2a1d3d31": "{count, plural, one {Uppdatera {count} dator?} other {Uppdatera {count} datorer?}}",
   "e4892b21e88abb60": "{count, plural, one {{count} leverantörsuppdatering} other {{count} leverantörsuppdateringar}}",
