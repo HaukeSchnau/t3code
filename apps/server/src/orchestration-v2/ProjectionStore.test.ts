@@ -2385,6 +2385,9 @@ const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
     { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
     { threadId: ThreadId.make("thread:archived"), worktreePath: "/worktrees/archived" },
   ]);
+  assert.deepEqual(yield* store.getThreadWorktreePaths({ deleted: true }), [
+    { threadId: deleted.id, worktreePath: "/worktrees/deleted" },
+  ]);
   assert.deepEqual(
     yield* store.getThreadLinkMetadata([
       deleted.id,

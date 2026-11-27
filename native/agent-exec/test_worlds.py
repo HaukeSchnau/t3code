@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import agent_exec as runtime
+import project_files
 import workspaces
 import worlds
 
@@ -233,6 +234,25 @@ class ThreadWorldTests(unittest.TestCase):
         self.assertFalse(runtime.record_path(root).exists())
         # A thread resumed in the same root keeps its provider sessions.
         self.assertTrue(state.exists())
+
+    def test_forgetting_state_removes_it_only_where_nothing_is_registered(self):
+        torn_down = self.create()
+        worlds.teardown(runtime, torn_down)
+        live = self.create("live", thread="t3-live")
+        identity = runtime.identity(torn_down["root"])
+        stopped = []
+        with patch.object(runtime, "stop_unit", side_effect=stopped.append):
+            forget = lambda record: project_files.forget_private_state(runtime, record["root"])
+            self.assertEqual(forget(torn_down), "removed")
+            self.assertEqual(stopped, [f"agent-exec-{identity}", f"agent-env-{identity}.slice"])
+            # What a removal that failed after its rename leaves; asking again finishes it, and
+            # leaves other roots' removals to theirs.
+            (runtime.STATE / "environments" / f".removed-{identity}-failed/home").mkdir(parents=True)
+            (runtime.STATE / "environments" / ".removed-other-failed").mkdir()
+            self.assertEqual([forget(torn_down), forget(torn_down), forget(live)],
+                             ["removed", "absent", "registered"])
+        self.assertEqual(sorted(path.name for path in (runtime.STATE / "environments").iterdir()),
+                         [".removed-other-failed", runtime.identity(live["root"])])
 
     def world_repo(self):
         """A remote world repo, and a second clone that stands for another thread."""

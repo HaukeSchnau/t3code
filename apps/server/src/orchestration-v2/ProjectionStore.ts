@@ -713,6 +713,8 @@ export interface ProjectionStoreV2Shape {
   ) => Effect.Effect<Record<ThreadId, string>, ProjectionStoreV2Error>;
   readonly getThreadWorktreePaths: (options?: {
     readonly includeArchived?: boolean;
+    /** Only deleted threads, archived or not. */
+    readonly deleted?: boolean;
   }) => Effect.Effect<
     ReadonlyArray<{ readonly threadId: ThreadId; readonly worktreePath: string }>,
     ProjectionStoreV2Error
@@ -9330,8 +9332,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sql<{ readonly thread_id: string; readonly worktree_path: string }>`
         SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
         FROM orchestration_v2_projection_threads
-        WHERE deleted_at IS NULL
-          ${options?.includeArchived === true ? sql`` : sql`AND archived_at IS NULL`}
+        WHERE ${
+          options?.deleted === true
+            ? sql`deleted_at IS NOT NULL`
+            : options?.includeArchived === true
+              ? sql`deleted_at IS NULL`
+              : sql`deleted_at IS NULL AND archived_at IS NULL`
+        }
           AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
       `.pipe(
         Effect.map((rows) =>

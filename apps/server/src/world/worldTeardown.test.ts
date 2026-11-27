@@ -1,7 +1,7 @@
 import type { WorldThreadRepo, WorldThreadStatus } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { teardownDecision, WORLD_QUIET_MS } from "./worldTeardown.ts";
+import { rootsToForget, teardownDecision, WORLD_QUIET_MS } from "./worldTeardown.ts";
 
 const NOW = 1_800_000_000_000;
 const LONG_AGO = NOW - WORLD_QUIET_MS - 1;
@@ -94,5 +94,36 @@ describe("teardownDecision", () => {
       teardown: false,
       reason: "files outside the world's repos: notes.md",
     });
+  });
+});
+
+describe("rootsToForget", () => {
+  const forget = (overrides: Partial<Parameters<typeof rootsToForget>[0]> = {}) =>
+    rootsToForget({
+      candidates: ["/worlds/w/deleted"],
+      named: new Set(),
+      answered: new Set(),
+      onDisk: () => false,
+      ...overrides,
+    });
+
+  it("forgets the state of a deleted thread's world once it is torn down", () => {
+    expect(forget()).toEqual(["/worlds/w/deleted"]);
+  });
+
+  it("keeps the state of a world a settled or archived thread still names", () => {
+    // A deleted subagent names its settled parent's world.
+    expect(forget({ named: new Set(["/worlds/w/deleted"]) })).toEqual([]);
+  });
+
+  it("waits while the world is still on disk", () => {
+    expect(forget({ onDisk: () => true })).toEqual([]);
+  });
+
+  it("asks agent-exec once per root, however many deleted threads name it", () => {
+    expect(forget({ candidates: ["/worlds/w/deleted", "/worlds/w/deleted"] })).toEqual([
+      "/worlds/w/deleted",
+    ]);
+    expect(forget({ answered: new Set(["/worlds/w/deleted"]) })).toEqual([]);
   });
 });

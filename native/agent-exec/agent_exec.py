@@ -1123,6 +1123,11 @@ def main():
     stop.add_argument("root")
     stop.add_argument("--remove-checkout", action="store_true",
                       help="Also remove the checkout and private state; used after T3's workspace deletion checks")
+    forget = sub.add_parser(
+        "forget-state",
+        help="Remove the private state of roots that have no registration, such as a thread world whose threads were deleted",
+    )
+    forget.add_argument("roots", nargs="+", metavar="root")
     for name in ["auto", "exec"]:
         command = sub.add_parser(name)
         command.add_argument("--cwd", required=True)
@@ -1163,6 +1168,17 @@ def main():
         if not record or not record.get("world") or record["root"] != str(Path(args.root).resolve()):
             raise ValueError("No thread world registered here")
         print(json.dumps(worlds.push_notes(runtime, record)))
+    elif args.operation == "forget-state":
+        # One root's failure leaves the others to go; stdout has every outcome either way.
+        outcomes, failed = {}, False
+        for root in args.roots:
+            try:
+                outcomes[root] = project_files.forget_private_state(runtime, root)
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                outcomes[root], failed = "failed", True
+                print(f"agent-exec: {root}: {error}", file=sys.stderr)
+        print(json.dumps(outcomes))
+        return 1 if failed else 0
     elif args.operation == "collect":
         print(
             json.dumps(workspaces.collect(args.source, args.destination, args.revision))

@@ -42,6 +42,7 @@ import { ManagedWorkspaceError, runWorkspaceCommand } from "../workspace/Workspa
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { looseFiles, removeEmptyTree } from "./looseFiles.ts";
 import {
+  forgetThreadWorldState,
   pushThreadWorldNotes,
   registeredThreadKey,
   registerThreadWorld,
@@ -51,6 +52,7 @@ import {
   isInWorlds,
   isWorldProjectRoot,
   threadWorldOf,
+  threadWorldRoot,
   worldProjectRoot,
 } from "./threadWorldPaths.ts";
 import {
@@ -65,7 +67,7 @@ import {
   emptyWorldThreadStatus,
   toWorldThreadStatus,
 } from "./worldStatus.ts";
-import { busyReason, teardownDecision } from "./worldTeardown.ts";
+import { busyReason, rootsToForget, teardownDecision } from "./worldTeardown.ts";
 import { WorldThreadHooks } from "./WorldThreadHooks.ts";
 
 const STATUS_TIMEOUT_MS = 15_000;
@@ -396,10 +398,58 @@ export const layerBackground = Layer.effectDiscard(
       .getShellSnapshot()
       .pipe(Effect.map((snapshot) => [...snapshot.threads, ...snapshot.archivedThreads]));
 
+    // Roots whose state agent-exec removed or found gone, so each goes to it once per process.
+    const answered = new Set<string>();
+
+    /** One agent-exec call removes the private state of every root that lost its threads. */
+    const forgetDeleted = Effect.fn("ThreadWorlds.forgetDeleted")(function* (
+      tornDown: ReadonlyArray<string>,
+    ) {
+      const roots = (paths: ReadonlyArray<{ readonly worktreePath: string }>) =>
+        paths.flatMap(({ worktreePath }) => threadWorldRoot(config.baseDir, worktreePath) ?? []);
+      const deleted = roots(yield* threads.getThreadWorktreePaths({ deleted: true }));
+      // Read again after the teardowns, so a thread that named a root meanwhile keeps its state.
+      const named = roots(yield* threads.getThreadWorktreePaths({ includeArchived: true }));
+      const due = rootsToForget({
+        candidates: [...deleted, ...tornDown],
+        named: new Set(named),
+        answered,
+        onDisk: (root) => NodeFS.existsSync(root),
+      });
+      if (due.length === 0) return;
+      const { outcomes, errors } = yield* forgetThreadWorldState(due).pipe(Effect.provide(context));
+      for (const [root, outcome] of Object.entries(outcomes)) {
+        // A registration can still be on its way out, so a registered root is asked again.
+        if (outcome === "removed" || outcome === "absent") answered.add(root);
+      }
+      const removed = Object.keys(outcomes).filter((root) => outcomes[root] === "removed");
+      if (removed.length > 0) {
+        yield* Effect.logInfo("Removed the private state of deleted threads' worlds", { removed });
+      }
+      if (errors !== "") {
+        yield* Effect.logWarning("Some deleted threads' worlds keep their private state", {
+          reason: errors,
+        });
+      }
+    });
+
     const sweep = Effect.gen(function* () {
       const current = yield* settingsService.getSettings;
       const shells = yield* allThreads;
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      // By path, not settings: a world removed from settings still has threads that may resume.
+      const usersByRoot = new Map<string, Array<OrchestrationV2ThreadShell>>();
+      for (const shell of shells) {
+        const root =
+          shell.worktreePath === null
+            ? undefined
+            : threadWorldRoot(config.baseDir, shell.worktreePath);
+        if (root === undefined) continue;
+        const users = usersByRoot.get(root);
+        if (users === undefined) usersByRoot.set(root, [shell]);
+        else users.push(shell);
+      }
+      const tornDown: Array<string> = [];
       for (const id of Object.keys(current.worlds)) {
         const parent = worldProjectRoot(config.baseDir, id);
         const names = NodeFS.existsSync(parent)
@@ -411,11 +461,7 @@ export const layerBackground = Layer.effectDiscard(
           const root = NodePath.join(parent, entry.name);
           const world = yield* worlds.threadWorld(root);
           if (world === undefined) continue;
-          const users = shells.filter(
-            (shell) =>
-              shell.worktreePath !== null &&
-              threadWorldOf(config.baseDir, current.worlds, shell.worktreePath)?.root === root,
-          );
+          const users = usersByRoot.get(root) ?? [];
           const createdMs = NodeFS.statSync(root).ctimeMs;
           if (busyReason({ nowMs, createdMs, threads: users.map(threadUse) }) !== undefined) {
             continue;
@@ -464,6 +510,7 @@ export const layerBackground = Layer.effectDiscard(
                 ? removeEmptyTree(root)
                 : deleteIsolatedWorkspace(root).pipe(Effect.provide(context));
               yield* Effect.logInfo("Tore down a thread world", { root });
+              tornDown.push(root);
             }),
           ).pipe(
             Effect.catch((error) =>
@@ -472,6 +519,13 @@ export const layerBackground = Layer.effectDiscard(
           );
         }
       }
+      yield* forgetDeleted(tornDown).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Deleted threads' worlds keep their private state", {
+            reason: error.message,
+          }),
+        ),
+      );
     }).pipe(
       Effect.catchCause((cause) => Effect.logWarning("Thread world sweep failed", { cause })),
     );

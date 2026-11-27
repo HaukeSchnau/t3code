@@ -54,6 +54,14 @@ export function worldOfProjectRoot(
   return settings === undefined ? undefined : { id, settings };
 }
 
+/** The root of the thread world that contains `path`, configured or not. */
+export function threadWorldRoot(baseDir: string, path: string): string | undefined {
+  const parts = segments(baseDir, path);
+  return parts === undefined || parts.length < 2
+    ? undefined
+    : NodePath.join(worldsRoot(baseDir), parts[0]!, parts[1]!);
+}
+
 /** The thread world that contains `path`, if its world is configured. */
 export function threadWorldOf(
   baseDir: string,
