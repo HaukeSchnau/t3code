@@ -8,7 +8,7 @@ import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { request } from "../rpc/client.ts";
 import { ConnectionOnboarding, readOidcSignInOffer } from "./onboarding.ts";
 import * as EnvironmentRegistry from "./registry.ts";
-import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
+import { connectionRoutes, isLearned, routeHttpBaseUrl } from "./routes.ts";
 
 /** An environment a connected one links to, which this client lacks, and where to sign in to it. */
 export interface PeerSignIn {
@@ -166,10 +166,8 @@ const findRejectedSignIns = Effect.fn("clientRuntime.connection.peerFanOut.findR
       // Only direct routes the person saved pair; T3 Connect and SSH sign in their own ways, and a
       // learned route is an address the host advertised.
       const urls = connectionRoutes(entry).flatMap((route) => {
-        const profile = Option.getOrNull(route.profile);
-        const learned = profile?._tag === "BearerConnectionProfile" && profile.learned === true;
         const url =
-          route.target._tag === "BearerConnectionTarget" && !learned
+          route.target._tag === "BearerConnectionTarget" && !isLearned(route)
             ? routeHttpBaseUrl(route)
             : null;
         return url === null ? [] : [url];

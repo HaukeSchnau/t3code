@@ -52,6 +52,7 @@ import {
   entryWithRoutes,
   findRouteToSameAddress,
   hasSavedBearerRoute,
+  isLearned,
   mergeLearnedRoutes,
   routesAfterRemoving,
   upsertRoute,
@@ -586,7 +587,10 @@ export const make = Effect.gen(function* () {
         if (
           options?.savedRouteOnly === true &&
           (previous?.enabled !== true ||
-            findRouteToSameAddress(connectionRoutes(previous), route) === undefined)
+            findRouteToSameAddress(
+              connectionRoutes(previous).filter((saved) => !isLearned(saved)),
+              route,
+            ) === undefined)
         ) {
           return false;
         }

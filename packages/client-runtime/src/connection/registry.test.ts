@@ -2132,7 +2132,10 @@ describe("EnvironmentRegistry routes", () => {
 
   it.effect("a saved-route-only pairing leaves an environment that is off or lost the route", () =>
     Effect.gen(function* () {
-      const repaired = new BearerConnectionTarget({ ...LAN_TARGET, connectionId: "bearer:again" });
+      const repaired = new BearerConnectionTarget({
+        ...LAN_TARGET,
+        connectionId: "bearer:again",
+      });
       const again = lanRegistration(
         repaired,
         new BearerConnectionProfile({ ...LAN_PROFILE, connectionId: repaired.connectionId }),
@@ -2160,6 +2163,26 @@ describe("EnvironmentRegistry routes", () => {
           routesOf(yield* Ref.get(routeRemoved.storedTargets), LAN_TARGET.environmentId),
         ).toEqual([RELAY_TARGET]);
       }).pipe(Effect.provide(routeRemoved.layer), Effect.scoped);
+
+      // A route the host advertised at that address is not one the person saved.
+      const learnedLan = new BearerConnectionTarget({
+        ...LAN_TARGET,
+        connectionId: "learned:lan",
+      });
+      const onlyLearned = yield* makeHarness(
+        [learnedLan, RELAY_TARGET],
+        [
+          new BearerConnectionProfile({
+            ...LAN_PROFILE,
+            connectionId: learnedLan.connectionId,
+            learned: true,
+          }),
+        ],
+      );
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        expect(yield* registry.register(again, { savedRouteOnly: true })).toBe(false);
+      }).pipe(Effect.provide(onlyLearned.layer), Effect.scoped);
 
       const saved = yield* makeHarness(
         [LAN_TARGET, RELAY_TARGET],
