@@ -26,6 +26,7 @@ const OLD = EnvironmentId.make("old");
 const PLAIN = EnvironmentId.make("plain");
 const DESK = EnvironmentId.make("desk");
 const DEN = EnvironmentId.make("den");
+const LAB = EnvironmentId.make("lab");
 
 /** Hosts by name: which environment answers there and whether it offers sign-in. */
 const HOSTS: Record<
@@ -45,6 +46,7 @@ const HOSTS: Record<
   "den-lan.test": { environmentId: "den", signIn: true, signInAt: "https://den-vpn.test" },
   "den-vpn.test": { environmentId: "den", signIn: true },
   "den.test": { environmentId: "den", signIn: true },
+  "lab.test": { environmentId: "lab", signIn: true },
 };
 
 const fetchFn = ((input) => {
@@ -209,6 +211,15 @@ const direct = (
   enabled,
 });
 
+const learned = (entry: ConnectionCatalogEntry): ConnectionCatalogEntry => ({
+  ...entry,
+  profile: Option.map(entry.profile, (profile) =>
+    profile._tag === "BearerConnectionProfile"
+      ? new BearerConnectionProfile({ ...profile, learned: true })
+      : profile,
+  ),
+});
+
 const blocked = (reason: string) =>
   ({ phase: "blocked", lastFailure: { reason } }) as unknown as SupervisorConnectionState;
 
@@ -219,9 +230,10 @@ const SAVED: ReadonlyArray<
   [OFFICE, direct(OFFICE, "https://office.test"), blocked("authentication")],
   [DEN, direct(DEN, "https://den-lan.test", true, "https://den.test"), blocked("authentication")],
   // Rejected too, but offers no sign-in, sits at an address that is another machine now, sends
-  // its sign-in to an address it is not saved at, or is off.
+  // its sign-in to an address it is not saved at, was only advertised by the host, or is off.
   [PLAIN, direct(PLAIN, "https://plain.test"), blocked("authentication")],
   [DESK, direct(DESK, "https://desk-lan.test"), blocked("authentication")],
+  [LAB, learned(direct(LAB, "https://lab.test")), blocked("authentication")],
   [TOWER, direct(TOWER, "https://moved.test"), blocked("authentication")],
   [OLD, direct(OLD, "https://old.test", false), blocked("authentication")],
   // Blocked for another reason, or connected.

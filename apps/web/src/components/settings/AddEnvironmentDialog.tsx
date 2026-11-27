@@ -404,12 +404,18 @@ export function AddEnvironmentDialog({
       startOidcSignIn(origin);
       return;
     }
+    const session = savedBackendSessionRef.current;
     setIsAddingSavedBackend(true);
     onErrorChange(null);
     const result = await signIn({ origin }).catch(() => ({
       _tag: "Failed" as const,
       error: "sign_in_failed",
     }));
+    // The dialog was dismissed while the sign-in window was open.
+    if (session !== savedBackendSessionRef.current) {
+      setIsAddingSavedBackend(false);
+      return;
+    }
     if (result._tag === "Signed") {
       await handleAddSavedBackend({ host: origin, pairingCode: result.pairingCode });
       return;

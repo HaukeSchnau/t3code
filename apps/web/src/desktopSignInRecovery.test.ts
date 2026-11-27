@@ -9,9 +9,12 @@ import { recoverSignIns } from "./desktopSignInRecovery";
 it("runs again for a host that failed while another one was signing in", async () => {
   vi.stubGlobal("window", { desktopBridge: { signInWithOidc: vi.fn() } });
   const first = Promise.withResolvers<void>();
-  const recover = vi.fn(() =>
-    recover.mock.calls.length === 1 ? first.promise : Promise.resolve(),
-  );
+  const second = Promise.withResolvers<void>();
+  const recover = vi.fn(() => {
+    if (recover.mock.calls.length === 1) return first.promise;
+    second.resolve();
+    return Promise.resolve();
+  });
 
   recoverSignIns(recover);
   // Host B fails while A's sign-in is open.
@@ -19,6 +22,7 @@ it("runs again for a host that failed while another one was signing in", async (
   expect(recover).toHaveBeenCalledOnce();
   first.resolve();
 
-  await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
+  await second.promise;
+  expect(recover).toHaveBeenCalledTimes(2);
   vi.unstubAllGlobals();
 });

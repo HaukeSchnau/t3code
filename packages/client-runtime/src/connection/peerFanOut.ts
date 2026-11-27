@@ -163,9 +163,15 @@ const findRejectedSignIns = Effect.fn("clientRuntime.connection.peerFanOut.findR
       ) {
         continue;
       }
-      // Only direct routes pair; T3 Connect and SSH sign in their own ways.
+      // Only direct routes the person saved pair; T3 Connect and SSH sign in their own ways, and a
+      // learned route is an address the host advertised.
       const urls = connectionRoutes(entry).flatMap((route) => {
-        const url = route.target._tag === "BearerConnectionTarget" ? routeHttpBaseUrl(route) : null;
+        const profile = Option.getOrNull(route.profile);
+        const learned = profile?._tag === "BearerConnectionProfile" && profile.learned === true;
+        const url =
+          route.target._tag === "BearerConnectionTarget" && !learned
+            ? routeHttpBaseUrl(route)
+            : null;
         return url === null ? [] : [url];
       });
       if (urls.length > 0) rejected.push({ environmentId, urls });

@@ -34,7 +34,8 @@ MacBook and the iPhone without a tap.
   `runSignInRecovery` picks the enabled ones blocked on authentication, resolves the sign-in of
   their direct routes the same way, and pairs each through a hidden `prompt=none` window with the
   expected environment id, which replaces the route's credential. Recovery signs in only at an
-  origin the environment is saved at, since the environment id a host reports is public. It pairs
+  origin the environment is saved at by the person (not a
+  learned route), since the environment id a host reports is public. It pairs
   with `savedRouteOnly`, which the registry checks under the environment's lease: an environment
   removed, turned off or without that route by then stays as it is. After an attempt a host is left
   alone for an hour. A revoked session looks like an expired one to the client, so revoking a
