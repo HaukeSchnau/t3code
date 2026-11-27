@@ -52,6 +52,11 @@ export interface PairingConnectionInput {
   readonly host?: string;
   readonly pairingCode?: string;
   readonly expectedEnvironmentId?: EnvironmentId;
+  /**
+   * Replaces only the credential of a route the environment still has while it is on, and leaves
+   * it otherwise, so signing in again cannot undo removing or turning it off meanwhile.
+   */
+  readonly savedRouteOnly?: boolean;
 }
 
 export interface SshConnectionInput {
@@ -236,13 +241,21 @@ const registerPairingConnection = Effect.fn(
   const registration = yield* preparePairingRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   const knownAddressOnly = input.expectedEnvironmentId === undefined;
-  if (!(yield* registry.register(registration, { knownAddressOnly }))) {
+  if (
+    !(yield* registry.register(registration, {
+      knownAddressOnly,
+      savedRouteOnly: input.savedRouteOnly === true,
+    }))
+  ) {
     return registration.target.environmentId;
   }
   yield* registry.setCompatibility(registration.target.environmentId, null);
-  yield* registry
-    .setEnabled(registration.target.environmentId, true)
-    .pipe(Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }));
+  // A saved-route-only pairing found the environment on; turning it on now could undo a switch-off.
+  if (input.savedRouteOnly !== true) {
+    yield* registry
+      .setEnabled(registration.target.environmentId, true)
+      .pipe(Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }));
+  }
   return registration.target.environmentId;
 });
 

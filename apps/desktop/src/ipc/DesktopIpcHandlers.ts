@@ -2,6 +2,7 @@ import { startFileDrag } from "./methods/fileDrag.ts";
 import * as Effect from "effect/Effect";
 
 import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./methods/providerAuth.ts";
+import { signInWithOidc } from "./methods/oidcSignIn.ts";
 import {
   appleSpeechAvailable,
   appleSpeechPrepare,
@@ -175,6 +176,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(openExternal);
   yield* ipc.handle(readMedia);
   yield* ipc.handle(receiveProviderAuthCallback);
+  yield* ipc.handle(signInWithOidc);
   yield* ipc.handle(cancelProviderAuthCallback);
   yield* ipc.handle(openSystemSettings);
   yield* ipc.handle(checkSystemPermission);

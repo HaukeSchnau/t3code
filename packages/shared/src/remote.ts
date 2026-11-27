@@ -240,10 +240,6 @@ export const buildOidcSignInResultUrl = (
   return next;
 };
 
-/** The client state a sign-in result carries back, if its client sent one. */
-export const readOidcSignInClientState = (url: URL): string | null =>
-  readHashParams(url).get(OIDC_SIGN_IN_CLIENT_STATE_PARAM) || null;
-
 export interface OidcSignInFailure {
   /** The server that refused, or empty when the return URL is that server's own page. */
   readonly host: string;
@@ -259,6 +255,28 @@ export const readOidcSignInFailure = (url: URL): OidcSignInFailure | null => {
     label: url.searchParams.get(HOSTED_PAIRING_LABEL_PARAM)?.trim() ?? "",
     error,
   };
+};
+
+export type OidcSignInResult =
+  | { readonly _tag: "Signed"; readonly pairingCode: string }
+  | { readonly _tag: "Failed"; readonly error: string };
+
+/**
+ * The result a sign-in at `origin` returned to an app scheme with. Another app can open that
+ * scheme, so only a result that carries back this attempt's `clientState` counts.
+ */
+export const readOidcSignInResult = (
+  url: URL,
+  expected: { readonly origin: string; readonly clientState: string },
+): OidcSignInResult => {
+  if (readHashParams(url).get(OIDC_SIGN_IN_CLIENT_STATE_PARAM) !== expected.clientState) {
+    return { _tag: "Failed", error: "sign_in_failed" };
+  }
+  const request = readHostedPairingRequest(url);
+  if (request && URL.canParse(request.host) && new URL(request.host).origin === expected.origin) {
+    return { _tag: "Signed", pairingCode: request.token };
+  }
+  return { _tag: "Failed", error: readOidcSignInFailure(url)?.error ?? "sign_in_failed" };
 };
 
 /** True when signing in again with the provider's own page, not silently, may succeed. */
