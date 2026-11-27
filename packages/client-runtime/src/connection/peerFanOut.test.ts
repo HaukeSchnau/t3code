@@ -3,12 +3,19 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as RpcHttp from "../rpc/http.ts";
-import type { ConnectionCatalogEntry } from "./catalog.ts";
+import { BearerConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
+import { BearerConnectionTarget, type SupervisorConnectionState } from "./model.ts";
 import { ConnectionOnboarding, type PairingConnectionInput } from "./onboarding.ts";
-import { findPeerSignIns, runPeerFanOut, type PeerSignIn } from "./peerFanOut.ts";
+import {
+  findPeerSignIns,
+  runPeerFanOut,
+  runSignInRecovery,
+  type PeerSignIn,
+} from "./peerFanOut.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 
 const HOME = EnvironmentId.make("home");
@@ -17,15 +24,29 @@ const TOWER = EnvironmentId.make("tower");
 const KNOWN = EnvironmentId.make("known");
 const OLD = EnvironmentId.make("old");
 const PLAIN = EnvironmentId.make("plain");
+const DESK = EnvironmentId.make("desk");
+const DEN = EnvironmentId.make("den");
+const LAB = EnvironmentId.make("lab");
 
 /** Hosts by name: which environment answers there and whether it offers sign-in. */
-const HOSTS: Record<string, { readonly environmentId: string; readonly signIn: boolean }> = {
+const HOSTS: Record<
+  string,
+  { readonly environmentId: string; readonly signIn: boolean; readonly signInAt?: string }
+> = {
   "office.test": { environmentId: "office", signIn: true },
   "moved.test": { environmentId: "someone-else", signIn: true },
   "tower.test": { environmentId: "tower", signIn: true },
   "plain.test": { environmentId: "plain", signIn: false },
   "known.test": { environmentId: "known", signIn: true },
   "old.test": { environmentId: "old", signIn: true },
+  // Answers as DESK and sends its sign-in to another address that also claims to be DESK.
+  "desk-lan.test": { environmentId: "desk", signIn: true, signInAt: "https://desk.test" },
+  "desk.test": { environmentId: "desk", signIn: true },
+  // DEN's first saved address sends its sign-in elsewhere; its second signs in where it is.
+  "den-lan.test": { environmentId: "den", signIn: true, signInAt: "https://den-vpn.test" },
+  "den-vpn.test": { environmentId: "den", signIn: true },
+  "den.test": { environmentId: "den", signIn: true },
+  "lab.test": { environmentId: "lab", signIn: true },
 };
 
 const fetchFn = ((input) => {
@@ -51,7 +72,9 @@ const fetchFn = ((input) => {
         bootstrapMethods: ["one-time-token"],
         sessionMethods: ["bearer-access-token"],
         sessionCookieName: "t3_session",
-        ...(host.signIn ? { oidc: { label: "Schnau ID", origin: url.origin } } : {}),
+        ...(host.signIn
+          ? { oidc: { label: "Schnau ID", origin: host.signInAt ?? url.origin } }
+          : {}),
       },
     }),
   );
@@ -156,5 +179,128 @@ describe("peer fan-out", () => {
         { host: "https://office.test", pairingCode: "CODE", expectedEnvironmentId: OFFICE },
       ]);
     }).pipe(Effect.provide(makeLayer(registrations)));
+  });
+});
+
+const route = (environmentId: EnvironmentId, httpBaseUrl: string) => {
+  const connectionId = `${environmentId}-${new URL(httpBaseUrl).hostname}`;
+  return {
+    target: new BearerConnectionTarget({ environmentId, label: environmentId, connectionId }),
+    profile: Option.some(
+      new BearerConnectionProfile({
+        connectionId,
+        environmentId,
+        label: environmentId,
+        httpBaseUrl,
+        wsBaseUrl: httpBaseUrl.replace(/^http/, "ws"),
+      }),
+    ),
+  };
+};
+
+const direct = (
+  environmentId: EnvironmentId,
+  httpBaseUrl: string,
+  enabled = true,
+  ...alternates: ReadonlyArray<string>
+): ConnectionCatalogEntry => ({
+  ...route(environmentId, httpBaseUrl),
+  ...(alternates.length > 0
+    ? { alternateRoutes: alternates.map((url) => route(environmentId, url)) }
+    : {}),
+  enabled,
+});
+
+const learned = (entry: ConnectionCatalogEntry): ConnectionCatalogEntry => ({
+  ...entry,
+  profile: Option.map(entry.profile, (profile) =>
+    profile._tag === "BearerConnectionProfile"
+      ? new BearerConnectionProfile({ ...profile, learned: true })
+      : profile,
+  ),
+});
+
+const blocked = (reason: string) =>
+  ({ phase: "blocked", lastFailure: { reason } }) as unknown as SupervisorConnectionState;
+
+/** Saved environments and their connections, as the registry holds them. */
+const SAVED: ReadonlyArray<
+  readonly [EnvironmentId, ConnectionCatalogEntry, SupervisorConnectionState]
+> = [
+  [OFFICE, direct(OFFICE, "https://office.test"), blocked("authentication")],
+  [DEN, direct(DEN, "https://den-lan.test", true, "https://den.test"), blocked("authentication")],
+  // Rejected too, but offers no sign-in, sits at an address that is another machine now, sends
+  // its sign-in to an address it is not saved at, was only advertised by the host, or is off.
+  [PLAIN, direct(PLAIN, "https://plain.test"), blocked("authentication")],
+  [DESK, direct(DESK, "https://desk-lan.test"), blocked("authentication")],
+  [LAB, learned(direct(LAB, "https://lab.test")), blocked("authentication")],
+  [TOWER, direct(TOWER, "https://moved.test"), blocked("authentication")],
+  [OLD, direct(OLD, "https://old.test", false), blocked("authentication")],
+  // Blocked for another reason, or connected.
+  [HOME, direct(HOME, "https://known.test"), blocked("configuration")],
+  [KNOWN, direct(KNOWN, "https://known.test"), { phase: "connected" } as SupervisorConnectionState],
+];
+
+const makeSavedLayer = (registrations: Array<PairingConnectionInput>) =>
+  Layer.mergeAll(
+    RpcHttp.layerRemoteHttpClient(fetchFn),
+    Layer.effect(
+      EnvironmentRegistry.EnvironmentRegistry,
+      SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+        new Map(SAVED.map(([environmentId, entry]) => [environmentId, entry])),
+      ).pipe(
+        Effect.map((entries) =>
+          EnvironmentRegistry.EnvironmentRegistry.of({
+            entries,
+            state: (environmentId: EnvironmentId) =>
+              Effect.succeed(SAVED.find(([id]) => id === environmentId)![2]),
+          } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+        ),
+      ),
+    ),
+    Layer.mock(ConnectionOnboarding)({
+      registerPairing: (input) =>
+        Effect.sync(() => {
+          registrations.push(input);
+          return input.expectedEnvironmentId!;
+        }),
+    }),
+  );
+
+describe("sign-in recovery", () => {
+  it.effect("signs a rejected environment in again once, where its sign-in is it", () => {
+    const registrations: Array<PairingConnectionInput> = [];
+    return Effect.gen(function* () {
+      const tried = new Set<EnvironmentId>();
+      const signIns: Array<PeerSignIn> = [];
+      const run = () =>
+        runSignInRecovery({
+          skip: tried,
+          signIn: (peer) =>
+            Effect.sync(() => {
+              signIns.push(peer);
+              return { _tag: "Signed" as const, pairingCode: "CODE" };
+            }),
+          recordAttempt: (peer) => Effect.sync(() => void tried.add(peer.environmentId)),
+        });
+
+      expect(yield* run()).toEqual([OFFICE, DEN]);
+      expect(registrations).toEqual([
+        {
+          host: "https://office.test",
+          pairingCode: "CODE",
+          expectedEnvironmentId: OFFICE,
+          savedRouteOnly: true,
+        },
+        {
+          host: "https://den.test",
+          pairingCode: "CODE",
+          expectedEnvironmentId: DEN,
+          savedRouteOnly: true,
+        },
+      ]);
+      expect(yield* run()).toEqual([]);
+      expect(signIns).toHaveLength(2);
+    }).pipe(Effect.provide(makeSavedLayer(registrations)));
   });
 });

@@ -1089,6 +1089,18 @@ export const DesktopMediaReadSchema = Schema.Struct({
 });
 export type DesktopMediaRead = typeof DesktopMediaReadSchema.Type;
 
+export const DesktopOidcSignInInputSchema = Schema.Struct({
+  origin: Schema.String.check(Schema.isMaxLength(2_048)),
+  prompt: Schema.optionalKey(Schema.Literal("none")),
+});
+
+export const DesktopOidcSignInResultSchema = Schema.Union([
+  Schema.TaggedStruct("Signed", { pairingCode: Schema.String }),
+  Schema.TaggedStruct("Failed", { error: Schema.String }),
+  Schema.TaggedStruct("Cancelled", {}),
+]);
+export type DesktopOidcSignInResult = typeof DesktopOidcSignInResultSchema.Type;
+
 /** `value` is the resolved locale from `prepare` and the transcript from `transcribe`. */
 export const DesktopAppleSpeechResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), value: Schema.String }),
@@ -1292,6 +1304,14 @@ export interface DesktopBridge {
   ) => Promise<T | null>;
   receiveProviderAuthCallback: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback: (authorizationUrl: string) => Promise<void>;
+  /**
+   * Signs in to the server at `origin` through its OpenID Connect provider in a window of its
+   * own, since the renderer cannot leave for the provider. `prompt: "none"` keeps it hidden.
+   */
+  signInWithOidc: (input: {
+    readonly origin: string;
+    readonly prompt?: "none";
+  }) => Promise<DesktopOidcSignInResult>;
   startFileDrag: (input: { environmentId: EnvironmentId; path: string }) => Promise<boolean>;
   openExternal: (url: string) => Promise<boolean>;
   /** Reads http(s) media in the main process, outside renderer CORS and CSP; null on network failure. */

@@ -527,6 +527,30 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
         expect(yield* refused(renewed.access_token, other.thumbprint)).toBe(
           "ServerAuthInvalidCredentialError",
         );
+        // A device the provider signed in renews like one paired with a code.
+        const signedIn = yield* serverAuth
+          .createPairingLink({
+            scopes: ["orchestration:read"],
+            subject: `${EnvironmentAuth.OIDC_SUBJECT_PREFIX}hauke`,
+          })
+          .pipe(
+            Effect.flatMap((link) =>
+              serverAuth.exchangeBootstrapCredentialForAccessToken(
+                link.credential,
+                undefined,
+                requestMetadata,
+                { proofKeyThumbprint: key.thumbprint },
+              ),
+            ),
+          );
+        const resigned = yield* serverAuth.renewAccessToken(
+          signedIn.access_token,
+          key.thumbprint,
+          Effect.void,
+        );
+        expect((yield* sessions.verify(resigned.access_token)).subject).toBe(
+          `${EnvironmentAuth.OIDC_SUBJECT_PREFIX}hauke`,
+        );
         // Bearer and T3 Connect sessions keep their fixed lifetimes, so unlinking still cuts off.
         const bearer = yield* pair();
         expect(yield* refused(bearer.access_token, key.thumbprint)).toBe(

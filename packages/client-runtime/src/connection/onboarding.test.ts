@@ -5,6 +5,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
 } from "@t3tools/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -167,6 +168,7 @@ function layerPairingOnboarding(
   options?: Parameters<typeof layerPairingHttp>[1],
   calls: Array<{ readonly url: string; readonly init: RequestInit }> = [],
   provision?: ClientCapabilities.SshEnvironmentGateway["Service"]["provision"],
+  registrationStore?: Partial<Persistence.ConnectionRegistrationStore["Service"]>,
 ) {
   const dependencies = Layer.mergeAll(
     layerClientPresentation,
@@ -178,6 +180,7 @@ function layerPairingOnboarding(
     Layer.mock(Persistence.ConnectionRegistrationStore)({
       register: () => Effect.void,
       setEnabled: () => Effect.void,
+      ...registrationStore,
     }),
     Layer.mock(Persistence.EnvironmentCacheStore)({}),
     Layer.mock(ConnectionProfileStore.ConnectionProfileStore)({}),
@@ -309,6 +312,42 @@ describe("connection onboarding", () => {
       );
     }).pipe(Effect.provide(layerPairingOnboarding())),
   );
+
+  it.effect("leaves an environment switched off while its recovery pairing was saved", () => {
+    // Runs once the pairing has saved its credential, before onboarding finishes.
+    const afterSave = { run: Effect.void as Effect.Effect<void> };
+    return Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const onboarding = yield* Onboarding.ConnectionOnboarding;
+      yield* registerSwitchedOffEnvironment;
+      yield* registry.setEnabled(PAIRED_ENVIRONMENT_ID, true);
+      const switchOff = yield* Deferred.make<void>();
+      afterSave.run = registry.setEnabled(PAIRED_ENVIRONMENT_ID, false).pipe(
+        Effect.ignore,
+        Effect.andThen(Deferred.succeed(switchOff, undefined)),
+        // Starting now queues the switch-off on the environment's lock ahead of onboarding.
+        Effect.forkDetach({ startImmediately: true }),
+        Effect.asVoid,
+      );
+
+      yield* onboarding.registerPairing({
+        ...PAIRING_INPUT,
+        expectedEnvironmentId: PAIRED_ENVIRONMENT_ID,
+        savedRouteOnly: true,
+      });
+      yield* Deferred.await(switchOff);
+
+      const entry = (yield* SubscriptionRef.get(registry.entries)).get(PAIRED_ENVIRONMENT_ID);
+      expect(entry?.profile).toEqual(Option.some(PAIRED_PROFILE));
+      expect(entry?.enabled).toBe(false);
+    }).pipe(
+      Effect.provide(
+        layerPairingOnboarding(undefined, [], undefined, {
+          register: () => Effect.suspend(() => afterSave.run),
+        }),
+      ),
+    );
+  });
 
   it.effect("refuses a pairing link that claims a saved environment from a new address", () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
