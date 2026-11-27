@@ -95,14 +95,17 @@ const withFakeSystemd = <A, E>(
     readonly stateDir: string;
     readonly cgroupRoot: string;
   }) => Effect.Effect<A, E>,
-  // A user manager older than systemd 253 rejects OOMPolicy on scopes.
+  // A user manager older than systemd 253 rejects OOMPolicy on scopes, and
+  // systemd-run older than 254 rejects --expand-environment.
   {
     oomPolicy = true,
+    expandEnvironment = true,
     stopFails = false,
     leftovers = false,
     liveOwner = false,
   }: {
     readonly oomPolicy?: boolean;
+    readonly expandEnvironment?: boolean;
     readonly stopFails?: boolean;
     readonly leftovers?: boolean;
     readonly liveOwner?: boolean;
@@ -141,6 +144,9 @@ const withFakeSystemd = <A, E>(
               : output("", 1);
           }
           if (!oomPolicy && args.some((arg) => arg.startsWith("--property=OOMPolicy="))) {
+            return output("", 1);
+          }
+          if (!expandEnvironment && args.some((arg) => arg.startsWith("--expand-environment"))) {
             return output("", 1);
           }
           const [, verb, unit = ""] = args;
@@ -378,22 +384,33 @@ describe("AgentScope service", () => {
     ),
   );
 
-  it.effect("delegates every agent scope so rootless containers can manage their cgroups", () =>
-    withFakeSystemd(({ scope }) =>
-      Effect.gen(function* () {
-        const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
-        const codex = yield* launchCodex(scope, "a");
-        const terminal = yield* scope.wrap({
-          command: "agent",
-          args: [],
-          name: "terminal",
-          survivesRestart: true,
-        });
-        for (const launch of [agent, codex, terminal]) {
-          expect(launch.args).toContain("--property=Delegate=yes");
-        }
-      }),
-    ),
+  it.effect.each([{ expandEnvironment: true }, { expandEnvironment: false }])(
+    "delegates every agent scope, and keeps systemd from expanding ${VAR} where it can (supported $expandEnvironment)",
+    ({ expandEnvironment }) =>
+      withFakeSystemd(
+        ({ scope }) =>
+          Effect.gen(function* () {
+            const agent = yield* scope.wrap({
+              command: "agent",
+              args: [],
+              name: "t",
+              threadId: "a",
+            });
+            const codex = yield* launchCodex(scope, "a");
+            const terminal = yield* scope.wrap({
+              command: "agent",
+              args: [],
+              name: "terminal",
+              survivesRestart: true,
+            });
+            for (const launch of [agent, codex, terminal]) {
+              expect(launch.args).toContain("--property=Delegate=yes");
+              const systemdRunArgs = launch.args.slice(0, launch.args.indexOf("--"));
+              expect(systemdRunArgs.includes("--expand-environment=no")).toBe(expandEnvironment);
+            }
+          }),
+        { expandEnvironment },
+      ),
   );
 
   it.effect("caps agent memory and yields CPU, disk, and tasks to the server", () =>
