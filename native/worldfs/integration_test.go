@@ -98,7 +98,7 @@ func TestIntegration(t *testing.T) {
 	expect(t, out, "Read-only file system")
 	it.step("A refused cd stays on the view, where git works from the thread's own worktree and synthetic index")
 	out = t1.launch(`cd /world/example.com/x/d && stat -f -c %T . && git status --porcelain && git log --format=%s -1 && ls /run/worldfs/admin/example.com/x`)
-	expect(t, out, "fuse\nfirst\n", "d\n")
+	expect(t, out, "fuse\nrename notes\n", "d\n")
 	st := it.ctl(map[string]any{"method": "status", "thread": "t1"})
 	refs, _ := st["refusals"].([]any)
 	if len(refs) == 0 || !strings.Contains(fmt.Sprint(refs[0]), "touch[") {
@@ -128,7 +128,7 @@ func TestIntegration(t *testing.T) {
 	it.step("After kill -9 and a restart, namespaces that held the dead mount read views again")
 	it.kill()
 	it.start()
-	expect(t, provider2.run(`cat `+view(a)+`/README.md; stat -f -c %T `+view(c)+`; git --git-dir=`+view(c)+`/.git log -1 --format=%s`), "version 2", "fuse\n", "first")
+	expect(t, provider2.run(`cat `+view(a)+`/README.md; stat -f -c %T `+view(c)+`; git --git-dir=`+view(c)+`/.git log -1 --format=%s`), "version 2", "fuse\n", "rename notes")
 	expect(t, provider1.run(`cat `+view(a)+`/README.md; cat `+view(b)+`/README.md`), "more\n", "# example.com/x/b")
 	expect(t, t1.launch(`cat /world/example.com/x/b/README.md`), "# example.com/x/b")
 
