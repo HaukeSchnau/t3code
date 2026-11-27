@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -311,7 +312,11 @@ func (m *machine) initJJ(t *thread, r *repo, dir string, ready chan struct{}) {
 		return
 	}
 	t0 := time.Now()
-	cmd := exec.Command("jj", "git", "init", "--colocate")
+	// Bounded, because an upgrade's drain waits for it; recover reruns an
+	// init that never finished.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "jj", "git", "init", "--colocate")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("jj %s in %s: %v %s", r.name, t.ID, err, out)

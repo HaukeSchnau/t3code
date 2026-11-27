@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -166,6 +167,12 @@ func TestIntegration(t *testing.T) {
 	pid := it.daemon.Process.Pid
 	calls, failed, slowest := 0, 0, time.Duration(0)
 	stop, stopped := make(chan struct{}), make(chan struct{})
+	var stopOnce sync.Once
+	stopStats := func() {
+		stopOnce.Do(func() { close(stop) })
+		<-stopped
+	}
+	defer stopStats() // before the deferred it.stop, also when a wait below fails
 	go func() {
 		defer close(stopped)
 		for {
@@ -185,8 +192,7 @@ func TestIntegration(t *testing.T) {
 	}()
 	provider2.stop()
 	waitFor(t, func() bool { return it.ctl(stats)["revision"] == "b" })
-	close(stop)
-	<-stopped
+	stopStats()
 	if failed > 0 {
 		t.Fatalf("%d of %d stats calls failed during the upgrade", failed, calls)
 	}
