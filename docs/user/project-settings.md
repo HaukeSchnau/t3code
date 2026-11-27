@@ -303,7 +303,15 @@ Choose **Delete now** to run the enabled rules immediately. The latest results s
 worktrees were removed or kept and why, plus any failures.
 Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
 
-The inactive and settled retention periods also apply to the folders of
+The same rules apply to the workspaces T3 creates for jj projects. Before removing one, cleanup
+snapshots its working copy and keeps it when any change in it is on no remote bookmark or tag, or
+when jj could not snapshot a file, such as one over jj's size limit for new files. Merge cleanup
+counts a workspace as merged when every pull request linked to its threads is closed and at least
+one was merged. Starting another turn recreates the workspace on the same commits. Isolated
+workspaces are removed only when their thread is deleted, and copies of folders without version
+control are always kept.
+
+The inactive and settled retention periods, and deletion cleanup, also apply to the folders of
 [threads without a project](./thread-sidebar.md#start-without-a-project). Those folders are not
 Git repositories, so their files are deleted with them and cannot be recovered; the thread stays,
 and its next turn starts in a new, empty folder. A folder is kept when it has a Git repository

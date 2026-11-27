@@ -4,6 +4,7 @@
  * are visible across workspaces without pushing. In a colocated repository jj also creates the
  * Git worktree; T3 never runs `git worktree` itself for jj repositories.
  */
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -120,6 +121,8 @@ export const createJjWorkspace = Effect.fn("JjWorkspaces.create")(function* (inp
   readonly description: string;
   readonly baseRef?: string | undefined;
   readonly startFromOrigin?: boolean | undefined;
+  /** Commit ids to start from, in place of `baseRef`. */
+  readonly revisions?: ReadonlyArray<string> | undefined;
 }) {
   const marker = findRepositoryMarker(input.projectRoot);
   if (marker?.kind !== "jj") {
@@ -130,11 +133,13 @@ export const createJjWorkspace = Effect.fn("JjWorkspaces.create")(function* (inp
   }
   const repository = marker.root;
   const relative = NodePath.relative(repository, realpath(input.projectRoot));
-  const revision = yield* resolveJjStartRevision({
-    repository,
-    baseRef: input.baseRef,
-    startFromOrigin: input.startFromOrigin === true,
-  });
+  const revisions =
+    input.revisions ??
+    (yield* resolveJjStartRevision({
+      repository,
+      baseRef: input.baseRef,
+      startFromOrigin: input.startFromOrigin === true,
+    }).pipe(Effect.map((revision) => (revision === undefined ? [] : [revision]))));
   yield* jj("JjWorkspaces.add", repository, [
     "workspace",
     "add",
@@ -145,18 +150,39 @@ export const createJjWorkspace = Effect.fn("JjWorkspaces.create")(function* (inp
     input.name,
     "--message",
     input.description,
-    ...(revision === undefined ? [] : ["--revision", revision]),
+    ...revisions.flatMap((revision) => ["--revision", revision]),
     input.destination,
   ]).pipe(
     Effect.tapError(() =>
-      runWorkspaceCommand({
-        operation: "JjWorkspaces.cleanup",
-        command: "jj",
-        args: ["-R", repository, "--ignore-working-copy", "workspace", "forget", input.name],
-      }).pipe(Effect.andThen(removeWorkspaceDirectory(input.destination)), Effect.ignore),
+      Effect.gen(function* () {
+        // A recreated workspace reuses its old name, which something else may hold by now.
+        const added = (yield* listJjWorkspaces(repository)).find(
+          (entry) => entry.name === input.name,
+        );
+        if (added?.root != null && realpath(added.root) === realpath(input.destination)) {
+          yield* runWorkspaceCommand({
+            operation: "JjWorkspaces.cleanup",
+            command: "jj",
+            args: ["-R", repository, "--ignore-working-copy", "workspace", "forget", input.name],
+          });
+        }
+        yield* removeWorkspaceDirectory(input.destination);
+      }).pipe(Effect.ignore),
     ),
   );
   return relative === "" ? input.destination : NodePath.join(input.destination, relative);
+});
+
+/** The jj name of the workspace rooted at `workspaceRoot`. */
+export const jjWorkspaceName = Effect.fn("JjWorkspaces.name")(function* (workspaceRoot: string) {
+  const root = realpath(workspaceRoot);
+  const workspaces = yield* listJjWorkspaces(root).pipe(
+    Effect.orElseSucceed((): ReadonlyArray<JjWorkspaceEntry> => []),
+  );
+  return (
+    workspaces.find((entry) => entry.root !== null && realpath(entry.root) === root)?.name ??
+    NodePath.basename(root)
+  );
 });
 
 /** Forgets the jj workspace rooted at `workspaceRoot`, then removes its files. */
@@ -164,12 +190,7 @@ export const deleteJjWorkspace = Effect.fn("JjWorkspaces.delete")(function* (
   workspaceRoot: string,
 ) {
   const root = realpath(workspaceRoot);
-  const workspaces = yield* listJjWorkspaces(root).pipe(
-    Effect.orElseSucceed((): ReadonlyArray<JjWorkspaceEntry> => []),
-  );
-  const name =
-    workspaces.find((entry) => entry.root !== null && realpath(entry.root) === root)?.name ??
-    NodePath.basename(root);
+  const name = yield* jjWorkspaceName(root);
   if (name === "default") {
     return yield* new ManagedWorkspaceError({
       operation: "JjWorkspaces.delete",
@@ -182,4 +203,102 @@ export const deleteJjWorkspace = Effect.fn("JjWorkspaces.delete")(function* (
     args: ["-R", root, "--ignore-working-copy", "workspace", "forget", name],
   });
   yield* removeWorkspaceDirectory(root);
+});
+
+export interface JjWorkspaceInspection {
+  /** Why removing the workspace could lose work no remote has, or null. */
+  readonly keep: string | null;
+  /** Whether `@` adds no change beyond `trunk()`. */
+  readonly unchanged: boolean;
+  /** Commit ids a recreated workspace starts from: `@`, or its parents while `@` is empty. */
+  readonly revisions: ReadonlyArray<string>;
+}
+
+// Local bookmarks and tags don't count: an agent-exec fork's own store goes with its folder.
+const ON_A_REMOTE = "::(remote_bookmarks() | remote_tags())";
+
+/**
+ * Snapshots the workspace at `root`, then reads what removing it would lose. A workspace of a
+ * shared store leaves its commits in that store, so only the history of its `@` counts; an
+ * agent-exec fork (`ownStore`) takes every commit of its repository with it.
+ */
+export const inspectJjWorkspace = Effect.fn("JjWorkspaces.inspect")(function* (input: {
+  readonly root: string;
+  readonly ownStore: boolean;
+}) {
+  const keep = (reason: string): JjWorkspaceInspection => ({
+    keep: reason,
+    unchanged: false,
+    revisions: [],
+  });
+  // A plain status snapshots the working copy, so files nobody committed become part of `@`.
+  const status = yield* runWorkspaceCommand({
+    operation: "JjWorkspaces.inspect",
+    command: "jj",
+    args: [...STABLE_OUTPUT_ARGS, "-R", input.root, "status"],
+    timeout: "5 minutes",
+  });
+  if (status.code !== 0) {
+    const detail = status.stderr.trim().split(/\r?\n/)[0] || `exit ${status.code ?? "unknown"}`;
+    return keep(`jj could not snapshot the working copy (${detail})`);
+  }
+  // jj leaves files over `snapshot.max-new-file-size`, or outside `snapshot.auto-track`, out of `@`.
+  if (/^Untracked paths:$/m.test(status.stdout) || status.stderr.includes("Refused to snapshot")) {
+    return keep("has files jj did not snapshot");
+  }
+  // A colocated checkout's Git holds work jj never reads: a staged edit, a paused rebase or
+  // merge, and in a fork's own repository a stash.
+  if (NodeFS.existsSync(NodePath.join(input.root, ".git"))) {
+    const git = (args: ReadonlyArray<string>) =>
+      runWorkspaceCommand({
+        operation: "JjWorkspaces.inspect",
+        command: "git",
+        args: ["-C", input.root, ...args],
+      });
+    const staged = yield* git(["diff", "--cached", "--quiet", "--ignore-submodules=none"]);
+    if (staged.code === 1) return keep("has changes staged in Git");
+    const operations = yield* git([
+      "rev-parse",
+      "--path-format=absolute",
+      ...["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].flatMap(
+        (name) => ["--git-path", name],
+      ),
+    ]);
+    if (staged.code !== 0 || operations.code !== 0) return keep("its Git state could not be read");
+    if (operations.stdout.split("\n").some((state) => state !== "" && NodeFS.existsSync(state))) {
+      return keep("a Git operation is in progress");
+    }
+    if (
+      input.ownStore &&
+      (yield* git(["rev-parse", "--verify", "--quiet", "refs/stash"])).code === 0
+    )
+      return keep("has a Git stash");
+  }
+  const read = (revset: string, template: string) =>
+    jj("JjWorkspaces.inspect", input.root, [
+      "--ignore-working-copy",
+      "log",
+      "--no-graph",
+      "--limit",
+      "1",
+      "-r",
+      revset,
+      "-T",
+      template,
+    ]);
+  const unpushed = yield* read(
+    `(${input.ownStore ? "all()" : "::@"} ~ ${ON_A_REMOTE}) ~ empty()`,
+    "change_id.short()",
+  );
+  if (unpushed !== "") return keep(`change ${unpushed} is not on a remote bookmark or tag`);
+  const beyondTrunk = yield* read("(trunk()..@) ~ empty()", "change_id.short()");
+  const revisions = yield* read(
+    "@",
+    'if(empty, parents.map(|parent| parent.commit_id()).join(" "), commit_id)',
+  );
+  return {
+    keep: null,
+    unchanged: beyondTrunk === "",
+    revisions: revisions.split(" ").filter((revision) => revision !== ""),
+  } satisfies JjWorkspaceInspection;
 });

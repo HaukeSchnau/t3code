@@ -338,12 +338,21 @@ const make = Effect.gen(function* () {
     const legacy = yield* sql<{ readonly checkoutPath: string }>`
       SELECT checkout_path AS "checkoutPath" FROM projection_thread_workspace_roots
     `.pipe(Effect.orElseSucceed(() => []));
-    return new Set([
-      ...threads.flatMap((thread) =>
-        thread.worktreePath === null ? [] : [NodePath.resolve(thread.worktreePath)],
-      ),
-      ...legacy.map((row) => NodePath.resolve(row.checkoutPath)),
-    ]);
+    // A thread of a project in a subfolder names `<workspace>/<subfolder>`; the workspace stays
+    // taken, since storage cleanup may remove it while the thread can still resume there.
+    return new Set(
+      [
+        ...threads.flatMap((thread) =>
+          thread.worktreePath === null ? [] : [NodePath.resolve(thread.worktreePath)],
+        ),
+        ...legacy.map((row) => NodePath.resolve(row.checkoutPath)),
+      ].flatMap((path) => {
+        const [project, name] = NodePath.relative(workspacesRoot, path).split(NodePath.sep);
+        return isInside(path, workspacesRoot) && project && name && project !== ".."
+          ? [path, NodePath.join(workspacesRoot, project, name)]
+          : [path];
+      }),
+    );
   }).pipe(
     Effect.mapError((cause) =>
       fail("ManagedWorkspaces.referencedPaths", "Could not read existing workspaces.", cause),

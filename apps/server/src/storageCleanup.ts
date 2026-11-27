@@ -61,6 +61,19 @@ import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirect
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
+import * as ProcessRunner from "./processRunner.ts";
+import { deleteIsolatedWorkspace, findIsolatedWorkspace } from "./workspace/IsolatedWorkspaces.ts";
+import {
+  deleteJjWorkspace,
+  inspectJjWorkspace,
+  jjWorkspaceName,
+} from "./workspace/JjWorkspaces.ts";
+import {
+  managedWorkspaceRootOf,
+  pruneRemovedJjWorkspaces,
+  recordRemovedJjWorkspace,
+  removedJjWorkspacesDirectory,
+} from "./workspace/removedJjWorkspaces.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -220,6 +233,19 @@ function heldForLimitRecovery(
   return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
 }
 
+/** Linked pull requests are all closed, at least one merged; T3 refreshes their snapshots. */
+export function storageCleanupPullRequestsMerged(
+  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "pullRequests">>,
+): boolean {
+  const links = threads
+    .flatMap((thread) => thread.pullRequests ?? [])
+    .filter((link) => link.source !== "stack-dismissed");
+  return (
+    links.some((link) => link.snapshot?.state === "merged") &&
+    links.every((link) => link.snapshot != null && link.snapshot.state !== "open")
+  );
+}
+
 /** PR metadata refreshes must not reset the inactivity clock. */
 export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): number {
   return Math.max(
@@ -340,6 +366,7 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const taskFolders = yield* TaskFolders.TaskFolders;
+  const processContext = yield* Effect.context<ProcessRunner.ProcessRunner>();
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
   const orphanSizes = new Map<string, number | null>();
   const noteTerminal = (terminal: TerminalSummary) => {
@@ -393,13 +420,18 @@ const make = Effect.gen(function* () {
   );
 
   const measureWorktree = Effect.fn("storageCleanup.measureWorktree")(
-    function* (worktreePath: string, inspectRepositories: boolean | "plain-folder" = false) {
+    function* (worktreePath: string, inspectRepositories: boolean | "plain-folder" | "jj" = false) {
       const root = yield* fs.realPath(worktreePath);
       const skipped = yield* sharedPnpmVirtualStore(root);
       const incomplete = { bytes: null, reason: "worktree could not be fully inspected" };
       // A plain folder is not a checkout, so a repository at its root counts like one below it.
       const repositories = new Set(inspectRepositories === "plain-folder" ? [] : [pathKey(root)]);
       const moduleStores: string[] = [];
+      if (inspectRepositories === "jj") {
+        // The workspace's own: a colocated Git repository, and jj's store and working-copy state.
+        repositories.add(pathKey(path.join(root, ".git")));
+        moduleStores.push(pathKey(path.join(root, ".jj")));
+      }
       if (inspectRepositories === true && (yield* fs.exists(path.join(root, ".gitmodules")))) {
         const submodules = yield* git.execute({
           operation: "StorageCleanup.nestedRepositories",
@@ -958,6 +990,12 @@ const make = Effect.gen(function* () {
     const hidden = yield* hiddenTrackedChange(cwd);
     if (hidden !== null) return hidden;
     if (rules.worktreeKeepWhen !== "any-local-files") return null;
+    return yield* ignoredFilesReason(cwd);
+  });
+
+  const ignoredFilesReason = Effect.fn("StorageCleanup.ignoredFilesReason")(function* (
+    cwd: string,
+  ) {
     const ignored = yield* git.execute({
       operation: "StorageCleanup.ignoredFiles",
       cwd,
@@ -1240,6 +1278,19 @@ const make = Effect.gen(function* () {
     const scratchRoot = yield* fs
       .realPath(scratchFolderRoot(config.baseDir, path))
       .pipe(Effect.orElseSucceed(() => null));
+    const isScratchFolder = (key: string) =>
+      scratchRoot !== null && pathKey(path.dirname(key)) === pathKey(scratchRoot);
+    // The fork's managed workspaces (patches/workspaces.md): jj workspaces, agent-exec forks and
+    // directory copies, at `<baseDir>/workspaces/<project>/<name>`.
+    const workspacesRoot = path.join(config.baseDir, "workspaces");
+    const realWorkspacesRoot = yield* fs
+      .realPath(workspacesRoot)
+      .pipe(Effect.orElseSucceed(() => null));
+    const workspacesRoots =
+      realWorkspacesRoot === null ? [workspacesRoot] : [workspacesRoot, realWorkspacesRoot];
+    const managedWorkspaceRoot = (key: string) =>
+      realWorkspacesRoot === null ? null : managedWorkspaceRootOf([realWorkspacesRoot], key, path);
+    const removedWorkspaces = removedJjWorkspacesDirectory(config.stateDir, path);
     // Nothing can bring a scratch folder's files back, so these hold whatever the retention says.
     const scratchKeepReason = Effect.fn("StorageCleanup.scratchKeepReason")(function* (
       folder: string,
@@ -1325,7 +1376,7 @@ const make = Effect.gen(function* () {
       decodeCleanupThread(row.payload_json).pipe(
         Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
       ),
-    )).filter((thread) => thread.worktreePath !== null && thread.branch !== null);
+    )).filter((thread) => thread.worktreePath !== null);
     const snapshot = yield* readThreads();
     const threadsById = new Map(snapshot.threads.map((thread) => [thread.id, thread]));
     // Failures are cached too, so one broken repository costs one fetch per sweep.
@@ -1372,10 +1423,20 @@ const make = Effect.gen(function* () {
       canonical(thread.worktreePath!),
     );
     const groups = Map.groupBy(liveThreads, (_thread, index) => liveKeys[index]!);
-    const deletedKeys = yield* Effect.forEach(deletedThreads, (thread) =>
+    const deletedPathKeys = yield* Effect.forEach(deletedThreads, (thread) =>
       canonical(thread.worktreePath!),
     );
-    const deletedByPath = Map.groupBy(deletedThreads, (_thread, index) => deletedKeys[index]!);
+    // No project folders and managed workspaces have no branch; other folders without one
+    // (thread worlds, for example) belong to someone else.
+    const ownedByCleanup = deletedThreads.map(
+      (thread, index) =>
+        thread.branch !== null ||
+        isScratchFolder(deletedPathKeys[index]!) ||
+        managedWorkspaceRoot(deletedPathKeys[index]!) !== null,
+    );
+    const deletedCandidates = deletedThreads.filter((_thread, index) => ownedByCleanup[index]);
+    const deletedKeys = deletedPathKeys.filter((_key, index) => ownedByCleanup[index]);
+    const deletedByPath = Map.groupBy(deletedCandidates, (_thread, index) => deletedKeys[index]!);
     const candidates = [
       ...[...groups].map(
         ([worktreeKey, group]) =>
@@ -1391,7 +1452,7 @@ const make = Effect.gen(function* () {
           worktreeOwner(group) ??
           group[0]!,
       ),
-      ...deletedThreads.filter((_thread, index) => !groups.has(deletedKeys[index]!)),
+      ...deletedCandidates.filter((_thread, index) => !groups.has(deletedKeys[index]!)),
     ];
     for (const thread of candidates) {
       const settings = resolveWorktreeCleanup(serverSettings, thread.projectId);
@@ -1401,10 +1462,8 @@ const make = Effect.gen(function* () {
       const worktreePaths = [worktreePath, worktreeKey];
       const group = groups.get(worktreeKey) ?? [];
       // No project threads have no branch; their folders sit directly in the scratch root.
-      const scratch =
-        thread.branch === null &&
-        scratchRoot !== null &&
-        pathKey(path.dirname(worktreeKey)) === pathKey(scratchRoot);
+      const scratch = thread.branch === null && isScratchFolder(worktreeKey);
+      const managedRoot = thread.branch === null ? managedWorkspaceRoot(worktreeKey) : null;
       const activityAt = Math.max(...group.map(storageCleanupActivityAt));
       const deleted = "workspaceRoot" in thread;
       const settlementChain = deleted
@@ -1437,10 +1496,17 @@ const make = Effect.gen(function* () {
       };
       yield* Effect.gen(function* () {
         const taskFolder = yield* taskFolders.find(worktreePath);
-        // Terminals, sessions and project folders anywhere in a task folder protect all of it.
-        const guardedPath = taskFolder?.root ?? worktreePath;
+        // Terminals, sessions and project folders anywhere in a task folder or managed workspace
+        // protect all of it.
+        const guardedPath = taskFolder?.root ?? managedRoot ?? worktreePath;
         const guardedPaths =
-          taskFolder === null ? worktreePaths : [guardedPath, yield* canonical(guardedPath)];
+          guardedPath === worktreePath
+            ? worktreePaths
+            : [guardedPath, yield* canonical(guardedPath)];
+        const elsewhereInWorkspace = (key: string) =>
+          managedRoot !== null &&
+          key !== worktreeKey &&
+          (key === pathKey(managedRoot) || inside(managedRoot, key));
         const exists = yield* fs.exists(guardedPath).pipe(
           // A stored path under a regular file cannot exist, but access() fails with ENOTDIR.
           Effect.catchIf(
@@ -1455,10 +1521,13 @@ const make = Effect.gen(function* () {
         if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
         if (members.length > 1 && worktreeOwner(members) === undefined)
           return keep(`shared by ${members.length} threads`);
+        if (liveKeys.some(elsewhereInWorkspace))
+          return keep("another thread works in a different folder of this workspace");
         if (project === undefined) return keep("project is unavailable");
         if (!group.every((member) => storageCleanupThreadIdle(member, now, serverSettings)))
           return keep(waitForStop("thread is running or has pending work"));
-        if (thread.branch === null && !scratch) return keep("thread has no branch");
+        if (thread.branch === null && !scratch && managedRoot === null)
+          return keep("thread has no branch");
         if (group.some((member) => member.branch !== thread.branch))
           return keep("a subagent thread's branch differs from this worktree's branch");
         if (yield* hasTerminal(guardedPaths)) return keep(waitForStop("open terminal"));
@@ -1526,6 +1595,8 @@ const make = Effect.gen(function* () {
             canonical(binding.worktreePath),
           );
           const latest = bindings.filter((_binding, index) => bindingKeys[index] === worktreeKey);
+          if (bindingKeys.some(elsewhereInWorkspace))
+            return "another thread works in a different folder of this workspace";
           if (yield* hasTerminal(guardedPaths)) return waitForStop("open terminal");
           if (deleted) {
             if (
@@ -1651,6 +1722,89 @@ const make = Effect.gen(function* () {
               yield* Effect.logInfo("storage cleanup removed scratch folder", {
                 threadId: thread.id,
               });
+            }),
+          );
+        }
+        if (managedRoot !== null) {
+          // An agent-exec fork has a repository of its own; jj workspaces share the project's.
+          const isolatedRoot = yield* findIsolatedWorkspace(managedRoot).pipe(
+            Effect.orElseSucceed(() => undefined),
+          );
+          if (isolatedRoot === undefined)
+            return keep("the workspace's environment could not be inspected");
+          if (isolatedRoot !== null && pathKey(isolatedRoot) !== pathKey(managedRoot))
+            return keep("workspace is inside another workspace's environment");
+          const ownStore = isolatedRoot !== null;
+          const store = yield* fs.stat(path.join(managedRoot, ".jj", "repo")).pipe(Effect.option);
+          // Directory copies have no history that tells what a remote holds.
+          if (Option.isNone(store) || (store.value.type === "Directory") !== ownStore)
+            return keep("not a jj workspace");
+          // Nothing recreates an agent-exec fork when its thread resumes.
+          if (ownStore && !deleted)
+            return keep("isolated workspaces are removed only once their thread is deleted");
+          if (!eligible && settings.worktreeOnMerge && storageCleanupPullRequestsMerged(members)) {
+            eligible = true;
+            removalReason = "pull request was merged";
+          }
+          if (!eligible && !unchangedApplies) return keep(notDueReason);
+          const blocked = yield* blockedSinceCheck();
+          if (blocked !== null) return keep(blocked);
+          const inspect = inspectJjWorkspace({ root: managedRoot, ownStore }).pipe(
+            Effect.provide(processContext),
+          );
+          // jj cannot list ignored files; the Git repository of a colocated workspace can.
+          const ignoredFiles = Effect.gen(function* () {
+            if (settings.worktreeKeepWhen !== "any-local-files") return null;
+            return (yield* fs.exists(path.join(managedRoot, ".git")))
+              ? yield* ignoredFilesReason(managedRoot)
+              : "ignored files cannot be listed without Git";
+          });
+          const inspection = yield* inspect;
+          if (inspection.keep !== null) return keep(inspection.keep);
+          const needsUnchanged = !eligible;
+          if (needsUnchanged) {
+            if (!inspection.unchanged) return keep(notDueReason);
+            removalReason = "no changes beyond trunk";
+          }
+          const ignored = yield* ignoredFiles;
+          if (ignored !== null) return keep(ignored);
+          // Walked before the lease; provider startup must not wait for directory traversal.
+          const measured = yield* measureWorktree(managedRoot, "jj");
+          if (measured.reason !== null) return keep(measured.reason);
+          const removedRoot =
+            managedWorkspaceRootOf(workspacesRoots, worktreePath, path) ?? managedRoot;
+          return yield* withWorkspaceLease(
+            worktreePath,
+            Effect.gen(function* () {
+              const blockedSinceLease = yield* blockedSinceCheck();
+              if (blockedSinceLease !== null) return keep(blockedSinceLease);
+              if (yield* settingsChangedSinceCheck) return keep("settings changed since check");
+              // Snapshotted again: an edit since the first look would otherwise go with the folder.
+              const final = yield* inspect;
+              if (final.keep !== null) return keep(final.keep);
+              if (needsUnchanged && !final.unchanged) return keep("commits changed since check");
+              const ignoredSinceLease = yield* ignoredFiles;
+              if (ignoredSinceLease !== null) return keep(ignoredSinceLease);
+              if (ownStore) {
+                yield* deleteIsolatedWorkspace(managedRoot).pipe(Effect.provide(processContext));
+              } else {
+                // A thread that resumes here gets the workspace back on the same commits.
+                if (group.length > 0)
+                  yield* recordRemovedJjWorkspace(removedWorkspaces, {
+                    root: removedRoot,
+                    name: yield* jjWorkspaceName(managedRoot).pipe(Effect.provide(processContext)),
+                    revisions: final.revisions,
+                  });
+                yield* deleteJjWorkspace(managedRoot).pipe(Effect.provide(processContext));
+              }
+              entries.push({
+                ...entry,
+                path: removedRoot,
+                outcome: "removed",
+                reason: sentence(removalReason),
+                bytes: measured.bytes,
+              });
+              yield* Effect.logInfo("storage cleanup removed workspace", { threadId: thread.id });
             }),
           );
         }
@@ -1951,6 +2105,20 @@ const make = Effect.gen(function* () {
         ),
       );
     }
+    // Records of workspaces no remaining thread can resume in.
+    const resumable = new Set(
+      snapshot.threads.flatMap((thread) =>
+        thread.worktreePath === null
+          ? []
+          : (managedWorkspaceRootOf(workspacesRoots, path.resolve(thread.worktreePath), path) ??
+            []),
+      ),
+    );
+    yield* pruneRemovedJjWorkspaces(removedWorkspaces, (root) => resumable.has(root)).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("storage cleanup could not prune removed workspace records", { error }),
+      ),
+    );
     yield* reportOrphanWorktrees(
       roots,
       yield* projectStore.list({ includeDeleted: true }),
@@ -2349,4 +2517,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(StorageCleanup, make);
+export const layer = Layer.effect(StorageCleanup, make).pipe(Layer.provide(ProcessRunner.layer));

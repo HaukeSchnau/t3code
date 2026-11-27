@@ -11,14 +11,26 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { scratchFolderRoot } from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { findRepositoryMarker, realpathOrResolve } from "../vcs/RepositoryMarker.ts";
+import { createJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
+import {
+  forgetRemovedJjWorkspace,
+  managedWorkspaceRootOf,
+  readRemovedJjWorkspace,
+  removedJjWorkspaceName,
+  removedJjWorkspacesDirectory,
+} from "./removedJjWorkspaces.ts";
+import { removeWorkspaceDirectory } from "./WorkspaceCommand.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 import * as TaskFolders from "./TaskFolders.ts";
 import { TerminalCwdRecovery } from "../terminal/Manager.ts";
@@ -27,12 +39,15 @@ export class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateEr
   "WorktreeRecreateError",
   {
     worktreePath: Schema.String,
-    branch: Schema.String,
+    // Fork: absent for a jj workspace, which has no branch (patches/workspaces.md).
+    branch: Schema.optional(Schema.String),
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
-    return `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}.`;
+    return this.branch === undefined
+      ? `Could not recreate the workspace at ${this.worktreePath}.`
+      : `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}.`;
   }
 }
 
@@ -88,6 +103,91 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     },
     // Turn start reports a folder that is still missing.
     Effect.orElseSucceed(() => undefined),
+  );
+
+  // Fork (patches/workspaces.md): storage cleanup removes a jj workspace once a remote has its
+  // work, and records the commits it was on so a thread that resumes gets it back there.
+  // Optional, so this layer keeps upstream's requirements; the server always has a spawner.
+  const processRunner = yield* Effect.serviceOption(ChildProcessSpawner.ChildProcessSpawner).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.undefined,
+        onSome: (spawner) =>
+          ProcessRunner.make().pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+      }),
+    ),
+  );
+  const recreateJjWorkspace = Effect.fn("restoreMissingWorktree.recreateJjWorkspace")(
+    function* (thread: WorktreeThread, worktreePath: string) {
+      const workspacesRoot = path.join(serverConfig.baseDir, "workspaces");
+      const removedWorkspaces = removedJjWorkspacesDirectory(serverConfig.stateDir, path);
+      const realRoot = yield* fileSystem
+        .realPath(workspacesRoot)
+        .pipe(Effect.orElseSucceed(() => workspacesRoot));
+      const root = managedWorkspaceRootOf(
+        [workspacesRoot, realRoot],
+        path.resolve(worktreePath),
+        path,
+      );
+      if (root === null || (yield* fileSystem.exists(root).pipe(Effect.orElseSucceed(() => true))))
+        return undefined;
+      const record = yield* readRemovedJjWorkspace(removedWorkspaces, root);
+      if (Option.isNone(record) || processRunner === undefined) return undefined;
+      const project = yield* projects.getById(thread.projectId).pipe(
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (project === undefined) return undefined;
+      yield* Effect.logWarning("recreating removed jj workspace", { threadId: thread.id, root });
+      yield* fileSystem
+        .makeDirectory(path.dirname(root), { recursive: true })
+        .pipe(Effect.mapError((cause) => new WorktreeRecreateError({ worktreePath, cause })));
+      // The old name may belong to another project's workspace by now, or be what a concurrent
+      // restore of another root picks; a name derived from this root is neither.
+      const repository = findRepositoryMarker(project.workspaceRoot)?.root;
+      const workspaces =
+        repository === undefined
+          ? Effect.succeedNone
+          : listJjWorkspaces(repository).pipe(
+              Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+              Effect.option,
+            );
+      const taken = new Set(
+        Option.getOrElse(yield* workspaces, () => []).map((entry) => entry.name),
+      );
+      const ownName = removedJjWorkspaceName(record.value);
+      let name = ownName;
+      for (let suffix = 2; taken.has(name); suffix++) name = `${ownName}-${suffix}`;
+      yield* createJjWorkspace({
+        projectRoot: project.workspaceRoot,
+        destination: root,
+        name,
+        description: `wip: ${name}`,
+        revisions: record.value.revisions,
+      }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+        Effect.mapError((cause) => new WorktreeRecreateError({ worktreePath, cause })),
+      );
+      // Concurrent adds of one name can each succeed while jj keeps one registration. The record
+      // stays, and so does the folder unless jj shows the name at another root.
+      const registration = Option.map(yield* workspaces, (entries) =>
+        entries.find((entry) => entry.name === name),
+      );
+      const elsewhere = Option.getOrUndefined(registration)?.root;
+      if (elsewhere == null || realpathOrResolve(elsewhere) !== realpathOrResolve(root)) {
+        if (elsewhere != null) yield* removeWorkspaceDirectory(root).pipe(Effect.ignore);
+        return yield* new WorktreeRecreateError({
+          worktreePath,
+          cause: new Error(`jj did not register the workspace ${name} at ${root}`),
+        });
+      }
+      yield* forgetRemovedJjWorkspace(removedWorkspaces, root).pipe(Effect.ignore);
+      return { project, worktreePath };
+    },
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, path),
   );
 
   // Only folders holding nothing but leftovers are cleared, never user files.
@@ -196,7 +296,11 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
   return Effect.fn("restoreMissingWorktree")(function* (thread: WorktreeThread) {
     const { worktreePath, branch } = thread;
     if (worktreePath === null) return;
-    if (branch === null) return yield* recreateScratchFolder(thread, worktreePath);
+    if (branch === null) {
+      const workspace = yield* recreateJjWorkspace(thread, worktreePath);
+      if (workspace !== undefined) return workspace;
+      return yield* recreateScratchFolder(thread, worktreePath);
+    }
     // A task folder can miss one repository's worktree while the thread's own folder is there.
     const taskFolder = yield* taskFolders.find(worktreePath).pipe(Effect.orElseSucceed(() => null));
     if (taskFolder !== null) {

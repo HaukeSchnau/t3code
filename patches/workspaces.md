@@ -60,8 +60,8 @@ still names, and jj workspace names. Names never follow later title changes.
 
 Settlement and archiving hide a workspace in the pickers and never delete or merge files.
 Explicit deletion through `vcs.removeWorktree` refuses while an unarchived, unsettled thread or a
-running thread uses the directory. Upstream's automatic worktree cleanup only touches
-`<baseDir>/worktrees`, so it never sees managed workspaces. Cancelling a launch during
+running thread uses the directory. Storage cleanup removes jj workspaces under the worktree rules
+once a remote has their work, and recreates one for a thread that resumes (`storage-cleanup.md`). Cancelling a launch during
 preparation removes the workspace it just created, matching upstream's "Work locally" retry.
 
 Setup scripts run in the workspace terminal as upstream does. Inside an isolated workspace,
