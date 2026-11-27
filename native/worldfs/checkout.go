@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -280,6 +281,7 @@ func (m *machine) checkout(t *thread, r *repo, who, why string, force bool) erro
 			log.Printf("backfill flag %s: %v", r.name, err)
 		}
 	}
+	m.bg.Add(1)
 	go m.initJJ(t, r, dir, ready)
 	return nil
 }
@@ -302,14 +304,19 @@ func rollbackCheckout(dir, admin string) {
 	}
 }
 
-// initJJ colocates a jj repo in a fresh checkout.
+// initJJ colocates a jj repo in a fresh checkout. Callers add it to m.bg.
 func (m *machine) initJJ(t *thread, r *repo, dir string, ready chan struct{}) {
+	defer m.bg.Done()
 	defer close(ready)
 	if !m.jj {
 		return
 	}
 	t0 := time.Now()
-	cmd := exec.Command("jj", "git", "init", "--colocate")
+	// Bounded, because an upgrade's drain waits for it; recover reruns an
+	// init that never finished.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "jj", "git", "init", "--colocate")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("jj %s in %s: %v %s", r.name, t.ID, err, out)
@@ -747,6 +754,7 @@ func (m *machine) recover() {
 					close(tr.jjReady)
 				} else {
 					_ = os.RemoveAll(filepath.Join(dir, ".jj"))
+					m.bg.Add(1)
 					go m.initJJ(t, w.repoOrStub(name), dir, tr.jjReady)
 				}
 			}

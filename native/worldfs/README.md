@@ -75,7 +75,7 @@ caller inside a thread (any mount namespace but the daemon's) may only use `chec
 | `close`    | `thread`, `repo`                                                                                                                                         | Codes: `work`, `busy`, `not-checked-out`.                                                                                                                                                  |
 | `teardown` | `thread`                                                                                                                                                 | Codes: `live`, `work`. Branches in `refs/heads` survive; they live in the mirror.                                                                                                          |
 | `sync`     | `thread`                                                                                                                                                 | Applies checkouts and catalog moves to every live namespace of the thread. A launch calls it from its new namespace before it starts the command, so nothing that raced `binds` is missed. |
-| `stats`    |                                                                                                                                                          | Repos, threads, RSS, OS threads, fds.                                                                                                                                                      |
+| `stats`    |                                                                                                                                                          | `revision`, a pending `upgrade` (`revision`, `since`, `waitingFor`), repos, threads, RSS, OS threads, fds.                                                                                 |
 
 A repo lands at `<path>/<dir><rest>` for the longest matching `layout` prefix, else at
 `<path>/<forge path>`.
@@ -97,11 +97,32 @@ deletes files only runs once its phase is saved. On start the daemon lazily unmo
 Namespaces see the new mount because agent-exec binds the parent of `mnt/views`, which receives
 host mount events.
 
+## Upgrades
+
+The daemon follows its Release without a restart by systemd. On every poll it asks the command it
+was started as (infra's `current/bin/worldfs`) for its revision with `worldfs version`, again only
+once that command resolves to another file. When the revision differs from its own, `stats` lists
+the upgrade as pending, with the threads it waits for.
+
+The daemon waits until no thread has a live mount namespace and none called `register` or `binds`
+in the last minute. A restart detaches every live namespace's views until the new daemon rebinds
+them, and a file a process holds open in a view stays dead. A thread without a live namespace has
+nothing to lose: its next launch gets its binds from the new daemon.
+
+Then it stops accepting connections, waits for the requests and jj inits in flight, and executes
+the command in its own process, passing the control socket's listener in `WORLDFS_LISTEN_FD`.
+Callers that connect meanwhile wait in the listener's backlog. The new process starts as after a
+crash (above), with the listener it was given. systemd sees the same main process throughout.
+
+`nix/worldfs.nix` sets the revision to the store hash of the daemon's source. A Release that
+changes no file in `native/worldfs` leaves the daemon alone, and hosts that run the same source
+report the same revision.
+
 ## Tests
 
 `go test ./...` covers the cap and throttle, idle close, unpushed-work status, catalog refresh,
-recovery and teardown with real git and jj. `TestIntegration` runs the daemon against real FUSE
-and bwrap namespaces built like agent-exec's; it needs `/dev/fuse`, user namespaces, `bwrap`,
+recovery, teardown and when an upgrade runs, with real git and jj. `TestIntegration` runs the daemon against real FUSE
+and bwrap namespaces built like agent-exec's, up to an upgrade to another build; it needs `/dev/fuse`, user namespaces, `bwrap`,
 `unshare` and `nsenter`, so CI skips it:
 
 ```sh
