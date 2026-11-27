@@ -214,6 +214,13 @@ export const make = Effect.gen(function* () {
         yield* Effect.logInfo("Agent scopes are off: no systemd user manager");
         return undefined;
       }
+      // systemd 262 expands ${VAR} in a scope's command line by default, which blanks shell
+      // variables in watch and tool commands. systemd-run before 254 rejects the option.
+      const expansionProbe = yield* run(systemdRun, ["--expand-environment=no", "--version"]);
+      const noExpansion =
+        expansionProbe._tag === "Some" && expansionProbe.value.code === 0
+          ? ["--expand-environment=no"]
+          : [];
       const setProperties = Effect.fn("agentScope.setProperties")(function* (
         slice: string,
         properties: ReadonlyArray<string>,
@@ -281,6 +288,7 @@ export const make = Effect.gen(function* () {
         getfattr,
         runtimeDir,
         supportsOomPolicy,
+        noExpansion,
         applyMemoryLimits,
         sessionMemoryMax: () => sessionMemoryMax,
       };
@@ -568,6 +576,7 @@ export const make = Effect.gen(function* () {
         // OOM kills, so the agent sees the killed tool and carries on.
         options: [
           ...SCOPE_OPTIONS,
+          ...scope.noExpansion,
           ...(scope.supportsOomPolicy ? ["--property=OOMPolicy=continue"] : []),
           ...(sharedScope ? [] : [`--property=MemoryMax=${scope.sessionMemoryMax()}`]),
           ...(owned ? [] : ["--collect"]),
