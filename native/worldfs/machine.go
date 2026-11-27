@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -60,8 +62,9 @@ type thread struct {
 	Throttled []time.Time            `json:"throttled,omitempty"`
 	Refusals  []refusal              `json:"refusals,omitempty"`
 
-	pending      int    // checkouts admitted but not finished
-	pendingBytes uint64 // their sizes
+	pending      int       // checkouts admitted but not finished
+	pendingBytes uint64    // their sizes
+	launched     time.Time // last register or binds; held under m.mu
 	ops          sync.RWMutex
 	gone         bool       // torn down; held under ops and m.mu
 	syncMu       sync.Mutex // one reconcile at a time, so none applies a stale snapshot
@@ -113,10 +116,28 @@ type machine struct {
 	hostMnt uint64
 	live    string // major:minor of the running FUSE mount
 
+	// Following the Release, see upgrade.go.
+	release     string // the command a new Release replaces
+	releaseSeen string // what it resolved to when last asked
+	releaseRev  string // and that file's revision
+	releaseErr  string // the last failure to ask, logged once
+	exec        func(path string, argv, env []string) error
+
+	// The control socket, paused while the daemon upgrades.
+	listener *net.UnixListener
+	// peerTimeout bounds how long a caller may take to send its line and
+	// to read the answer, so a stalled one can't hold off the drain.
+	peerTimeout time.Duration
+	serving     chan struct{}  // closed once the accept loop returned
+	handlers    sync.WaitGroup // requests in flight
+	bg          sync.WaitGroup // jj inits in flight
+	periodic    sync.Mutex     // one periodic job at a time
+
 	mu      sync.Mutex
 	worlds  map[string]*world
 	threads map[string]*thread
 	byKey   map[uint64]*thread
+	upgrade *pendingUpgrade
 }
 
 // nsOps is how the machine reaches thread namespaces; tests replace it.
@@ -135,7 +156,7 @@ var threadIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 func newMachine(cache, state, socket string, p policy, ns nsOps) *machine {
 	return &machine{
-		cache: cache, state: state, socket: socket, policy: p, jj: true, ns: ns,
+		cache: cache, state: state, socket: socket, policy: p, jj: true, ns: ns, exec: syscall.Exec, peerTimeout: 10 * time.Second,
 		views:   filepath.Join(state, "mnt", "views"),
 		worlds:  map[string]*world{},
 		threads: map[string]*thread{},

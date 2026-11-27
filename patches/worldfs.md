@@ -24,7 +24,8 @@ control socket and the rules. In short:
 - `status` reports unpushed work across checkouts, worktree admin dirs and the mirrors'
   `refs/heads`; `teardown` refuses while any of it would be lost.
 - The Linux Release ships the binary (`nix/worldfs.nix`, a payload in `flake.nix`). Infra runs it
-  as the `worldfs` user unit and owns the machine cache.
+  as the `worldfs` user unit and owns the machine cache. The daemon moves to a new Release's
+  binary in its own process once no thread runs, so no deploy restarts it.
 
 agent-exec runs each thread's agent inside its world (`native/agent-exec/worlds.py`):
 
