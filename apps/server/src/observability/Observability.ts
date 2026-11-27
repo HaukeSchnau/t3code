@@ -15,6 +15,7 @@ import * as Statement from "effect/sql/Statement";
 import * as ServerConfig from "../config.ts";
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import * as ServerLogger from "../serverLogger.ts";
+import { boundTraces } from "./BoundedTraces.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 import * as HeapAttribution from "./HeapAttribution.ts";
 import * as OtlpExportFailures from "./OtlpExportFailures.ts";
@@ -82,7 +83,7 @@ export const layer = Layer.unwrap(
         yield* heapAttribution.run;
 
         return Layer.mergeAll(
-          Layer.succeed(Tracer.Tracer, heapAttribution.tracer),
+          Layer.succeed(Tracer.Tracer, boundTraces(heapAttribution.tracer)),
           BrowserTraceCollector.layer(sink),
         );
       }),
