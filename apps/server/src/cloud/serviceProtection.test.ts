@@ -69,7 +69,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       const calls = NodePath.join(root, "calls");
       const runScript = (protection: ServiceProtection.ProtectionPlan, mode: "apply" | "undo") => {
         const script = ServiceProtection.renderPrivilegedScript(protection, mode);
-        const redirected = script.replaceAll('"/proc/$pid/', `"${proc}/$pid/`);
+        const redirected = script.replaceAll('"/proc/$pid/', '"$PROC_ROOT/$pid/');
         expect(redirected).not.toBe(script);
         const result = NodeChildProcess.spawnSync("/bin/sh", ["-c", redirected], {
           encoding: "utf8",
@@ -78,6 +78,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
             PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ""}`,
             CALLS: calls,
             MAIN_PID: String(mainPid),
+            PROC_ROOT: proc,
           },
         });
         expect(result.stderr).toBe("");
