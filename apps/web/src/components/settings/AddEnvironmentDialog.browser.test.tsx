@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     AsyncResult.success(Option.some({ origin: "https://box.example.test", label: "Schnau ID" })),
   ),
   startOidcSignIn: vi.fn((_origin: string) => {}),
+  connectPairing: vi.fn(async (_input: unknown) => AsyncResult.success("box")),
 }));
 
 vi.mock(import("../../state/use-atom-command"), async (original) => ({
@@ -27,6 +28,7 @@ vi.mock(import("../../state/use-atom-command"), async (original) => ({
 vi.mock(import("~/connection/onboarding"), async (original) => ({
   ...(await original()),
   connectSshEnvironment: mocks.connectSshEnvironment as never,
+  connectPairing: mocks.connectPairing as never,
   readOidcSignInOffer: mocks.readOidcSignInOffer as never,
 }));
 vi.mock(import("~/oidcSignIn"), async (original) => ({
@@ -75,6 +77,7 @@ function setup() {
   mocks.connectSshEnvironment.mockClear();
   mocks.readOidcSignInOffer.mockReset();
   mocks.startOidcSignIn.mockReset();
+  mocks.connectPairing.mockClear();
 }
 
 /** SSH needs the desktop bridge; sign-in needs its absence, so only the SSH tests stub it. */
@@ -111,6 +114,29 @@ describe("AddEnvironmentDialog", () => {
 
     expect(mocks.readOidcSignInOffer).toHaveBeenCalledWith("box.example.test");
     expect(mocks.startOidcSignIn).toHaveBeenCalledWith("https://box.example.test");
+  });
+
+  it("signs in on the desktop in a window of its own and pairs with the code it returns", async () => {
+    setup();
+    const signInWithOidc = vi.fn(async (_input: { origin: string }) => ({
+      _tag: "Signed" as const,
+      pairingCode: "SIGNED1",
+    }));
+    using _bridge = stubGlobal("desktopBridge", { signInWithOidc });
+    await using _screen = await render(<Owner />);
+
+    await userEvent.click(page.getByRole("button", { name: "Add environment" }));
+    await userEvent.type(page.getByPlaceholder("backend.example.com"), "box.example.test");
+    await userEvent.click(page.getByPlaceholder("PAIRCODE"));
+    await userEvent.click(page.getByRole("button", { name: "Sign in with Schnau ID" }));
+
+    expect(signInWithOidc).toHaveBeenCalledWith({ origin: "https://box.example.test" });
+    expect(mocks.startOidcSignIn).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(mocks.connectPairing).toHaveBeenCalledWith(
+        expect.objectContaining({ pairingCode: "SIGNED1" }),
+      ),
+    );
   });
 
   it("keeps the offer of the host the field shows when an older lookup answers last", async () => {

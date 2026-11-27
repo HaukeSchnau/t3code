@@ -2130,6 +2130,53 @@ describe("EnvironmentRegistry routes", () => {
     }),
   );
 
+  it.effect("a saved-route-only pairing leaves an environment that is off or lost the route", () =>
+    Effect.gen(function* () {
+      const repaired = new BearerConnectionTarget({ ...LAN_TARGET, connectionId: "bearer:again" });
+      const again = lanRegistration(
+        repaired,
+        new BearerConnectionProfile({ ...LAN_PROFILE, connectionId: repaired.connectionId }),
+      );
+      const off = yield* makeHarness(
+        [LAN_TARGET, RELAY_TARGET],
+        [LAN_PROFILE],
+        [[LAN_TARGET.connectionId, BEARER_CREDENTIAL]],
+        { initialDisabled: [LAN_TARGET.environmentId] },
+      );
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        expect(yield* registry.register(again, { savedRouteOnly: true })).toBe(false);
+        expect(routesOf(yield* Ref.get(off.storedTargets), LAN_TARGET.environmentId)).toEqual([
+          LAN_TARGET,
+          RELAY_TARGET,
+        ]);
+      }).pipe(Effect.provide(off.layer), Effect.scoped);
+
+      const routeRemoved = yield* makeHarness([RELAY_TARGET]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        expect(yield* registry.register(again, { savedRouteOnly: true })).toBe(false);
+        expect(
+          routesOf(yield* Ref.get(routeRemoved.storedTargets), LAN_TARGET.environmentId),
+        ).toEqual([RELAY_TARGET]);
+      }).pipe(Effect.provide(routeRemoved.layer), Effect.scoped);
+
+      const saved = yield* makeHarness(
+        [LAN_TARGET, RELAY_TARGET],
+        [LAN_PROFILE],
+        [[LAN_TARGET.connectionId, BEARER_CREDENTIAL]],
+      );
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        expect(yield* registry.register(again, { savedRouteOnly: true })).toBe(true);
+        expect(routesOf(yield* Ref.get(saved.storedTargets), LAN_TARGET.environmentId)).toEqual([
+          repaired,
+          RELAY_TARGET,
+        ]);
+      }).pipe(Effect.provide(saved.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("re-pairing at another loopback address prefers the new route", () =>
     Effect.gen(function* () {
       const loopback = (connectionId: string, host: string) =>

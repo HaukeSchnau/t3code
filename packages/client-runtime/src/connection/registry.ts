@@ -104,11 +104,12 @@ export class EnvironmentRegistry extends Context.Service<
     /**
      * Succeeds with `false` and changes nothing when the environment is
      * platform-managed, since the host owns that entry. With `knownAddressOnly`, it fails like
-     * `assertKnownAddress`, checked under the environment's lease.
+     * `assertKnownAddress`, checked under the environment's lease. With `savedRouteOnly`, it also
+     * succeeds with `false` unless the environment is on and still has a route at that address.
      */
     readonly register: (
       registration: ConnectionRegistration,
-      options?: { readonly knownAddressOnly?: boolean },
+      options?: { readonly knownAddressOnly?: boolean; readonly savedRouteOnly?: boolean },
     ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError | ConnectionBlockedError>;
     /**
      * Fails when the route would add a new address to a saved user environment. Pairing that does
@@ -567,7 +568,7 @@ export const make = Effect.gen(function* () {
 
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
-    options?: { readonly knownAddressOnly?: boolean },
+    options?: { readonly knownAddressOnly?: boolean; readonly savedRouteOnly?: boolean },
   ) {
     const registered = connectionRegistrationCatalogEntry(registration);
     const environmentId = registered.target.environmentId;
@@ -582,6 +583,13 @@ export const make = Effect.gen(function* () {
           yield* assertKnownAddress(route);
         }
         const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
+        if (
+          options?.savedRouteOnly === true &&
+          (previous?.enabled !== true ||
+            findRouteToSameAddress(connectionRoutes(previous), route) === undefined)
+        ) {
+          return false;
+        }
         let entry = registered;
         if (previous !== undefined) {
           const existing = connectionRoutes(previous);

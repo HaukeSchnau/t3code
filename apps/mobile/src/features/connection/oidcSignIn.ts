@@ -4,9 +4,7 @@ import type { EnvironmentId, PeerLinkSummary } from "@t3tools/contracts";
 import {
   buildOidcSignInUrl,
   describeOidcSignInError,
-  readHostedPairingRequest,
-  readOidcSignInClientState,
-  readOidcSignInFailure,
+  readOidcSignInResult,
   setPairingTokenOnUrl,
 } from "@t3tools/shared/remote";
 import Constants from "expo-constants";
@@ -53,8 +51,6 @@ async function openSignInSheet(
   options?: { readonly prompt?: "none" },
 ): Promise<PeerFanOut.PeerSignInResult> {
   const returnTo = `${appScheme()}://oidc`;
-  // Another app can open this scheme while the sheet is up, so only a result that brings this
-  // attempt's value back from the server counts.
   const clientState = Base64Url.encode(ExpoCrypto.getRandomBytes(24));
   // A shared session makes iOS ask "wants to use ... to sign in" every time; the fleet's
   // provider signs in without cookies, so the ephemeral sheet stays silent.
@@ -66,15 +62,7 @@ async function openSignInSheet(
   // Android rejects when no browser can show the sheet.
   if (result === null) return { _tag: "Failed", error: OIDC_BROWSER_UNAVAILABLE };
   if (result.type !== "success") return { _tag: "Cancelled" };
-  const url = new URL(result.url);
-  if (readOidcSignInClientState(url) !== clientState) {
-    return { _tag: "Failed", error: "sign_in_failed" };
-  }
-  const request = readHostedPairingRequest(url);
-  if (request && URL.canParse(request.host) && new URL(request.host).origin === origin) {
-    return { _tag: "Signed", pairingCode: request.token };
-  }
-  return { _tag: "Failed", error: readOidcSignInFailure(url)?.error ?? "sign_in_failed" };
+  return readOidcSignInResult(new URL(result.url), { origin, clientState });
 }
 
 /**

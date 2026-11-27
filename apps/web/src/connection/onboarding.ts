@@ -51,6 +51,14 @@ export const findPeerSignIns = createRuntimeCommand(connectionAtomRuntime, {
     PeerFanOut.findPeerSignIns(input),
 });
 
+export const runSignInRecovery = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:connection:run-sign-in-recovery",
+  scheduler: onboardingScheduler,
+  concurrency: { mode: "singleFlight", key: () => "sign-in-recovery" },
+  execute: (input: Parameters<typeof PeerFanOut.runSignInRecovery<never>>[0]) =>
+    PeerFanOut.runSignInRecovery(input),
+});
+
 export const reachesEnvironment = createRuntimeCommand(connectionAtomRuntime, {
   label: "web:connection:reaches-environment",
   execute: (input: { readonly host: string; readonly environmentId: EnvironmentId }) =>

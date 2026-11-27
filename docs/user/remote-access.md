@@ -151,10 +151,19 @@ pairing code. Register the server as a confidential client whose redirect URI is
 | `T3CODE_OIDC_RETURN_ORIGINS`     | Comma-separated web origins of other T3 Code servers, and app schemes such as `t3code://`, that may receive a sign-in. The server's own origin is always allowed. |
 
 The pairing page then shows **Sign in with** the label. In **Add environment** on
-web, type the host and the button appears. On mobile, leave the code empty and
-tap Connect. The desktop app still pairs with codes. A sign-in pairs the device
-the way a pairing link does, so its session shows in `t3 auth session list`
-with the subject `oidc:<sub>`, and you revoke it the same way.
+web and desktop, type the host and the button appears; the desktop app signs in
+in a window of its own. On mobile, leave the code empty and tap Connect. A
+sign-in pairs the device the way a pairing link does, so its session shows in
+`t3 auth session list` with the subject `oidc:<sub>`, and you revoke it the same
+way. Like a session from a pairing link, it stays valid while the device keeps
+using it and ends after 30 days without use.
+
+When such a server stops accepting the desktop app, for example after 30 days
+away, the app signs in again on its own in a hidden window, as long as the
+provider recognizes the device without asking. If the provider needs your input,
+sign in through **Add environment** with the same host. Revoking the desktop's
+session on the server lets it sign in again the same way; to keep it out, turn the
+environment off on the desktop or stop the provider from accepting the device.
 
 Once a browser or the mobile app is connected to one such server, it also signs in
 to the environments that server [links to](#link-another-environment), without a
