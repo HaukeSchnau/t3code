@@ -12758,10 +12758,10 @@
       "v": "v"
     }
   ],
-  "2253d131ab9b959f": "Worlds",
-  "ca3d234e8af0ec7c": "Show only {world}",
-  "fbd3beda7ee0a8b3": "Show only threads outside worlds",
-  "1d12b03128c7cd43": "{dir}: holds work no remote has",
+  "2253d131ab9b959f": "Mondes",
+  "ca3d234e8af0ec7c": "Afficher uniquement {world}",
+  "fbd3beda7ee0a8b3": "Afficher uniquement les fils hors des mondes",
+  "1d12b03128c7cd43": "{dir} : contient du travail absent de tous les remotes",
   "e7f35f60e6229cf5": "App de bureau",
   "77be1b7e2a1d3d31": "{count, plural, one {Mettre à jour {count} machine ?} other {Mettre à jour {count} machines ?}}",
   "e4892b21e88abb60": "{count, plural, one {{count} mise à jour de fournisseur} other {{count} mises à jour de fournisseurs}}",
