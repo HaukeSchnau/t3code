@@ -1,4 +1,5 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { describeOidcSignInError } from "@t3tools/shared/remote";
 import { m } from "~/i18n/messages";
 import { pipe } from "effect/Function";
 import { ChevronsLeftRightEllipsisIcon, PlusIcon, TerminalIcon } from "lucide-react";
@@ -52,7 +53,7 @@ import {
   connectSshEnvironment as connectSshEnvironmentAtom,
   readOidcSignInOffer as readOidcSignInOfferAtom,
 } from "~/connection/onboarding";
-import { canSignInWithOidc, startOidcSignIn } from "~/oidcSignIn";
+import { offersOidcSignIn, startOidcSignIn } from "~/oidcSignIn";
 import { useEnvironmentQuery } from "~/state/query";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
 import { type EnvironmentPresentation, useRelayEnvironmentDiscovery } from "~/state/environments";
@@ -220,7 +221,10 @@ export function AddEnvironmentDialog({
     setIsAddingSavedBackend(false);
   };
 
-  const handleAddSavedBackend = async () => {
+  const handleAddSavedBackend = async (signedIn?: {
+    readonly host: string;
+    readonly pairingCode: string;
+  }) => {
     if (savedBackendMode === "ssh") {
       let target: DesktopSshEnvironmentTarget;
       try {
@@ -242,10 +246,9 @@ export function AddEnvironmentDialog({
     onErrorChange(null);
     let remotePairingInput: ReturnType<typeof parseRemotePairingFields>;
     try {
-      remotePairingInput = parseRemotePairingFields({
-        host: savedBackendHost,
-        pairingCode: savedBackendPairingCode,
-      });
+      remotePairingInput = parseRemotePairingFields(
+        signedIn ?? { host: savedBackendHost, pairingCode: savedBackendPairingCode },
+      );
     } catch (error) {
       const message =
         error instanceof Error
@@ -383,7 +386,7 @@ export function AddEnvironmentDialog({
 
   // A route joins a known machine, which a sign-in's pairing page cannot tell apart from a new one.
   const readSignInOffer = async (host: string) => {
-    if (routeTarget !== null || !canSignInWithOidc() || host.trim() === "") return;
+    if (routeTarget !== null || !offersOidcSignIn() || host.trim() === "") return;
     if (signInOffer?.host === host) return;
     const result = await readOidcSignInOffer(host.trim());
     if (savedBackendHostRef.current !== host) return;
@@ -392,6 +395,27 @@ export function AddEnvironmentDialog({
         ? { host, ...result.value.value }
         : null,
     );
+  };
+
+  // The desktop signs in in a window of its own and pairs with the code it brings back.
+  const handleOidcSignIn = async (origin: string) => {
+    const signIn = window.desktopBridge?.signInWithOidc;
+    if (signIn === undefined) {
+      startOidcSignIn(origin);
+      return;
+    }
+    setIsAddingSavedBackend(true);
+    onErrorChange(null);
+    const result = await signIn({ origin }).catch(() => ({
+      _tag: "Failed" as const,
+      error: "sign_in_failed",
+    }));
+    if (result._tag === "Signed") {
+      await handleAddSavedBackend({ host: origin, pairingCode: result.pairingCode });
+      return;
+    }
+    setIsAddingSavedBackend(false);
+    if (result._tag === "Failed") onErrorChange(describeOidcSignInError(result.error));
   };
 
   const handleSavedBackendHostChange = (value: string) => {
@@ -485,7 +509,7 @@ export function AddEnvironmentDialog({
         <div className="grid">
           <Button
             disabled={isAddingSavedBackend}
-            onClick={() => startOidcSignIn(signInOffer.origin)}
+            onClick={() => void handleOidcSignIn(signInOffer.origin)}
           >
             <T>
               Sign in with <Var>{signInOffer.label}</Var>

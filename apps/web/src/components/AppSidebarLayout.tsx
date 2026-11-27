@@ -94,6 +94,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { registerCommands, registerMenuAction } from "../shortcuts/dispatcher";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { CLOSED_SIDEBAR_CONTROLS_SURFACE_CLASS } from "../workspaceTitlebar";
+import { useDesktopSignInRecovery } from "../desktopSignInRecovery";
 import { usePeerFanOut } from "../peerFanOut";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 
@@ -607,6 +608,7 @@ export function AppSidebarLayout({
 }) {
   const gt = useGT();
   usePeerFanOut(showSidebar);
+  useDesktopSignInRecovery();
   const sidebarArea = workspaceAreaProps("sidebar", 0, gt("Threads"));
   const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
     observedKey: null,

@@ -1,11 +1,16 @@
 import { buildOidcSignInUrl, readOidcSignInFailure } from "@t3tools/shared/remote";
 
 /**
- * The desktop renderer cannot leave for a provider's page and come back, so it pairs with codes.
- * Every browser, the hosted app included, can.
+ * Whether this page can leave for a provider's page and come back. Every browser, the hosted app
+ * included, can; the desktop renderer cannot, and signs in through its bridge's window instead.
  */
 export function canSignInWithOidc(): boolean {
   return window.desktopBridge === undefined;
+}
+
+/** Whether this client can sign in through a server's provider at all. */
+export function offersOidcSignIn(): boolean {
+  return canSignInWithOidc() || window.desktopBridge?.signInWithOidc !== undefined;
 }
 
 /** Leaves for the sign-in of the server at `origin`; it returns to `returnOrigin`'s pairing page. */

@@ -29,12 +29,25 @@ MacBook and the iPhone without a tap.
   per peer, and keeps tried peers in SecureStore for a day. **Settings → Environments → Linked from
   … → Add to this device** signs in to one linked environment interactively, at an address that
   answers as it.
+- The desktop signs in again to saved environments that rejected its credential
+  (`apps/web/src/desktopSignInRecovery.ts`). Whenever an environment's connection fails,
+  `runSignInRecovery` picks the enabled ones blocked on authentication, resolves the sign-in of
+  their direct routes the same way, and pairs each through a hidden `prompt=none` window with the
+  expected environment id, which replaces the route's credential. Recovery signs in only at an
+  origin the environment is saved at, since the environment id a host reports is public. It pairs
+  with `savedRouteOnly`, which the registry checks under the environment's lease: an environment
+  removed, turned off or without that route by then stays as it is. After an attempt a host is left
+  alone for an hour. A revoked session looks like an expired one to the client, so revoking a
+  desktop on the host does not keep it out while the provider recognizes it.
+  The desktop still does not fan out to linked environments it has never saved.
 - A removed environment is added again while a connected one links to it. Turning it off keeps it
   saved, so the fan-out leaves it alone; that is the way to keep a linked environment off a device.
 
 ## Upstream touch points
 
-- `packages/client-runtime/src/connection/index.ts` exports it.
+- `packages/client-runtime/src/connection/index.ts` exports it. `AppSidebarLayout.tsx` also mounts the desktop's
+  sign-in recovery. `EnvironmentRegistry.register`'s `savedRouteOnly` option and the matching
+  `PairingConnectionInput` field exist for it.
 - `apps/web/src/components/AppSidebarLayout.tsx` runs the fan-out in the app shell, since
   workspace panes replace the chat route's outlet while a thread is open, and holds it during
   `/welcome`, which a step would leave. `PairingRouteSurface.tsx` continues it, and
@@ -52,4 +65,5 @@ link to.
 `packages/client-runtime/src/connection/peerFanOut.test.ts` covers the set of peers offered (saved,
 connected, expired and sign-in-less links left out, every linking environment's addresses tried,
 an address that reaches another machine skipped), one registration per peer, and a tried peer
-skipped on the next run.
+skipped on the next run. It also covers which rejected environments recovery signs in again: only enabled
+ones blocked on authentication, at an address that offers sign-in and is still them, once.

@@ -29,6 +29,9 @@ user. Upstream closed OIDC as not planned (pingdotgg/t3code#12278).
   `?host=<this server>&label=<label>#token=<code>`, which every client already redeems as a
   hosted pairing link. Failures return the same way with `#oidc_error=<code>`. Sessions, revocation
   and `t3 auth session list` stay as they are.
+- A grant with subject `oidc:<sub>` exchanged with a DPoP proof renews like a plain pairing link
+  (`EnvironmentAuth.exchangeBootstrapCredentialForAccessToken`), so a device signed in through the
+  provider stays in while it is used. Upstream renews only `one-time-token` subjects.
 - `listPairingLinks` hides `oidc:` grants, and a managed policy without remote clients revokes
   `oidc:` sessions and grants with the other link-paired ones.
 - `ServerAuthDescriptor.oidc` advertises sign-in with its label and `origin`, the redirect URI's
@@ -36,7 +39,12 @@ user. Upstream closed OIDC as not planned (pingdotgg/t3code#12278).
   starts the sign-in at `origin`, whatever address it reached the server by. Web shows a button
   on the pairing page and in **Add environment** (after reading the typed host's
   `/api/auth/session`), and shows `#oidc_error`. The desktop renderer cannot leave for the
-  provider and come back, so it keeps pairing with codes. Mobile signs in when Connect has no
+  provider and come back, so `apps/desktop/src/app/DesktopOidcSignIn.ts` signs in in a window of
+  its own (`desktopBridge.signInWithOidc`, partition `persist:oidc-sign-in` so a provider's cookies
+  survive). It returns to `t3code://oidc` with a random `client_state`, catches that redirect
+  before it leaves the window, and gives the renderer the code, which **Add environment** pairs
+  with. A silent attempt keeps the window hidden and gives up after 30 seconds or on an error
+  page. Mobile signs in when Connect has no
   code and is not adding a route to a known machine, through an ephemeral `openAuthSessionAsync`
   sheet that returns to `<scheme>://oidc`. It accepts only a result that carries back the random
   `client_state` it sent, since another app can open that scheme. The grant itself is not bound
@@ -54,6 +62,9 @@ user. Upstream closed OIDC as not planned (pingdotgg/t3code#12278).
   the config reference. `apps/server/src/server.ts` wires the layers.
 - `packages/client-runtime/src/authorization/remote.ts`: `fetchRemoteSessionState` takes an
   optional bearer token.
+- `apps/server/src/auth/EnvironmentAuth.ts`: the `renewable` check in the bootstrap exchange.
+- `packages/contracts/src/ipc.ts` (`DesktopBridge.signInWithOidc`), `apps/desktop/src/preload.ts`
+  and `apps/desktop/src/ipc/DesktopIpcHandlers.ts`.
 - Web: `PairingRouteSurface.tsx` (mounts `auth/OidcSignInButton.tsx`), `AddEnvironmentDialog.tsx`,
   `routes/__root.tsx`, `routes/pair.tsx`. Mobile: `ConnectionsNewRouteScreen.tsx`.
 
@@ -67,4 +78,5 @@ Drop this if upstream ships provider sign-in that hands out the same pairing gra
 RS256 tokens: start parameters and the cookie, refused return URLs, single-use redemption through
 `/api/auth/browser-session` and `/oauth/token`, hosted results, binding and state reuse, wrong
 nonce, audience and signature, claim rules, and `login_required`. `EnvironmentAuthAdmin.test.ts`
-covers hiding and revoking `oidc:` grants.
+covers hiding and revoking `oidc:` grants. `EnvironmentAuth.test.ts` renews an `oidc:` DPoP session.
+`AddEnvironmentDialog.browser.test.tsx` covers the desktop button.

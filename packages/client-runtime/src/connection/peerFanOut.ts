@@ -8,6 +8,7 @@ import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { request } from "../rpc/client.ts";
 import { ConnectionOnboarding, readOidcSignInOffer } from "./onboarding.ts";
 import * as EnvironmentRegistry from "./registry.ts";
+import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 
 /** An environment a connected one links to, which this client lacks, and where to sign in to it. */
 export interface PeerSignIn {
@@ -22,11 +23,23 @@ export type PeerSignInResult =
 
 /** The first of a link's addresses that offers sign-in where the linked environment answers. */
 export const resolvePeerSignIn = Effect.fn("clientRuntime.connection.peerFanOut.resolvePeerSignIn")(
-  function* (link: Pick<PeerLinkSummary, "environmentId" | "urls">) {
+  function* (
+    link: Pick<PeerLinkSummary, "environmentId" | "urls">,
+    options?: {
+      /** Skip an address whose sign-in lives at an origin that is not one of `urls`. */
+      readonly listedOriginsOnly?: boolean;
+    },
+  ) {
+    const listed = new Set(
+      link.urls.flatMap((url) => (URL.canParse(url) ? [new URL(url).origin] : [])),
+    );
     for (const url of link.urls) {
       const peer = yield* Effect.gen(function* () {
         const offer = yield* readOidcSignInOffer(url);
         if (Option.isNone(offer)) return Option.none<PeerSignIn>();
+        if (options?.listedOriginsOnly === true && !listed.has(offer.value.origin)) {
+          return Option.none<PeerSignIn>();
+        }
         const descriptor = yield* fetchRemoteEnvironmentDescriptor({
           httpBaseUrl: offer.value.origin,
         });
@@ -85,34 +98,93 @@ export const findPeerSignIns = Effect.fn("clientRuntime.connection.peerFanOut.fi
   },
 );
 
+interface PlatformSignIn<R> {
+  readonly signIn: (peer: PeerSignIn) => Effect.Effect<PeerSignInResult, never, R>;
+  readonly recordAttempt: (peer: PeerSignIn) => Effect.Effect<void, never, R>;
+}
+
 /**
- * Adds each peer `findPeerSignIns` returns through the platform's `signIn`, one at a time, and
- * returns the environments added. Each peer goes to `recordAttempt` first, so a sign-in that
- * fails, is dismissed or never comes back is skipped next time; a cancelled one ends the run.
+ * Pairs with each peer through the platform's `signIn`, one at a time, and returns the
+ * environments paired. Each peer goes to `recordAttempt` first, so a sign-in that fails, is
+ * dismissed or never comes back is skipped next time; a cancelled one ends the run.
  */
+const signInEach = Effect.fn("clientRuntime.connection.peerFanOut.signInEach")(function* <R>(
+  peers: ReadonlyArray<PeerSignIn>,
+  input: PlatformSignIn<R> & { readonly savedRouteOnly?: boolean },
+) {
+  const onboarding = yield* ConnectionOnboarding;
+  const added: Array<EnvironmentId> = [];
+  for (const peer of peers) {
+    yield* input.recordAttempt(peer);
+    const result = yield* input.signIn(peer);
+    if (result._tag === "Cancelled") break;
+    if (result._tag === "Failed") continue;
+    const registered = yield* onboarding
+      .registerPairing({
+        host: peer.origin,
+        pairingCode: result.pairingCode,
+        expectedEnvironmentId: peer.environmentId,
+        ...(input.savedRouteOnly === true ? { savedRouteOnly: true } : {}),
+      })
+      .pipe(Effect.option);
+    if (Option.isSome(registered)) added.push(registered.value);
+  }
+  return added;
+});
+
+/** Adds each peer `findPeerSignIns` returns through `signInEach`. */
 export const runPeerFanOut = Effect.fn("clientRuntime.connection.peerFanOut.runPeerFanOut")(
-  function* <R>(input: {
-    readonly connected: ReadonlyArray<EnvironmentId>;
-    readonly skip: ReadonlySet<EnvironmentId>;
-    readonly signIn: (peer: PeerSignIn) => Effect.Effect<PeerSignInResult, never, R>;
-    readonly recordAttempt: (peer: PeerSignIn) => Effect.Effect<void, never, R>;
-  }) {
-    const onboarding = yield* ConnectionOnboarding;
-    const added: Array<EnvironmentId> = [];
-    for (const peer of yield* findPeerSignIns(input)) {
-      yield* input.recordAttempt(peer);
-      const result = yield* input.signIn(peer);
-      if (result._tag === "Cancelled") break;
-      if (result._tag === "Failed") continue;
-      const registered = yield* onboarding
-        .registerPairing({
-          host: peer.origin,
-          pairingCode: result.pairingCode,
-          expectedEnvironmentId: peer.environmentId,
-        })
-        .pipe(Effect.option);
-      if (Option.isSome(registered)) added.push(registered.value);
+  function* <R>(
+    input: PlatformSignIn<R> & {
+      readonly connected: ReadonlyArray<EnvironmentId>;
+      readonly skip: ReadonlySet<EnvironmentId>;
+    },
+  ) {
+    return yield* signInEach(yield* findPeerSignIns(input), input);
+  },
+);
+
+/**
+ * Saved environments whose host rejected this device's credential and that offer sign-in at an
+ * address they are saved at. Their connections wait for a person until then. An address only a
+ * host advertises could hand this device to another server, so recovery never adds one.
+ */
+const findRejectedSignIns = Effect.fn("clientRuntime.connection.peerFanOut.findRejectedSignIns")(
+  function* (input: { readonly skip: ReadonlySet<EnvironmentId> }) {
+    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+    const rejected: Array<{ environmentId: EnvironmentId; urls: Array<string> }> = [];
+    for (const [environmentId, entry] of yield* SubscriptionRef.get(registry.entries)) {
+      if (!entry.enabled || input.skip.has(environmentId)) continue;
+      const state = yield* registry.state(environmentId).pipe(Effect.option);
+      if (
+        Option.isNone(state) ||
+        state.value.phase !== "blocked" ||
+        state.value.lastFailure?.reason !== "authentication"
+      ) {
+        continue;
+      }
+      // Only direct routes pair; T3 Connect and SSH sign in their own ways.
+      const urls = connectionRoutes(entry).flatMap((route) => {
+        const url = route.target._tag === "BearerConnectionTarget" ? routeHttpBaseUrl(route) : null;
+        return url === null ? [] : [url];
+      });
+      if (urls.length > 0) rejected.push({ environmentId, urls });
     }
-    return added;
+    const found = yield* Effect.forEach(
+      rejected,
+      (environment) => resolvePeerSignIn(environment, { listedOriginsOnly: true }),
+      { concurrency: "unbounded" },
+    );
+    return found.flatMap((peer) => Option.toArray(peer));
+  },
+);
+
+/** Signs each environment `findRejectedSignIns` returns in again through `signInEach`. */
+export const runSignInRecovery = Effect.fn("clientRuntime.connection.peerFanOut.runSignInRecovery")(
+  function* <R>(input: PlatformSignIn<R> & { readonly skip: ReadonlySet<EnvironmentId> }) {
+    return yield* signInEach(yield* findRejectedSignIns(input), {
+      ...input,
+      savedRouteOnly: true,
+    });
   },
 );
