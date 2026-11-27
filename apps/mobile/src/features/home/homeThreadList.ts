@@ -96,11 +96,12 @@ export function resolveHomeProjectFilterScope(
     readonly projectGroupingMode: SidebarProjectGroupingMode;
   },
   filing?: WorldFiling,
+  resolve: MessageResolver = m,
 ): HomeProjectScope | null {
   if (filing !== undefined && options.selectedProjectKey !== null) {
     if (worldOfScopeKey(options.selectedProjectKey) !== undefined) {
       return (
-        buildHomeWorldScopes(scopes, filing).find(
+        buildHomeWorldScopes(scopes, filing, resolve).find(
           (scope) => scope.key === options.selectedProjectKey,
         ) ?? null
       );

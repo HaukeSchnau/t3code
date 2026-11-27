@@ -172,6 +172,18 @@ describe("fileProjectsIntoWorlds", () => {
     }
   });
 
+  it("files the project at a world path declared with a trailing slash", () => {
+    const filed = fileProjectsIntoWorlds({
+      projects: [projects[0]!, project("srv-1", "umbrella", "/home/u/Buildlinx")],
+      worlds: declaredWorldsFromConfigs(
+        new Map([
+          ["srv-1", { settings: { worlds: { buildlinx: { path: "/home/u/Buildlinx/" } } } }],
+        ]),
+      ),
+    });
+    expect(filed.worldByProjectKey.get("srv-1:umbrella")).toBe("buildlinx");
+  });
+
   it("files nothing without a world project", () => {
     expect(fileProjectsIntoWorlds({ projects: projects.slice(3), worlds })).toEqual({
       worlds: [],
