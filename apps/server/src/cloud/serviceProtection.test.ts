@@ -48,6 +48,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       const bin = NodePath.join(root, "bin");
       NodeFS.mkdirSync(bin);
       // Raising a score needs no privilege, so the test's own child stands in for a main process.
+      // CI jobs already run at 1000, so the score never goes below the child's own.
+      const score = Math.max(
+        900,
+        Number(NodeFS.readFileSync(`/proc/${target.pid}/oom_score_adj`, "utf8")),
+      );
       NodeFS.writeFileSync(
         NodePath.join(bin, "systemctl"),
         [
@@ -55,7 +60,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
           'echo "$*" >>"$CALLS"',
           'case "$*" in',
           '  *MainPID*) echo "$TARGET_PID" ;;',
-          "  *OOMScoreAdjust*) echo 900 ;;",
+          '  *OOMScoreAdjust*) echo "$SCORE" ;;',
           "esac",
           "",
         ].join("\n"),
@@ -73,6 +78,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
               PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ""}`,
               CALLS: calls,
               TARGET_PID: String(target.pid),
+              SCORE: String(score),
             },
           },
         );
@@ -87,7 +93,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
       for (const { path, contents } of theo.system) {
         expect(NodeFS.readFileSync(path, "utf8")).toBe(contents);
       }
-      expect(NodeFS.readFileSync(`/proc/${target.pid}/oom_score_adj`, "utf8").trim()).toBe("900");
+      expect(NodeFS.readFileSync(`/proc/${target.pid}/oom_score_adj`, "utf8").trim()).toBe(
+        String(score),
+      );
       expect(NodeFS.readFileSync(calls, "utf8").split("\n")[0]).toBe("daemon-reload");
 
       // Undo removes every drop-in a user could own, and keeps shared ones while another user is protected.
