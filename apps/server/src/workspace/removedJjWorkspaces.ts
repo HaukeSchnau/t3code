@@ -42,11 +42,14 @@ export const managedWorkspaceRootOf = (
 export const removedJjWorkspacesDirectory = (stateDir: string, path: Path.Path) =>
   path.join(stateDir, "removed-jj-workspaces");
 
+const rootHash = (root: string) => NodeCrypto.createHash("sha256").update(root).digest("hex");
+
 const recordPath = (directory: string, root: string, path: Path.Path) =>
-  path.join(
-    directory,
-    `${NodeCrypto.createHash("sha256").update(root).digest("hex").slice(0, 32)}.json`,
-  );
+  path.join(directory, `${rootHash(root).slice(0, 32)}.json`);
+
+/** The jj name a recreated workspace gets; it differs for every root. */
+export const removedJjWorkspaceName = (record: RemovedJjWorkspace) =>
+  `${record.name}-${rootHash(record.root).slice(0, 8)}`;
 
 export const recordRemovedJjWorkspace = Effect.fn("RemovedJjWorkspaces.record")(function* (
   directory: string,

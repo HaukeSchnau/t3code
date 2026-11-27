@@ -20,14 +20,17 @@ import { scratchFolderRoot } from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
-import { createJjWorkspace } from "./JjWorkspaces.ts";
+import { findRepositoryMarker, realpathOrResolve } from "../vcs/RepositoryMarker.ts";
+import { createJjWorkspace, listJjWorkspaces } from "./JjWorkspaces.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import {
   forgetRemovedJjWorkspace,
   managedWorkspaceRootOf,
   readRemovedJjWorkspace,
+  removedJjWorkspaceName,
   removedJjWorkspacesDirectory,
 } from "./removedJjWorkspaces.ts";
+import { removeWorkspaceDirectory } from "./WorkspaceCommand.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 import * as TaskFolders from "./TaskFolders.ts";
 import { TerminalCwdRecovery } from "../terminal/Manager.ts";
@@ -141,16 +144,45 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
       yield* fileSystem
         .makeDirectory(path.dirname(root), { recursive: true })
         .pipe(Effect.mapError((cause) => new WorktreeRecreateError({ worktreePath, cause })));
+      // The old name may belong to another project's workspace by now, or be what a concurrent
+      // restore of another root picks; a name derived from this root is neither.
+      const repository = findRepositoryMarker(project.workspaceRoot)?.root;
+      const workspaces =
+        repository === undefined
+          ? Effect.succeedNone
+          : listJjWorkspaces(repository).pipe(
+              Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+              Effect.option,
+            );
+      const taken = new Set(
+        Option.getOrElse(yield* workspaces, () => []).map((entry) => entry.name),
+      );
+      const ownName = removedJjWorkspaceName(record.value);
+      let name = ownName;
+      for (let suffix = 2; taken.has(name); suffix++) name = `${ownName}-${suffix}`;
       yield* createJjWorkspace({
         projectRoot: project.workspaceRoot,
         destination: root,
-        name: record.value.name,
-        description: `wip: ${record.value.name}`,
+        name,
+        description: `wip: ${name}`,
         revisions: record.value.revisions,
       }).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
         Effect.mapError((cause) => new WorktreeRecreateError({ worktreePath, cause })),
       );
+      // Concurrent adds of one name can each succeed while jj keeps one registration. The record
+      // stays, and so does the folder unless jj shows the name at another root.
+      const registration = Option.map(yield* workspaces, (entries) =>
+        entries.find((entry) => entry.name === name),
+      );
+      const elsewhere = Option.getOrUndefined(registration)?.root;
+      if (elsewhere == null || realpathOrResolve(elsewhere) !== realpathOrResolve(root)) {
+        if (elsewhere != null) yield* removeWorkspaceDirectory(root).pipe(Effect.ignore);
+        return yield* new WorktreeRecreateError({
+          worktreePath,
+          cause: new Error(`jj did not register the workspace ${name} at ${root}`),
+        });
+      }
       yield* forgetRemovedJjWorkspace(removedWorkspaces, root).pipe(Effect.ignore);
       return { project, worktreePath };
     },

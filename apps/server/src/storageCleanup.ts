@@ -1752,19 +1752,22 @@ const make = Effect.gen(function* () {
           const inspect = inspectJjWorkspace({ root: managedRoot, ownStore }).pipe(
             Effect.provide(processContext),
           );
+          // jj cannot list ignored files; the Git repository of a colocated workspace can.
+          const ignoredFiles = Effect.gen(function* () {
+            if (settings.worktreeKeepWhen !== "any-local-files") return null;
+            return (yield* fs.exists(path.join(managedRoot, ".git")))
+              ? yield* ignoredFilesReason(managedRoot)
+              : "ignored files cannot be listed without Git";
+          });
           const inspection = yield* inspect;
           if (inspection.keep !== null) return keep(inspection.keep);
-          if (!eligible) {
+          const needsUnchanged = !eligible;
+          if (needsUnchanged) {
             if (!inspection.unchanged) return keep(notDueReason);
             removalReason = "no changes beyond trunk";
           }
-          // jj cannot list ignored files; the Git repository of a colocated workspace can.
-          if (settings.worktreeKeepWhen === "any-local-files") {
-            const ignored = (yield* fs.exists(path.join(managedRoot, ".git")))
-              ? yield* ignoredFilesReason(managedRoot)
-              : "ignored files cannot be listed without Git";
-            if (ignored !== null) return keep(ignored);
-          }
+          const ignored = yield* ignoredFiles;
+          if (ignored !== null) return keep(ignored);
           // Walked before the lease; provider startup must not wait for directory traversal.
           const measured = yield* measureWorktree(managedRoot, "jj");
           if (measured.reason !== null) return keep(measured.reason);
@@ -1779,6 +1782,9 @@ const make = Effect.gen(function* () {
               // Snapshotted again: an edit since the first look would otherwise go with the folder.
               const final = yield* inspect;
               if (final.keep !== null) return keep(final.keep);
+              if (needsUnchanged && !final.unchanged) return keep("commits changed since check");
+              const ignoredSinceLease = yield* ignoredFiles;
+              if (ignoredSinceLease !== null) return keep(ignoredSinceLease);
               if (ownStore) {
                 yield* deleteIsolatedWorkspace(managedRoot).pipe(Effect.provide(processContext));
               } else {

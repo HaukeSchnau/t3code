@@ -29,8 +29,13 @@ srv-2 that left about 100 jj workspaces of 3 to 9 GB each, most of them for sett
   there, cleanup first writes the workspace's name and the commits of `@` (its parents while `@` is
   empty) to `<stateDir>/removed-jj-workspaces/`. Turn start's missing-worktree restore recreates
   the workspace from that record with `jj workspace add` and runs the project's setup, as it does
-  for a removed Git worktree. Records whose workspace no remaining thread names are dropped at
-  each sweep.
+  for a removed Git worktree. The recreated workspace's jj name carries a hash of its path, since
+  the old name may belong to another project's workspace by then, and concurrent restores of
+  other paths must not pick the same one. A restore that jj did not register keeps its record.
+  Records whose workspace no remaining thread names are dropped at each sweep. While any thread
+  names a folder inside a workspace, new workspaces never take that workspace's path.
+- Colocated workspaces also stay while Git holds a staged edit or a paused rebase, merge,
+  cherry-pick or revert, and an agent-exec fork stays while its repository has a Git stash.
 - An agent-exec fork (an isolated workspace with its own jj repository) is removed only once its
   thread is deleted, with `agent-exec retire --remove-checkout`, and only when no non-empty change
   in its whole repository is missing from a remote bookmark or tag. Nothing recreates a fork for a
@@ -52,7 +57,9 @@ srv-2 that left about 100 jj workspaces of 3 to 9 GB each, most of them for sett
   thread without a branch. `WorktreeRecreateError.branch` is optional for it. The spawner is read
   with `Effect.serviceOption`, so the layer keeps upstream's requirements.
 - Fork-owned: `workspace/JjWorkspaces.ts` (`inspectJjWorkspace`, `jjWorkspaceName`, `revisions` on
-  `createJjWorkspace`) and `workspace/removedJjWorkspaces.ts`.
+  `createJjWorkspace`, whose failure cleanup forgets only a workspace registered at its
+  destination), `workspace/removedJjWorkspaces.ts`, and `ManagedWorkspaces.referencedPaths`, which
+  reserves the workspace of every folder a thread names.
 
 ## Not carried over
 

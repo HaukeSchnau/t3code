@@ -4,6 +4,7 @@
  * are visible across workspaces without pushing. In a colocated repository jj also creates the
  * Git worktree; T3 never runs `git worktree` itself for jj repositories.
  */
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -153,11 +154,20 @@ export const createJjWorkspace = Effect.fn("JjWorkspaces.create")(function* (inp
     input.destination,
   ]).pipe(
     Effect.tapError(() =>
-      runWorkspaceCommand({
-        operation: "JjWorkspaces.cleanup",
-        command: "jj",
-        args: ["-R", repository, "--ignore-working-copy", "workspace", "forget", input.name],
-      }).pipe(Effect.andThen(removeWorkspaceDirectory(input.destination)), Effect.ignore),
+      Effect.gen(function* () {
+        // A recreated workspace reuses its old name, which something else may hold by now.
+        const added = (yield* listJjWorkspaces(repository)).find(
+          (entry) => entry.name === input.name,
+        );
+        if (added?.root != null && realpath(added.root) === realpath(input.destination)) {
+          yield* runWorkspaceCommand({
+            operation: "JjWorkspaces.cleanup",
+            command: "jj",
+            args: ["-R", repository, "--ignore-working-copy", "workspace", "forget", input.name],
+          });
+        }
+        yield* removeWorkspaceDirectory(input.destination);
+      }).pipe(Effect.ignore),
     ),
   );
   return relative === "" ? input.destination : NodePath.join(input.destination, relative);
@@ -235,6 +245,34 @@ export const inspectJjWorkspace = Effect.fn("JjWorkspaces.inspect")(function* (i
   // jj leaves files over `snapshot.max-new-file-size`, or outside `snapshot.auto-track`, out of `@`.
   if (/^Untracked paths:$/m.test(status.stdout) || status.stderr.includes("Refused to snapshot")) {
     return keep("has files jj did not snapshot");
+  }
+  // A colocated checkout's Git holds work jj never reads: a staged edit, a paused rebase or
+  // merge, and in a fork's own repository a stash.
+  if (NodeFS.existsSync(NodePath.join(input.root, ".git"))) {
+    const git = (args: ReadonlyArray<string>) =>
+      runWorkspaceCommand({
+        operation: "JjWorkspaces.inspect",
+        command: "git",
+        args: ["-C", input.root, ...args],
+      });
+    const staged = yield* git(["diff", "--cached", "--quiet", "--ignore-submodules=none"]);
+    if (staged.code === 1) return keep("has changes staged in Git");
+    const operations = yield* git([
+      "rev-parse",
+      "--path-format=absolute",
+      ...["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].flatMap(
+        (name) => ["--git-path", name],
+      ),
+    ]);
+    if (staged.code !== 0 || operations.code !== 0) return keep("its Git state could not be read");
+    if (operations.stdout.split("\n").some((state) => state !== "" && NodeFS.existsSync(state))) {
+      return keep("a Git operation is in progress");
+    }
+    if (
+      input.ownStore &&
+      (yield* git(["rev-parse", "--verify", "--quiet", "refs/stash"])).code === 0
+    )
+      return keep("has a Git stash");
   }
   const read = (revset: string, template: string) =>
     jj("JjWorkspaces.inspect", input.root, [

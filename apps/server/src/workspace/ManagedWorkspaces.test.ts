@@ -198,6 +198,18 @@ describe("ManagedWorkspaces", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
+  it.effect("keeps a workspace taken while a thread names a folder inside it", () => {
+    const test = harness();
+    return Effect.gen(function* () {
+      const project = jjProject();
+      const parent = NodePath.join(test.baseDir, "workspaces", "studienbuch");
+      // Storage cleanup removed the folder; its thread works in a subfolder and may resume.
+      test.threads.push(shell(NodePath.join(parent, "fix-login-redirect", "app")));
+      const created = yield* create(project, "thread:jj-again");
+      assert.equal(created.worktreePath, NodePath.join(parent, "fix-login-redirect-2"));
+    }).pipe(Effect.provide(test.layer));
+  });
+
   it.effect("copies directory projects and refuses sensitive sources", () => {
     const test = harness();
     return Effect.gen(function* () {
