@@ -1568,5 +1568,7 @@ export const runServer = Layer.launch(
   // For the layers above whose spawner requirement is not met by one of them.
   layerMakeServer.pipe(
     Layer.provide(ProcessLauncher.layerServer.pipe(Layer.provide(layerSpawner))),
+    // Fork (patches/bounded-traces.md): services would otherwise run under the lifetime span too.
+    withRootRequestSpans,
   ),
 );
