@@ -238,6 +238,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     projects,
     options,
     worldFiling,
+    messages,
   );
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,

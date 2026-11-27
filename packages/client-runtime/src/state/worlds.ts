@@ -206,8 +206,9 @@ export function declaredWorldsFromConfigs(
   for (const [environmentId, config] of configs) {
     const paths = new Map<string, string>();
     for (const [id, world] of Object.entries(config.settings?.worlds ?? {})) {
-      paths.set(id, world.path);
-      if (!anyPaths.has(id)) anyPaths.set(id, world.path);
+      const path = world.path.replace(/\/+$/, "") || "/";
+      paths.set(id, path);
+      if (!anyPaths.has(id)) anyPaths.set(id, path);
     }
     if (paths.size > 0) pathsByEnvironment.set(environmentId, paths);
     for (const [id, namespaces] of Object.entries(config.worldNamespaces ?? {})) {
