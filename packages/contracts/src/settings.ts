@@ -1497,6 +1497,8 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** VACUUM once at start, before serving, so a database without auto_vacuum starts shrinking. */
+  reclaimDatabaseOnStart: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
@@ -2032,6 +2034,7 @@ export const ServerSettingsPatch = Schema.Struct({
       worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
       browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
       logsAfterDays: Schema.optionalKey(StorageRetentionDays),
+      reclaimDatabaseOnStart: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   worktreesDirectory: Schema.optionalKey(TrimmedString),

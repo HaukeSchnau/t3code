@@ -5,10 +5,13 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as DatabaseMaintenance from "./DatabaseMaintenance.ts";
 import * as Sqlite from "./Sqlite.ts";
@@ -177,6 +180,97 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
           yield* fs.readFileString(broken.failure),
           new DatabaseMaintenance.DatabaseCompactError({ path: brokenPath, cause: null }).message,
         );
+      }),
+    );
+
+    it.effect("vacuums at start only a database without auto_vacuum that frees enough", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-start-reclaim-" });
+        const dbPath = path.join(baseDir, "userdata", "statev2.sqlite");
+        const files = DatabaseMaintenance.reclaimFiles(path, dbPath);
+        const mebibyte = 1024 ** 2;
+
+        // A host's first start has no database yet.
+        yield* DatabaseMaintenance.runStartReclaim(dbPath, 0);
+        assert.isFalse(yield* fs.exists(files.failure));
+
+        yield* Effect.void.pipe(Effect.provide(Sqlite.layerFromPath(dbPath)));
+        const storage = Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) => sql<{ readonly auto_vacuum: number; readonly free_pages: number }>`
+            SELECT
+              (SELECT auto_vacuum FROM pragma_auto_vacuum) AS auto_vacuum,
+              (SELECT freelist_count FROM pragma_freelist_count) AS free_pages
+          `,
+        ).pipe(
+          Effect.map((rows) => rows[0]),
+          Effect.provide(NodeSqliteClient.layer({ filename: dbPath, readonly: true })),
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`PRAGMA auto_vacuum = NONE`;
+          yield* sql`VACUUM`;
+          yield* sql`CREATE TABLE retained_data (value TEXT)`;
+          yield* sql`INSERT INTO retained_data VALUES ('keep')`;
+          yield* sql`CREATE TABLE discarded (value BLOB)`;
+          yield* sql`INSERT INTO discarded VALUES (zeroblob(${2 * mebibyte}))`;
+          yield* sql`DROP TABLE discarded`;
+        }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+        const before = yield* storage;
+        assert.equal(before?.auto_vacuum, 0);
+        assert.isAbove(before?.free_pages ?? 0, 0);
+
+        yield* DatabaseMaintenance.runStartReclaim(dbPath, 4 * mebibyte);
+        assert.deepEqual(yield* storage, before, "too little to free for a slower start");
+
+        // A failed or killed attempt waits for a manual retry instead of slowing every start.
+        yield* fs.writeFileString(files.failure, "an earlier failure");
+        yield* DatabaseMaintenance.runStartReclaim(dbPath, mebibyte);
+        assert.deepEqual(yield* storage, before);
+        assert.equal(yield* fs.readFileString(files.failure), "an earlier failure");
+        // A marker it cannot read is still a marker.
+        yield* fs.chmod(files.failure, 0o200);
+        yield* DatabaseMaintenance.runStartReclaim(dbPath, mebibyte);
+        yield* fs.chmod(files.failure, 0o600);
+        assert.deepEqual(yield* storage, before);
+        assert.equal(yield* fs.readFileString(files.failure), "an earlier failure");
+
+        yield* fs.remove(files.failure);
+        // An attempt refused because another repair holds the database leaves that repair's marker.
+        const refusals = yield* Queue.unbounded<void>();
+        const maintenance = yield* DatabaseMaintenance.DatabaseMaintenance;
+        const attempt = yield* DatabaseMaintenance.runStartReclaim(dbPath, mebibyte).pipe(
+          Effect.provideService(DatabaseMaintenance.DatabaseMaintenance, {
+            ...maintenance,
+            compact: (path) =>
+              Queue.offer(refusals, undefined).pipe(
+                Effect.andThen(
+                  Effect.fail(new DatabaseMaintenance.DatabaseInUseError({ path, cause: null })),
+                ),
+              ),
+          }),
+          Effect.forkChild,
+        );
+        yield* Queue.take(refusals);
+        yield* fs.writeFileString(files.failure, "the other repair");
+        // The attempt retries ten times, a second apart.
+        for (let retry = 0; retry < 10; retry++) {
+          yield* TestClock.adjust("1 second");
+          yield* Queue.take(refusals);
+        }
+        yield* Fiber.join(attempt);
+        assert.equal(yield* fs.readFileString(files.failure), "the other repair");
+        yield* fs.remove(files.failure);
+
+        yield* DatabaseMaintenance.runStartReclaim(dbPath, mebibyte);
+        assert.deepEqual(yield* storage, { auto_vacuum: 2, free_pages: 0 });
+        assert.isFalse(yield* fs.exists(files.failure));
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          assert.deepEqual(yield* sql`SELECT value FROM retained_data`, [{ value: "keep" }]);
+        }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath, readonly: true })));
       }),
     );
 

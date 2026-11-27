@@ -365,6 +365,87 @@ export const runRequestedReclaim = Effect.fn("DatabaseMaintenance.runRequestedRe
   Effect.catchCause((cause) => Effect.logWarning("Database space reclamation failed", { cause })),
 );
 
+// Below this a start-up VACUUM delays the start for little disk space.
+const START_RECLAIM_MINIMUM_FREE_BYTES = 1024 ** 3;
+
+/**
+ * VACUUMs a database without auto_vacuum before the server opens it, when that frees at least
+ * `minimumFreeBytes`. VACUUM time grows with the live data. An attempt that fails or is killed
+ * leaves its reason in `reclaim-failed`, and later starts log it and skip the repair until
+ * Settings' Reclaim, `t3 doctor`, or deleting that file.
+ */
+export const runStartReclaim = Effect.fn("DatabaseMaintenance.runStartReclaim")(
+  function* (databasePath: string, minimumFreeBytes = START_RECLAIM_MINIMUM_FREE_BYTES) {
+    const fs = yield* FileSystem.FileSystem;
+    const files = reclaimFiles(yield* Path.Path, databasePath);
+    if (!(yield* fs.exists(databasePath))) return;
+    const storage = yield* readStorage.pipe(
+      Effect.provide(NodeSqliteClient.layer({ filename: databasePath, readonly: true })),
+    );
+    if (storage.incrementalVacuumEnabled || storage.reclaimableBytes < minimumFreeBytes) return;
+    const failure = yield* fs.readFileString(files.failure).pipe(
+      Effect.asSome,
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    );
+    if (Option.isSome(failure)) {
+      return yield* Effect.logWarning("Skipping database space reclamation after a failed one", {
+        reason: failure.value,
+        retry: `Run t3 doctor, or delete ${files.failure} to try again at the next start.`,
+      });
+    }
+    const shortfall = yield* reclaimSpaceShortfall(
+      databasePath,
+      storage.databaseBytes - storage.reclaimableBytes,
+    );
+    if (shortfall !== null) {
+      return yield* Effect.logWarning("Not enough free disk space to reclaim database space", {
+        ...shortfall,
+      });
+    }
+    yield* Effect.logInfo("Reclaiming database space before starting. This can take minutes.", {
+      databaseBytes: storage.databaseBytes,
+      reclaimableBytes: storage.reclaimableBytes,
+    });
+    const maintenance = yield* DatabaseMaintenance;
+    yield* maintenance
+      .compact(databasePath, (step) =>
+        // The first step starts once the repair holds the database, so an attempt refused as in
+        // use never touches the marker of the one that holds it.
+        step === "prune-events"
+          ? fs
+              .writeFileString(
+                files.failure,
+                "The repair that ran as T3 Code started did not finish. Try again.",
+              )
+              .pipe(Effect.orDie)
+          : Effect.void,
+      )
+      .pipe(
+        // A CLI or the previous server can hold the file for a moment.
+        Effect.retry({
+          times: 10,
+          while: (error) => error._tag === "DatabaseInUseError",
+          schedule: Schedule.spaced("1 second"),
+        }),
+        Effect.matchEffect({
+          onSuccess: (result) =>
+            fs
+              .remove(files.failure, { force: true })
+              .pipe(Effect.andThen(Effect.logInfo("Reclaimed database space", result))),
+          // Another process keeping the database open says nothing about the repair; try next start.
+          onFailure: (error) =>
+            (error._tag === "DatabaseInUseError"
+              ? Effect.void
+              : fs.writeFileString(files.failure, error.message)
+            ).pipe(
+              Effect.andThen(Effect.logWarning("Database space reclamation failed", { error })),
+            ),
+        }),
+      );
+  },
+  Effect.catchCause((cause) => Effect.logWarning("Database space reclamation failed", { cause })),
+);
+
 // SQLite's search order for its temporary files (unixTempFileDir in os_unix.c).
 const sqliteTempDirectory = Effect.gen(function* () {
   if ((yield* HostProcess.Platform) === "win32") return NodeOS.tmpdir();

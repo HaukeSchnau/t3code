@@ -1,6 +1,7 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Command, GlobalFlag } from "effect/cli";
@@ -10,7 +11,10 @@ import { awaitServiceLauncherStop } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { stopOnLauncherLoss } from "../launcherWatch.ts";
 import * as DatabaseMaintenance from "../persistence/DatabaseMaintenance.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ServerOwnership from "../serverOwnership.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as AutomaticPort from "./automaticPort.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
 
@@ -29,8 +33,30 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   const logLevel = yield* GlobalFlag.LogLevel;
   const selectAutomaticPort = yield* AutomaticPort.make.pipe(Effect.provide(ProcessRunner.layer));
   const config = yield* resolveServerConfig(flags, logLevel, { ...options, selectAutomaticPort });
+  // VACUUM needs the database to itself, so it runs before the server opens it. The server lock,
+  // which t3 doctor also holds, keeps another server or doctor from repairing alongside it.
+  const reclaimOnStart = ServerSettings.readServerSettingsFromDisk.pipe(
+    Effect.flatMap((settings) =>
+      settings.storageCleanup.reclaimDatabaseOnStart
+        ? ServerOwnership.holdServerOwnershipLock(config.serverRuntimeStatePath).pipe(
+            Effect.andThen(DatabaseMaintenance.runStartReclaim(config.dbPath)),
+            Effect.scoped,
+          )
+        : Effect.void,
+    ),
+    Effect.provide(
+      Layer.mergeAll(
+        DatabaseMaintenance.layer,
+        ManagedPolicy.layer.pipe(Layer.provideMerge(ServerConfig.layer(config))),
+      ),
+    ),
+    Effect.catchCause((cause) => Effect.logWarning("Database space reclamation failed", { cause })),
+  );
   const run = Effect.raceFirst(
-    runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config)),
+    reclaimOnStart.pipe(
+      Effect.andThen(runServer),
+      Effect.provideService(ServerConfig.ServerConfig, config),
+    ),
     awaitServiceLauncherStop().pipe(Effect.andThen(Effect.interrupt)),
   ).pipe(
     // Settings' Reclaim stops the server; repair once the database is closed, before the restart.

@@ -111,6 +111,7 @@ function setup() {
       worktreeUnchanged: false,
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
+      reclaimDatabaseOnStart: false,
     },
     projectSettingsOverrides: {},
   };

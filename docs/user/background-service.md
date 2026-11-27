@@ -218,6 +218,14 @@ for the same data directory, for example by a desktop app connecting over SSH,
 is refused until the repair ends. Use `--base-dir` for a different data
 directory.
 
+A server that nobody can restart from Settings can run the repair as it starts
+instead: set `storageCleanup.reclaimDatabaseOnStart` to `true` with
+`t3 settings patch`. At each start it repairs a database that does not shrink
+on its own when at least 1 GiB can be reclaimed and the disk has room, and only
+then starts serving. If a repair fails or is cut off, the server log says why.
+Later starts skip the repair and log that reason again until you run
+`t3 doctor` or delete the `reclaim-failed` file next to the database.
+
 The repair's time grows with the size of the whole database, not only the
 space it reclaims, and can exceed an hour on a large database or a slow disk;
 `t3 doctor` shows each step as it runs. It rebuilds the database through a
