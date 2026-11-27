@@ -38,18 +38,28 @@ type request struct {
 	Force bool   `json:"force"`
 }
 
-func (m *machine) serve(l *net.UnixListener) {
-	for {
-		c, err := l.AcceptUnix()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
+// startServing accepts connections until the listener closes or reaches
+// its deadline, which pauses it for an upgrade.
+func (m *machine) startServing() {
+	m.serving = make(chan struct{})
+	go func() {
+		defer close(m.serving)
+		for {
+			c, err := m.listener.AcceptUnix()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrDeadlineExceeded) {
+					return
+				}
+				log.Printf("accept: %v", err)
+				continue
 			}
-			log.Printf("accept: %v", err)
-			continue
+			m.handlers.Add(1)
+			go func() {
+				defer m.handlers.Done()
+				m.handle(c)
+			}()
 		}
-		go m.handle(c)
-	}
+	}()
 }
 
 func peerPid(c *net.UnixConn) int {
@@ -68,6 +78,7 @@ func peerPid(c *net.UnixConn) int {
 
 func (m *machine) handle(c *net.UnixConn) {
 	defer c.Close()
+	_ = c.SetReadDeadline(time.Now().Add(m.peerTimeout))
 	line, err := bufio.NewReaderSize(c, 64<<10).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
 		return
@@ -86,6 +97,7 @@ func (m *machine) handle(c *net.UnixConn) {
 		res = out
 	}
 	b, _ := json.Marshal(res)
+	_ = c.SetWriteDeadline(time.Now().Add(m.peerTimeout))
 	_, _ = c.Write(append(b, '\n'))
 }
 
@@ -147,12 +159,14 @@ func (m *machine) call(req request, pid int) (okResult, error) {
 		if err != nil {
 			return nil, err
 		}
+		m.launching(t)
 		return okResult{"ok": true, "thread": t.ID, "binds": m.binds(t), "socket": m.socket}, nil
 	case "binds":
 		t, err := m.thread(req.Thread, pid)
 		if err != nil {
 			return nil, err
 		}
+		m.launching(t)
 		return okResult{"ok": true, "binds": m.binds(t)}, nil
 	case "checkout":
 		return m.ctlCheckout(req, pid)
@@ -200,6 +214,13 @@ func (m *machine) call(req request, pid int) (okResult, error) {
 		return m.stats(), nil
 	}
 	return nil, apiErr("invalid", "unknown method %q", req.Method)
+}
+
+// launching marks a thread whose launch is about to create a namespace.
+func (m *machine) launching(t *thread) {
+	m.mu.Lock()
+	t.launched = time.Now()
+	m.mu.Unlock()
 }
 
 func (m *machine) ctlCheckout(req request, pid int) (okResult, error) {
@@ -315,8 +336,13 @@ func (m *machine) stats() okResult {
 	for _, w := range m.worlds {
 		views += len(w.names)
 	}
-	return okResult{"ok": true, "worlds": len(m.worlds), "repos": views, "threads": len(m.threads),
+	res := okResult{"ok": true, "revision": revision, "worlds": len(m.worlds), "repos": views, "threads": len(m.threads),
 		"rss": rss, "osThreads": threads, "goroutines": runtime.NumGoroutine(), "fds": len(fds)}
+	if m.upgrade != nil {
+		u := *m.upgrade
+		res["upgrade"] = u
+	}
+	return res
 }
 
 // defaultSocket follows systemd's RuntimeDirectory=worldfs.
